@@ -14,6 +14,7 @@ mod network_interfaces;
 mod ports;
 mod process_accounting;
 mod shell_history;
+mod ssh_keys;
 pub(crate) mod sshd;
 mod sudoers;
 mod sysctl;
@@ -21,8 +22,26 @@ mod systemd;
 mod windows_persistence;
 
 use crate::models::{Fact, OperatingSystem};
+use std::io::Read;
+use std::path::Path;
 
 const LINUX_ONLY: &[OperatingSystem] = &[OperatingSystem::Linux];
+
+/// Upper bound on how much of a file a collector reads into memory. Config and history files are
+/// kilobytes in practice; the cap only matters for user-writable inputs (`~/.ssh/authorized_keys`,
+/// shell rc files) that a local user could inflate to gigabytes to exhaust memory during a scan
+/// that may be running as root. Reading at most this much turns that DoS into a truncated read.
+pub(crate) const MAX_COLLECTOR_READ_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Like `std::fs::read_to_string` but reads at most [`MAX_COLLECTOR_READ_BYTES`], so a collector
+/// can't be made to allocate unbounded memory by an oversized (possibly attacker-grown) input.
+/// Lossy UTF-8 so a stray non-UTF-8 byte truncates a line rather than failing the whole read.
+pub(crate) fn read_capped(path: &Path) -> std::io::Result<String> {
+    let f = std::fs::File::open(path)?;
+    let mut buf = Vec::new();
+    f.take(MAX_COLLECTOR_READ_BYTES).read_to_end(&mut buf)?;
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
 
 /// A collector produces zero or more fact rows describing one slice of host state.
 /// List-shaped collectors (ports, cron entries, ...) produce one row per item;
@@ -63,6 +82,7 @@ pub fn all_collectors() -> Vec<Box<dyn Collector>> {
         Box::new(ports::ListeningPortsCollector),
         Box::new(cron::CronEntriesCollector),
         Box::new(authorized_keys::AuthorizedKeysCollector),
+        Box::new(ssh_keys::SshPrivateKeysCollector),
         Box::new(sysctl::SysctlKernelCollector),
         Box::new(mac::MacStatusCollector),
         Box::new(file_permissions::FilePermissionsCollector),
@@ -90,7 +110,7 @@ mod tests {
     #[test]
     fn all_collectors_have_unique_non_empty_names() {
         let collectors = all_collectors();
-        assert_eq!(collectors.len(), 22);
+        assert_eq!(collectors.len(), 23);
         let mut names: Vec<&str> = collectors.iter().map(|c| c.name()).collect();
         names.sort_unstable();
         names.dedup();

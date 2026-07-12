@@ -262,11 +262,16 @@ fn strip_jsonc(input: &str) -> String {
 }
 
 fn evidence_line(content: &str, line: usize) -> String {
-    content
+    let raw: String = content
         .lines()
         .nth(line.saturating_sub(1))
         .map(|l| l.trim().chars().take(160).collect())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // Evidence is persisted to the DB and printed to stdout/JSON, so it must honor the same
+    // "never store a raw secret" invariant the dedicated secret detector already upholds. A
+    // config line we quote as evidence (e.g. a one-line settings.json `hooks` entry) can itself
+    // embed a high-confidence credential; redact those out before the line leaves this function.
+    super::secrets::redact_text(&raw).0
 }
 
 fn find_key_line(content: &str, needle: &str) -> Option<usize> {
@@ -582,6 +587,14 @@ pub fn detect_mcp(content: &str) -> Vec<Detection> {
             })
             .unwrap_or_default();
         let all = format!("{command} {}", args.join(" "));
+        // MCP server definitions routinely carry credentials in their args/env (a bearer token, an
+        // `Authorization:` header). Evidence is persisted and printed, so mask any high-confidence
+        // secret out of it first — the same invariant `evidence_line` upholds for config lines.
+        let evidence: String = super::secrets::redact_text(&all)
+            .0
+            .chars()
+            .take(120)
+            .collect();
         let line = find_key_line(content, name).unwrap_or(1);
 
         if all.contains("mcp-remote") {
@@ -591,7 +604,7 @@ pub fn detect_mcp(content: &str) -> Vec<Detection> {
                     "MCP server \"{name}\" runs via mcp-remote, which had a critical command-injection flaw in versions ≤ 0.1.15 (CVE-2025-6514)."
                 ),
                 line: Some(line),
-                evidence: all.chars().take(120).collect(),
+                evidence: evidence.clone(),
             });
         }
 
@@ -606,7 +619,7 @@ pub fn detect_mcp(content: &str) -> Vec<Detection> {
                     "MCP server \"{name}\" is launched through a shell (`{base} -c …`)."
                 ),
                 line: Some(line),
-                evidence: all.chars().take(120).collect(),
+                evidence: evidence.clone(),
             });
         } else if matches!(base, "npx" | "uvx" | "bunx" | "pnpm" | "pipx") && is_unpinned(&args) {
             out.push(Detection {
@@ -615,7 +628,7 @@ pub fn detect_mcp(content: &str) -> Vec<Detection> {
                     "MCP server \"{name}\" launches an unpinned package via {base}. Without a pinned version it runs whatever the registry serves next, with your granted tool permissions."
                 ),
                 line: Some(line),
-                evidence: all.chars().take(120).collect(),
+                evidence: evidence.clone(),
             });
         }
     }
@@ -774,6 +787,25 @@ mod tests {
         let d =
             detect_mcp(r#"{"mcpServers":{"s":{"command":"bash","args":["-c","some | pipe"]}}}"#);
         assert!(d.iter().any(|x| x.rule_id == "BLWK-AI-005"));
+    }
+
+    #[test]
+    fn mcp_evidence_masks_an_embedded_secret() {
+        // An MCP server whose args carry a real Anthropic-style key. The finding's evidence must
+        // not echo that key in plaintext — it is persisted and printed.
+        let key = format!("sk-ant-api03-{}AA", "a".repeat(93));
+        let config = format!(
+            r#"{{"mcpServers":{{"s":{{"command":"npx","args":["-y","some-server","--token","{key}"]}}}}}}"#
+        );
+        let d = detect_mcp(&config);
+        assert!(!d.is_empty(), "an unpinned npx server should be flagged");
+        for det in &d {
+            assert!(
+                !det.evidence.contains(&key),
+                "evidence must not contain the raw secret: {}",
+                det.evidence
+            );
+        }
     }
 
     #[test]

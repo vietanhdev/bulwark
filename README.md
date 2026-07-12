@@ -24,7 +24,7 @@ Built with Tauri v2 + Rust + React. One rule engine, one rule pack, two front-do
 
 ## Features
 
-- **59 rules** across 11 categories (SSH/remote access, persistence, network egress, kernel
+- **60 rules** across 11 categories (SSH/remote access, persistence, network egress, kernel
   hardening, filesystem permissions, privilege escalation, logging/auditing, accounts/services,
   defense evasion, rootkit/malware, file integrity), each carrying a severity, a plain-language
   explanation with live values interpolated in, a one-line fix, and CIS/MITRE ATT&CK references.

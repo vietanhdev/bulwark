@@ -30,7 +30,8 @@ impl Collector for ShellHistoryConfigCollector {
         let mut combined = String::new();
         for rc in [".bashrc", ".zshrc", ".profile"] {
             let path = std::path::Path::new(&home).join(rc);
-            if let Ok(text) = std::fs::read_to_string(path) {
+            // Size-capped: user-writable rc files, same memory-exhaustion concern as authorized_keys.
+            if let Ok(text) = super::read_capped(&path) {
                 combined.push_str(&text);
                 combined.push('\n');
             }

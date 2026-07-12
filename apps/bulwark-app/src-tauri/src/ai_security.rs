@@ -180,17 +180,51 @@ pub async fn ai_scan_snapshot() -> Result<AiSnapshotResponse, String> {
     })
 }
 
+/// Set of files the most recent persisted AI scan actually flagged. `ai_redact` uses this as an
+/// allowlist: redaction may only touch a file the user already saw reported, never an arbitrary
+/// path the caller supplies. Paths are canonicalized so `./x` and `/abs/x` compare equal.
+fn redactable_files() -> BTreeSet<PathBuf> {
+    let canon = |s: &str| std::fs::canonicalize(s).unwrap_or_else(|_| PathBuf::from(s));
+    db_path()
+        .filter(|p| p.exists())
+        .and_then(|p| Store::open(&p).ok())
+        .and_then(|mut s| s.latest_ai_scan().ok().flatten())
+        .map(|snap| snap.findings.iter().map(|f| canon(&f.file)).collect())
+        .unwrap_or_default()
+}
+
 /// Redacts (or, with `apply = false`, previews redacting) leaked secrets in the given files —
 /// the paths the frontend collected from the current scan's redactable findings. Never scans or
 /// rewrites anything the user didn't already see flagged. Returns the per-file outcome.
+///
+/// The "already flagged" guarantee is enforced **here**, server-side, not merely trusted from the
+/// frontend: `ai_redact` is an IPC command callable by any script in the webview, so an unfiltered
+/// path list would be an arbitrary-file-rewrite primitive (point it at `~/.aws/credentials` and it
+/// would overwrite the live secret). Every requested path is intersected with the files the last
+/// scan reported; anything else is dropped with an error entry rather than opened.
 #[tauri::command]
 pub async fn ai_redact(
     paths: Vec<String>,
     apply: bool,
 ) -> Result<bulwark_core::RedactionReport, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let files: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
-        ai_redact_paths(&files, apply, &backup_dir())
+        let allowed = redactable_files();
+        let mut files: Vec<PathBuf> = Vec::new();
+        let mut rejected: Vec<String> = Vec::new();
+        for p in paths {
+            let canon = std::fs::canonicalize(&p).unwrap_or_else(|_| PathBuf::from(&p));
+            if allowed.contains(&canon) {
+                files.push(PathBuf::from(p));
+            } else {
+                rejected.push(format!(
+                    "{p}: not redacting a path the latest scan did not flag"
+                ));
+            }
+        }
+
+        let mut report = ai_redact_paths(&files, apply, &backup_dir());
+        report.errors.extend(rejected);
+        report
     })
     .await
     .map_err(|e| e.to_string())

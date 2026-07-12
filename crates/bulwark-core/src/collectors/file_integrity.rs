@@ -75,7 +75,10 @@ fn compute_hashes(paths: &[PathBuf]) -> HashMap<String, String> {
     if paths.is_empty() {
         return HashMap::new();
     }
-    let Ok(output) = Command::new("sha256sum").args(paths).output() else {
+    // `--` ends option parsing. Today these paths are curated constants, but keeping the
+    // separator means a future caller that passes a path beginning with `-` (or the `-`
+    // stdin sentinel) can't accidentally turn a watched path into a flag for sha256sum.
+    let Ok(output) = Command::new("sha256sum").arg("--").args(paths).output() else {
         return HashMap::new();
     };
     parse_hash_lines(&String::from_utf8_lossy(&output.stdout))
@@ -201,8 +204,31 @@ pub fn establish_baseline_at(paths: &[&str], baseline_file: &Path) -> anyhow::Re
     if let Some(parent) = baseline_file.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(baseline_file, lines.join("\n") + "\n")?;
+    write_no_follow(baseline_file, (lines.join("\n") + "\n").as_bytes())?;
     Ok(hashes.len())
+}
+
+/// Writes `content` to `path`, refusing to follow a symlink at the final path component. The
+/// baseline is written by `bulwarkctl fim baseline` which, with `--privileged`, runs as root; if
+/// its resolved path (from `$HOME`/`$BULWARK_FIM_BASELINE`) were a pre-planted symlink, a plain
+/// `fs::write` would let root clobber the symlink's target. `O_NOFOLLOW` makes that `open` fail
+/// (ELOOP) instead. On non-Unix there's no such flag, so it falls back to a plain write.
+#[cfg(unix)]
+fn write_no_follow(path: &Path, content: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)?;
+    f.write_all(content)
+}
+
+#[cfg(not(unix))]
+fn write_no_follow(path: &Path, content: &[u8]) -> std::io::Result<()> {
+    std::fs::write(path, content)
 }
 
 /// Resolves the real, on-disk baseline path and delegates to [`establish_baseline_at`] — the

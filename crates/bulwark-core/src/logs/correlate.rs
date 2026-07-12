@@ -48,9 +48,46 @@ pub struct CorrelationState {
     keys: HashMap<(String, String), KeyState>,
 }
 
+/// Hard cap on distinct live `(rule_id, group_key)` entries. A rule keyed by `srcip` inserts one
+/// entry per source IP that ever matches, so a crafted log with many (spoofable) source addresses
+/// would otherwise grow this map without bound. Set far above any realistic host's IP diversity.
+const MAX_LIVE_KEYS: usize = 200_000;
+
+/// A key whose most recent event is older than this (in the log's own time) can't contribute to
+/// any reasonable correlation window anymore and is evicted when space is needed — one day of
+/// log-time dwarfs the window widths correlation rules actually use (seconds to minutes).
+const GC_HORIZON_SECS: i64 = 24 * 3600;
+
 impl CorrelationState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Frees entries that can no longer affect any result: those with no timestamps left (already
+    /// fired and not suppressed) or whose newest event is older than [`GC_HORIZON_SECS`] and which
+    /// aren't actively suppressing. If that still doesn't get under the cap, evict the entries with
+    /// the oldest activity as a hard backstop. Only ever called when the map hits the cap.
+    fn gc(&mut self, now_epoch: i64) {
+        let horizon = now_epoch - GC_HORIZON_SECS;
+        self.keys.retain(|_, st| {
+            let suppressing = st.suppressed_until.is_some_and(|u| u > now_epoch);
+            let recent = st.window.back().is_some_and(|&ts| ts >= horizon);
+            suppressing || recent
+        });
+        if self.keys.len() < MAX_LIVE_KEYS {
+            return;
+        }
+        // Backstop: still at the cap after horizon GC — drop the least-recently-active tenth so a
+        // pathological single-window flood of distinct keys can't pin us at the ceiling forever.
+        let mut newest: Vec<((String, String), i64)> = self
+            .keys
+            .iter()
+            .map(|(k, st)| (k.clone(), st.window.back().copied().unwrap_or(i64::MIN)))
+            .collect();
+        newest.sort_unstable_by_key(|(_, ts)| *ts);
+        for (k, _) in newest.into_iter().take(MAX_LIVE_KEYS / 10) {
+            self.keys.remove(&k);
+        }
     }
 
     /// Records one matching event for `rule_id` at `now_epoch` (the event's own Unix timestamp),
@@ -71,10 +108,13 @@ impl CorrelationState {
         group_key: &str,
         now_epoch: i64,
     ) -> bool {
-        let state = self
-            .keys
-            .entry((rule_id.to_string(), group_key.to_string()))
-            .or_default();
+        // Bound memory before inserting a brand-new key: if we're at the cap and this event would
+        // add yet another distinct key, garbage-collect first.
+        let key = (rule_id.to_string(), group_key.to_string());
+        if self.keys.len() >= MAX_LIVE_KEYS && !self.keys.contains_key(&key) {
+            self.gc(now_epoch);
+        }
+        let state = self.keys.entry(key).or_default();
 
         let cutoff = now_epoch - spec.window_secs;
         while let Some(&front) = state.window.front() {

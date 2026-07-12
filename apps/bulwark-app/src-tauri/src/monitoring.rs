@@ -159,7 +159,7 @@ impl From<&Inner> for MonitoringStatus {
 
 #[tauri::command]
 pub fn monitoring_get_status(state: tauri::State<MonitoringState>) -> MonitoringStatus {
-    let inner = state.0.lock().unwrap();
+    let inner = state.0.lock().unwrap_or_else(|e| e.into_inner());
     MonitoringStatus::from(&*inner)
 }
 
@@ -168,7 +168,7 @@ pub fn monitoring_set_enabled(
     state: tauri::State<MonitoringState>,
     enabled: bool,
 ) -> MonitoringStatus {
-    let mut inner = state.0.lock().unwrap();
+    let mut inner = state.0.lock().unwrap_or_else(|e| e.into_inner());
     inner.enabled = enabled;
     if enabled && inner.next_tick_at.is_none() {
         inner.next_tick_at =
@@ -185,7 +185,7 @@ pub fn monitoring_set_interval_minutes(
     state: tauri::State<MonitoringState>,
     minutes: u64,
 ) -> MonitoringStatus {
-    let mut inner = state.0.lock().unwrap();
+    let mut inner = state.0.lock().unwrap_or_else(|e| e.into_inner());
     inner.interval_minutes = minutes.max(1);
     inner.next_tick_at =
         Some(Utc::now() + chrono::Duration::minutes(inner.interval_minutes as i64));
@@ -208,7 +208,7 @@ pub fn spawn(app: AppHandle, rules_dir: PathBuf) {
 
             let due = {
                 let state = app.state::<MonitoringState>();
-                let inner = state.0.lock().unwrap();
+                let inner = state.0.lock().unwrap_or_else(|e| e.into_inner());
                 inner.enabled && inner.next_tick_at.is_some_and(|t| Utc::now() >= t)
             };
             if !due {
@@ -276,11 +276,11 @@ pub fn spawn_file_watcher(app: AppHandle, rules_dir: PathBuf) {
 
                 let should_run = {
                     let state = watcher_app.state::<MonitoringState>();
-                    let enabled = state.0.lock().unwrap().enabled;
+                    let enabled = state.0.lock().unwrap_or_else(|e| e.into_inner()).enabled;
                     if !enabled {
                         false
                     } else {
-                        let mut last = last_triggered.lock().unwrap();
+                        let mut last = last_triggered.lock().unwrap_or_else(|e| e.into_inner());
                         let due = last.is_none_or(|t| t.elapsed() >= DEBOUNCE);
                         if due {
                             *last = Some(Instant::now());
@@ -358,7 +358,7 @@ fn run_tick(app: &AppHandle, rules_dir: &Path) {
     let _ = app.emit("monitoring:tick", ());
 
     let state = app.state::<MonitoringState>();
-    let mut inner = state.0.lock().unwrap();
+    let mut inner = state.0.lock().unwrap_or_else(|e| e.into_inner());
     inner.last_tick_at = Some(Utc::now());
     inner.next_tick_at =
         Some(Utc::now() + chrono::Duration::minutes(inner.interval_minutes as i64));

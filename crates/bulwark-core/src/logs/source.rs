@@ -11,7 +11,7 @@
 use super::event::RawEvent;
 use chrono::{DateTime, TimeZone, Utc};
 use regex::Regex;
-use std::io::{BufRead, BufReader, Lines};
+use std::io::{BufRead, BufReader};
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::LazyLock;
 
@@ -20,6 +20,64 @@ use std::sync::LazyLock;
 /// aborts a whole scan, matching the engine's "never a silent drop, never a fatal one" stance.
 pub trait LogSource {
     fn next_event(&mut self) -> Option<anyhow::Result<RawEvent>>;
+}
+
+/// Max bytes retained for a single log line. Log input can be attacker-influenced (a crafted or
+/// corrupt `--from-file`, or an oversized journald record), and a newline-free multi-gigabyte
+/// "line" read whole would OOM the process — the same reason the config collectors size-cap their
+/// reads. Past this we keep the first `MAX_LINE_BYTES` and discard the rest of that physical line.
+const MAX_LINE_BYTES: usize = 1024 * 1024;
+
+/// A `BufRead::lines()`-style iterator that never buffers more than [`MAX_LINE_BYTES`] for one
+/// line. It still consumes the whole physical line from the reader (so parsing stays aligned to
+/// real line boundaries), it just stops *storing* bytes past the cap.
+struct CappedLines<R: BufRead> {
+    reader: R,
+}
+
+impl<R: BufRead> Iterator for CappedLines<R> {
+    type Item = std::io::Result<String>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut saw_any = false;
+        loop {
+            let available = match self.reader.fill_buf() {
+                Ok(b) => b,
+                Err(e) => return Some(Err(e)),
+            };
+            if available.is_empty() {
+                if !saw_any {
+                    return None;
+                }
+                break;
+            }
+            saw_any = true;
+            match available.iter().position(|&b| b == b'\n') {
+                Some(pos) => {
+                    if buf.len() < MAX_LINE_BYTES {
+                        let take = pos.min(MAX_LINE_BYTES - buf.len());
+                        buf.extend_from_slice(&available[..take]);
+                    }
+                    self.reader.consume(pos + 1);
+                    break;
+                }
+                None => {
+                    let n = available.len();
+                    if buf.len() < MAX_LINE_BYTES {
+                        let take = n.min(MAX_LINE_BYTES - buf.len());
+                        buf.extend_from_slice(&available[..take]);
+                    }
+                    self.reader.consume(n);
+                }
+            }
+        }
+        // Match BufRead::lines(): a trailing CR (from CRLF) is stripped.
+        if buf.last() == Some(&b'\r') {
+            buf.pop();
+        }
+        Some(Ok(String::from_utf8_lossy(&buf).into_owned()))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -44,7 +102,7 @@ pub struct JournaldSource {
     // Kept so the child is reaped when the source is dropped; the stdout it owned was moved
     // into `lines`.
     child: Child,
-    lines: Lines<BufReader<ChildStdout>>,
+    lines: CappedLines<BufReader<ChildStdout>>,
 }
 
 impl JournaldSource {
@@ -76,7 +134,9 @@ impl JournaldSource {
             .ok_or_else(|| anyhow::anyhow!("journalctl produced no stdout pipe"))?;
         Ok(Self {
             child,
-            lines: BufReader::new(stdout).lines(),
+            lines: CappedLines {
+                reader: BufReader::new(stdout),
+            },
         })
     }
 
@@ -178,14 +238,14 @@ static SYSLOG_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// UTC is the one interpretation that's reproducible, and it only shifts absolute times, not the
 /// *relative* deltas correlation windows actually depend on.
 pub struct SyslogLinesSource<R: BufRead> {
-    lines: Lines<R>,
+    lines: CappedLines<R>,
     assume_year: i32,
 }
 
 impl<R: BufRead> SyslogLinesSource<R> {
     pub fn new(reader: R, assume_year: i32) -> Self {
         Self {
-            lines: reader.lines(),
+            lines: CappedLines { reader },
             assume_year,
         }
     }
@@ -282,6 +342,26 @@ mod tests {
         );
         assert_eq!(ev.timestamp.to_rfc3339(), "2026-07-12T13:45:01+00:00");
         assert!(s.next_event().is_none());
+    }
+
+    #[test]
+    fn an_oversized_line_is_capped_and_the_next_line_still_parses() {
+        // A newline-free "line" far larger than the cap, followed by a real line. The giant line
+        // must not be buffered whole (memory bound) and must not swallow the following line.
+        let huge = "A".repeat(MAX_LINE_BYTES + 5_000);
+        let text = format!("{huge}\nJul 12 13:45:01 h sshd[7]: hello\n");
+        let mut lines = CappedLines {
+            reader: Cursor::new(text.into_bytes()),
+        };
+        let first = lines.next().unwrap().unwrap();
+        assert_eq!(
+            first.len(),
+            MAX_LINE_BYTES,
+            "the giant line is truncated to the cap"
+        );
+        let second = lines.next().unwrap().unwrap();
+        assert_eq!(second, "Jul 12 13:45:01 h sshd[7]: hello");
+        assert!(lines.next().is_none());
     }
 
     #[test]

@@ -1,0 +1,23 @@
+id: BLWK-SSH-012
+title: SSH private key is not passphrase-protected
+category: ssh-remote-access
+severity: high
+collector: ssh_private_keys
+condition: encrypted == false
+explain: >
+  The SSH private key at {{ ssh_private_keys.path }} (format: {{ ssh_private_keys.key_format }})
+  has no passphrase, so it is a plaintext credential on disk. Anyone who obtains a copy of that
+  one file — from a backup, a lost or stolen laptop, a dotfiles repo synced to the cloud, or any
+  process running as you — can authenticate as you to every server that trusts it, immediately and
+  with nothing else required. A passphrase does not stop a determined attacker forever, but it
+  turns "copy one file and log in" into "also crack a passphrase," and it is what lets you notice
+  and rotate the key before it is used.
+fix: >
+  Add a passphrase to the existing key in place (this keeps the same key, so you do not have to
+  re-add it to any server): run 'ssh-keygen -p -f {{ ssh_private_keys.path }}' and enter a strong
+  passphrase when prompted. To avoid typing it on every use, load the key into your agent once per
+  session with 'ssh-add {{ ssh_private_keys.path }}'. If this key is shared, checked into a repo,
+  or you are unsure who has copied it, treat it as compromised: generate a fresh one with
+  'ssh-keygen -t ed25519 -a 100', deploy the new public key, and remove the old key from every
+  server's authorized_keys.
+references: [CIS-5.2, ATTACK-T1552.004, ATTACK-T1078]

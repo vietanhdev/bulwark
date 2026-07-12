@@ -6,7 +6,6 @@
   "permissions": [
     "core:default",
     "notification:default",
-    "opener:default",
     "dialog:default",
     "core:window:default",
     "core:window:allow-start-dragging",

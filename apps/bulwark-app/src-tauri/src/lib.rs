@@ -128,40 +128,70 @@ fn resolve_rules_dir(app: Option<&tauri::AppHandle>) -> Result<PathBuf, String> 
     Err("couldn't find a 'rules' directory (set BULWARK_RULES_DIR)".to_string())
 }
 
+/// Like [`resolve_rules_dir`] but for the path handed to the **root** `pkexec` scan: it must not be
+/// steerable by anything an attacker can set in the GUI's environment. So `BULWARK_RULES_DIR` and
+/// the dev workspace walk are honored only under `debug_assertions`; a shipped build resolves the
+/// rules only to the bundled Tauri resource dir. This mirrors [`resolve_cli_binary`]'s refusal to
+/// trust the environment on the privileged path — the rule engine is declarative and can't execute
+/// code, but a root scan should still never read a rules dir an unprivileged actor chose.
+fn resolve_privileged_rules_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    #[cfg(debug_assertions)]
+    {
+        if let Ok(p) = std::env::var("BULWARK_RULES_DIR") {
+            return Ok(PathBuf::from(p));
+        }
+        if let Some(dir) = find_workspace_rules_dir() {
+            return Ok(dir);
+        }
+    }
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let rules = resource_dir.join("rules");
+        if rules.is_dir() {
+            return Ok(rules);
+        }
+    }
+    Err("couldn't find the bundled 'rules' directory for the privileged scan".to_string())
+}
+
 /// Locates the `bulwarkctl` CLI binary this GUI shells out to for the privileged path (see
 /// [`scan_privileged`]).
 ///
-/// Resolution order, most-specific first:
-/// 1. `BULWARK_CLI_PATH` — explicit override (tests, unusual installs).
-/// 2. **Next to the running executable** — this is the one that matters for a GUI-only
-///    install. `bulwarkctl` is bundled as a Tauri `externalBin` sidecar, so it lands beside
-///    `bulwark-app` in every package format — the desktop `.deb`/`.rpm` *and* the single-file
-///    AppImage (which has no `usr/bin` on `PATH` at all). Without this, "Run privileged checks"
-///    would fail for exactly the users most likely to install the desktop package alone.
-/// 3. Dev-mode workspace walk (`target/{debug,release}/bulwarkctl`).
-/// 4. Bare `"bulwarkctl"` on `PATH` — the CLI-package-alongside-GUI case.
-fn resolve_cli_binary() -> PathBuf {
-    if let Ok(p) = std::env::var("BULWARK_CLI_PATH") {
-        return PathBuf::from(p);
-    }
+/// This binary is executed **as root** via `pkexec`, so its path must not be influenceable by
+/// anything an attacker can set in the GUI process's environment. That rules out, on purpose:
+///   * `BULWARK_CLI_PATH` / any env override — a poisoned `~/.profile`, systemd user environment,
+///     or tampered `.desktop` `Environment=` would otherwise choose the binary root runs.
+///   * the bare-`"bulwarkctl"`-on-`$PATH` fallback — `$PATH` is equally attacker-controlled.
+///   * (release builds) the dev workspace `target/` walk — a planted `target/debug/bulwarkctl`
+///     under an attacker-chosen CWD would otherwise be run as root.
+///
+/// The only trusted location is **next to the running executable**, canonicalized: `bulwark-cli`
+/// is bundled as a Tauri `externalBin` sidecar, so it lands beside `bulwark-app` in every package
+/// format (the desktop `.deb`/`.rpm` and the single-file AppImage alike). The `target/` walk
+/// survives *only* under `debug_assertions`, purely so `cargo tauri dev` can find the freshly
+/// built CLI; it is compiled out of every shipped build.
+fn resolve_cli_binary() -> Result<PathBuf, String> {
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
+        // Canonicalize the executable's own directory so a symlinked launcher can't point the
+        // sidecar lookup at an attacker-controlled directory.
+        if let Some(dir) = exe.parent().and_then(|d| std::fs::canonicalize(d).ok()) {
             // `bulwark-cli` is the bundled sidecar (see build.rs for why it is not called
             // `bulwarkctl`); `bulwarkctl` covers an install where the CLI package sits alongside.
             for name in ["bulwark-cli", "bulwarkctl"] {
                 let sidecar = dir.join(name);
                 if sidecar.is_file() {
-                    return sidecar;
+                    return Ok(sidecar);
                 }
             }
         }
     }
+
+    #[cfg(debug_assertions)]
     if let Ok(mut candidate) = std::env::current_dir() {
         for _ in 0..4 {
             for profile in ["debug", "release"] {
                 let bin = candidate.join("target").join(profile).join("bulwarkctl");
                 if bin.is_file() {
-                    return bin;
+                    return Ok(bin);
                 }
             }
             if !candidate.pop() {
@@ -169,7 +199,12 @@ fn resolve_cli_binary() -> PathBuf {
             }
         }
     }
-    PathBuf::from("bulwarkctl")
+
+    Err(
+        "couldn't locate the bundled bulwark CLI next to the app — refusing to run an \
+         unverified binary as root"
+            .to_string(),
+    )
 }
 
 fn db_path() -> Result<PathBuf, String> {
@@ -256,15 +291,17 @@ async fn scan_start(
 /// Runs the full (privileged) scan via `pkexec bulwarkctl scan --privileged --json` and
 /// returns the parsed result. Deliberately shells out to the already-built, already-tested
 /// CLI rather than duplicating collector-invocation logic here — the polkit prompt this
-/// triggers is defined by `polkit/com.bulwark.policy` (`auth_admin_keep`, one prompt per
-/// session), matching architecture doc §4's GUI privilege model. This replaces the current
+/// triggers is defined by `polkit/com.bulwark.policy` (`auth_admin`, one prompt per privileged
+/// scan), matching architecture doc §4's GUI privilege model. Both the CLI binary and the rules
+/// dir handed to root are resolved without trusting the environment (see `resolve_cli_binary` and
+/// `resolve_privileged_rules_dir`). This replaces the current
 /// finding list rather than merging into it — it's a strictly more complete re-scan, not
 /// an incremental addition, so there's nothing to de-duplicate against the prior partial run.
 #[tauri::command]
 async fn scan_privileged(app: tauri::AppHandle) -> Result<ScanRun, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let rules_dir = resolve_rules_dir(Some(&app))?;
-        let cli = resolve_cli_binary();
+        let rules_dir = resolve_privileged_rules_dir(&app)?;
+        let cli = resolve_cli_binary()?;
         let output = std::process::Command::new("pkexec")
             .arg(&cli)
             .arg("scan")

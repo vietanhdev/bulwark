@@ -221,6 +221,10 @@ pub fn scan(paths: &[PathBuf]) -> anyhow::Result<AvScanResult> {
         .arg("--recursive")
         .arg("--infected")
         .arg("--no-summary")
+        // `--` ends option parsing: the scan targets come from the UI (user-chosen files and
+        // folders), and without this a path like `--copy=/somewhere` or one that merely starts
+        // with `-` would be swallowed by clamscan as a flag instead of scanned as a path.
+        .arg("--")
         .args(paths)
         .output()?;
 
@@ -280,6 +284,10 @@ pub fn scan_streaming_cancellable(
     let mut child = Command::new("clamscan")
         .arg("--recursive")
         .arg("--no-summary")
+        // `--` ends option parsing. This is the path the GUI's "scan this folder" command drives
+        // with webview-supplied paths, so without it an entry like `--remove` or `--move=/dir`
+        // (or `-d attacker.db`) would be honored as a destructive clamscan flag, not a scan target.
+        .arg("--")
         .args(paths)
         .stdout(Stdio::piped())
         .spawn()?;

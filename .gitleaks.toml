@@ -22,4 +22,9 @@ paths = [
   # valid so the rule fires, never a live credential.
   '''crates/bulwark-core/src/ai_scan/secrets\.rs''',
   '''crates/bulwarkctl/tests/ai_cli\.rs''',
+
+  # The SSH-private-key collector's tests. Classifying "is this key encrypted?" requires test
+  # vectors shaped like each on-disk key format (OpenSSH/PEM/PKCS#8). Every one is a synthetic,
+  # truncated header — no key material, never a real private key.
+  '''crates/bulwark-core/src/collectors/ssh_keys\.rs''',
 ]

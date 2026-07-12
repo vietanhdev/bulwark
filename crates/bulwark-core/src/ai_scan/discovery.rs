@@ -610,8 +610,19 @@ fn collect_dir(
             return;
         };
         for entry in entries.flatten() {
+            // Use the dirent's own type (does not traverse the link) and skip symlinks entirely:
+            // a symlink planted in a scanned tree could otherwise redirect the walk out of scope
+            // (into /etc or another user's home) and pull those files into the scan — and, worse,
+            // into the redaction path. Redaction refuses symlinks too, but not descending onto
+            // them here is the first and cheaper line of defense (and avoids symlink-loop walks).
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
             let path = entry.path();
-            if path.is_dir() {
+            if file_type.is_dir() {
                 walk(out, &path, ext, tool, kind, ws, depth + 1);
             } else if path.extension().and_then(|e| e.to_str()) == Some(ext) {
                 out.push(Artifact {

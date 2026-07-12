@@ -288,14 +288,20 @@ fn line_of(text: &str, byte_offset: usize) -> usize {
 /// so nothing recoverable reaches a finding, a log, or the database.
 pub fn mask(secret: &str) -> String {
     let chars: Vec<char> = secret.chars().collect();
-    if chars.len() <= 10 {
-        return "*".repeat(chars.len().max(1));
+    let len = chars.len();
+    // The revealed head/tail exists only to help a human recognize *which* key this is (e.g. an
+    // `sk-ant-` prefix), never to expose recoverable material. So reveal at most ~1/8 of the
+    // secret from each end (capped at 4 head / 3 tail), and nothing at all from a short one — the
+    // previous fixed head4/tail3 leaked ~64% of an 11-char generic token.
+    let reveal = len / 8;
+    if len <= 12 || reveal == 0 {
+        return "*".repeat(len.max(1));
     }
-    let head: String = chars.iter().take(4).collect();
+    let head: String = chars.iter().take(reveal.min(4)).collect();
     let tail: String = chars
         .iter()
         .rev()
-        .take(3)
+        .take(reveal.min(3))
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
@@ -346,6 +352,36 @@ fn matches_for<'t>(rule: &Rule, text: &'t str) -> Vec<((usize, usize), &'t str)>
     out
 }
 
+/// A set of accepted, non-overlapping byte spans, keyed by start offset, with O(log n) overlap
+/// queries. Replaces a linear `spans.iter().any(...)` scan whose cost was O(n²) in the number of
+/// matches — a crafted file packed with thousands of secret-like values could otherwise turn a
+/// scan into tens of seconds of pure CPU. Because accepted spans never overlap, a candidate
+/// `[start, end)` overlaps the set iff the accepted span with the greatest start `< end` still
+/// ends after `start`.
+#[derive(Default)]
+struct SpanSet(std::collections::BTreeMap<usize, usize>);
+
+impl SpanSet {
+    fn overlaps(&self, start: usize, end: usize) -> bool {
+        self.0
+            .range(..end)
+            .next_back()
+            .is_some_and(|(_, &e)| e > start)
+    }
+    fn insert(&mut self, start: usize, end: usize) {
+        self.0.insert(start, end);
+    }
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+/// Upper bound on distinct secret hits recorded for a single file. Real artifacts hold a handful;
+/// this only caps a pathological/crafted file whose whole point is to amplify one 4 MB input into
+/// a memory-blowing pile of findings. Far above any legitimate file, so it never truncates real
+/// results silently.
+const MAX_SECRETS_PER_TEXT: usize = 1000;
+
 /// Scans `text`, returning one [`SecretMatch`] per distinct hit. Where a broad `generic-*` rule
 /// overlaps a precise provider rule on the same bytes, only the provider match is kept — a
 /// hardcoded `ANTHROPIC_API_KEY=sk-ant-…` is *one* Anthropic finding, not also a generic one.
@@ -354,21 +390,21 @@ pub fn scan_text(text: &str) -> Vec<SecretMatch> {
     let lowered = text.to_lowercase();
     let candidates = pack.candidates(&lowered);
 
-    let mut spans: Vec<(usize, usize)> = Vec::new();
+    let mut spans = SpanSet::default();
     let mut out: Vec<SecretMatch> = Vec::new();
 
     // Precise rules first, so they claim their spans before the heuristic ones run.
-    for high_conf_pass in [true, false] {
+    'passes: for high_conf_pass in [true, false] {
         for rule in candidates
             .iter()
             .map(|&i| &pack.rules[i])
             .filter(|r| r.high_conf == high_conf_pass)
         {
             for ((start, end), secret) in matches_for(rule, text) {
-                if spans.iter().any(|&(s, e)| start < e && s < end) {
+                if spans.overlaps(start, end) {
                     continue;
                 }
-                spans.push((start, end));
+                spans.insert(start, end);
                 out.push(SecretMatch {
                     provider: rule.provider.clone(),
                     rule_id: rule.id.clone(),
@@ -376,6 +412,9 @@ pub fn scan_text(text: &str) -> Vec<SecretMatch> {
                     redacted: mask(secret),
                     high_conf: rule.high_conf,
                 });
+                if out.len() >= MAX_SECRETS_PER_TEXT {
+                    break 'passes;
+                }
             }
         }
     }
@@ -407,21 +446,26 @@ pub fn redact_text(text: &str) -> (String, usize) {
     let lowered = text.to_lowercase();
     let candidates = pack.candidates(&lowered);
 
-    let mut hits: Vec<(usize, usize)> = Vec::new();
-    for rule in candidates
+    let mut spans = SpanSet::default();
+    'rules: for rule in candidates
         .iter()
         .map(|&i| &pack.rules[i])
         .filter(|r| r.high_conf)
     {
         for ((start, end), _) in matches_for(rule, text) {
-            if hits.iter().any(|&(s, e)| start < e && s < end) {
+            if spans.overlaps(start, end) {
                 continue;
             }
-            hits.push((start, end));
+            spans.insert(start, end);
+            if spans.len() >= MAX_SECRETS_PER_TEXT {
+                break 'rules;
+            }
         }
     }
-    hits.sort_unstable();
 
+    // BTreeMap iterates by ascending start; collect and splice right-to-left so earlier offsets
+    // stay valid as later ones are replaced.
+    let hits: Vec<(usize, usize)> = spans.0.into_iter().collect();
     let count = hits.len();
     let mut out = text.to_string();
     for &(start, end) in hits.iter().rev() {
@@ -609,6 +653,17 @@ mod tests {
     fn mask_never_reveals_a_short_secret() {
         assert_eq!(mask("short"), "*****");
         assert!(mask("sk-ant-api03-aaaaaaaaaa").contains('…'));
+    }
+
+    #[test]
+    fn mask_reveals_at_most_a_small_fraction() {
+        // An 11-char token used to leak 7 of its 11 chars (head4…tail3); it must now be fully
+        // masked — nothing recoverable in a stored/displayed finding.
+        assert_eq!(mask("abcdefghijk"), "***********");
+        assert!(!mask("abcdefghijk").contains('…'));
+        // A 16-char secret reveals only 1/8 from each end (head2…tail2), not head4/tail3.
+        let m = mask("abcdefghijklmnop");
+        assert_eq!(m, "ab…op");
     }
 
     #[test]

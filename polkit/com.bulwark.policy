@@ -6,15 +6,34 @@
   <vendor>Bulwark</vendor>
   <vendor_url>https://github.com/vietanhdev/bulwark</vendor_url>
 
+  <!--
+    Bulwark's GUI elevates one thing: `bulwarkctl scan --privileged`, to read root-only files
+    (e.g. /etc/sudoers, /etc/shadow) for a full audit. It does this with `pkexec`, which uses the
+    generic `org.freedesktop.policykit.exec` action below.
+
+    Two deliberate security choices:
+
+    * auth_admin, NOT auth_admin_keep. `keep` caches the authorization for the *generic exec
+      action* for several minutes, which means any other `pkexec <program>` in that window could
+      be authorized without a fresh prompt. For a security tool that is the wrong trade: we would
+      rather prompt on each privileged scan than leave a standing "run anything as root without
+      asking" window open. Every elevation is therefore an explicit, per-action decision.
+
+    * Which binary runs as root is decided by the app, not by this file. pkexec always runs the
+      absolute path it is handed; Bulwark resolves that path only to the CLI bundled beside the
+      app executable (canonicalized, no environment override) — see `resolve_cli_binary` in
+      apps/bulwark-app/src-tauri/src/lib.rs. The `exec.path` annotation on the shared exec action
+      is not an enforcement mechanism in polkit, so it is intentionally omitted here to avoid
+      implying a guarantee this file does not provide.
+  -->
   <action id="org.freedesktop.policykit.exec">
     <description>Run the privileged subset of a Bulwark scan</description>
     <message>Authentication is required for Bulwark to read root-only files (e.g. /etc/sudoers)</message>
     <defaults>
       <allow_any>auth_admin</allow_any>
       <allow_inactive>auth_admin</allow_inactive>
-      <allow_active>auth_admin_keep</allow_active>
+      <allow_active>auth_admin</allow_active>
     </defaults>
-    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/bulwark</annotate>
     <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
   </action>
 </policyconfig>

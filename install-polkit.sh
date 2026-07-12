@@ -5,9 +5,13 @@
 # of a scan (e.g. reading /etc/sudoers) via pkexec, without running the whole app as root.
 # Mirrors ThinkUtils' install-polkit.sh (https://github.com/vietanhdev/ThinkUtils).
 
-set -e
+set -euo pipefail
 
-POLICY_FILE="polkit/com.bulwark.policy"
+# Resolve paths relative to THIS script, not the caller's working directory. The script runs as
+# root (checked below) and installs a privilege-granting polkit action; a CWD-relative source path
+# would let `sudo ./install-polkit.sh` from an attacker-seeded directory install a rogue policy.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+POLICY_FILE="$SCRIPT_DIR/polkit/com.bulwark.policy"
 INSTALL_DIR="/usr/share/polkit-1/actions"
 
 echo "Bulwark Polkit Policy Installer"
@@ -40,7 +44,8 @@ echo ""
 echo "Polkit policy installed successfully."
 echo ""
 echo "bulwark-app can now run the privileged subset of a scan (e.g. reading /etc/sudoers)."
-echo "You'll be prompted for your password once per session (auth_admin_keep)."
+echo "You'll be prompted for your admin password each time you run a privileged scan"
+echo "(auth_admin — no standing 'run as root without asking' window is left open)."
 echo ""
 echo "Note: the CLI (bulwarkctl) doesn't use pkexec at all — for headless/SSH use, run"
 echo "'sudo bulwarkctl scan --privileged' directly instead."

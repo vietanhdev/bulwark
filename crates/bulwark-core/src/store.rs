@@ -35,6 +35,21 @@ pub struct Store {
     conn: SqliteConnection,
 }
 
+/// Sets `0700` (dir) / `0600` (file) on `path`, owner-only. Best-effort and silent on failure:
+/// this is a hardening step, not a correctness requirement, and it must never block the tool on a
+/// filesystem that doesn't carry Unix modes.
+#[cfg(unix)]
+fn restrict_to_owner(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(meta) = std::fs::metadata(path) {
+        let mode = if meta.is_dir() { 0o700 } else { 0o600 };
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
+    }
+}
+
+#[cfg(not(unix))]
+fn restrict_to_owner(_path: &Path) {}
+
 // ---- row types -----------------------------------------------------------------------------
 //
 // Diesel maps a table row to a struct. These are the *storage* shapes, kept separate from the
@@ -271,6 +286,11 @@ impl Store {
     pub fn open(path: &Path) -> anyhow::Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
+            // The database is a catalogue of this host's security weaknesses (open findings, fix
+            // hints) plus masked-secret evidence and secret file paths — an attacker's prioritized
+            // target list if another local user can read it. Lock down the directory and (below)
+            // the file to owner-only, rather than inheriting a world-readable default umask.
+            restrict_to_owner(parent);
         }
         if is_pre_orm_database(path)? {
             let backup = path.with_extension("db.pre-orm.bak");
@@ -287,6 +307,10 @@ impl Store {
             .ok_or_else(|| anyhow::anyhow!("database path is not valid UTF-8"))?;
         let mut conn = SqliteConnection::establish(url)?;
         prepare(&mut conn)?;
+        // `establish` creates the file under the process umask (typically 0644, world-readable);
+        // tighten it to owner-only now that it exists. Best-effort: a failure here (e.g. a
+        // filesystem without Unix modes) must not stop the tool from working.
+        restrict_to_owner(path);
         Ok(Self { conn })
     }
 

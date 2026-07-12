@@ -190,7 +190,7 @@ fn persist_watched_paths(paths: &[PathBuf]) {
 /// restarts, not just that the toggle remembers its position.
 pub fn start_if_enabled(app: AppHandle) {
     let state = app.state::<RealtimeAvState>();
-    let mut inner = state.0.lock().unwrap();
+    let mut inner = state.0.lock().unwrap_or_else(|e| e.into_inner());
     if inner.enabled {
         begin_watching(&app, &mut inner);
     }
@@ -222,7 +222,7 @@ fn begin_watching(app: &AppHandle, inner: &mut Inner) {
             ) {
                 return;
             }
-            let mut map = callback_pending.lock().unwrap();
+            let mut map = callback_pending.lock().unwrap_or_else(|e| e.into_inner());
             for path in event.paths {
                 // Only files get scanned — a new subdirectory just needs its own watch (which
                 // `RecursiveMode::Recursive` adds automatically), not a scan of the directory
@@ -277,7 +277,7 @@ fn spawn_worker(app: AppHandle, pending: Arc<Mutex<HashMap<PathBuf, Instant>>>, 
 
         let still_ours = {
             let state = app.state::<RealtimeAvState>();
-            let guard = state.0.lock().unwrap();
+            let guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
             guard.enabled && guard.generation == generation
         };
         if !still_ours {
@@ -285,7 +285,7 @@ fn spawn_worker(app: AppHandle, pending: Arc<Mutex<HashMap<PathBuf, Instant>>>, 
         }
 
         let ready: Vec<PathBuf> = {
-            let mut map = pending.lock().unwrap();
+            let mut map = pending.lock().unwrap_or_else(|e| e.into_inner());
             let ready_paths: Vec<PathBuf> = map
                 .iter()
                 .filter(|(_, t)| t.elapsed() >= SETTLE)
@@ -322,7 +322,7 @@ fn scan_one(app: &AppHandle, path: &Path) {
 
     let threats = {
         let state = app.state::<RealtimeAvState>();
-        let mut inner = state.0.lock().unwrap();
+        let mut inner = state.0.lock().unwrap_or_else(|e| e.into_inner());
         inner.files_scanned += 1;
         for threat in &result.threats {
             inner.threats_found += 1;
@@ -358,7 +358,7 @@ fn scan_one(app: &AppHandle, path: &Path) {
 
 #[tauri::command]
 pub fn realtime_av_get_status(state: tauri::State<RealtimeAvState>) -> RealtimeAvStatus {
-    let inner = state.0.lock().unwrap();
+    let inner = state.0.lock().unwrap_or_else(|e| e.into_inner());
     RealtimeAvStatus::from(&*inner)
 }
 
@@ -366,7 +366,7 @@ pub fn realtime_av_get_status(state: tauri::State<RealtimeAvState>) -> RealtimeA
 pub fn realtime_av_set_enabled(app: AppHandle, enabled: bool) -> RealtimeAvStatus {
     let state = app.state::<RealtimeAvState>();
     let status = {
-        let mut inner = state.0.lock().unwrap();
+        let mut inner = state.0.lock().unwrap_or_else(|e| e.into_inner());
         inner.enabled = enabled;
         if enabled {
             begin_watching(&app, &mut inner);
@@ -387,7 +387,7 @@ pub fn realtime_av_add_folder(app: AppHandle, path: String) -> Result<RealtimeAv
     }
 
     let state = app.state::<RealtimeAvState>();
-    let mut inner = state.0.lock().unwrap();
+    let mut inner = state.0.lock().unwrap_or_else(|e| e.into_inner());
 
     if inner.watched_paths.contains(&candidate) {
         return Ok(RealtimeAvStatus::from(&*inner));
@@ -413,7 +413,7 @@ pub fn realtime_av_remove_folder(app: AppHandle, path: String) -> Result<Realtim
     let candidate = PathBuf::from(&path);
 
     let state = app.state::<RealtimeAvState>();
-    let mut inner = state.0.lock().unwrap();
+    let mut inner = state.0.lock().unwrap_or_else(|e| e.into_inner());
 
     let before = inner.watched_paths.len();
     inner.watched_paths.retain(|p| p != &candidate);

@@ -26,7 +26,15 @@ pub fn parse_authorized_keys(text: &str) -> Vec<Fact> {
             .get(key_type_idx + 1)
             .map(|k| k.chars().take(16).collect())
             .unwrap_or_default();
-        let comment = fields[key_type_idx + 2..].join(" ");
+        // `get(range)` not `[range]`: this file is fully user-controlled, and a line whose
+        // key-type token is the last field (e.g. a bare `ssh-rsa`, or `command="x" ssh-ed25519`)
+        // makes `key_type_idx + 2 > fields.len()`, which panics with range indexing. A collector
+        // panic unwinds through the whole scan (there is no catch_unwind at the call site), so a
+        // single malformed authorized_keys line would abort an otherwise-good privileged scan.
+        let comment = fields
+            .get(key_type_idx + 2..)
+            .map(|rest| rest.join(" "))
+            .unwrap_or_default();
 
         let mut fact = Fact::new();
         fact.insert("line_number".to_string(), Value::from(line_no + 1));
@@ -51,7 +59,9 @@ impl Collector for AuthorizedKeysCollector {
         let Some(path) = Self::path() else {
             return Ok(vec![]);
         };
-        let text = std::fs::read_to_string(path)?;
+        // Size-capped: this is a user-writable file, so a local user could otherwise inflate it
+        // to exhaust memory during a (possibly root) scan.
+        let text = super::read_capped(&path)?;
         Ok(parse_authorized_keys(&text))
     }
 }

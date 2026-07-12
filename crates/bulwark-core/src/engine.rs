@@ -48,6 +48,25 @@ fn rule_matches_profile(rule: &Rule, profile: &Profile) -> bool {
         && (rule.profiles.is_empty() || rule.profiles.iter().any(|p| profile.needs.contains(p)))
 }
 
+/// Reads at most `max` bytes of `path` as UTF-8 (lossy), so an oversized rule file can't be used
+/// to exhaust memory during a scan. Opens without following a symlink at the final component.
+fn read_capped(path: &Path, max: u64) -> std::io::Result<String> {
+    use std::io::Read;
+    #[cfg(unix)]
+    let file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)?
+    };
+    #[cfg(not(unix))]
+    let file = std::fs::File::open(path)?;
+    let mut buf = Vec::new();
+    file.take(max).read_to_end(&mut buf)?;
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
 /// Loads every `.yaml`/`.yml` file under `dir` as a [`Rule`], parsing its condition too.
 /// A rule that fails to parse (bad YAML, unknown fields, or a bad condition expression)
 /// is collected as a [`RuleLoadError`] and skipped — never a silent drop and never a panic
@@ -56,14 +75,28 @@ pub fn load_rules(dir: &Path) -> (Vec<LoadedRule>, Vec<RuleLoadError>) {
     let mut loaded = Vec::new();
     let mut errors = Vec::new();
 
-    for entry in WalkDir::new(dir).into_iter().filter_map(Result::ok) {
+    // WalkDir doesn't recurse *through* symlinks by default, but it still yields a symlink entry,
+    // and `read_to_string` on one follows it at the OS level. A rules dir can be attacker-supplied
+    // (`--rules-dir`, and it's passed into the root pkexec scan), so a planted `x.yaml -> /etc/shadow`
+    // would otherwise be read — as root — and its content reflected back in the parse-error message.
+    // Skip symlinks outright, and read each rule through a size cap so a multi-GB `*.yaml` can't OOM
+    // the (possibly root) process.
+    const MAX_RULE_BYTES: u64 = 1024 * 1024;
+    for entry in WalkDir::new(dir)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
+        if entry.path_is_symlink() {
+            continue;
+        }
         let path = entry.path();
         let ext = path.extension().and_then(|e| e.to_str());
         if !matches!(ext, Some("yaml") | Some("yml")) {
             continue;
         }
         let path_str = path.display().to_string();
-        let text = match std::fs::read_to_string(path) {
+        let text = match read_capped(path, MAX_RULE_BYTES) {
             Ok(t) => t,
             Err(e) => {
                 errors.push(RuleLoadError {

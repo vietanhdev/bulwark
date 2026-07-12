@@ -1,0 +1,19 @@
+version: 2
+updates:
+  # Keeps the SHA-pinned GitHub Actions current: Dependabot bumps the pinned commit (and its
+  # trailing version comment) when the upstream action releases, so pinning doesn't mean going
+  # stale. This is the maintenance half of "pin third-party actions to a commit SHA".
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: npm
+    directory: "/apps/bulwark-app"
+    schedule:
+      interval: weekly

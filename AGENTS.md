@@ -131,7 +131,7 @@ Both front-doors share one on-disk SQLite history (`~/.local/share/bulwark/bulwa
 
 ### Privilege model
 
-Two different mechanisms, deliberately: the GUI uses `pkexec` with `polkit/com.bulwark.policy` (`auth_admin_keep`, one prompt per session — see `install-polkit.sh`); the CLI uses `sudo bulwarkctl scan --privileged` directly and refuses to run privileged without an actual root EUID. `pkexec` depends on a GUI-session-bound polkit agent that's normally absent over plain SSH, which is the whole reason the CLI doesn't use it (`docs/guide/architecture.md` §4, ADR-0004). Don't unify these into one mechanism without re-reading that reasoning.
+Two different mechanisms, deliberately: the GUI uses `pkexec` with `polkit/com.bulwark.policy` (`auth_admin`, one prompt per privileged scan — `auth_admin_keep` was dropped because it caches authorization for the *generic* exec action; see `install-polkit.sh`), and the exact root binary is pinned app-side in `resolve_cli_binary` (sidecar-beside-exe only, no env/PATH override); the CLI uses `sudo bulwarkctl scan --privileged` directly and refuses to run privileged without an actual root EUID. `pkexec` depends on a GUI-session-bound polkit agent that's normally absent over plain SSH, which is the whole reason the CLI doesn't use it (`docs/guide/architecture.md` §4, ADR-0004). Don't unify these into one mechanism without re-reading that reasoning.
 
 ### End-to-end fixture tests (`crates/bulwarkctl/tests/e2e.rs`)
 
