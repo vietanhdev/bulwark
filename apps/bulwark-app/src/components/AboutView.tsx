@@ -8,10 +8,22 @@ import { ShieldMark } from "@/components/ShieldMark";
 const REPO_URL = "https://github.com/vietanhdev/bulwark";
 
 const COMPARISON_SUMMARY = [
-  { name: "Lynis", note: "Closest in scope — a single-host config auditor. No GUI, no continuous file-triggered re-checks, no built-in AV." },
-  { name: "rkhunter / chkrootkit", note: "Signature-based rootkit detection — Bulwark deliberately delegates that to ClamAV rather than reimplementing it." },
-  { name: "AIDE", note: "Broad file-integrity baselining. Bulwark's FIM watches a small curated set of files that actually matter for this threat model." },
-  { name: "Wazuh, CrowdStrike, SentinelOne", note: "Fleet-scale XDR/EDR with kernel-level real-time telemetry — a different product category, not a gap Bulwark is trying to close." },
+  {
+    name: "Lynis",
+    note: "Closest in scope — a single-host config auditor. No GUI, no continuous file-triggered re-checks, no built-in AV.",
+  },
+  {
+    name: "rkhunter / chkrootkit",
+    note: "Signature-based rootkit detection — Bulwark deliberately delegates that to ClamAV rather than reimplementing it.",
+  },
+  {
+    name: "AIDE",
+    note: "Broad file-integrity baselining. Bulwark's FIM watches a small curated set of files that actually matter for this threat model.",
+  },
+  {
+    name: "Wazuh, CrowdStrike, SentinelOne",
+    note: "Fleet-scale XDR/EDR with kernel-level real-time telemetry — a different product category, not a gap Bulwark is trying to close.",
+  },
 ];
 
 export function AboutView() {
@@ -19,8 +31,12 @@ export function AboutView() {
   const [tauriVersion, setTauriVersion] = useState<string | null>(null);
 
   useEffect(() => {
-    getVersion().then(setVersion).catch(() => setVersion(null));
-    getTauriVersion().then(setTauriVersion).catch(() => setTauriVersion(null));
+    getVersion()
+      .then(setVersion)
+      .catch(() => setVersion(null));
+    getTauriVersion()
+      .then(setTauriVersion)
+      .catch(() => setTauriVersion(null));
   }, []);
 
   return (
@@ -38,12 +54,11 @@ export function AboutView() {
         </div>
 
         <p className="mt-5 text-sm text-muted-foreground">
-          A Linux host security scanner with a native CLI and desktop GUI. Bulwark checks a
-          machine's configuration against a declarative rule pack — SSH hardening, systemd/cron
-          persistence, sudoers, kernel/sysctl hardening, file permissions, logging, rootkit
-          indicators — and explains every finding in plain language with a concrete fix,
-          alongside real ClamAV virus scanning, file-integrity monitoring, and continuous
-          background monitoring. Built with Tauri, Rust, and React.
+          A Linux host security scanner with a native CLI and desktop GUI. Bulwark checks a machine's
+          configuration against a declarative rule pack — SSH hardening, systemd/cron persistence, sudoers,
+          kernel/sysctl hardening, file permissions, logging, rootkit indicators — and explains every finding
+          in plain language with a concrete fix, alongside real ClamAV virus scanning, file-integrity
+          monitoring, and continuous background monitoring. Built with Tauri, Rust, and React.
         </p>
 
         <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -83,8 +98,8 @@ export function AboutView() {
           ))}
         </Card>
         <p className="mt-3 text-xs text-muted-foreground">
-          Full sourced comparison, including a hands-on benchmark against 5 of these tools, is in
-          the repository's README.
+          Full sourced comparison, including a hands-on benchmark against 5 of these tools, is in the
+          repository's README.
         </p>
       </div>
     </ScrollArea>

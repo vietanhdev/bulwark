@@ -126,8 +126,8 @@ export function ThreatsView() {
     <div className="mx-auto max-w-5xl px-8 py-6">
       <h2 className="text-lg font-semibold">Antivirus &amp; File Integrity</h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        Two independent protective checks: signature-based malware scanning and baseline-and-diff
-        integrity monitoring for the files that matter most.
+        Two independent protective checks: signature-based malware scanning and baseline-and-diff integrity
+        monitoring for the files that matter most.
       </p>
 
       {/* Two equal-weight, independent features side by side rather than stacked — each has
@@ -140,10 +140,10 @@ export function ThreatsView() {
             Antivirus
           </h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            Signature-based malware scanning via ClamAV — Bulwark shells out to it rather than
-            reimplementing detection. Checks Downloads and the world-writable temp directories
-            (<code className="font-mono">/tmp</code>, <code className="font-mono">/var/tmp</code>) by
-            default, not the whole filesystem.
+            Signature-based malware scanning via ClamAV — Bulwark shells out to it rather than reimplementing
+            detection. Checks Downloads and the world-writable temp directories (
+            <code className="font-mono">/tmp</code>, <code className="font-mono">/var/tmp</code>) by default,
+            not the whole filesystem.
           </p>
 
           {/* Visible the moment this page opens — real engine/database version detail when
@@ -232,8 +232,9 @@ export function ThreatsView() {
                     : `${result.threats.length} threat${result.threats.length === 1 ? "" : "s"} found`}
                 </div>
                 <div className="font-mono text-xs text-muted-foreground">
-                  {result.files_scanned ?? filesScanned} file{(result.files_scanned ?? filesScanned) === 1 ? "" : "s"}{" "}
-                  scanned in {result.scanned_paths.join(", ")}
+                  {result.files_scanned ?? filesScanned} file
+                  {(result.files_scanned ?? filesScanned) === 1 ? "" : "s"} scanned in{" "}
+                  {result.scanned_paths.join(", ")}
                 </div>
               </div>
             </Card>
@@ -260,8 +261,9 @@ export function ThreatsView() {
             File integrity
           </h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            Bulwark hashes a curated set of security-critical files (<code className="font-mono">/etc/passwd</code>,
-            PAM configs, <code className="font-mono">sshd_config</code>, <code className="font-mono">sudo</code>/
+            Bulwark hashes a curated set of security-critical files (
+            <code className="font-mono">/etc/passwd</code>, PAM configs,{" "}
+            <code className="font-mono">sshd_config</code>, <code className="font-mono">sudo</code>/
             <code className="font-mono">su</code>) and flags any change against a baseline you establish
             explicitly — never automatically, since a baseline recorded after a compromise would just enshrine
             it as "known good." This covers the world-readable files;{" "}

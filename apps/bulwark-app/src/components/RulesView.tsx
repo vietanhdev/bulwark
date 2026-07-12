@@ -52,7 +52,9 @@ export function RulesView() {
           {rules ? `${rules.length} rules loaded, grouped by category.` : "Loading…"}
         </p>
 
-        {error && <div className="mt-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</div>}
+        {error && (
+          <div className="mt-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</div>
+        )}
 
         {/* Categories fill left-to-right, top-to-bottom rather than stacking one per row —
             at 57 rules across 12 categories, a single column meant a very long scroll for
@@ -86,7 +88,9 @@ export function RulesView() {
                               <Badge variant="outline" className="font-mono text-[10px]">
                                 {r.id}
                               </Badge>
-                              <span className="truncate text-xs text-muted-foreground">via {r.collector}</span>
+                              <span className="truncate text-xs text-muted-foreground">
+                                via {r.collector}
+                              </span>
                             </div>
                           </div>
                           <SeverityBadge severity={r.severity} />
@@ -94,7 +98,9 @@ export function RulesView() {
                         {isOpen && (
                           <div className="border-t border-border bg-muted/30 px-3 py-2.5 pl-9">
                             <p className="text-xs text-muted-foreground">{r.explain.trim()}</p>
-                            <div className="mt-2 rounded-md bg-muted px-2.5 py-1.5 font-mono text-xs">{r.fix}</div>
+                            <div className="mt-2 rounded-md bg-muted px-2.5 py-1.5 font-mono text-xs">
+                              {r.fix}
+                            </div>
                           </div>
                         )}
                       </div>

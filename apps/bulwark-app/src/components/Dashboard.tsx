@@ -1,15 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke, Channel } from "@tauri-apps/api/core";
-import {
-  ShieldAlert,
-  RotateCw,
-  Radar,
-  ListChecks,
-  Check,
-  AlertCircle,
-  Bug,
-  BadgeCheck,
-} from "lucide-react";
+import { ShieldAlert, RotateCw, Radar, ListChecks, Check, AlertCircle, Bug, BadgeCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -277,7 +268,9 @@ export function Dashboard({
           </button>
           <button onClick={() => onNavigate("monitoring")} className="text-left">
             <Card className="flex-row items-center gap-3 p-4 transition-colors hover:bg-accent">
-              <Radar className={cn("h-4 w-4 shrink-0", monitoringOn ? "text-primary" : "text-muted-foreground")} />
+              <Radar
+                className={cn("h-4 w-4 shrink-0", monitoringOn ? "text-primary" : "text-muted-foreground")}
+              />
               <div className="min-w-0">
                 <div className="text-xs text-muted-foreground">Monitoring</div>
                 <div className="truncate text-sm font-medium">
@@ -294,7 +287,13 @@ export function Dashboard({
             <span className="flex-1">
               {skippedPrivileged.length} check(s) skipped (no privilege): {skippedPrivileged.join(", ")}
             </span>
-            <Button variant="outline" size="sm" onClick={runPrivilegedScan} disabled={elevating} className="h-7">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={runPrivilegedScan}
+              disabled={elevating}
+              className="h-7"
+            >
               {elevating ? "Waiting for authentication…" : "Run privileged checks"}
             </Button>
           </div>
@@ -348,7 +347,9 @@ export function Dashboard({
 
           <div className="flex flex-col gap-3">
             {findings.length > 0 && (
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Findings</h3>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Findings
+              </h3>
             )}
             {findings.length === 0 && !scanning && !loadingSnapshot && (
               <Card className="flex flex-col items-center gap-2 p-10 text-center text-muted-foreground">

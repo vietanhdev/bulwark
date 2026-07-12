@@ -56,7 +56,10 @@ export function StatusHero({
           </>
         )}
         <ShieldMark
-          className={cn("relative h-11 w-11 transition-colors duration-300", scanning ? "animate-pulse text-primary" : shieldClass)}
+          className={cn(
+            "relative h-11 w-11 transition-colors duration-300",
+            scanning ? "animate-pulse text-primary" : shieldClass,
+          )}
         />
         {!scanning && (
           <Icon className="absolute h-4 w-4 text-background" strokeWidth={3} style={{ marginTop: "-2px" }} />

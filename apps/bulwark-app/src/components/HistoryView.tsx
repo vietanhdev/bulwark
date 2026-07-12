@@ -23,7 +23,9 @@ function formatWhen(iso: string): string {
   const now = new Date();
   const sameDay = d.toDateString() === now.toDateString();
   const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-  return sameDay ? `Today, ${time}` : `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${time}`;
+  return sameDay
+    ? `Today, ${time}`
+    : `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${time}`;
 }
 
 export function HistoryView() {
@@ -40,8 +42,8 @@ export function HistoryView() {
       <div className="mx-auto max-w-4xl px-8 py-6">
         <h2 className="text-lg font-semibold">History</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Every scan run this host has recorded — manual scans and background monitoring ticks alike — so you can see
-          whether an issue just appeared or has been open for a while.
+          Every scan run this host has recorded — manual scans and background monitoring ticks alike — so you
+          can see whether an issue just appeared or has been open for a while.
         </p>
 
         {runs && runs.length === 0 && (

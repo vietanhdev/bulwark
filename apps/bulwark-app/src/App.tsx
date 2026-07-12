@@ -14,7 +14,7 @@ import { AboutView } from "@/components/AboutView";
 import { cn } from "@/lib/utils";
 
 export default function App() {
-  const [view, setView] = useState<View>("dashboard");
+  const [view, setViewRaw] = useState<View>("dashboard");
   const [historyCount, setHistoryCount] = useState<number | null>(null);
   const [monitoringEnabled, setMonitoringEnabled] = useState<boolean | null>(null);
   // Every view a user has opened at least once stays mounted forever after (hidden via CSS,
@@ -27,9 +27,14 @@ export default function App() {
   // state-lifting workaround.
   const [visited, setVisited] = useState<Set<View>>(() => new Set(["dashboard"]));
 
-  useEffect(() => {
-    setVisited((prev) => (prev.has(view) ? prev : new Set(prev).add(view)));
-  }, [view]);
+  // Marks the view as visited in the same update that changes it, rather than reactively via
+  // a useEffect watching `view` — updating one state from another inside an effect causes an
+  // extra cascading render on every navigation; doing both together in the event handler that
+  // actually causes the change doesn't.
+  const setView = useCallback((v: View) => {
+    setViewRaw(v);
+    setVisited((prev) => (prev.has(v) ? prev : new Set(prev).add(v)));
+  }, []);
 
   const refreshHistoryCount = useCallback(() => {
     invoke<number>("history_count")

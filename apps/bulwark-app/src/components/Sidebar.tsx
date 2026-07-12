@@ -83,7 +83,11 @@ export function Sidebar({ view, onChange, historyCount, monitoringEnabled }: Sid
             )}
           />
           <span className="text-xs font-medium text-sidebar-foreground">
-            {monitoringEnabled === null ? "Checking status…" : monitoringEnabled ? "Monitoring active" : "Monitoring paused"}
+            {monitoringEnabled === null
+              ? "Checking status…"
+              : monitoringEnabled
+                ? "Monitoring active"
+                : "Monitoring paused"}
           </span>
         </div>
         <span className="font-mono text-[11px] text-muted-foreground">

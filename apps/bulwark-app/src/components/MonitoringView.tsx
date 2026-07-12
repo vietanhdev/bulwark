@@ -70,9 +70,9 @@ export function MonitoringView() {
     <div className="mx-auto max-w-5xl px-8 py-6">
       <h2 className="text-lg font-semibold">Continuous Monitoring</h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        Bulwark re-runs its unprivileged checks on a timer and tells you when something
-        genuinely new shows up — not a live kernel-level watch, but enough to catch
-        configuration drift without you having to remember to check.
+        Bulwark re-runs its unprivileged checks on a timer and tells you when something genuinely new shows up
+        — not a live kernel-level watch, but enough to catch configuration drift without you having to
+        remember to check.
       </p>
 
       {/* Controls (status + interval) on the left, activity stats + the privilege caveat on
@@ -91,9 +91,13 @@ export function MonitoringView() {
                 <Radar className={cn("h-5 w-5", status.enabled && "animate-pulse")} strokeWidth={1.75} />
               </div>
               <div>
-                <div className="text-sm font-medium">{status.enabled ? "Monitoring active" : "Monitoring paused"}</div>
+                <div className="text-sm font-medium">
+                  {status.enabled ? "Monitoring active" : "Monitoring paused"}
+                </div>
                 <div className="font-mono text-xs text-muted-foreground">
-                  {status.enabled ? `Next check in ${formatCountdown(status.next_tick_at, now)}` : "Not watching for changes"}
+                  {status.enabled
+                    ? `Next check in ${formatCountdown(status.next_tick_at, now)}`
+                    : "Not watching for changes"}
                 </div>
               </div>
             </div>
@@ -123,7 +127,9 @@ export function MonitoringView() {
 
         <div className="flex flex-col gap-6">
           <div>
-            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Activity</h3>
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Activity
+            </h3>
             <div className="grid grid-cols-3 gap-3">
               <Card className="gap-1 p-3">
                 <div className="flex items-center gap-1.5 text-muted-foreground">
@@ -144,7 +150,9 @@ export function MonitoringView() {
                   <Bell className="h-3.5 w-3.5" />
                   <span className="text-xs">New last check</span>
                 </div>
-                <span className="font-mono text-xl font-semibold tabular-nums">{status.last_tick_new_findings}</span>
+                <span className="font-mono text-xl font-semibold tabular-nums">
+                  {status.last_tick_new_findings}
+                </span>
               </Card>
             </div>
           </div>

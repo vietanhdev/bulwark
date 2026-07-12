@@ -1,0 +1,50 @@
+#!/bin/bash
+# Pre-commit checks for Bulwark. Installed via native git hooks (not husky/pre-commit
+# framework) so a pure-Rust contributor never needs Node, and a pure-frontend contributor
+# never needs the full Cargo toolchain to be told which part they touched.
+#
+# One-time setup (per clone): git config core.hooksPath .githooks
+#
+# Runs the fast, local subset of what CI (.github/workflows/ci.yml) checks in full —
+# gitleaks, formatting, and type/lint checks. Full `cargo test --workspace` and `cargo
+# clippy` are NOT run here (they're comprehensive but slow on a large workspace); CI is the
+# backstop for those. This deliberately trades some local thoroughness for a commit that
+# doesn't make you wait a minute-plus every time — clippy warnings and test failures still
+# get caught, just at push/PR time instead of every commit.
+
+set -e
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+fail() {
+  echo -e "${RED}✗ $1${NC}"
+  exit 1
+}
+
+echo "Running pre-commit checks..."
+
+# --- Secret scanning -------------------------------------------------------
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks protect --staged -v || fail "gitleaks found a possible secret in staged changes"
+else
+  echo "  (gitleaks not installed — skipping secret scan; install from https://github.com/gitleaks/gitleaks)"
+fi
+
+# --- Rust: formatting only (clippy/test are CI's job, see header comment) --
+if git diff --cached --name-only | grep -q '\.rs$'; then
+  cargo fmt --all -- --check || fail "cargo fmt would reformat staged Rust files — run 'cargo fmt --all'"
+fi
+
+# --- Frontend: only if frontend files are actually staged -------------------
+if git diff --cached --name-only | grep -q '^apps/bulwark-app/'; then
+  (
+    cd apps/bulwark-app
+    npx prettier --check . || { echo -e "${RED}✗ prettier found unformatted files — run 'npm run format' in apps/bulwark-app${NC}"; exit 1; }
+    npx eslint . || fail "eslint found problems"
+    npx tsc --noEmit || fail "TypeScript type check failed"
+  ) || exit 1
+fi
+
+echo -e "${GREEN}✓ Pre-commit checks passed${NC}"

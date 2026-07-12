@@ -99,9 +99,10 @@ export function ComplianceView() {
       <div className="mx-auto max-w-5xl px-8 py-6">
         <h2 className="text-lg font-semibold">Compliance</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Every rule that maps to a framework control does so via its own <code className="font-mono">references</code>{" "}
-          field — this is a view over that existing data, not a separate compliance engine. Coverage below only
-          reflects rules that have actually been mapped so far.
+          Every rule that maps to a framework control does so via its own{" "}
+          <code className="font-mono">references</code> field — this is a view over that existing data, not a
+          separate compliance engine. Coverage below only reflects rules that have actually been mapped so
+          far.
         </p>
 
         {/* The same headline metric Lynis itself leads its report with — a single hardening
@@ -129,7 +130,9 @@ export function ComplianceView() {
                   strokeDasharray={`${(hardeningIndex.score / 100) * 97.4} 97.4`}
                 />
               </svg>
-              <span className="absolute font-mono text-lg font-semibold tabular-nums">{hardeningIndex.score}</span>
+              <span className="absolute font-mono text-lg font-semibold tabular-nums">
+                {hardeningIndex.score}
+              </span>
             </div>
             <div>
               <div className="text-sm font-medium">Hardening index</div>
@@ -167,7 +170,11 @@ export function ComplianceView() {
                               : "bg-destructive/15 text-destructive",
                           )}
                         >
-                          {pass ? <Check className="h-3 w-3" strokeWidth={3} /> : <X className="h-3 w-3" strokeWidth={3} />}
+                          {pass ? (
+                            <Check className="h-3 w-3" strokeWidth={3} />
+                          ) : (
+                            <X className="h-3 w-3" strokeWidth={3} />
+                          )}
                         </div>
                         <Badge variant="outline" className="shrink-0 font-mono text-[10px]">
                           {reference}
