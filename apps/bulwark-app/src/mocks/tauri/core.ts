@@ -52,6 +52,21 @@ const aiFindings = [
   },
   {
     id: "ai-3",
+    rule_id: "BLWK-AI-009",
+    severity: "critical",
+    tool: "VS Code / editor",
+    title: 'VS Code chat auto-approve ("YOLO mode") is enabled',
+    explanation:
+      '"chat.tools.autoApprove" is true — every agent tool call, including shell commands, is auto-approved with no confirmation.',
+    fix_hint: 'Remove "chat.tools.autoApprove": true from settings.json.',
+    file: "/home/user/Projects/web/.vscode/settings.json",
+    line: 12,
+    evidence: '"chat.tools.autoApprove": true',
+    references: ["CVE-2025-53773"],
+    redactable: false,
+  },
+  {
+    id: "ai-4",
     rule_id: "BLWK-AI-004",
     severity: "high",
     tool: "Cursor",
@@ -65,14 +80,59 @@ const aiFindings = [
     references: ["CVE-2025-6514"],
     redactable: false,
   },
+  {
+    id: "ai-5",
+    rule_id: "BLWK-AI-012",
+    severity: "high",
+    tool: "Cursor",
+    title: "An instruction file contains hidden Unicode control characters",
+    explanation:
+      "This instruction file contains an invisible Unicode control character (U+202E) on line 14. Such characters are read by the model but don't render for a human reviewer.",
+    fix_hint: "Inspect and strip the zero-width / bidirectional control characters from this file.",
+    file: "/home/user/Projects/web/.cursor/rules/style.mdc",
+    line: 14,
+    evidence: "hidden U+202E",
+    references: ["ATTACK-T1027"],
+    redactable: false,
+  },
+  {
+    id: "ai-6",
+    rule_id: "BLWK-AI-016",
+    severity: "high",
+    tool: "AI assistant",
+    title: "A secret-bearing AI file is not covered by .gitignore",
+    explanation:
+      ".env holds a secret and sits in a git repository with no .gitignore rule covering it — a `git add .` would stage the secret for commit.",
+    fix_hint: "Add this file to .gitignore, git rm --cached it, and rotate the credential.",
+    file: "/home/user/Projects/api/.env",
+    line: null,
+    evidence: ".env",
+    references: ["ATTACK-T1552.001"],
+    redactable: false,
+  },
+  {
+    id: "ai-7",
+    rule_id: "BLWK-AI-015",
+    severity: "medium",
+    tool: "GitHub Copilot",
+    title: "An AI credential file is readable by other users",
+    explanation:
+      "~/.config/github-copilot/hosts.json is mode 644 — readable beyond its owner. A plaintext token store shouldn't be group- or world-readable.",
+    fix_hint: "chmod 600 this file.",
+    file: "/home/user/.config/github-copilot/hosts.json",
+    line: null,
+    evidence: "mode 644",
+    references: ["ATTACK-T1552.001"],
+    redactable: false,
+  },
 ];
 
 let aiSnapshot: { snapshot: unknown } = {
   snapshot: {
     started_at: new Date().toISOString(),
     host_fingerprint: "workstation/6.8.0",
-    workspaces_scanned: ["/home/user/Projects/api", "/home/user/Projects/web"],
-    artifacts_scanned: 34,
+    workspaces_scanned: ["/home/user/Projects/api", "/home/user/Projects/web", "/home/user/Projects/infra"],
+    artifacts_scanned: 61,
     workspaces_capped: false,
     findings: aiFindings,
   },
@@ -101,7 +161,11 @@ async function streamScan(channel: Channel<unknown>) {
   }
   channel.onmessage?.({
     event: "complete",
-    data: { total_findings: findings.length, host_fingerprint: dashboardSnapshot.meta.host_fingerprint },
+    data: {
+      total_findings: findings.length,
+      host_fingerprint: dashboardSnapshot.meta.host_fingerprint,
+      cancelled: false,
+    },
   });
 }
 
@@ -125,6 +189,7 @@ async function streamAvScan(channel: Channel<unknown>) {
       files_scanned: avScanPaths.length,
       threats: [{ path: avScanPaths.find((p) => p.includes("eicar")), signature: "Win.Test.EICAR_HDB-1" }],
       clamscan_available: true,
+      cancelled: false,
     },
   });
 }
@@ -146,9 +211,10 @@ async function streamAiScan(channel: Channel<unknown>) {
     event: "complete",
     data: {
       totalFindings: aiFindings.length,
-      artifactsScanned: 34,
-      workspacesScanned: 2,
+      artifactsScanned: 61,
+      workspacesScanned: 3,
       workspacesCapped: false,
+      cancelled: false,
       errors: [],
     },
   });
@@ -183,7 +249,7 @@ const handlers: Record<string, (args: Args) => unknown> = {
       errors: [],
     };
   },
-  dashboard_snapshot: () => dashboardSnapshot,
+  dashboard_snapshot: () => ({ ...dashboardSnapshot, agent_scanned: true }),
   history_count: () => historyRuns.length,
   history_list: () => historyRuns,
   monitoring_get_status: () => monitoringStatus,
@@ -198,6 +264,7 @@ const handlers: Record<string, (args: Args) => unknown> = {
   scan_privileged: () => scanRunResult,
   clamav_info: () => clamavInfo,
   fim_baseline: () => 7,
+  scan_cancel: () => null,
   realtime_av_get_status: () => realtimeAvStatus,
   realtime_av_set_enabled: (args) => {
     realtimeAvStatus = { ...realtimeAvStatus, enabled: Boolean(args?.enabled) };

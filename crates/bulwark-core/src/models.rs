@@ -129,6 +129,20 @@ pub struct ScanRun {
     /// Collectors that needed elevation and were skipped because this run wasn't
     /// privileged — never silent (architecture doc §8, "N checks skipped (no privilege)").
     pub privileged_collectors_skipped: Vec<String>,
+    /// The rule IDs that *demonstrably ran* in this scan — i.e. whose collector was applicable,
+    /// had the privilege it needed, and returned facts without erroring. This is what makes
+    /// "absent from this scan" interpretable: a rule in this list that produced no finding
+    /// genuinely passed (the issue is fixed), whereas a rule *not* in this list tells us nothing
+    /// either way and its existing findings must be left alone. Without this distinction
+    /// `Store::persist_and_reconcile` could only ever add findings and never close them, so a
+    /// fixed issue stayed on the dashboard forever — a real bug (a recorded FIM baseline still
+    /// showed "no baseline yet" indefinitely).
+    #[serde(default)]
+    pub rules_evaluated: Vec<String>,
+    /// True when the user stopped the scan before it finished. A cancelled run's findings are
+    /// partial and must not be persisted as the host's current picture.
+    #[serde(default)]
+    pub cancelled: bool,
     pub findings: Vec<Finding>,
 }
 
@@ -168,6 +182,8 @@ mod tests {
                 message: "denied".into(),
             }],
             privileged_collectors_skipped: vec!["sudoers".into()],
+            rules_evaluated: vec!["BLWK-NET-001".into()],
+            cancelled: false,
             findings: vec![Finding {
                 id: Uuid::new_v4(),
                 rule_id: "BLWK-NET-001".into(),
@@ -221,6 +237,8 @@ mod tests {
             rule_load_errors: vec![],
             collector_errors: vec![],
             privileged_collectors_skipped: vec![],
+            rules_evaluated: vec![],
+            cancelled: false,
             findings,
         }
     }

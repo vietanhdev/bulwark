@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { Check, Radar, RotateCw } from "lucide-react";
+import { Check, Radar, RotateCw, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { CommandBlock } from "@/components/ui/copy-button";
@@ -40,13 +40,55 @@ interface LatestScanMeta {
 interface DashboardSnapshot {
   findings: Finding[];
   meta: LatestScanMeta | null;
+  agent_scanned: boolean;
 }
 
 type ScanEvent =
   | { event: "finding"; data: Finding }
   | { event: "collectorError"; data: { collector: string; message: string } }
   | { event: "privilegedSkipped"; data: { collectors: string[] } }
-  | { event: "complete"; data: { total_findings: number; host_fingerprint: string } }
+  | {
+      event: "complete";
+      data: { total_findings: number; host_fingerprint: string; cancelled: boolean };
+    }
+  | { event: "error"; data: { message: string } };
+
+/* Bulwark has three scanners, and the Overview drives all of them — that's what makes this
+   page's "every issue on this host" claim true rather than aspirational. Each is independently
+   enableable because they cost wildly different amounts of time: compliance and agent are
+   seconds, a full ClamAV sweep is minutes. Making the slow one opt-in is the difference between
+   a button people press and one they learn to avoid.
+
+   "Compliance" is the configuration rule pack (SSH, sudo, kernel, cron, file integrity) — the
+   engine whose results the Compliance and Rules tabs are a view over. It has no scanner tab of
+   its own precisely because its home *is* this page. */
+type ScanKind = "compliance" | "agent" | "antivirus";
+
+const SCAN_KINDS: { id: ScanKind; label: string; hint: string }[] = [
+  {
+    id: "compliance",
+    label: "Compliance",
+    hint: "The rule pack — SSH, sudo, kernel, cron, file integrity",
+  },
+  { id: "agent", label: "Agent security", hint: "AI assistant context, MCP configs, transcripts" },
+  { id: "antivirus", label: "Antivirus", hint: "ClamAV signature scan — minutes, not seconds" },
+];
+
+// Fast, safe, and what you almost always want. Antivirus is deliberately off by default: it's a
+// minutes-long filesystem sweep, and silently making the headline button take that long would be
+// a worse default than making the user ask for it.
+const DEFAULT_KINDS: ScanKind[] = ["compliance", "agent"];
+
+type AgentScanEvent =
+  | { event: "artifact"; data: { path: string } }
+  | { event: "finding"; data: Finding }
+  | { event: "complete"; data: { totalFindings: number; cancelled: boolean } }
+  | { event: "error"; data: { message: string } };
+
+type AvScanEvent =
+  | { event: "fileScanned"; data: { path: string } }
+  | { event: "threatFound"; data: { path: string; signature: string } }
+  | { event: "complete"; data: { threats: { path: string; signature: string }[]; cancelled: boolean } }
   | { event: "error"; data: { message: string } };
 
 interface ScanRunResult {
@@ -80,6 +122,18 @@ export function OverviewView() {
   const [loading, setLoading] = useState(true);
   const [rules, setRules] = useState<RuleSummary[] | null>(null);
   const [activeNeeds, setActiveNeeds] = useState<Set<string>>(new Set());
+  // Which scanners the next run will drive. See SCAN_KINDS.
+  const [selectedKinds, setSelectedKinds] = useState<Set<ScanKind>>(() => new Set(DEFAULT_KINDS));
+  // The file/artifact currently being examined, for the slow scans that have one.
+  const [progress, setProgress] = useState<string | null>(null);
+  // ClamAV detections from this run. Not findings — no rule fired, a signature matched.
+  const [threats, setThreats] = useState<{ path: string; signature: string }[]>([]);
+  const [agentScanned, setAgentScanned] = useState(false);
+  // Set when the user pressed Stop. Held in a ref as well as state because the sequential runner
+  // below reads it *between* awaits, where a state value captured at render time would be stale
+  // and it would cheerfully start the next scan you just asked it not to run.
+  const [cancelled, setCancelled] = useState(false);
+  const cancelledRef = useRef(false);
   // True only when the findings on screen arrived live over the scan Channel, so the
   // arrival animation plays for a scan you are watching happen and not for results restored
   // from disk when you merely opened the tab. See FindingCard.
@@ -95,6 +149,10 @@ export function OverviewView() {
     if (scanning) return;
     invoke<DashboardSnapshot>("dashboard_snapshot")
       .then((snap) => {
+        // `findings` here spans every engine — the config rule pack and the agent scanner both
+        // (see dashboard_snapshot in lib.rs). This page is the one place that owes you the
+        // complete picture.
+        setAgentScanned(snap.agent_scanned);
         if (!snap.meta) return;
         setFindings([...snap.findings].sort(bySeverity));
         setHost(snap.meta.host_fingerprint);
@@ -127,14 +185,23 @@ export function OverviewView() {
 
   const modules = useMemo(() => {
     if (!rules) return [];
-    return Array.from(new Set(rules.map((r) => r.category)))
+    const byCategory = Array.from(new Set(rules.map((r) => r.category)))
       .sort()
       .map((category) => {
         const issues = findings.filter((f) => ruleCategoryById.get(f.rule_id) === category);
         const worst = SEVERITY_ORDER.find((s) => issues.some((f) => f.severity === s)) ?? null;
         return { category, issueCount: issues.length, worst };
       });
-  }, [rules, findings, ruleCategoryById]);
+
+    // The agent scanner isn't part of the YAML rule pack, so it has no category to be derived
+    // from — but it is a protection module like any other, and omitting it here would leave the
+    // grid quietly claiming a coverage it doesn't have. Only shown once it has actually run:
+    // an unscanned module must not render as a green tick.
+    if (!agentScanned) return byCategory;
+    const agentIssues = findings.filter((f) => f.rule_id.startsWith("BLWK-AI-"));
+    const worst = SEVERITY_ORDER.find((s) => agentIssues.some((f) => f.severity === s)) ?? null;
+    return [...byCategory, { category: "agent-security", issueCount: agentIssues.length, worst }];
+  }, [rules, findings, ruleCategoryById, agentScanned]);
 
   const counts = useMemo(
     () => SEVERITY_ORDER.map((sev) => ({ sev, count: findings.filter((f) => f.severity === sev).length })),
@@ -151,45 +218,144 @@ export function OverviewView() {
           ? "warning"
           : "clean";
 
+  /** The compliance (configuration rule pack) pass. Resolves once its Channel completes. */
+  function runComplianceScan(): Promise<void> {
+    return new Promise((resolve) => {
+      const onEvent = new Channel<ScanEvent>();
+      onEvent.onmessage = (msg) => {
+        switch (msg.event) {
+          case "finding":
+            setFindings((prev) => [...prev, msg.data].sort(bySeverity));
+            break;
+          case "privilegedSkipped":
+            setSkippedPrivileged(msg.data.collectors);
+            break;
+          case "collectorError":
+            setErrors((prev) => [...prev, `${msg.data.collector}: ${msg.data.message}`]);
+            break;
+          case "error":
+            setErrors((prev) => [...prev, msg.data.message]);
+            resolve();
+            break;
+          case "complete":
+            setHost(msg.data.host_fingerprint);
+            if (msg.data.cancelled) markCancelled();
+            resolve();
+            break;
+        }
+      };
+      invoke("scan_start", { onEvent, needs: Array.from(activeNeeds) }).catch((e) => {
+        setErrors((prev) => [...prev, String(e)]);
+        resolve();
+      });
+    });
+  }
+
+  /** The agent-security pass. Its findings share the common Finding shape, so they land in the
+   *  same list as the compliance ones — the Overview doesn't care which engine produced an issue. */
+  function runAgentScan(): Promise<void> {
+    return new Promise((resolve) => {
+      const onEvent = new Channel<AgentScanEvent>();
+      onEvent.onmessage = (msg) => {
+        switch (msg.event) {
+          case "artifact":
+            setProgress(msg.data.path);
+            break;
+          case "finding":
+            setFindings((prev) => [...prev, msg.data].sort(bySeverity));
+            break;
+          case "error":
+            setErrors((prev) => [...prev, msg.data.message]);
+            resolve();
+            break;
+          case "complete":
+            if (msg.data.cancelled) markCancelled();
+            resolve();
+            break;
+        }
+      };
+      invoke("ai_scan_start", { onEvent, targets: undefined }).catch((e) => {
+        setErrors((prev) => [...prev, String(e)]);
+        resolve();
+      });
+    });
+  }
+
+  /** The ClamAV pass. Its detections aren't rule findings (no rule fired — a signature matched),
+   *  so they're surfaced as their own result rather than faked into the findings list. The
+   *  Antivirus tab remains their detailed home. */
+  function runAntivirusScan(): Promise<void> {
+    return new Promise((resolve) => {
+      const onEvent = new Channel<AvScanEvent>();
+      onEvent.onmessage = (msg) => {
+        switch (msg.event) {
+          case "fileScanned":
+            setProgress(msg.data.path);
+            break;
+          case "threatFound":
+            setThreats((prev) => [...prev, msg.data]);
+            break;
+          case "error":
+            setErrors((prev) => [...prev, msg.data.message]);
+            resolve();
+            break;
+          case "complete":
+            if (msg.data.cancelled) markCancelled();
+            resolve();
+            break;
+        }
+      };
+      invoke("run_virus_scan", { onEvent, paths: undefined }).catch((e) => {
+        setErrors((prev) => [...prev, String(e)]);
+        resolve();
+      });
+    });
+  }
+
+  function markCancelled() {
+    cancelledRef.current = true;
+    setCancelled(true);
+  }
+
+  /** Stop whatever is running. The backend kills the in-flight engine (including the clamscan
+   *  child process); `cancelledRef` stops the runner from starting any scan still queued. */
+  async function stopScan() {
+    markCancelled();
+    try {
+      await invoke("scan_cancel");
+    } catch (e) {
+      setErrors((prev) => [...prev, String(e)]);
+    }
+  }
+
   async function runScan() {
+    if (selectedKinds.size === 0) return;
+
+    cancelledRef.current = false;
+    setCancelled(false);
     setScanning(true);
     setHasScanned(true);
     setStreamed(true);
     setFindings([]);
     setSkippedPrivileged([]);
     setErrors([]);
+    setThreats([]);
+    setProgress(null);
     setPrivilegedRunDone(false);
 
-    const onEvent = new Channel<ScanEvent>();
-    onEvent.onmessage = (msg) => {
-      switch (msg.event) {
-        case "finding":
-          setFindings((prev) => [...prev, msg.data].sort(bySeverity));
-          break;
-        case "privilegedSkipped":
-          setSkippedPrivileged(msg.data.collectors);
-          break;
-        case "collectorError":
-          setErrors((prev) => [...prev, `${msg.data.collector}: ${msg.data.message}`]);
-          break;
-        case "error":
-          setErrors((prev) => [...prev, msg.data.message]);
-          break;
-        case "complete":
-          setHost(msg.data.host_fingerprint);
-          setScanning(false);
-          // Tells History, Compliance and the sidebar's scan count to re-read from disk.
-          bump();
-          break;
-      }
-    };
+    // Sequential, not concurrent: these engines all hammer the filesystem, and running a ClamAV
+    // sweep alongside an agent-artifact walk would make both slower while producing an
+    // interleaved progress line nobody can read. Stop is honoured between each one, so pressing
+    // it during the compliance pass doesn't leave a five-minute antivirus sweep still to come.
+    if (!cancelledRef.current && selectedKinds.has("compliance")) await runComplianceScan();
+    if (!cancelledRef.current && selectedKinds.has("agent")) await runAgentScan();
+    if (!cancelledRef.current && selectedKinds.has("antivirus")) await runAntivirusScan();
 
-    try {
-      await invoke("scan_start", { onEvent, needs: Array.from(activeNeeds) });
-    } catch (e) {
-      setErrors((prev) => [...prev, String(e)]);
-      setScanning(false);
-    }
+    setProgress(null);
+    setScanning(false);
+    // A stopped scan was never persisted, so re-read from disk to show the last complete picture
+    // rather than the partial one that happens to be sitting in component state.
+    bump();
   }
 
   async function runPrivilegedScan() {
@@ -247,10 +413,21 @@ export function OverviewView() {
               );
             })}
           </div>
-          <Button onClick={runScan} disabled={scanning} size="sm">
-            {scanning ? <RotateCw className="h-4 w-4 animate-spin" /> : <Radar className="h-4 w-4" />}
-            {scanning ? "Scanning…" : "Run a scan"}
-          </Button>
+          {scanning ? (
+            <Button onClick={stopScan} variant="outline" size="sm">
+              <Square className="h-3.5 w-3.5 fill-current" />
+              Stop
+            </Button>
+          ) : (
+            <Button onClick={runScan} disabled={selectedKinds.size === 0} size="sm">
+              <Radar className="h-4 w-4" />
+              {selectedKinds.size === SCAN_KINDS.length
+                ? "Run all scans"
+                : selectedKinds.size === 1
+                  ? "Run 1 scan"
+                  : `Run ${selectedKinds.size} scans`}
+            </Button>
+          )}
         </>
       }
     >
@@ -261,6 +438,86 @@ export function OverviewView() {
           <StatusHero status={status} counts={counts} host={host} />
           {hardening && <HardeningRing index={hardening} />}
         </div>
+
+        <section>
+          <SectionLabel>Scan scope</SectionLabel>
+          <div className="flex flex-wrap gap-2 rounded-lg border border-border bg-card p-3">
+            {SCAN_KINDS.map(({ id, label, hint }) => {
+              const on = selectedKinds.has(id);
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  role="switch"
+                  aria-checked={on}
+                  title={hint}
+                  disabled={scanning}
+                  onClick={() =>
+                    setSelectedKinds((prev) => {
+                      const next = new Set(prev);
+                      if (!next.delete(id)) next.add(id);
+                      return next;
+                    })
+                  }
+                  className={cn(
+                    "flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition-colors",
+                    "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+                    "disabled:cursor-not-allowed disabled:opacity-60",
+                    on
+                      ? "border-primary bg-primary/10 font-medium text-primary"
+                      : "border-border text-muted-foreground hover:bg-accent",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border",
+                      on ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/50",
+                    )}
+                  >
+                    {on && <Check className="h-2.5 w-2.5" strokeWidth={3.5} />}
+                  </span>
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Every scanner Bulwark has, driven from one button. Antivirus is off by default — it's a full
+            ClamAV sweep and takes minutes, not seconds.
+          </p>
+        </section>
+
+        {scanning && (
+          <div className="flex items-center gap-2.5 rounded-md border border-border bg-muted/40 px-3 py-2.5">
+            <RotateCw className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+            <div className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">
+              {progress ?? "Scanning…"}
+            </div>
+          </div>
+        )}
+
+        {cancelled && !scanning && (
+          <Callout tone="warning">
+            <span className="font-medium">Scan stopped.</span> These results are partial and weren't saved —
+            the checks that hadn't run yet have proved nothing either way. Run a full scan when you want a
+            complete picture.
+          </Callout>
+        )}
+
+        {threats.length > 0 && (
+          <Callout tone="critical">
+            <span className="font-medium">
+              Antivirus found {threats.length} threat{threats.length === 1 ? "" : "s"}.
+            </span>{" "}
+            <span className="font-mono text-xs opacity-80">
+              {threats
+                .slice(0, 3)
+                .map((t) => t.signature)
+                .join(", ")}
+            </span>{" "}
+            Open the Antivirus tab for the full list.
+          </Callout>
+        )}
 
         {skippedPrivileged.length > 0 && !privilegedRunDone && (
           <Callout

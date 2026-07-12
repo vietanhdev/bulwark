@@ -5,7 +5,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { TitleBar } from "@/components/TitleBar";
 import { Sidebar, type View } from "@/components/Sidebar";
 import { OverviewView } from "@/components/OverviewView";
-import { AiSecurityView } from "@/components/AiSecurityView";
+import { AgentSecurityView } from "@/components/AgentSecurityView";
 import { AntivirusView } from "@/components/AntivirusView";
 import { IntegrityView } from "@/components/IntegrityView";
 import { RulesView } from "@/components/RulesView";
@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 
 const VIEWS: { id: View; render: (active: boolean) => React.ReactNode }[] = [
   { id: "overview", render: () => <OverviewView /> },
-  { id: "ai-security", render: (active) => <AiSecurityView active={active} /> },
+  { id: "agent-security", render: (active) => <AgentSecurityView active={active} /> },
   { id: "antivirus", render: (active) => <AntivirusView active={active} /> },
   { id: "integrity", render: () => <IntegrityView /> },
   { id: "rules", render: () => <RulesView /> },

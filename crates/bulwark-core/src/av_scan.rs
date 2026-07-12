@@ -142,6 +142,11 @@ pub struct AvScanResult {
     pub files_scanned: Option<u64>,
     pub threats: Vec<ThreatDetection>,
     pub clamscan_available: bool,
+    /// True when the user stopped the scan before it finished. The counts and threat list are
+    /// then *partial*, and a caller must say so rather than rendering "no threats found" — a
+    /// scan that was cut short has proved nothing about the files it never reached.
+    #[serde(default)]
+    pub cancelled: bool,
 }
 
 /// Parses `clamscan --infected --no-summary` output. Each detection line looks like
@@ -208,6 +213,7 @@ pub fn scan(paths: &[PathBuf]) -> anyhow::Result<AvScanResult> {
             files_scanned: None,
             threats: Vec::new(),
             clamscan_available: available,
+            cancelled: false,
         });
     }
 
@@ -229,6 +235,7 @@ pub fn scan(paths: &[PathBuf]) -> anyhow::Result<AvScanResult> {
         files_scanned: None,
         threats,
         clamscan_available: true,
+        cancelled: false,
     })
 }
 
@@ -240,7 +247,23 @@ pub fn scan(paths: &[PathBuf]) -> anyhow::Result<AvScanResult> {
 /// signal at all.
 pub fn scan_streaming(
     paths: &[PathBuf],
+    on_line: impl FnMut(&ClamscanLine),
+) -> anyhow::Result<AvScanResult> {
+    scan_streaming_cancellable(paths, on_line, &|| false)
+}
+
+/// [`scan_streaming`] plus the ability to stop. `should_cancel` is polled after every line
+/// `clamscan` emits; when it returns true the child process is **killed**, not merely abandoned.
+/// That distinction is the whole point: a ClamAV sweep of a large tree runs for minutes, and
+/// simply dropping our end of the pipe would leave it churning the disk in the background long
+/// after the user pressed Stop.
+///
+/// A cancelled run reports `cancelled: true` and its partial counts. Callers must not present it
+/// as a clean bill of health — "we stopped early and found nothing yet" is not "there is nothing".
+pub fn scan_streaming_cancellable(
+    paths: &[PathBuf],
     mut on_line: impl FnMut(&ClamscanLine),
+    should_cancel: &dyn Fn() -> bool,
 ) -> anyhow::Result<AvScanResult> {
     let available = is_clamscan_available();
 
@@ -250,6 +273,7 @@ pub fn scan_streaming(
             files_scanned: None,
             threats: Vec::new(),
             clamscan_available: available,
+            cancelled: false,
         });
     }
 
@@ -267,7 +291,13 @@ pub fn scan_streaming(
 
     let mut files_scanned: u64 = 0;
     let mut threats = Vec::new();
+    let mut cancelled = false;
     for line in BufReader::new(stdout).lines() {
+        if should_cancel() {
+            cancelled = true;
+            let _ = child.kill();
+            break;
+        }
         let line = line?;
         let Some(parsed) = parse_clamscan_line(&line) else {
             continue;
@@ -282,7 +312,7 @@ pub fn scan_streaming(
         on_line(&parsed);
     }
     // clamscan exits 1 when infections are found — a normal, already-consumed-above result,
-    // not a process failure worth propagating as an Err.
+    // not a process failure worth propagating as an Err. Also reaps the child after a kill.
     let _ = child.wait();
 
     Ok(AvScanResult {
@@ -290,6 +320,7 @@ pub fn scan_streaming(
         files_scanned: Some(files_scanned),
         threats,
         clamscan_available: true,
+        cancelled,
     })
 }
 

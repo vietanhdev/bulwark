@@ -6,6 +6,11 @@
   "trailingSlash": false,
   "redirects": [
     {
+      "source": "/guide/ai-security",
+      "destination": "/guide/agent-security",
+      "permanent": true
+    },
+    {
       "source": "/research/lynis-benchmark",
       "destination": "/articles/choosing-a-linux-security-scanner",
       "permanent": true

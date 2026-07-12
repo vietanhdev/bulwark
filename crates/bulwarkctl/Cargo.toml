@@ -22,6 +22,10 @@ serde_json.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 
+[dev-dependencies]
+tempfile = "3"
+serde_json.workspace = true
+
 # `cargo install cargo-deb` then `cargo deb -p bulwarkctl` from the workspace root.
 [package.metadata.deb]
 maintainer = "Viet Anh Nguyen"

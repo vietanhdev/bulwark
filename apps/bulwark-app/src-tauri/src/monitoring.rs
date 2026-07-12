@@ -58,13 +58,13 @@ impl Default for Inner {
 /// DB can't be read — a fresh install or a locked-down `HOME` must never block startup. This is
 /// what makes the enable/interval toggles survive a restart, mirroring `realtime_av::initial_state`.
 pub fn initial_inner() -> Inner {
-    let stored = super_db_path()
+    let mut stored = super_db_path()
         .ok()
         .filter(|p| p.exists())
         .and_then(|p| Store::open(&p).ok());
 
     let mut inner = Inner::default();
-    if let Some(store) = &stored {
+    if let Some(store) = &mut stored {
         if let Ok(Some(v)) = store.get_setting(KEY_ENABLED) {
             inner.enabled = v == "true";
         }

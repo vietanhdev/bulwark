@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Bot, Eraser, Loader2, ScanSearch, ShieldCheck, X } from "lucide-react";
+import { Bot, Eraser, Loader2, ScanSearch, ShieldCheck, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { CommandBlock } from "@/components/ui/copy-button";
@@ -59,6 +59,7 @@ type AiScanEvent =
         artifactsScanned: number;
         workspacesScanned: number;
         workspacesCapped: boolean;
+        cancelled: boolean;
         errors: string[];
       };
     }
@@ -71,7 +72,7 @@ interface Complete {
   errors: string[];
 }
 
-export function AiSecurityView({ active }: { active: boolean }) {
+export function AgentSecurityView({ active }: { active: boolean }) {
   const { revision, bump } = useRevision();
 
   const [findings, setFindings] = useState<AiFinding[]>([]);
@@ -86,6 +87,9 @@ export function AiSecurityView({ active }: { active: boolean }) {
   const [settings, setSettings] = useState<AiSettings | null>(null);
   const [redacting, setRedacting] = useState(false);
   const [redactResult, setRedactResult] = useState<RedactionReport | null>(null);
+  // A stopped sweep saw only part of the machine, and wasn't persisted. Say so, rather than
+  // letting a partial "0 findings" read as an all-clear.
+  const [cancelled, setCancelled] = useState(false);
 
   // Restore the last (possibly background) scan whenever this tab is re-read — first mount, a
   // background `ai_security:tick`, or any other revision bump.
@@ -126,8 +130,18 @@ export function AiSecurityView({ active }: { active: boolean }) {
   );
   const secretCount = useMemo(() => findings.filter((f) => f.redactable).length, [findings]);
 
+  async function stopScan() {
+    setCancelled(true);
+    try {
+      await invoke("scan_cancel");
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   async function runScan() {
     setScanning(true);
+    setCancelled(false);
     setError(null);
     setRedactResult(null);
     setCurrentFile(null);
@@ -145,6 +159,7 @@ export function AiSecurityView({ active }: { active: boolean }) {
           streamed.push(msg.data);
           break;
         case "complete":
+          if (msg.data.cancelled) setCancelled(true);
           setFindings([...streamed]);
           setSummary({
             artifactsScanned: msg.data.artifactsScanned,
@@ -208,13 +223,20 @@ export function AiSecurityView({ active }: { active: boolean }) {
 
   return (
     <PageShell
-      title="AI Security"
+      title="Agent Security"
       description="Scans the AI coding assistants on this machine — Claude Code, Cursor, Copilot, Codex and more — for secrets leaked into context or transcripts and for agent configuration that a prompt injection could turn into code execution."
       action={
-        <Button onClick={runScan} disabled={scanning}>
-          {scanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanSearch className="h-4 w-4" />}
-          {scanning ? "Scanning…" : hasScanned ? "Re-scan" : "Scan AI artifacts"}
-        </Button>
+        scanning ? (
+          <Button onClick={stopScan} variant="outline">
+            <Square className="h-3.5 w-3.5 fill-current" />
+            Stop
+          </Button>
+        ) : (
+          <Button onClick={runScan}>
+            <ScanSearch className="h-4 w-4" />
+            {hasScanned ? "Re-scan" : "Scan AI artifacts"}
+          </Button>
+        )
       }
     >
       <div className="flex flex-col gap-8">
@@ -225,6 +247,13 @@ export function AiSecurityView({ active }: { active: boolean }) {
         </Callout>
 
         {error && <Callout tone="critical">{error}</Callout>}
+
+        {cancelled && !scanning && (
+          <Callout tone="warning">
+            <span className="font-medium">Scan stopped.</span> These results are partial and weren't saved —
+            the artifacts that weren't reached have proved nothing either way.
+          </Callout>
+        )}
 
         {redactResult && (
           <Callout tone="success">

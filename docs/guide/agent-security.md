@@ -1,4 +1,4 @@
-# AI security scanning
+# Agent Security
 
 Bulwark scans the AI coding assistants on your machine — Claude Code, Cursor, GitHub Copilot,
 OpenAI Codex, Gemini CLI, Aider, Continue, Windsurf, Cline/Roo and Amazon Q — for two classes of
@@ -11,8 +11,18 @@ problem that ordinary host scanners don't look for:
 2. **Dangerous agent configuration.** Settings that a prompt injection can turn into code
    execution on your host, grounded in real, published attacks.
 
-It's a first-class tab in the desktop app (highlighted in the sidebar) and a `bulwarkctl ai`
-subcommand in the CLI.
+It's a first-class **Agent Security** tab in the desktop app — one of the four scanners, alongside
+Compliance, Antivirus and File integrity — and a `bulwarkctl ai` subcommand in the CLI. Its findings
+also roll up into the Overview, which is the one page that accounts for every scanner at once.
+
+![The Agent Security tab: secrets found in AI assistant context, and dangerous agent configuration, each with its CVE / ATT&CK reference](/screenshots/agent-security.png)
+
+::: warning A scan reads real secrets. Treat its output accordingly.
+Findings are stored and displayed with the secret **masked** (`sk-a…3f`), never in full, and the
+raw value is never written to the database or the logs. But the *file paths* a finding points at
+are real, so a screenshot of a live scan can still disclose where you keep things. The screenshots
+in this documentation are deliberately generated from fixtures, not from a real machine.
+:::
 
 ## What it checks
 
@@ -91,3 +101,16 @@ bulwarkctl ai redact --apply
 
 `ai scan` exits non-zero on findings (`2` for a critical, `1` for medium/high), so it drops into
 cron or CI the same way `bulwarkctl scan` does.
+
+## Stopping a scan
+
+A sweep across a machine with many workspaces takes a while, so every scan can be stopped from the
+UI. Stop is not cosmetic: it stops the engine mid-walk (and, for the antivirus scan, **kills the
+`clamscan` child process** rather than leaving it churning the disk in the background).
+
+A stopped scan is **partial**, and Bulwark treats it that way rather than pretending otherwise:
+
+- The results are labelled as partial and are **not persisted**. A half-finished sweep never
+  replaces a complete picture on disk.
+- Nothing it didn't reach is marked as passing. The rule engine only records the checks that
+  demonstrably ran, so stopping a scan can never resolve a finding it never actually re-tested.

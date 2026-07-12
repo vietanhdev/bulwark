@@ -100,17 +100,46 @@ flowchart TB
 flowchart LR
   ui["React UI (Tauri webview)"] -->|"IPC commands"| shell["Tauri Rust shell\n(bulwark-app)"]
   term["Terminal / SSH session"] -->|"args, stdout, exit code"| cli["bulwarkctl"]
-  shell -->|"invoke scan"| core["bulwark-core\n(collectors + rule engine)"]
+  shell -->|"invoke scan"| core["bulwark-core"]
   cli -->|"invoke scan"| core
   core -->|"loads"| rules["rules/\n(YAML rule pack)"]
   core -->|"elevated collectors"| pkexec["pkexec (GUI)\nor sudo (CLI, see below)"]
   core -->|"findings stream"| channel["Tauri Channel"]
   channel --> ui
   cli -->|"findings\n(table or --json)"| term
-  core -->|"persist"| db[("local SQLite\n~/.local/share/bulwark")]
+  core -->|"persist (Diesel)"| db[("local SQLite\n~/.local/share/bulwark")]
   db -->|"shared history / diffing"| shell
   db -->|"shared history / diffing"| cli
 ```
+
+`bulwark-core` is not one engine but four, sharing a finding model and a store. Each answers a
+question the others structurally cannot:
+
+```mermaid
+flowchart TD
+  subgraph core["bulwark-core"]
+    direction LR
+    cfg["Config engine\ncollectors → facts → YAML rules"]
+    agent["Agent scanner\nai_scan/"]
+    av["Antivirus\nav_scan/ (shells out to ClamAV)"]
+    logs["Log pipeline\nlogs/ (decode → detect → correlate)"]
+  end
+  cfg --> store[("Store (Diesel)")]
+  agent --> store
+  logs --> store
+  av -.->|"live results, not persisted"| ui2["UI / CLI"]
+  store --> ui2
+```
+
+**Why the agent scanner and the antivirus are *not* collectors.** A collector is a fast,
+sub-second read of a fixed host path, evaluated against a boolean YAML condition. Neither of those
+two fits: `av_scan` shells out to a minutes-long ClamAV pass, and `ai_scan` walks a *discovered*,
+machine-specific set of project directories, matches secrets with capturing regexes to compute
+redaction spans, parses MCP JSON, and inspects files for invisible Unicode. None of that is
+expressible in the condition DSL, and forcing it in would mean either breaking the "a scan is
+under 10 seconds" budget or growing the DSL into a general-purpose language. They keep the *shape*
+of a rule (id, severity, plain-language explanation, one-line fix, references) without pretending
+to be one.
 
 **`bulwark-core` has zero UI/Tauri/CLI-specific code.** Both `bulwark-app` (Tauri GUI) and `bulwarkctl` are thin front-doors over the same library crate — same collectors, same rule engine, same `Finding`/`Rule`/`ScanRun` model, same local SQLite history. A scan run from the CLI shows up in the GUI's history and vice versa, since they share one on-disk store rather than each keeping their own. This also means the CLI can ship and be dogfooded before the GUI is polished, and it's the only form factor that can reach a headless box (`ssh host 'bulwarkctl scan'`) — the case that matters most for catching lateral movement on a local network.
 
@@ -197,7 +226,10 @@ A finding is considered "the same" across scan runs if its previously-stored `co
 ### Access patterns
 - **Read path:** the UI/CLI queries the latest `ScanRun`'s findings, grouped by severity/category; prior runs are diffed to show new-vs-resolved findings over time.
 - **Write path:** the scan engine emits `Finding`s over a stream as they're produced (streamed, not batched); on completion, findings are persisted to local SQLite in one transaction.
-- **Index strategy:** local SQLite (`rusqlite`), indexed on `(rule_id, status)` and `(scan_run_id)` — single-host scale, at most a few thousand rows; nothing heavier is needed.
+- **Index strategy:** local SQLite via **Diesel**, indexed on `(rule_id, status)` and `(scan_run_id)` — single-host scale, at most a few thousand rows; nothing heavier is needed.
+- **Why an ORM.** Queries go through Diesel's typed DSL rather than SQL strings, so the columns a query touches are checked against `schema.rs` at *compile time*: renaming a column fails the build at every site that needed updating, instead of at runtime on a user's machine. That is not hypothetical — it is how a column previously drifted out of sync with the code reading it. The only raw SQL left is `PRAGMA` and schema introspection, neither of which is a query *over* the schema.
+- **Migrations are embedded and append-only** (`crates/bulwark-core/migrations/`). A database already stamped with a migration will never re-run it, so editing one silently splits users into two different schemas depending on when they first installed. Add a new migration directory instead.
+- **Foreign keys are enabled explicitly** per connection. SQLite leaves them *off* by default, which had quietly made `findings.scan_run_id → scan_runs.id` decoration rather than a constraint.
 
 ### Log-analysis pipeline (decode → detect → correlate)
 
