@@ -37,6 +37,47 @@ jobs:
       - name: Validate the bundled rule pack
         run: cargo run -p bulwark-cli -- rules validate rules/
 
+  changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      rules_or_collectors: ${{ steps.filter.outputs.rules_or_collectors }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            rules_or_collectors:
+              - 'rules/**'
+              - 'crates/bulwark-core/src/collectors/**'
+              - 'tests/e2e/**'
+              - 'crates/bulwark-cli/tests/e2e.rs'
+
+  # Gated to only run when rules/collectors/fixtures actually changed — building the fixture
+  # images adds real CI time (a handful of small apt-installs, not compilation, but not free)
+  # that unrelated frontend/docs-only PRs shouldn't pay. Always runs on a direct push to main
+  # (dorny/paths-filter's push-diff behavior is less precise than on a PR's base comparison).
+  # Docker is preinstalled (rootful, real root) on GitHub-hosted runners, so no setup step is
+  # needed beyond checkout and the build itself — unlike this project's own dev machine, which
+  # has no passwordless sudo and `unshare --map-root-user` blocked by
+  # kernel.apparmor_restrict_unprivileged_userns=1 (see the Lynis benchmark research page),
+  # GitHub's hosted runners go through an already-root dockerd, not user-namespace tricks.
+  e2e:
+    needs: changes
+    if: github.event_name == 'push' || needs.changes.outputs.rules_or_collectors == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run e2e fixture tests
+        run: cargo test -p bulwark-cli --test e2e -- --ignored --test-threads=1
+
   frontend:
     runs-on: ubuntu-24.04
     defaults:

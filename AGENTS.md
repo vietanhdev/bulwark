@@ -16,6 +16,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all                        # cargo fmt --all -- --check in CI
 cargo run -p bulwark-cli -- scan
 cargo run -p bulwark-cli -- rules validate rules/
+cargo test -p bulwark-cli --test e2e -- --ignored --test-threads=1   # needs Docker; see below
 
 # GUI (from apps/bulwark-app/)
 npm install
@@ -68,6 +69,16 @@ Both front-doors share one on-disk SQLite history (`~/.local/share/bulwark/bulwa
 ### Privilege model
 
 Two different mechanisms, deliberately: the GUI uses `pkexec` with `polkit/com.bulwark.policy` (`auth_admin_keep`, one prompt per session — see `install-polkit.sh`); the CLI uses `sudo bulwark scan --privileged` directly and refuses to run privileged without an actual root EUID. `pkexec` depends on a GUI-session-bound polkit agent that's normally absent over plain SSH, which is the whole reason the CLI doesn't use it (`docs/guide/architecture.md` §4, ADR-0004). Don't unify these into one mechanism without re-reading that reasoning.
+
+### End-to-end fixture tests (`crates/bulwark-cli/tests/e2e.rs`)
+
+Collector unit tests prove parsing logic works against a fixture *string*; they don't prove the full pipeline — a real file on a real filesystem, read by the real collector, evaluated by the real rule engine, surfaced in the real CLI's JSON output — actually works together. `tests/e2e/fixtures/<scenario>/` pairs a `Dockerfile` (a known-bad or known-good config baked into `ubuntu:24.04`) with `expected-findings.json` (rule IDs that must appear) and an optional `forbidden-findings.json` (rule IDs that must not). The harness builds the image, mounts the just-built `bulwark` binary and `rules/` into a container, runs a real `bulwark scan --json` via `docker exec`, and checks the result.
+
+**Subset checks, not exact-set equality, on purpose.** A bare `ubuntu:24.04` container has its own baseline of unrelated findings (no ClamAV, no rsyslog, no FIM baseline, default login.defs policy) that have nothing to do with what a given fixture is testing. Kernel/sysctl rules specifically read the *host's* live sysctl values — sysctls aren't containerized/namespaced by default — so they vary by whatever machine actually runs the suite. Don't add new fixtures for kernel-hardening rules; they can't be pinned to a specific expected value this way. SSH/cron/systemd-persistence rules (reading config files/units, not live kernel state) are the right shape for this harness.
+
+**Mutate config with `sed`, not `>>` append.** The collectors use first-occurrence-wins semantics matching how the daemons themselves read their configs — a duplicate directive appended after an already-uncommented one (Ubuntu's stock `sshd_config` ships several directives uncommented already) is silently ignored, not an override. `ssh-hardened`'s Dockerfile has the full replace-or-append pattern to copy for a new fixture.
+
+`#[ignore]`d so plain `cargo test --workspace` stays fast and Docker-independent for contributors who don't have it; CI runs them explicitly in a separate `e2e` job, gated on changes to `rules/`, `crates/bulwark-core/src/collectors/`, or the fixtures themselves (`.github/workflows/ci.yml`).
 
 ## Current status (2026-07-12)
 
