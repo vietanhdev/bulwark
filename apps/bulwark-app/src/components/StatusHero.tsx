@@ -1,76 +1,101 @@
-import { Check, AlertTriangle, X, HelpCircle, Clock } from "lucide-react";
+import { AlertTriangle, Check, Clock, HelpCircle, X, type LucideIcon } from "lucide-react";
 import { ShieldMark } from "@/components/ShieldMark";
+import { SeverityDot, type Severity } from "@/components/Severity";
 import { cn } from "@/lib/utils";
 
 export type ProtectionStatus = "idle" | "clean" | "warning" | "critical" | "scanning";
 
+/* The verdict is written as a sentence a person would actually say, not a status enum. "This
+   host is in good shape" tells you where you stand; "CLEAN" makes you decode a label. */
 const CONFIG: Record<
   Exclude<ProtectionStatus, "scanning">,
-  { icon: typeof Check; label: string; shieldClass: string }
+  { icon: LucideIcon; headline: string; shieldColor: string }
 > = {
   idle: {
     icon: HelpCircle,
-    label: "Not scanned yet",
-    shieldClass: "text-muted-foreground/50",
+    headline: "This host hasn't been scanned yet",
+    shieldColor: "var(--muted-foreground)",
   },
   clean: {
     icon: Check,
-    label: "Protected — no issues found",
-    shieldClass: "text-[var(--sev-resolved)]",
+    headline: "This host is in good shape",
+    shieldColor: "var(--sev-resolved)",
   },
   warning: {
     icon: AlertTriangle,
-    label: "Issues need attention",
-    shieldClass: "text-[var(--sev-medium)]",
+    headline: "A few things are worth tightening",
+    shieldColor: "var(--sev-medium)",
   },
   critical: {
     icon: X,
-    label: "Critical issues found",
-    shieldClass: "text-[var(--sev-critical)]",
+    headline: "This host needs attention now",
+    shieldColor: "var(--sev-critical)",
   },
 };
 
-/// Horizontal, not the vertical centered block this used to be — a security dashboard's
-/// status is something you glance at once and then want out of the way of the actually
-/// useful content (protection modules, findings) below it. This is Bulwark's persistent
-/// header, not a splash screen; it shouldn't compete with the scrollable content for space
-/// every time the window opens.
-export function StatusHero({
-  status,
-  lastScanLabel,
-}: {
+interface StatusHeroProps {
   status: ProtectionStatus;
-  lastScanLabel: string | null;
-}) {
+  counts: { sev: Severity; count: number }[];
+  /** Host fingerprint of the most recent scan, or null if nothing has run. */
+  host: string | null;
+}
+
+/**
+ * The Overview's thesis: the shield, coloured by the verdict, and the verdict in plain words.
+ *
+ * The severity breakdown underneath lists only the severities that actually occur. The old
+ * version rendered all five as fixed-width cells whatever the result, so a perfectly clean
+ * host still displayed a row of five zeros — five reminders of things that aren't wrong, which
+ * is precisely the opposite of what a clean scan should feel like.
+ */
+export function StatusHero({ status, counts, host }: StatusHeroProps) {
   const scanning = status === "scanning";
-  const resolved = scanning ? "idle" : status;
-  const { icon: Icon, label, shieldClass } = CONFIG[resolved];
+  const { icon: Icon, headline, shieldColor } = CONFIG[scanning ? "idle" : status];
+  const present = counts.filter((c) => c.count > 0);
 
   return (
-    <div className="flex items-center gap-3">
-      <div className="relative flex h-11 w-11 shrink-0 items-center justify-center">
+    <div className="flex items-center gap-4">
+      <div className="relative flex h-14 w-14 shrink-0 items-center justify-center">
         {scanning && (
           <>
-            <span className="status-ring absolute inset-0 rounded-full bg-primary/30" />
-            <span className="status-ring-delayed absolute inset-0 rounded-full bg-primary/30" />
+            <span className="status-ring absolute inset-0 rounded-full bg-primary/25" />
+            <span className="status-ring-delayed absolute inset-0 rounded-full bg-primary/25" />
           </>
         )}
         <ShieldMark
-          className={cn(
-            "relative h-11 w-11 transition-colors duration-300",
-            scanning ? "animate-pulse text-primary" : shieldClass,
-          )}
+          className={cn("relative h-14 w-14 transition-colors duration-500", scanning && "animate-pulse")}
+          style={{ color: scanning ? "var(--primary)" : shieldColor }}
         />
         {!scanning && (
-          <Icon className="absolute h-4 w-4 text-background" strokeWidth={3} style={{ marginTop: "-2px" }} />
+          <Icon
+            className="absolute h-5 w-5"
+            style={{ color: "var(--card)", marginTop: "-3px" }}
+            strokeWidth={3}
+          />
         )}
       </div>
+
       <div className="min-w-0">
-        <div className="text-sm font-semibold leading-tight">{scanning ? "Scanning…" : label}</div>
-        {lastScanLabel && !scanning && (
-          <div className="mt-0.5 flex items-center gap-1 font-mono text-[11px] text-muted-foreground">
+        <h2 className="font-heading text-lg font-semibold tracking-tight">
+          {scanning ? "Scanning this host…" : headline}
+        </h2>
+
+        {!scanning && present.length > 0 && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+            {present.map(({ sev, count }) => (
+              <span key={sev} className="flex items-center gap-1.5 text-sm">
+                <SeverityDot severity={sev} />
+                <span className="font-mono font-semibold tabular-nums">{count}</span>
+                <span className="text-muted-foreground">{sev}</span>
+              </span>
+            ))}
+          </div>
+        )}
+
+        {!scanning && host && (
+          <div className="mt-1.5 flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
             <Clock className="h-3 w-3 shrink-0" />
-            <span className="truncate">{lastScanLabel}</span>
+            <span className="truncate">Last checked {host}</span>
           </div>
         )}
       </div>

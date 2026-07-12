@@ -15,6 +15,13 @@ import {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let monitoringStatus = { ...monitoringStatusInitial };
+let realtimeAvStatus = {
+  enabled: false,
+  watched_paths: ["/home/user/Downloads", "/home/user/Desktop"],
+  files_scanned: 0,
+  threats_found: 0,
+  recent_threats: [] as { path: string; signature: string }[],
+};
 
 type Args = Record<string, unknown> | undefined;
 
@@ -71,6 +78,29 @@ const handlers: Record<string, (args: Args) => unknown> = {
   scan_privileged: () => scanRunResult,
   clamav_info: () => clamavInfo,
   fim_baseline: () => 7,
+  realtime_av_get_status: () => realtimeAvStatus,
+  realtime_av_set_enabled: (args) => {
+    realtimeAvStatus = { ...realtimeAvStatus, enabled: Boolean(args?.enabled) };
+    return realtimeAvStatus;
+  },
+  realtime_av_add_folder: (args) => {
+    const path = String(args?.path);
+    if (!realtimeAvStatus.watched_paths.includes(path)) {
+      realtimeAvStatus = {
+        ...realtimeAvStatus,
+        watched_paths: [...realtimeAvStatus.watched_paths, path],
+      };
+    }
+    return realtimeAvStatus;
+  },
+  realtime_av_remove_folder: (args) => {
+    const path = String(args?.path);
+    realtimeAvStatus = {
+      ...realtimeAvStatus,
+      watched_paths: realtimeAvStatus.watched_paths.filter((p) => p !== path),
+    };
+    return realtimeAvStatus;
+  },
 };
 
 export async function invoke<T>(cmd: string, args?: Args): Promise<T> {

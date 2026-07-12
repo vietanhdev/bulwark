@@ -1,7 +1,16 @@
-import { LayoutDashboard, ListChecks, ShieldCheck, Radar, BadgeCheck, History, Info } from "lucide-react";
+import {
+  BadgeCheck,
+  FileCheck2,
+  History,
+  LayoutDashboard,
+  ListChecks,
+  Settings,
+  ShieldCheck,
+  type LucideIcon,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export type View = "dashboard" | "threats" | "compliance" | "rules" | "monitoring" | "history" | "about";
+export type View = "overview" | "antivirus" | "integrity" | "rules" | "compliance" | "history" | "settings";
 
 interface SidebarProps {
   view: View;
@@ -10,90 +19,134 @@ interface SidebarProps {
   monitoringEnabled: boolean | null;
 }
 
-// Grouped logically rather than in build order: what you look at day-to-day (protection
-// status, threats found) first, reference material (what gets checked, compliance mapping)
-// second, background configuration (monitoring cadence) last — closest to the live status
-// chip it controls.
-const PROTECTION_ITEMS: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
-  { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { id: "threats", label: "Antivirus", icon: ShieldCheck },
-];
-const REFERENCE_ITEMS: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
-  { id: "rules", label: "Rules", icon: ListChecks },
-  { id: "compliance", label: "Compliance", icon: BadgeCheck },
-  { id: "history", label: "History", icon: History },
-];
-const CONFIG_ITEMS: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
-  { id: "monitoring", label: "Monitoring", icon: Radar },
-  { id: "about", label: "About", icon: Info },
+interface NavItem {
+  id: View;
+  label: string;
+  icon: LucideIcon;
+}
+
+/* Three groups, cut by the question each answers rather than by build order.
+   `Overview` is ungrouped and alone at the top because it is the answer — everything else is
+   a way of getting to it or of explaining it.
+
+   What moved, and why (the old nav had seven items too, but two of them were doing someone
+   else's job):
+     - File integrity was a right-hand column inside a page called "Antivirus", despite being
+       an independent pillar of the product with its own threat model. It gets its own page.
+     - "Monitoring" was a cadence setting dressed as a destination, and "About" was a footer.
+       Both are Settings.
+     - The Overview's three quick-nav cards duplicated sidebar entries exactly. Deleted: the
+       sidebar is right there. */
+const GROUPS: { label: string | null; items: NavItem[] }[] = [
+  {
+    label: null,
+    items: [{ id: "overview", label: "Overview", icon: LayoutDashboard }],
+  },
+  {
+    label: "Protection",
+    items: [
+      { id: "antivirus", label: "Antivirus", icon: ShieldCheck },
+      { id: "integrity", label: "File integrity", icon: FileCheck2 },
+    ],
+  },
+  {
+    label: "Reference",
+    items: [
+      { id: "rules", label: "Rules", icon: ListChecks },
+      { id: "compliance", label: "Compliance", icon: BadgeCheck },
+      { id: "history", label: "History", icon: History },
+    ],
+  },
 ];
 
-function NavGroup({
-  items,
-  view,
+function NavButton({
+  item,
+  active,
   onChange,
 }: {
-  items: typeof PROTECTION_ITEMS;
-  view: View;
+  item: NavItem;
+  active: boolean;
   onChange: (view: View) => void;
 }) {
+  const { id, label, icon: Icon } = item;
   return (
-    <div className="flex flex-col gap-1">
-      {items.map(({ id, label, icon: Icon }) => (
-        <button
-          key={id}
-          onClick={() => onChange(id)}
-          className={cn(
-            "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm font-medium transition-colors",
-            view === id
-              ? "bg-sidebar-primary text-sidebar-primary-foreground"
-              : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-          )}
-        >
-          <Icon className="h-4 w-4" />
-          {label}
-        </button>
-      ))}
-    </div>
+    <button
+      onClick={() => onChange(id)}
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        // The severity rail again, doing navigational work: the active page is the one with a
+        // bar in its gutter, exactly like the finding you're reading. One structural idea,
+        // used consistently, rather than a second highlight vocabulary just for the chrome.
+        "rail relative flex items-center gap-2.5 rounded-md py-2 pr-2.5 pl-3 text-left text-sm transition-colors",
+        "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
+        active
+          ? "bg-ink-raised font-medium text-ink-fg"
+          : "font-normal text-ink-muted hover:bg-ink-raised/50 hover:text-ink-fg",
+      )}
+      style={{ "--rail-color": active ? "var(--primary)" : "transparent" } as React.CSSProperties}
+    >
+      <Icon className="h-4 w-4 shrink-0" strokeWidth={active ? 2.25 : 1.75} />
+      {label}
+    </button>
   );
 }
 
 export function Sidebar({ view, onChange, historyCount, monitoringEnabled }: SidebarProps) {
   return (
-    <nav className="flex w-48 shrink-0 flex-col justify-between border-r border-sidebar-border bg-sidebar p-2">
-      <div className="flex flex-col gap-4">
-        <NavGroup items={PROTECTION_ITEMS} view={view} onChange={onChange} />
-        <NavGroup items={REFERENCE_ITEMS} view={view} onChange={onChange} />
-        <NavGroup items={CONFIG_ITEMS} view={view} onChange={onChange} />
+    <nav className="flex w-52 shrink-0 flex-col justify-between border-r border-ink-border bg-ink p-2.5">
+      <div className="flex flex-col gap-5">
+        {GROUPS.map((group, i) => (
+          <div key={group.label ?? i} className="flex flex-col gap-1">
+            {group.label && (
+              <div className="mb-1 px-3 font-mono text-[10px] font-semibold uppercase tracking-widest text-ink-muted/70">
+                {group.label}
+              </div>
+            )}
+            {group.items.map((item) => (
+              <NavButton key={item.id} item={item} active={view === item.id} onChange={onChange} />
+            ))}
+          </div>
+        ))}
       </div>
 
-      <button
-        onClick={() => onChange("monitoring")}
-        className="flex flex-col gap-1 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-sidebar-accent"
-      >
-        <div className="flex items-center gap-1.5">
-          <span
-            className={cn(
-              "h-1.5 w-1.5 rounded-full",
-              monitoringEnabled === null
-                ? "bg-muted-foreground/40"
+      <div className="flex flex-col gap-1">
+        {/* The live status chip doubles as the way into the setting that governs it — clicking
+            "Monitoring paused" should take you to the thing that un-pauses it. */}
+        <button
+          onClick={() => onChange("settings")}
+          className="flex flex-col gap-1 rounded-md px-3 py-2 text-left transition-colors hover:bg-ink-raised/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+        >
+          <span className="flex items-center gap-1.5">
+            <span className="relative flex h-1.5 w-1.5 shrink-0">
+              {monitoringEnabled && (
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
+              )}
+              <span
+                className={cn(
+                  "relative inline-flex h-1.5 w-1.5 rounded-full",
+                  monitoringEnabled ? "bg-primary" : "bg-ink-muted/50",
+                )}
+              />
+            </span>
+            <span className="text-xs font-medium text-ink-fg">
+              {monitoringEnabled === null
+                ? "Checking status…"
                 : monitoringEnabled
-                  ? "animate-pulse bg-primary"
-                  : "bg-muted-foreground/40",
-            )}
-          />
-          <span className="text-xs font-medium text-sidebar-foreground">
-            {monitoringEnabled === null
-              ? "Checking status…"
-              : monitoringEnabled
-                ? "Monitoring active"
-                : "Monitoring paused"}
+                  ? "Monitoring active"
+                  : "Monitoring paused"}
+            </span>
           </span>
-        </div>
-        <span className="font-mono text-[11px] text-muted-foreground">
-          {historyCount === null ? "—" : `${historyCount} scan${historyCount === 1 ? "" : "s"} recorded`}
-        </span>
-      </button>
+          <span className="pl-3 font-mono text-[11px] text-ink-muted">
+            {historyCount === null ? "—" : `${historyCount} scan${historyCount === 1 ? "" : "s"} recorded`}
+          </span>
+        </button>
+
+        <NavButton
+          item={{ id: "settings", label: "Settings", icon: Settings }}
+          active={view === "settings"}
+          onChange={onChange}
+        />
+      </div>
     </nav>
   );
 }

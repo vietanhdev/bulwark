@@ -1,4 +1,5 @@
 mod monitoring;
+mod realtime_av;
 mod tray;
 
 use bulwark_core::av_scan::ClamscanLine;
@@ -9,6 +10,7 @@ use bulwark_core::{
     ScanRun, ScanRunSummary, Store, FIM_UNPRIVILEGED_WATCHED_PATHS,
 };
 use monitoring::MonitoringState;
+use realtime_av::RealtimeAvState;
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -89,9 +91,9 @@ fn resolve_rules_dir(app: Option<&tauri::AppHandle>) -> Result<PathBuf, String> 
     Err("couldn't find a 'rules' directory (set BULWARK_RULES_DIR)".to_string())
 }
 
-/// Locates the `bulwark` CLI binary this GUI shells out to for the privileged path (see
+/// Locates the `bulwarkctl` CLI binary this GUI shells out to for the privileged path (see
 /// [`scan_privileged`]). In dev mode it's a workspace-relative debug/release build; in an
-/// installed package both binaries land in the same `usr/bin`, so plain `"bulwark"` on
+/// installed package both binaries land in the same `usr/bin`, so plain `"bulwarkctl"` on
 /// `PATH` resolves correctly there.
 fn resolve_cli_binary() -> PathBuf {
     if let Ok(p) = std::env::var("BULWARK_CLI_PATH") {
@@ -99,11 +101,11 @@ fn resolve_cli_binary() -> PathBuf {
     }
     let mut candidate = match std::env::current_dir() {
         Ok(d) => d,
-        Err(_) => return PathBuf::from("bulwark"),
+        Err(_) => return PathBuf::from("bulwarkctl"),
     };
     for _ in 0..4 {
         for profile in ["debug", "release"] {
-            let bin = candidate.join("target").join(profile).join("bulwark");
+            let bin = candidate.join("target").join(profile).join("bulwarkctl");
             if bin.is_file() {
                 return bin;
             }
@@ -112,7 +114,7 @@ fn resolve_cli_binary() -> PathBuf {
             break;
         }
     }
-    PathBuf::from("bulwark")
+    PathBuf::from("bulwarkctl")
 }
 
 fn db_path() -> Result<PathBuf, String> {
@@ -179,7 +181,7 @@ async fn scan_start(
     .map_err(|e| e.to_string())
 }
 
-/// Runs the full (privileged) scan via `pkexec bulwark scan --privileged --json` and
+/// Runs the full (privileged) scan via `pkexec bulwarkctl scan --privileged --json` and
 /// returns the parsed result. Deliberately shells out to the already-built, already-tested
 /// CLI rather than duplicating collector-invocation logic here — the polkit prompt this
 /// triggers is defined by `polkit/com.bulwark.policy` (`auth_admin_keep`, one prompt per
@@ -209,7 +211,7 @@ async fn scan_privileged(app: tauri::AppHandle) -> Result<ScanRun, String> {
             if output.status.code() == Some(126) || output.status.code() == Some(127) {
                 return Err("Authentication was cancelled or denied.".to_string());
             }
-            // bulwark-cli's own exit codes (1/2) mean "ran fine, found something" —
+            // bulwarkctl's own exit codes (1/2) mean "ran fine, found something" —
             // only a genuinely empty/unparseable stdout counts as a real failure below.
             if output.stdout.is_empty() {
                 return Err(format!("privileged scan failed: {stderr}"));
@@ -242,19 +244,31 @@ enum AvScanEvent {
 /// is the project's own stated design decision, not a shortcut). Uses `scan_streaming`, not
 /// `scan`, specifically so the frontend can show live "N files scanned, currently: <path>"
 /// progress instead of a spinner with no information for however long the scan takes.
+///
+/// `paths`, when non-empty, scans exactly those user-chosen files/folders (drag-and-dropped or
+/// picked via the native dialog on the Antivirus tab) instead of the fixed default target set —
+/// the `HOME`-dependent default lookup only runs when nothing custom was chosen.
 #[tauri::command]
-async fn run_virus_scan(on_event: Channel<AvScanEvent>) -> Result<(), String> {
+async fn run_virus_scan(
+    on_event: Channel<AvScanEvent>,
+    paths: Option<Vec<String>>,
+) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let home = match std::env::var("HOME") {
-            Ok(h) => h,
-            Err(_) => {
-                let _ = on_event.send(AvScanEvent::Error {
-                    message: "HOME not set".to_string(),
-                });
-                return;
+        let targets = match paths {
+            Some(p) if !p.is_empty() => p.into_iter().map(PathBuf::from).collect(),
+            _ => {
+                let home = match std::env::var("HOME") {
+                    Ok(h) => h,
+                    Err(_) => {
+                        let _ = on_event.send(AvScanEvent::Error {
+                            message: "HOME not set".to_string(),
+                        });
+                        return;
+                    }
+                };
+                av_scan::default_scan_targets(std::path::Path::new(&home))
             }
         };
-        let targets = av_scan::default_scan_targets(std::path::Path::new(&home));
         let result = av_scan::scan_streaming(&targets, |line| {
             let event = match line {
                 ClamscanLine::Clean(path) | ClamscanLine::Error(path) => {
@@ -313,7 +327,7 @@ async fn clamav_info() -> Result<ClamavInfoResponse, String> {
 }
 
 /// Establishes a file-integrity baseline for the unprivileged watched paths only — the
-/// root-only ones (/etc/shadow, /etc/sudoers) need `sudo bulwark fim baseline --privileged`
+/// root-only ones (/etc/shadow, /etc/sudoers) need `sudo bulwarkctl fim baseline --privileged`
 /// from the CLI, same asymmetry as `scan_privileged` vs. the regular unprivileged scan, but
 /// without the pkexec dance for this one: establishing a baseline is a local write, not a
 /// system-state read that benefits from a single elevated session the way a full privileged
@@ -415,7 +429,9 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(MonitoringState(Mutex::new(monitoring::Inner::default())))
+        .manage(RealtimeAvState(Mutex::new(realtime_av::initial_state())))
         .setup(|app| {
             // Resolves and logs the rule pack location on every launch, dev or packaged.
             // This is the one code path that genuinely differs between `cargo tauri dev`
@@ -427,10 +443,15 @@ pub fn run() {
                 Ok(dir) => {
                     println!("[bulwark] rules directory resolved: {}", dir.display());
                     monitoring::spawn(handle.clone(), dir.clone());
-                    monitoring::spawn_file_watcher(handle, dir);
+                    monitoring::spawn_file_watcher(handle.clone(), dir);
                 }
                 Err(e) => eprintln!("[bulwark] warning: {e} — continuous monitoring disabled"),
             }
+
+            // Resumes real-time AV protection if it was left enabled on a previous run —
+            // "persists across restarts" should mean protection actually restarts, not just
+            // that the toggle remembers where it was left.
+            realtime_av::start_if_enabled(handle);
 
             if let Err(e) = tray::spawn(app.handle()) {
                 eprintln!("[bulwark] warning: couldn't create tray icon: {e}");
@@ -463,7 +484,11 @@ pub fn run() {
             fim_baseline,
             monitoring::monitoring_get_status,
             monitoring::monitoring_set_enabled,
-            monitoring::monitoring_set_interval_minutes
+            monitoring::monitoring_set_interval_minutes,
+            realtime_av::realtime_av_get_status,
+            realtime_av::realtime_av_set_enabled,
+            realtime_av::realtime_av_add_folder,
+            realtime_av::realtime_av_remove_folder
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
