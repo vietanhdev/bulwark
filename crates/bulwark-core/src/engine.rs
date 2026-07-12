@@ -371,7 +371,7 @@ fix: "f"
     /// Regression test for a real gap caught while raising this crate's test coverage: a
     /// rule's `collector:` field is only checked against the YAML schema, never against the
     /// actual registered collectors — a typo there loads without error and then simply
-    /// never matches a fact row at scan time, silently never firing. `bulwark-cli`'s `rules
+    /// never matches a fact row at scan time, silently never firing. `bulwarkctl`'s `rules
     /// validate` now cross-checks this too, but the bundled pack's own correctness belongs
     /// in bulwark-core's own test suite, not only in a CLI-level check.
     #[test]

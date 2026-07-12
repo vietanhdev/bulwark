@@ -11,7 +11,7 @@
 //!
 //! The baseline itself is a plain `sha256sum`-format text file (`<hex-hash>  <path>` per
 //! line) — literally `sha256sum`'s own output, not a custom format, so it's inspectable and
-//! diffable with any standard tool. Established explicitly via `bulwark fim baseline`
+//! diffable with any standard tool. Established explicitly via `bulwarkctl fim baseline`
 //! (`--privileged` to include the root-only paths), never automatically — an
 //! automatically-established "baseline" recorded *after* a compromise would just enshrine
 //! the compromised state as "known good."
@@ -206,7 +206,7 @@ pub fn establish_baseline_at(paths: &[&str], baseline_file: &Path) -> anyhow::Re
 }
 
 /// Resolves the real, on-disk baseline path and delegates to [`establish_baseline_at`] — the
-/// entry point `bulwark-cli`'s `fim baseline` subcommand actually calls.
+/// entry point `bulwarkctl`'s `fim baseline` subcommand actually calls.
 pub fn establish_baseline(paths: &[&str]) -> anyhow::Result<usize> {
     establish_baseline_at(paths, &baseline_path())
 }

@@ -114,7 +114,7 @@ pub struct RuleLoadError {
 }
 
 /// Round-trips through JSON (see `bulwark-app`'s privileged-scan path: the GUI shells out
-/// to `bulwark-cli scan --privileged --json` via pkexec and deserializes its stdout rather
+/// to `bulwarkctl scan --privileged --json` via pkexec and deserializes its stdout rather
 /// than duplicating collector logic — the CLI and GUI stay two front-doors over one engine
 /// even for the privileged path).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,7 +143,7 @@ mod tests {
     use super::*;
 
     /// `bulwark-app`'s privileged-scan path (see `apps/bulwark-app/src-tauri/src/lib.rs`)
-    /// depends entirely on `bulwark-cli scan --json`'s stdout deserializing back into a
+    /// depends entirely on `bulwarkctl scan --json`'s stdout deserializing back into a
     /// real `ScanRun` — this is the contract that makes that wiring trustworthy rather
     /// than something that only happened to work in one manual test run.
     #[test]
@@ -225,7 +225,7 @@ mod tests {
         }
     }
 
-    /// `bulwark-cli`'s process exit code is driven entirely by this — a wrong ordering
+    /// `bulwarkctl`'s process exit code is driven entirely by this — a wrong ordering
     /// here would mean the CLI reports "clean" (exit 0) on a run that actually found a
     /// critical issue, silently breaking any script/CI job gating on the exit code.
     #[test]

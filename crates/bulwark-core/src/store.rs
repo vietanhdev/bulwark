@@ -1,30 +1,27 @@
 use crate::models::{Finding, FindingStatus, ScanRun, Severity};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite_migration::{Migrations, M};
 use std::path::Path;
+use std::sync::LazyLock;
 
-pub struct Store {
-    conn: Connection,
-}
-
-impl Store {
-    pub fn open(path: &Path) -> anyhow::Result<Self> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let conn = Connection::open(path)?;
-        Self::migrate(&conn)?;
-        Ok(Store { conn })
-    }
-
-    pub fn open_in_memory() -> anyhow::Result<Self> {
-        let conn = Connection::open_in_memory()?;
-        Self::migrate(&conn)?;
-        Ok(Store { conn })
-    }
-
-    fn migrate(conn: &Connection) -> anyhow::Result<()> {
-        conn.execute_batch(
+/// Ordered, versioned schema migrations, tracked in SQLite's built-in `PRAGMA user_version`.
+///
+/// This replaces an earlier `CREATE TABLE IF NOT EXISTS` + best-effort `ALTER TABLE` approach
+/// that had no version number at all: it couldn't tell what state a given user's database was
+/// actually in, it swallowed *every* `ALTER` error (not just the expected "duplicate column"
+/// one, so a genuinely failed upgrade passed silently — against this project's own
+/// never-a-silent-drop invariant), and it had no way to express a data backfill or a
+/// non-defaulted `NOT NULL` column. Bulwark is shipping installable packages now, so a user's
+/// database survives across upgrades and the schema has to be able to evolve under it safely.
+///
+/// **Append only.** Never edit or reorder a migration that has shipped — a database already
+/// stamped at version N will never re-run it, so an edit silently splits users into two
+/// different schemas depending on when they first installed. Add a new `M::up` instead.
+static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
+    Migrations::new(vec![
+        // V1 — the schema as it stood when versioning was introduced.
+        M::up(
             r#"
             CREATE TABLE IF NOT EXISTS scan_runs (
                 id                 TEXT PRIMARY KEY,
@@ -55,22 +52,97 @@ impl Store {
             CREATE INDEX IF NOT EXISTS idx_findings_rule_status ON findings(rule_id, status);
             CREATE INDEX IF NOT EXISTS idx_findings_scan_run ON findings(scan_run_id);
             "#,
-        )?;
-        // `total_findings` was added after scan_runs already shipped. `CREATE TABLE IF NOT
-        // EXISTS` above only applies to a brand-new DB (which already gets the column from
-        // the definition itself); a DB created by an earlier Bulwark build needs this ALTER
-        // to pick it up. SQLite has no `ADD COLUMN IF NOT EXISTS`, so this errors with
-        // "duplicate column name" on every DB that already has it — which is expected and
-        // safe to ignore, not a real failure.
-        let _ = conn.execute(
-            "ALTER TABLE scan_runs ADD COLUMN total_findings INTEGER NOT NULL DEFAULT 0",
-            [],
-        );
+        ),
+        // V2 — small key-value store for persisted preferences (real-time AV protection's
+        // enabled flag and watched-folder list). See `get_setting`/`set_setting`.
+        M::up(
+            r#"
+            CREATE TABLE IF NOT EXISTS settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            "#,
+        ),
+    ])
+});
+
+pub struct Store {
+    conn: Connection,
+}
+
+impl Store {
+    pub fn open(path: &Path) -> anyhow::Result<Self> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut conn = Connection::open(path)?;
+        Self::migrate(&mut conn)?;
+        Ok(Store { conn })
+    }
+
+    pub fn open_in_memory() -> anyhow::Result<Self> {
+        let mut conn = Connection::open_in_memory()?;
+        Self::migrate(&mut conn)?;
+        Ok(Store { conn })
+    }
+
+    fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
+        Self::baseline_pre_versioning_db(conn)?;
+        MIGRATIONS.to_latest(conn)?;
         Ok(())
     }
 
+    /// Repairs a database created *before* `user_version` tracking existed, so that V1 can then
+    /// be applied to it like any other.
+    ///
+    /// Such a database is indistinguishable from a brand-new one by `user_version` alone (both
+    /// report 0), so the schema itself is what's inspected. V1 is written entirely with
+    /// `IF NOT EXISTS`, which means re-running it over an already-populated legacy database is
+    /// harmless — it no-ops on the tables that exist and creates any that don't. The one thing
+    /// `IF NOT EXISTS` *cannot* express is a column added to a table that already exists, so
+    /// adding `total_findings` is the sole job left here.
+    ///
+    /// Deliberately does not stamp the version itself: letting the normal migration run do that
+    /// keeps a single source of truth for versioning, and means a legacy database still gets
+    /// every `CREATE TABLE` in V1 (an earlier draft that stamped straight to V1 skipped them,
+    /// and any table missing from that old database would have stayed missing).
+    ///
+    /// The column check is a precise `pragma_table_info` lookup rather than the previous
+    /// "run the `ALTER` and discard whatever happens" — a real failure now propagates instead
+    /// of being silently swallowed along with the expected duplicate-column error.
+    fn baseline_pre_versioning_db(conn: &Connection) -> anyhow::Result<()> {
+        let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        if version != 0 {
+            return Ok(()); // Already under migration control.
+        }
+
+        let has_scan_runs = conn
+            .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'scan_runs'")?
+            .exists([])?;
+        if !has_scan_runs {
+            return Ok(()); // Brand-new database — the migrations build it from scratch.
+        }
+
+        let has_total_findings = conn
+            .prepare("SELECT 1 FROM pragma_table_info('scan_runs') WHERE name = 'total_findings'")?
+            .exists([])?;
+        if !has_total_findings {
+            conn.execute(
+                "ALTER TABLE scan_runs ADD COLUMN total_findings INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// The schema version this build expects, for tests and diagnostics.
+    pub fn schema_version(conn: &Connection) -> anyhow::Result<i64> {
+        Ok(conn.pragma_query_value(None, "user_version", |r| r.get(0))?)
+    }
+
     /// Persists a `ScanRun` as-is: every finding becomes a new row, with no relationship
-    /// to findings from earlier runs. Fine for a one-off `bulwark scan`, but a periodic
+    /// to findings from earlier runs. Fine for a one-off `bulwarkctl scan`, but a periodic
     /// monitoring loop that calls this on every tick would insert a fresh duplicate row
     /// for every persisting issue every time — see [`Self::persist_and_reconcile`], which
     /// is what continuous monitoring actually needs.
@@ -210,6 +282,31 @@ impl Store {
             params![scan_run_id],
             |r| r.get(0),
         )?)
+    }
+
+    /// Generic string key-value read, backing small persisted preferences (e.g. real-time
+    /// antivirus protection's enabled flag and watched-folder list) that don't warrant a
+    /// dedicated table of their own. Callers own their own value encoding (plain strings,
+    /// JSON, ...) — this table just stores and returns bytes-as-text.
+    pub fn get_setting(&self, key: &str) -> anyhow::Result<Option<String>> {
+        self.conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                params![key],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    /// Upserts a setting — the counterpart to [`Self::get_setting`].
+    pub fn set_setting(&mut self, key: &str, value: &str) -> anyhow::Result<()> {
+        self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
     }
 
     /// The state a freshly-opened window should actually show: everything currently open,
@@ -840,5 +937,104 @@ mod tests {
             1,
             "a finding seen across multiple monitoring ticks must still appear once, not once per tick"
         );
+    }
+
+    #[test]
+    fn migrations_are_valid_and_reach_the_expected_version() {
+        // Catches a malformed migration (bad SQL, wrong ordering) at test time rather than on
+        // a user's machine mid-upgrade.
+        assert!(MIGRATIONS.validate().is_ok());
+
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("fresh.db");
+        let store = Store::open(&db_path).unwrap();
+        assert_eq!(Store::schema_version(&store.conn).unwrap(), 2);
+    }
+
+    #[test]
+    fn opening_an_already_current_db_twice_is_a_no_op() {
+        // The upgrade path every existing user hits on every launch after the first: migrations
+        // must not re-run or error against a database already at the latest version.
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("repeat.db");
+        {
+            let mut store = Store::open(&db_path).unwrap();
+            store.persist_and_reconcile(&sample_scan()).unwrap();
+        }
+        let store = Store::open(&db_path).unwrap();
+        assert_eq!(Store::schema_version(&store.conn).unwrap(), 2);
+        assert_eq!(store.open_findings().unwrap().len(), 1, "data must survive");
+    }
+
+    #[test]
+    fn a_pre_versioning_db_upgrades_without_losing_data() {
+        // The real upgrade scenario once packages ship: a database written by a Bulwark build
+        // from before `user_version` tracking existed — no version stamp, no `total_findings`
+        // column, no `settings` table — must come forward cleanly with its rows intact.
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("legacy.db");
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE scan_runs (
+                    id TEXT PRIMARY KEY, started_at TEXT NOT NULL, finished_at TEXT,
+                    host_fingerprint TEXT NOT NULL, rules_loaded INTEGER NOT NULL,
+                    rules_failed INTEGER NOT NULL, collectors_failed INTEGER NOT NULL,
+                    rule_load_errors TEXT NOT NULL, collector_errors TEXT NOT NULL,
+                    privileged_skipped TEXT NOT NULL
+                );
+                CREATE TABLE findings (
+                    id TEXT PRIMARY KEY, scan_run_id TEXT NOT NULL, rule_id TEXT NOT NULL,
+                    severity TEXT NOT NULL, title TEXT NOT NULL, explanation TEXT NOT NULL,
+                    fix_hint TEXT NOT NULL, context TEXT NOT NULL, first_seen TEXT NOT NULL,
+                    last_seen TEXT NOT NULL, status TEXT NOT NULL
+                );
+                INSERT INTO scan_runs VALUES
+                  ('run-1','2026-01-01T00:00:00Z',NULL,'host',1,0,0,'[]','[]','[]');",
+            )
+            .unwrap();
+            assert_eq!(
+                conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+                    .unwrap(),
+                0,
+                "fixture must genuinely look like a pre-versioning database"
+            );
+        }
+
+        let store = Store::open(&db_path).unwrap();
+
+        assert_eq!(Store::schema_version(&store.conn).unwrap(), 2);
+        assert_eq!(
+            store.count_scan_runs().unwrap(),
+            1,
+            "the user's existing scan history must survive the upgrade, not be recreated empty"
+        );
+        // Both things the old schema lacked are now usable.
+        assert!(store.get_setting("anything").unwrap().is_none());
+        assert_eq!(store.list_scan_runs(10).unwrap()[0].total_findings, 0);
+    }
+
+    #[test]
+    fn missing_setting_is_none_not_an_error() {
+        let store = Store::open_in_memory().unwrap();
+        assert_eq!(store.get_setting("nope").unwrap(), None);
+    }
+
+    #[test]
+    fn setting_round_trips() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.set_setting("realtime_av_enabled", "true").unwrap();
+        assert_eq!(
+            store.get_setting("realtime_av_enabled").unwrap(),
+            Some("true".to_string())
+        );
+    }
+
+    #[test]
+    fn setting_a_key_twice_overwrites_rather_than_erroring() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.set_setting("k", "first").unwrap();
+        store.set_setting("k", "second").unwrap();
+        assert_eq!(store.get_setting("k").unwrap(), Some("second".to_string()));
     }
 }

@@ -178,6 +178,19 @@ pub fn default_scan_targets(home: &Path) -> Vec<PathBuf> {
     .collect()
 }
 
+/// Default folders for *real-time* protection to watch — deliberately narrower than
+/// [`default_scan_targets`]: `/tmp` and `/var/tmp` see constant churn from every application
+/// on the system, which would make a continuous on-write watcher fire near-permanently. The
+/// user-facing folders malware actually lands in (browser downloads, files dragged to the
+/// desktop) are the ones worth watching live; the noisier system temp dirs stay covered by
+/// the on-demand scan instead.
+pub fn default_realtime_watch_targets(home: &Path) -> Vec<PathBuf> {
+    vec![home.join("Downloads"), home.join("Desktop")]
+        .into_iter()
+        .filter(|p| p.exists())
+        .collect()
+}
+
 fn is_clamscan_available() -> bool {
     Command::new("clamscan")
         .arg("--version")
@@ -286,10 +299,23 @@ mod tests {
 
     #[test]
     fn parses_a_real_detection_line() {
-        let output = "/tmp/eicar.com: Eicar-Signature FOUND\n";
+        // The name a current ClamAV reports for the canonical 68-byte EICAR file, matched by
+        // the hash signature in main.hdb.
+        let output = "/tmp/eicar.com: Eicar-Test-Signature FOUND\n";
         let threats = parse_clamscan_output(output);
         assert_eq!(threats.len(), 1);
         assert_eq!(threats[0].path, "/tmp/eicar.com");
+        assert_eq!(threats[0].signature, "Eicar-Test-Signature");
+    }
+
+    #[test]
+    fn parses_the_bytecode_engines_eicar_variant() {
+        // EICAR padded with trailing whitespace (still a valid test file, up to 128 bytes)
+        // misses the exact-hash signature and is caught by the bytecode engine instead, which
+        // reports a *different* name. Both are real detections and both must parse.
+        let output = "/tmp/eicar-padded.com: Eicar-Signature FOUND\n";
+        let threats = parse_clamscan_output(output);
+        assert_eq!(threats.len(), 1);
         assert_eq!(threats[0].signature, "Eicar-Signature");
     }
 
@@ -305,11 +331,11 @@ mod tests {
     fn handles_paths_containing_colons() {
         // A filename with its own ": " substring shouldn't split at the wrong point —
         // rsplit_once anchors from the right, so the FOUND-adjacent separator wins.
-        let output = "/tmp/notes: draft.txt: Win.Test.EICAR_HDB-1 FOUND\n";
+        let output = "/tmp/notes: draft.txt: Unix.Trojan.Mirai-1 FOUND\n";
         let threats = parse_clamscan_output(output);
         assert_eq!(threats.len(), 1);
         assert_eq!(threats[0].path, "/tmp/notes: draft.txt");
-        assert_eq!(threats[0].signature, "Win.Test.EICAR_HDB-1");
+        assert_eq!(threats[0].signature, "Unix.Trojan.Mirai-1");
     }
 
     #[test]
@@ -320,6 +346,16 @@ mod tests {
         assert!(targets.contains(&tmp.path().join("Downloads")));
         // /tmp and /var/tmp existing on the actual host they don't control from this test —
         // just confirm the one we created shows up and nothing crashes on a fixture home dir.
+    }
+
+    #[test]
+    fn default_realtime_watch_targets_only_include_existing_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("Downloads")).unwrap();
+        // Desktop deliberately left uncreated — must be skipped, not produce a nonexistent
+        // watch target that would fail when handed to `notify::Watcher::watch`.
+        let targets = default_realtime_watch_targets(tmp.path());
+        assert_eq!(targets, vec![tmp.path().join("Downloads")]);
     }
 
     #[test]
