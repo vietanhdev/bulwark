@@ -1,0 +1,11 @@
+id: BLWK-KERNEL-016
+title: This host sends ICMP redirects
+category: kernel-hardening
+severity: low
+collector: sysctl_kernel
+condition: send_redirects == 1
+explain: >
+  net.ipv4.conf.all.send_redirects is 1 — a non-router host has no legitimate reason to
+  send ICMP redirects, and leaving this on is unnecessary route-manipulation surface.
+fix: "Set 'net.ipv4.conf.all.send_redirects=0' via /etc/sysctl.d/ and run 'sysctl --system' (skip this if the host is intentionally acting as a router)."
+references: [CIS-3.2.1]

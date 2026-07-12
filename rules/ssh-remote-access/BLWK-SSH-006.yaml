@@ -1,0 +1,13 @@
+id: BLWK-SSH-006
+title: SSH permits user-set environment variables
+category: ssh-remote-access
+severity: medium
+collector: sshd_config
+condition: permit_user_environment == "yes"
+explain: >
+  PermitUserEnvironment is set to "{{ sshd.permit_user_environment }}" in sshd_config,
+  letting an SSH client set arbitrary environment variables for its session (via
+  ~/.ssh/environment or SendEnv) — including ones like LD_PRELOAD that can hijack the
+  behavior of programs the session later runs.
+fix: "Set 'PermitUserEnvironment no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'."
+references: [CIS-5.2.6]

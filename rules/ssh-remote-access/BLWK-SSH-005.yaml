@@ -1,0 +1,13 @@
+id: BLWK-SSH-005
+title: SSH TCP forwarding/tunneling is enabled
+category: ssh-remote-access
+severity: medium
+collector: sshd_config
+condition: allow_tcp_forwarding == "yes"
+explain: >
+  AllowTcpForwarding is set to "{{ sshd.allow_tcp_forwarding }}" in sshd_config. TCP
+  forwarding lets any SSH user open arbitrary local or remote port tunnels through this
+  host — the exact mechanism used to pivot into internal networks or to reach services
+  (like VNC) that are only supposed to be reachable from localhost.
+fix: "Set 'AllowTcpForwarding no' in /etc/ssh/sshd_config, or restrict it per-user with a Match block, unless tunneling is a deliberate requirement."
+references: [CIS-5.2.5, ATTACK-T1572]

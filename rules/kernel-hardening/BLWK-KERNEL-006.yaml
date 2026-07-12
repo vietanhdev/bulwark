@@ -1,0 +1,13 @@
+id: BLWK-KERNEL-006
+title: Unprivileged users can load BPF programs into the kernel
+category: kernel-hardening
+severity: high
+collector: sysctl_kernel
+condition: unprivileged_bpf_disabled == 0
+explain: >
+  kernel.unprivileged_bpf_disabled is 0 — any local user can load BPF programs into the
+  kernel without CAP_SYS_ADMIN. The BPF verifier has been the source of numerous local
+  privilege-escalation CVEs; this setting is what determines whether that class of bug is
+  reachable by an unprivileged attacker at all.
+fix: "Set 'kernel.unprivileged_bpf_disabled=1' via /etc/sysctl.d/ and run 'sysctl --system'."
+references: [CIS-1.5.2, ATTACK-T1068]

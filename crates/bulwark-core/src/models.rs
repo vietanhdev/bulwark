@@ -1,0 +1,200 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
+    Info,
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FindingStatus {
+    Open,
+    Acknowledged,
+    Resolved,
+}
+
+/// One fact row produced by a collector. Most collectors produce exactly one row;
+/// list-shaped collectors (listening ports, cron entries, ...) produce one row per item,
+/// and each row is evaluated against the rule's condition independently.
+pub type Fact = BTreeMap<String, serde_json::Value>;
+
+/// A rule as authored in YAML. See design-docs/001-bulwark-security-scanner/index.md §5.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Rule {
+    pub id: String,
+    pub title: String,
+    pub category: String,
+    pub severity: Severity,
+    pub collector: String,
+    pub condition: String,
+    pub explain: String,
+    pub fix: String,
+    #[serde(default)]
+    pub references: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Finding {
+    pub id: Uuid,
+    pub rule_id: String,
+    pub severity: Severity,
+    pub title: String,
+    pub explanation: String,
+    pub fix_hint: String,
+    pub context: Fact,
+    pub first_seen: DateTime<Utc>,
+    pub last_seen: DateTime<Utc>,
+    pub status: FindingStatus,
+    pub scan_run_id: Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollectorError {
+    pub collector: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuleLoadError {
+    pub path: String,
+    pub message: String,
+}
+
+/// Round-trips through JSON (see `bulwark-app`'s privileged-scan path: the GUI shells out
+/// to `bulwark-cli scan --privileged --json` via pkexec and deserializes its stdout rather
+/// than duplicating collector logic — the CLI and GUI stay two front-doors over one engine
+/// even for the privileged path).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScanRun {
+    pub id: Uuid,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub host_fingerprint: String,
+    pub rules_loaded: usize,
+    pub rule_load_errors: Vec<RuleLoadError>,
+    pub collector_errors: Vec<CollectorError>,
+    /// Collectors that needed elevation and were skipped because this run wasn't
+    /// privileged — never silent (design doc §8, "N checks skipped (no privilege)").
+    pub privileged_collectors_skipped: Vec<String>,
+    pub findings: Vec<Finding>,
+}
+
+impl ScanRun {
+    pub fn worst_severity(&self) -> Option<Severity> {
+        self.findings.iter().map(|f| f.severity).max()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `bulwark-app`'s privileged-scan path (see `apps/bulwark-app/src-tauri/src/lib.rs`)
+    /// depends entirely on `bulwark-cli scan --json`'s stdout deserializing back into a
+    /// real `ScanRun` — this is the contract that makes that wiring trustworthy rather
+    /// than something that only happened to work in one manual test run.
+    #[test]
+    fn scan_run_survives_a_json_round_trip() {
+        let mut context = Fact::new();
+        context.insert("port".to_string(), serde_json::Value::from(5900));
+
+        let scan_run_id = Uuid::new_v4();
+        let now = Utc::now();
+        let original = ScanRun {
+            id: scan_run_id,
+            started_at: now,
+            finished_at: Some(now),
+            host_fingerprint: "test-host/6.8.0".to_string(),
+            rules_loaded: 3,
+            rule_load_errors: vec![RuleLoadError {
+                path: "bad.yaml".into(),
+                message: "oops".into(),
+            }],
+            collector_errors: vec![CollectorError {
+                collector: "sudoers".into(),
+                message: "denied".into(),
+            }],
+            privileged_collectors_skipped: vec!["sudoers".into()],
+            findings: vec![Finding {
+                id: Uuid::new_v4(),
+                rule_id: "BLWK-NET-001".into(),
+                severity: Severity::High,
+                title: "A VNC port is listening".into(),
+                explanation: "explanation text".into(),
+                fix_hint: "fix it".into(),
+                context,
+                first_seen: now,
+                last_seen: now,
+                status: FindingStatus::Open,
+                scan_run_id,
+            }],
+        };
+
+        let json = serde_json::to_string(&original).unwrap();
+        let round_tripped: ScanRun = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(round_tripped.id, original.id);
+        assert_eq!(round_tripped.findings.len(), 1);
+        assert_eq!(round_tripped.findings[0].rule_id, "BLWK-NET-001");
+        assert_eq!(round_tripped.findings[0].severity, Severity::High);
+        assert_eq!(round_tripped.privileged_collectors_skipped, vec!["sudoers"]);
+    }
+
+    fn finding_with(severity: Severity) -> Finding {
+        let now = Utc::now();
+        Finding {
+            id: Uuid::new_v4(),
+            rule_id: "BLWK-TEST-000".into(),
+            severity,
+            title: "t".into(),
+            explanation: "e".into(),
+            fix_hint: "f".into(),
+            context: Fact::new(),
+            first_seen: now,
+            last_seen: now,
+            status: FindingStatus::Open,
+            scan_run_id: Uuid::new_v4(),
+        }
+    }
+
+    fn scan_run_with(findings: Vec<Finding>) -> ScanRun {
+        let now = Utc::now();
+        ScanRun {
+            id: Uuid::new_v4(),
+            started_at: now,
+            finished_at: Some(now),
+            host_fingerprint: "test-host/6.8.0".into(),
+            rules_loaded: findings.len(),
+            rule_load_errors: vec![],
+            collector_errors: vec![],
+            privileged_collectors_skipped: vec![],
+            findings,
+        }
+    }
+
+    /// `bulwark-cli`'s process exit code is driven entirely by this — a wrong ordering
+    /// here would mean the CLI reports "clean" (exit 0) on a run that actually found a
+    /// critical issue, silently breaking any script/CI job gating on the exit code.
+    #[test]
+    fn worst_severity_picks_the_highest_of_mixed_findings() {
+        let scan = scan_run_with(vec![
+            finding_with(Severity::Low),
+            finding_with(Severity::Critical),
+            finding_with(Severity::Medium),
+        ]);
+        assert_eq!(scan.worst_severity(), Some(Severity::Critical));
+    }
+
+    #[test]
+    fn worst_severity_is_none_with_no_findings() {
+        assert_eq!(scan_run_with(vec![]).worst_severity(), None);
+    }
+}

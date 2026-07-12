@@ -1,0 +1,12 @@
+id: BLWK-KERNEL-017
+title: Martian packet logging is disabled
+category: kernel-hardening
+severity: low
+collector: sysctl_kernel
+condition: log_martians == 0
+explain: >
+  net.ipv4.conf.all.log_martians is 0 — packets with impossible/spoofed source addresses
+  (no route back to the claimed source) are silently dropped instead of logged, losing an
+  early signal of spoofing or scanning activity on the network.
+fix: "Set 'net.ipv4.conf.all.log_martians=1' via /etc/sysctl.d/ and run 'sysctl --system'."
+references: [CIS-3.2.3]

@@ -1,0 +1,12 @@
+id: BLWK-FIM-005
+title: "Credential file deleted since baseline: {{ file_integrity_privileged.path }}"
+category: file-integrity
+severity: critical
+collector: file_integrity_privileged
+condition: changed == true and currently_present == false
+explain: >
+  {{ file_integrity_privileged.path }} was present at the last baseline and is now missing.
+  A missing /etc/shadow or /etc/sudoers is either severe accidental damage or deliberate
+  tampering — neither leaves this host in a safe state.
+fix: "Restore the file immediately from a package manager reinstall or backup — do not leave this host running without it. Then re-run 'sudo bulwark fim baseline --privileged'."
+references: [ATTACK-T1070]

@@ -1,0 +1,12 @@
+id: BLWK-SSH-004
+title: SSH X11 forwarding is enabled
+category: ssh-remote-access
+severity: low
+collector: sshd_config
+condition: x11_forwarding == "yes"
+explain: >
+  X11Forwarding is set to "{{ sshd.x11_forwarding }}" in sshd_config. X11 forwarding
+  exposes any local X server to whatever runs on the remote end of the session, and has a
+  history of X11-protocol-level compromise (keystroke injection, screen capture).
+fix: "Set 'X11Forwarding no' in /etc/ssh/sshd_config and run 'systemctl restart sshd', unless remote GUI apps are a deliberate requirement."
+references: [CIS-5.2.4]

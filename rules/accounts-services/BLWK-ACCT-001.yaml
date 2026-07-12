@@ -1,0 +1,13 @@
+id: BLWK-ACCT-001
+title: Cron entry runs a downloader piped to a shell
+category: accounts-services
+severity: critical
+collector: cron_entries
+condition: command matches "(curl|wget).*\|\s*(ba)?sh\b"
+explain: >
+  A cron entry's command ("{{ cron_entries.command }}", scheduled "{{ cron_entries.schedule }}"
+  via {{ cron_entries.source }}) pipes a downloaded script straight into a shell. This pattern
+  hides what actually runs, changes on the attacker's schedule, and leaves nothing on disk to
+  inspect between runs.
+fix: "Review the cron entry, and if unrecognized, remove it and download/inspect the script manually before deciding whether it's legitimate."
+references: [ATTACK-T1053.003]

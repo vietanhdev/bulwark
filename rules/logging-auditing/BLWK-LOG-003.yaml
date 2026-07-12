@@ -1,0 +1,13 @@
+id: BLWK-LOG-003
+title: Kernel-level process accounting is not installed
+category: logging-auditing
+severity: low
+collector: process_accounting
+condition: installed == false
+explain: >
+  Neither 'accton' nor 'lastcomm' is present, so there's no kernel-level record of every
+  process that ran on this host, who ran it, and how long it took — a different, harder-
+  to-tamper-with data source than shell history or application logs, since it's written by
+  the kernel itself rather than by the process being recorded.
+fix: "Install process accounting (e.g. 'apt install acct') and enable it with 'systemctl enable --now acct'."
+references: [CIS-4.6]

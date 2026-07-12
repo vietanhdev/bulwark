@@ -1,0 +1,11 @@
+id: BLWK-KERNEL-002
+title: Kernel pointers are exposed to unprivileged users
+category: kernel-hardening
+severity: low
+collector: sysctl_kernel
+condition: kptr_restrict == 0
+explain: >
+  kernel.kptr_restrict is 0 — kernel pointer addresses in /proc are readable by any user,
+  making kernel-exploit development easier (defeats KASLR for local attackers).
+fix: "Set 'kernel.kptr_restrict=1' (or 2) via /etc/sysctl.d/ and run 'sysctl --system'."
+references: [CIS-1.5.3]

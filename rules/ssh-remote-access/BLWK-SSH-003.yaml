@@ -1,0 +1,11 @@
+id: BLWK-SSH-003
+title: SSH allows empty passwords
+category: ssh-remote-access
+severity: critical
+collector: sshd_config
+condition: permit_empty_passwords == "yes"
+explain: >
+  PermitEmptyPasswords is set to "{{ sshd.permit_empty_passwords }}" — any account with a
+  blank password can log in over SSH with no credential at all.
+fix: "Set 'PermitEmptyPasswords no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'."
+references: [CIS-5.2.11]

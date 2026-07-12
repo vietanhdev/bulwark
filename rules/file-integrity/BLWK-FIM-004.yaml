@@ -1,0 +1,16 @@
+id: BLWK-FIM-004
+title: "Credential file modified since baseline: {{ file_integrity_privileged.path }}"
+category: file-integrity
+severity: critical
+collector: file_integrity_privileged
+condition: changed == true and currently_present == true
+explain: >
+  {{ file_integrity_privileged.path }} no longer matches its recorded baseline hash. This is
+  one of the two root-only credential/privilege files Bulwark tracks (/etc/shadow,
+  /etc/sudoers) — a change here is about as direct a signal of credential tampering or
+  privilege-escalation setup as this host can produce.
+fix: >
+  Review the change immediately. If it wasn't yours (a password reset via 'passwd', or a
+  deliberate 'visudo' edit), treat this as a likely compromise. If legitimate, re-run
+  'sudo bulwark fim baseline --privileged' to record the new known-good state.
+references: [ATTACK-T1098, ATTACK-T1548.003]

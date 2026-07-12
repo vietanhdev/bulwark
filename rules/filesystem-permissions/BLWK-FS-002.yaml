@@ -1,0 +1,12 @@
+id: BLWK-FS-002
+title: /etc/shadow is world-readable
+category: filesystem-permissions
+severity: critical
+collector: file_permissions
+condition: path == "/etc/shadow" and world_readable == true
+explain: >
+  /etc/shadow (mode {{ file_permissions.mode_octal }}) is readable by any local user.
+  It holds every account's password hash — world-readable turns any local foothold into
+  an offline password-cracking opportunity against every account on the box.
+fix: "chmod 640 /etc/shadow (or your distro's default — verify with 'stat /etc/shadow' on a known-good system)."
+references: [CIS-6.1.2, ATTACK-T1003.008]

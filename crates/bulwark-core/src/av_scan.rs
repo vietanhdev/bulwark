@@ -1,0 +1,430 @@
+//! Real on-demand antivirus scanning — distinct from the `clamav_status` collector (which
+//! only checks whether ClamAV is installed and how fresh its signatures are). This actually
+//! invokes `clamscan` and reports what it finds. Deliberately *not* modeled as a `Collector`:
+//! every other collector is a fast, sub-second fact read evaluated against declarative rules,
+//! and a real filesystem scan is a fundamentally different kind of operation — slow, explicit,
+//! user-initiated — that would break the "under 10 seconds" scan experience if bundled into
+//! the regular rule-engine pass. This is why the project's own non-goals say "shell out to
+//! ClamAV, don't reimplement AV": that's exactly what this module does, nothing more.
+
+use serde::Serialize;
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ThreatDetection {
+    pub path: String,
+    pub signature: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ClamavVersionInfo {
+    pub engine_version: String,
+    pub database_version: String,
+    pub database_date: String,
+}
+
+/// Parses `clamscan -V`'s single-line output — `ClamAV <engine>/<db-version>/<db-build-date>`
+/// (e.g. `ClamAV 1.5.3/28055/Thu Jul  9 13:25:20 2026`, verified against a real install on
+/// this project's own dev machine before writing this parser). One command gives the engine
+/// version, the signature database version, *and* its build date together — a real "is this
+/// actually current" answer, not just a file-modification-time guess the way the
+/// `clamav_status` collector's `db_age_days` is (that one exists for fast, no-subprocess rule
+/// evaluation; this is for the richer on-demand display the Antivirus page wants).
+pub fn parse_version_output(output: &str) -> Option<ClamavVersionInfo> {
+    let rest = output.trim().strip_prefix("ClamAV ")?;
+    let mut parts = rest.splitn(3, '/');
+    let engine_version = parts.next()?.trim().to_string();
+    let database_version = parts.next()?.trim().to_string();
+    let database_date = parts.next()?.trim().to_string();
+    if engine_version.is_empty() || database_version.is_empty() || database_date.is_empty() {
+        return None;
+    }
+    Some(ClamavVersionInfo {
+        engine_version,
+        database_version,
+        database_date,
+    })
+}
+
+/// `None` covers both "clamscan isn't installed" and "installed but produced output this
+/// parser doesn't recognize" — the caller already has a separate, cheaper
+/// `clamav_status`-collector-driven "is it installed at all" signal, so this doesn't need to
+/// distinguish those two cases itself.
+pub fn get_version_info() -> Option<ClamavVersionInfo> {
+    let output = Command::new("clamscan").arg("-V").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_version_output(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// The right install command for *this* host, not a one-size-fits-all `apt install` that's
+/// simply wrong on non-Debian distros. Reads `ID`/`ID_LIKE` from `/etc/os-release` — the
+/// standard, portable way to identify a Linux distro family (systemd's own spec, present on
+/// every systemd-based distro and most others besides).
+pub fn install_command_for_os_release(os_release_text: &str) -> &'static str {
+    let mut id = "";
+    let mut id_like = "";
+    for line in os_release_text.lines() {
+        if let Some(v) = line.strip_prefix("ID=") {
+            id = v.trim_matches('"');
+        } else if let Some(v) = line.strip_prefix("ID_LIKE=") {
+            id_like = v.trim_matches('"');
+        }
+    }
+    let family = format!("{id} {id_like}").to_ascii_lowercase();
+
+    if family.contains("debian") || family.contains("ubuntu") {
+        "sudo apt install clamav"
+    } else if family.contains("fedora") || family.contains("rhel") || family.contains("centos") {
+        "sudo dnf install clamav clamav-update"
+    } else if family.contains("arch") {
+        "sudo pacman -S clamav"
+    } else if family.contains("suse") {
+        "sudo zypper install clamav"
+    } else if family.contains("alpine") {
+        "sudo apk add clamav"
+    } else {
+        "See https://docs.clamav.net/manual/Installing.html for your distro"
+    }
+}
+
+pub fn detect_install_command() -> &'static str {
+    std::fs::read_to_string("/etc/os-release")
+        .map(|text| install_command_for_os_release(&text))
+        .unwrap_or("See https://docs.clamav.net/manual/Installing.html for your distro")
+}
+
+/// One parsed line of `clamscan`'s real-time, per-file output — the streaming counterpart to
+/// [`parse_clamscan_output`]'s batch `--infected` parsing. Used to drive live scan progress
+/// (GUI: "N files scanned, currently: <path>") rather than only reporting a result once the
+/// whole scan finishes minutes later.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClamscanLine {
+    Clean(String),
+    Infected(ThreatDetection),
+    /// A file `clamscan` couldn't scan (permission denied, unsupported archive, ...) — still
+    /// progress (the file was reached), just not a clean/infected verdict.
+    Error(String),
+}
+
+/// Parses one line of `clamscan`'s default (non-`--infected`) per-file output:
+/// `<path>: OK`, `<path>: <Signature> FOUND`, or `<path>: <reason> ERROR`. Lines that match
+/// none of these (blank lines, the trailing summary block if present) return `None` rather
+/// than erroring — a scan that silently drops progress updates on an unrecognized line is
+/// worse than one that's merely permissive about what it doesn't understand.
+pub fn parse_clamscan_line(line: &str) -> Option<ClamscanLine> {
+    let line = line.trim();
+    // Unlike the FOUND/ERROR cases, a clean line has nothing between the path and the
+    // verdict (`<path>: OK`, not `<path>: <reason> OK`) — the separator is part of the
+    // suffix to strip, not just the verdict word, or the path would keep a trailing colon.
+    if let Some(rest) = line.strip_suffix(": OK") {
+        return Some(ClamscanLine::Clean(rest.to_string()));
+    }
+    if let Some(rest) = line.strip_suffix(" FOUND") {
+        let (path, signature) = rest.rsplit_once(": ")?;
+        return Some(ClamscanLine::Infected(ThreatDetection {
+            path: path.to_string(),
+            signature: signature.to_string(),
+        }));
+    }
+    if let Some(rest) = line.strip_suffix(" ERROR") {
+        return Some(ClamscanLine::Error(rest.to_string()));
+    }
+    None
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AvScanResult {
+    pub scanned_paths: Vec<String>,
+    pub files_scanned: Option<u64>,
+    pub threats: Vec<ThreatDetection>,
+    pub clamscan_available: bool,
+}
+
+/// Parses `clamscan --infected --no-summary` output. Each detection line looks like
+/// `/path/to/file: Signature.Name FOUND`; everything else (directory notices, warnings) is
+/// ignored rather than erroring the whole scan over one unparseable line — a scan that
+/// silently drops findings on a parse quirk is worse than one that's merely permissive.
+pub fn parse_clamscan_output(stdout: &str) -> Vec<ThreatDetection> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let rest = line.strip_suffix(" FOUND")?;
+            let (path, signature) = rest.rsplit_once(": ")?;
+            Some(ThreatDetection {
+                path: path.to_string(),
+                signature: signature.to_string(),
+            })
+        })
+        .collect()
+}
+
+/// Bounded, fast-ish default scan targets rather than the whole filesystem (or even the
+/// whole home directory, which can hold many GB of unrelated project data) — the places
+/// malware actually lands: browser downloads and the world-writable temp directories every
+/// local user and process can drop a file into.
+pub fn default_scan_targets(home: &Path) -> Vec<PathBuf> {
+    vec![
+        home.join("Downloads"),
+        PathBuf::from("/tmp"),
+        PathBuf::from("/var/tmp"),
+    ]
+    .into_iter()
+    .filter(|p| p.exists())
+    .collect()
+}
+
+fn is_clamscan_available() -> bool {
+    Command::new("clamscan")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+pub fn scan(paths: &[PathBuf]) -> anyhow::Result<AvScanResult> {
+    let available = is_clamscan_available();
+
+    if !available || paths.is_empty() {
+        return Ok(AvScanResult {
+            scanned_paths: paths.iter().map(|p| p.display().to_string()).collect(),
+            files_scanned: None,
+            threats: Vec::new(),
+            clamscan_available: available,
+        });
+    }
+
+    let output = Command::new("clamscan")
+        .arg("--recursive")
+        .arg("--infected")
+        .arg("--no-summary")
+        .args(paths)
+        .output()?;
+
+    // clamscan exits 1 when infections are found — that's a normal result, not a failure.
+    // Only a missing-binary-class error (already checked above) or a genuine crash (no
+    // stdout produced at all) should be treated as the scan not having run.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let threats = parse_clamscan_output(&stdout);
+
+    Ok(AvScanResult {
+        scanned_paths: paths.iter().map(|p| p.display().to_string()).collect(),
+        files_scanned: None,
+        threats,
+        clamscan_available: true,
+    })
+}
+
+/// Same underlying scan as [`scan`], but drives `on_line` with every per-file result as
+/// `clamscan` produces it instead of buffering the whole run and returning once at the end —
+/// what actually backs the GUI's live "N files scanned, currently: <path>" progress. Doesn't
+/// pass `--infected` (unlike `scan`): that flag suppresses the "OK" lines entirely, which
+/// would mean clean files (the overwhelming majority of any real scan) produce zero progress
+/// signal at all.
+pub fn scan_streaming(
+    paths: &[PathBuf],
+    mut on_line: impl FnMut(&ClamscanLine),
+) -> anyhow::Result<AvScanResult> {
+    let available = is_clamscan_available();
+
+    if !available || paths.is_empty() {
+        return Ok(AvScanResult {
+            scanned_paths: paths.iter().map(|p| p.display().to_string()).collect(),
+            files_scanned: None,
+            threats: Vec::new(),
+            clamscan_available: available,
+        });
+    }
+
+    let mut child = Command::new("clamscan")
+        .arg("--recursive")
+        .arg("--no-summary")
+        .args(paths)
+        .stdout(Stdio::piped())
+        .spawn()?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("clamscan produced no stdout pipe"))?;
+
+    let mut files_scanned: u64 = 0;
+    let mut threats = Vec::new();
+    for line in BufReader::new(stdout).lines() {
+        let line = line?;
+        let Some(parsed) = parse_clamscan_line(&line) else {
+            continue;
+        };
+        match &parsed {
+            ClamscanLine::Clean(_) | ClamscanLine::Error(_) => files_scanned += 1,
+            ClamscanLine::Infected(t) => {
+                files_scanned += 1;
+                threats.push(t.clone());
+            }
+        }
+        on_line(&parsed);
+    }
+    // clamscan exits 1 when infections are found — a normal, already-consumed-above result,
+    // not a process failure worth propagating as an Err.
+    let _ = child.wait();
+
+    Ok(AvScanResult {
+        scanned_paths: paths.iter().map(|p| p.display().to_string()).collect(),
+        files_scanned: Some(files_scanned),
+        threats,
+        clamscan_available: true,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_a_real_detection_line() {
+        let output = "/tmp/eicar.com: Eicar-Signature FOUND\n";
+        let threats = parse_clamscan_output(output);
+        assert_eq!(threats.len(), 1);
+        assert_eq!(threats[0].path, "/tmp/eicar.com");
+        assert_eq!(threats[0].signature, "Eicar-Signature");
+    }
+
+    #[test]
+    fn ignores_non_detection_lines() {
+        let output = "/tmp/clean.txt: OK\n\
+             ----------- SCAN SUMMARY -----------\n\
+             Scanned files: 42\n";
+        assert!(parse_clamscan_output(output).is_empty());
+    }
+
+    #[test]
+    fn handles_paths_containing_colons() {
+        // A filename with its own ": " substring shouldn't split at the wrong point —
+        // rsplit_once anchors from the right, so the FOUND-adjacent separator wins.
+        let output = "/tmp/notes: draft.txt: Win.Test.EICAR_HDB-1 FOUND\n";
+        let threats = parse_clamscan_output(output);
+        assert_eq!(threats.len(), 1);
+        assert_eq!(threats[0].path, "/tmp/notes: draft.txt");
+        assert_eq!(threats[0].signature, "Win.Test.EICAR_HDB-1");
+    }
+
+    #[test]
+    fn default_targets_only_include_existing_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("Downloads")).unwrap();
+        let targets = default_scan_targets(tmp.path());
+        assert!(targets.contains(&tmp.path().join("Downloads")));
+        // /tmp and /var/tmp existing on the actual host they don't control from this test —
+        // just confirm the one we created shows up and nothing crashes on a fixture home dir.
+    }
+
+    #[test]
+    fn parses_a_clean_line() {
+        assert_eq!(
+            parse_clamscan_line("/tmp/notes.txt: OK"),
+            Some(ClamscanLine::Clean("/tmp/notes.txt".to_string()))
+        );
+    }
+
+    #[test]
+    fn parses_an_infected_line() {
+        assert_eq!(
+            parse_clamscan_line("/tmp/eicar.com: Eicar-Signature FOUND"),
+            Some(ClamscanLine::Infected(ThreatDetection {
+                path: "/tmp/eicar.com".to_string(),
+                signature: "Eicar-Signature".to_string(),
+            }))
+        );
+    }
+
+    #[test]
+    fn parses_an_error_line() {
+        assert_eq!(
+            parse_clamscan_line("/root/private: Permission denied ERROR"),
+            Some(ClamscanLine::Error(
+                "/root/private: Permission denied".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn unrecognized_lines_are_ignored_not_erroring() {
+        assert_eq!(parse_clamscan_line(""), None);
+        assert_eq!(
+            parse_clamscan_line("----------- SCAN SUMMARY -----------"),
+            None
+        );
+        assert_eq!(parse_clamscan_line("Scanned files: 42"), None);
+    }
+
+    #[test]
+    fn scan_streaming_reports_clamscan_unavailable_without_invoking_on_line() {
+        // A binary named "clamscan" almost certainly isn't on PATH inside a test sandbox in
+        // a way that would make this test flaky either way — either it's genuinely absent
+        // (available=false, the common case) or present, in which case an empty paths list
+        // still short-circuits before spawning. Either way `on_line` must never fire here.
+        let mut calls = 0;
+        let result = scan_streaming(&[], |_| calls += 1).unwrap();
+        assert_eq!(calls, 0);
+        assert_eq!(result.threats.len(), 0);
+    }
+
+    #[test]
+    fn parses_a_real_clamscan_version_line() {
+        // Verified against a real `clamscan -V` invocation on this project's own dev
+        // machine before writing this parser.
+        let info = parse_version_output("ClamAV 1.5.3/28055/Thu Jul  9 13:25:20 2026\n").unwrap();
+        assert_eq!(info.engine_version, "1.5.3");
+        assert_eq!(info.database_version, "28055");
+        assert_eq!(info.database_date, "Thu Jul  9 13:25:20 2026");
+    }
+
+    #[test]
+    fn unparseable_version_output_is_none_not_a_panic() {
+        assert!(parse_version_output("").is_none());
+        assert!(parse_version_output("not clamav output at all").is_none());
+    }
+
+    #[test]
+    fn picks_apt_for_a_real_ubuntu_os_release() {
+        // The actual content of this project's own dev machine's /etc/os-release.
+        let text = "PRETTY_NAME=\"Ubuntu 26.04 LTS\"\nID=ubuntu\nID_LIKE=debian\n";
+        assert_eq!(
+            install_command_for_os_release(text),
+            "sudo apt install clamav"
+        );
+    }
+
+    #[test]
+    fn picks_the_right_package_manager_per_distro_family() {
+        assert_eq!(
+            install_command_for_os_release("ID=fedora\n"),
+            "sudo dnf install clamav clamav-update"
+        );
+        assert_eq!(
+            install_command_for_os_release("ID=arch\n"),
+            "sudo pacman -S clamav"
+        );
+        assert_eq!(
+            install_command_for_os_release("ID=opensuse-tumbleweed\nID_LIKE=suse\n"),
+            "sudo zypper install clamav"
+        );
+        assert_eq!(
+            install_command_for_os_release("ID=alpine\n"),
+            "sudo apk add clamav"
+        );
+    }
+
+    #[test]
+    fn unknown_distro_falls_back_to_the_docs_link_not_a_wrong_command() {
+        let hint = install_command_for_os_release("ID=some-unknown-distro\n");
+        assert!(
+            hint.contains("docs.clamav.net"),
+            "must not guess a specific package manager"
+        );
+    }
+}

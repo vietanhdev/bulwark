@@ -1,0 +1,12 @@
+id: BLWK-SSH-011
+title: SSH allows an excessive number of authentication attempts per connection
+category: ssh-remote-access
+severity: low
+collector: sshd_config
+condition: max_auth_tries > 6
+explain: >
+  MaxAuthTries is set to {{ sshd.max_auth_tries }} in sshd_config — well above the
+  recommended ceiling of 3-6. A high limit gives an online password-guessing attempt many
+  more tries per TCP connection before being cut off.
+fix: "Set 'MaxAuthTries 3' (or up to 6) in /etc/ssh/sshd_config and run 'systemctl restart sshd'."
+references: [CIS-5.2.7, ATTACK-T1110]

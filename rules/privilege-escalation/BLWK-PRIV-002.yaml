@@ -1,0 +1,17 @@
+id: BLWK-PRIV-002
+title: No GRUB boot loader password is set
+category: privilege-escalation
+severity: medium
+collector: grub_password
+condition: password_set == false
+explain: >
+  /boot/grub/grub.cfg has no 'password' or 'password_pbkdf2' directive. Anyone with
+  physical or console access to this machine can interrupt the boot menu and edit kernel
+  parameters directly (e.g. appending 'init=/bin/bash' or 'single') to get a root shell
+  without ever needing a valid credential — no OS-level control can prevent this once
+  someone has unrestricted access to the boot menu itself.
+fix: >
+  Set a GRUB password: run 'grub-mkpasswd-pbkdf2' to generate a hash, add
+  'set superusers="root"' and 'password_pbkdf2 root <hash>' to /etc/grub.d/40_custom, then
+  run 'update-grub'.
+references: [CIS-1.4.1, ATTACK-T1542]

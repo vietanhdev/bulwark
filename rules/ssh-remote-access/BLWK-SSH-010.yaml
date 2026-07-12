@@ -1,0 +1,14 @@
+id: BLWK-SSH-010
+title: SSH agent forwarding is enabled
+category: ssh-remote-access
+severity: low
+collector: sshd_config
+condition: allow_agent_forwarding == "yes"
+explain: >
+  AllowAgentForwarding is set to "{{ sshd.allow_agent_forwarding }}" in sshd_config. Agent
+  forwarding lets anyone with root (or the forwarding user's privileges) on this host make
+  use of the connecting client's SSH agent to authenticate onward as that client, without
+  ever seeing the private key itself — a well-known lateral-movement technique on
+  multi-hop SSH setups.
+fix: "Set 'AllowAgentForwarding no' in /etc/ssh/sshd_config unless agent forwarding is a deliberate requirement."
+references: [ATTACK-T1563]

@@ -1,0 +1,205 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Design doc §16, tuned: primary is a deep teal — a deliberate blue/green synthesis
+   (hue ~194, between blue's ~255 and green's ~149 in this token set), not a coin flip
+   between the two. It keeps blue's calm/professional read while leaning toward green's
+   trust association, and — as a side effect — sits far enough in hue from the "resolved"
+   status green (~149) that the brand/status collision flagged earlier doesn't reoccur even
+   though both are technically in the blue-green family. Flat/no-gradient throughout. */
+
+:root {
+  --background: oklch(0.99 0.003 195);
+  --foreground: oklch(0.19 0.02 195);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.19 0.02 195);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.19 0.02 195);
+  --primary: oklch(0.5 0.09 194);
+  --primary-foreground: oklch(0.98 0.01 195);
+  --secondary: oklch(0.96 0.01 195);
+  --secondary-foreground: oklch(0.25 0.02 195);
+  --muted: oklch(0.96 0.01 195);
+  --muted-foreground: oklch(0.5 0.02 195);
+  --accent: oklch(0.94 0.03 194);
+  --accent-foreground: oklch(0.3 0.05 194);
+  --destructive: oklch(0.58 0.22 27);
+  --border: oklch(0.91 0.01 195);
+  --input: oklch(0.91 0.01 195);
+  --ring: oklch(0.5 0.09 194 / 0.5);
+  --radius: 0.75rem;
+  --sidebar: oklch(0.97 0.01 195);
+  --sidebar-foreground: oklch(0.25 0.02 195);
+  --sidebar-primary: oklch(0.5 0.09 194);
+  --sidebar-primary-foreground: oklch(0.98 0.01 195);
+  --sidebar-accent: oklch(0.93 0.02 194);
+  --sidebar-accent-foreground: oklch(0.3 0.05 194);
+  --sidebar-border: oklch(0.91 0.01 195);
+  --sidebar-ring: oklch(0.5 0.09 194 / 0.5);
+
+  /* Severity scale — distinct hues, none competing with the teal brand primary (~194).
+     sev-low intentionally stays blue (~255) and sev-resolved stays green (~149) — the two
+     ends of the "blue/green" brief, deliberately kept apart from the teal in between. */
+  --sev-critical: oklch(0.58 0.22 27);
+  --sev-high: oklch(0.65 0.2 41);
+  --sev-medium: oklch(0.7 0.16 70);
+  --sev-low: oklch(0.55 0.16 255);
+  --sev-info: oklch(0.6 0.02 195);
+  --sev-resolved: oklch(0.65 0.19 149);
+}
+
+.dark {
+  --background: oklch(0.17 0.015 195);
+  --foreground: oklch(0.94 0.01 195);
+  --card: oklch(0.21 0.018 195);
+  --card-foreground: oklch(0.94 0.01 195);
+  --popover: oklch(0.21 0.018 195);
+  --popover-foreground: oklch(0.94 0.01 195);
+  --primary: oklch(0.75 0.12 194);
+  --primary-foreground: oklch(0.15 0.02 195);
+  --secondary: oklch(0.27 0.02 195);
+  --secondary-foreground: oklch(0.94 0.01 195);
+  --muted: oklch(0.27 0.02 195);
+  --muted-foreground: oklch(0.66 0.02 195);
+  --accent: oklch(0.3 0.04 194);
+  --accent-foreground: oklch(0.9 0.05 194);
+  --destructive: oklch(0.65 0.2 25);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.75 0.12 194 / 0.5);
+  --sidebar: oklch(0.14 0.015 195);
+  --sidebar-foreground: oklch(0.9 0.01 195);
+  --sidebar-primary: oklch(0.75 0.12 194);
+  --sidebar-primary-foreground: oklch(0.15 0.02 195);
+  --sidebar-accent: oklch(0.26 0.03 194);
+  --sidebar-accent-foreground: oklch(0.9 0.05 194);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.75 0.12 194 / 0.5);
+
+  --sev-critical: oklch(0.66 0.21 25);
+  --sev-high: oklch(0.72 0.18 45);
+  --sev-medium: oklch(0.78 0.15 80);
+  --sev-low: oklch(0.68 0.15 255);
+  --sev-info: oklch(0.65 0.02 195);
+  --sev-resolved: oklch(0.75 0.18 149);
+}
+
+@theme inline {
+  --font-heading: var(--font-sans);
+  --font-sans: "Geist Variable", sans-serif;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --color-sev-critical: var(--sev-critical);
+  --color-sev-high: var(--sev-high);
+  --color-sev-medium: var(--sev-medium);
+  --color-sev-low: var(--sev-low);
+  --color-sev-info: var(--sev-info);
+  --color-sev-resolved: var(--sev-resolved);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    margin: 0;
+    overscroll-behavior: none;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+/* Frameless-window dragging uses Tauri's `data-tauri-drag-region` attribute directly in
+   TitleBar.tsx, not CSS — `-webkit-app-region` is Blink-only and WebKitGTK (Tauri's Linux
+   backend) doesn't implement it. */
+
+/* App shell rounds its own corners since the OS window frame is gone (decorations:
+   false + transparent: true in tauri.conf.json) — otherwise a frameless window is just
+   a hard rectangle with no visual edge treatment at all. */
+.app-shell {
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+/* Status hero: a soft "actively working" pulse while a scan is running — reads as an
+   attentive monitor without implying a background daemon that isn't there in v1. Two
+   staggered rings rather than one so it feels like a ping propagating, not a blink. */
+@keyframes status-pulse {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.45;
+  }
+  100% {
+    transform: scale(1.55);
+    opacity: 0;
+  }
+}
+.status-ring {
+  animation: status-pulse 2.2s cubic-bezier(0.2, 0.6, 0.4, 1) infinite;
+}
+.status-ring-delayed {
+  animation: status-pulse 2.2s cubic-bezier(0.2, 0.6, 0.4, 1) infinite;
+  animation-delay: 1.1s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .status-ring,
+  .status-ring-delayed {
+    animation: none;
+    display: none;
+  }
+}
+
+@keyframes finding-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.finding-enter {
+  animation: finding-in 180ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .finding-enter {
+    animation: none;
+  }
+}

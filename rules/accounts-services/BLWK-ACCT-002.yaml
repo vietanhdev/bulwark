@@ -1,0 +1,11 @@
+id: BLWK-ACCT-002
+title: Password maximum age is excessively long
+category: accounts-services
+severity: low
+collector: login_defs
+condition: pass_max_days > 365
+explain: >
+  PASS_MAX_DAYS in /etc/login.defs is {{ login_defs.pass_max_days }} — passwords never
+  expire in any practical sense, so a leaked credential stays valid indefinitely.
+fix: "Set 'PASS_MAX_DAYS 90' (or your organization's policy) in /etc/login.defs."
+references: [CIS-6.2.1]

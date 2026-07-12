@@ -1,0 +1,12 @@
+id: BLWK-KERNEL-015
+title: IP source routing is enabled
+category: kernel-hardening
+severity: medium
+collector: sysctl_kernel
+condition: accept_source_route == 1
+explain: >
+  net.ipv4.conf.all.accept_source_route is 1 — this host accepts packets that specify
+  their own route, letting a remote attacker bypass normal routing/firewall path
+  assumptions and spoof traffic as if it originated from a trusted internal address.
+fix: "Set 'net.ipv4.conf.all.accept_source_route=0' via /etc/sysctl.d/ and run 'sysctl --system'."
+references: [CIS-3.2.2]

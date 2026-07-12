@@ -1,0 +1,13 @@
+id: BLWK-KERNEL-008
+title: kexec can load an unsigned, arbitrary kernel image
+category: kernel-hardening
+severity: medium
+collector: sysctl_kernel
+condition: kexec_load_disabled == 0
+explain: >
+  kernel.kexec_load_disabled is 0 — a process with sufficient privilege can use kexec to
+  load and immediately switch execution to a completely different, unverified kernel
+  image, bypassing secure boot and any measured-boot chain entirely. This is a defense-
+  evasion technique for surviving a reboot with a backdoored kernel.
+fix: "Set 'kernel.kexec_load_disabled=1' via /etc/sysctl.d/ (this is a one-way switch until reboot)."
+references: [ATTACK-T1601]

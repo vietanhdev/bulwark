@@ -1,0 +1,12 @@
+id: BLWK-ACCT-003
+title: Password minimum age is zero
+category: accounts-services
+severity: low
+collector: login_defs
+condition: pass_min_days == 0
+explain: >
+  PASS_MIN_DAYS in /etc/login.defs is 0 — a user forced to rotate a leaked password can
+  immediately change it right back to the old (compromised) one, defeating the point of
+  the forced rotation.
+fix: "Set 'PASS_MIN_DAYS 1' (or your organization's policy) in /etc/login.defs."
+references: [CIS-6.2.1]

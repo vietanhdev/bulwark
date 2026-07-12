@@ -1,0 +1,13 @@
+id: BLWK-KERNEL-004
+title: Address space layout randomization is disabled or partial
+category: kernel-hardening
+severity: high
+collector: sysctl_kernel
+condition: randomize_va_space != 2
+explain: >
+  kernel.randomize_va_space is {{ sysctl_kernel.randomize_va_space }}, not 2 (full ASLR).
+  ASLR randomizes where the stack, heap, and shared libraries load in memory — without it
+  (or with only partial randomization), memory-corruption exploits become dramatically
+  easier to write reliably.
+fix: "Set 'kernel.randomize_va_space=2' via /etc/sysctl.d/ and run 'sysctl --system'."
+references: [CIS-1.5.1, ATTACK-T1055]

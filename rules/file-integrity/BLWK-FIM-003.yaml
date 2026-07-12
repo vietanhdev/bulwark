@@ -1,0 +1,13 @@
+id: BLWK-FIM-003
+title: "No file-integrity baseline yet: {{ file_integrity.path }}"
+category: file-integrity
+severity: info
+collector: file_integrity
+condition: baseline_exists == false
+explain: >
+  Bulwark hasn't recorded a file-integrity baseline yet, so it can't detect tampering with
+  {{ file_integrity.path }} or the other monitored critical files — only that they currently
+  exist. This is the gap Lynis itself flags (test FINT-4350: "install a file integrity tool")
+  when no such tool is present.
+fix: "Run 'bulwark fim baseline' now, while you trust the current state of this host, to establish the known-good snapshot future scans compare against."
+references: []

@@ -1,0 +1,13 @@
+id: BLWK-KERNEL-007
+title: perf_event_paranoid allows unprivileged kernel profiling
+category: kernel-hardening
+severity: medium
+collector: sysctl_kernel
+condition: perf_event_paranoid < 2
+explain: >
+  kernel.perf_event_paranoid is {{ sysctl_kernel.perf_event_paranoid }}, below 2 — the
+  perf_event_open() syscall is a documented side-channel and kernel-address-disclosure
+  vector, and several real privilege-escalation exploits have used it once accessible to
+  unprivileged users.
+fix: "Set 'kernel.perf_event_paranoid=2' (or higher) via /etc/sysctl.d/ and run 'sysctl --system'."
+references: [CIS-1.5.5]

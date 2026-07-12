@@ -1,0 +1,13 @@
+id: BLWK-SSH-009
+title: SSH GatewayPorts exposes forwarded ports to the network
+category: ssh-remote-access
+severity: medium
+collector: sshd_config
+condition: gateway_ports == "yes"
+explain: >
+  GatewayPorts is set to "{{ sshd.gateway_ports }}" in sshd_config. By default, a port an
+  SSH client forwards to this host is only reachable from localhost; with GatewayPorts on,
+  it's reachable from anywhere on the network — turning an individual user's ad-hoc SSH
+  tunnel into an accidental (or deliberate) network-wide exposure of whatever it points at.
+fix: "Set 'GatewayPorts no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'."
+references: [ATTACK-T1090]

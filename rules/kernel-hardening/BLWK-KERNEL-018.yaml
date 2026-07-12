@@ -1,0 +1,13 @@
+id: BLWK-KERNEL-018
+title: Reverse-path filtering is disabled
+category: kernel-hardening
+severity: medium
+collector: sysctl_kernel
+condition: rp_filter == 0
+explain: >
+  net.ipv4.conf.all.rp_filter is 0 — the kernel will forward packets whose source address
+  couldn't possibly have arrived via the interface they came in on, which is exactly the
+  condition IP spoofing depends on. (A value of 1 or 2 — strict or loose mode — is fine;
+  this only fires when filtering is fully off.)
+fix: "Set 'net.ipv4.conf.all.rp_filter=1' via /etc/sysctl.d/ and run 'sysctl --system'."
+references: [CIS-3.2.4]

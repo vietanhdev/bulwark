@@ -1,0 +1,12 @@
+id: BLWK-LOG-001
+title: auditd is not installed
+category: logging-auditing
+severity: medium
+collector: logging
+condition: auditd_present == false
+explain: >
+  No auditd binary was found. Without it, there's no kernel-level record of privileged
+  syscalls (file access, exec, permission changes) — the trail that makes a break-in
+  reviewable after the fact instead of just a guess.
+fix: "Install auditd (e.g. 'apt install auditd') and enable it with 'systemctl enable --now auditd'."
+references: [CIS-4.1]

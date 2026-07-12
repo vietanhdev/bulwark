@@ -1,0 +1,12 @@
+id: BLWK-KERNEL-010
+title: Hardlink creation protection is disabled
+category: kernel-hardening
+severity: medium
+collector: sysctl_kernel
+condition: protected_hardlinks == 0
+explain: >
+  fs.protected_hardlinks is 0 — any user can create a hardlink to a file they don't own
+  (e.g. a setuid binary or a file another process will later run as root), a classic
+  TOCTOU/race primitive for local privilege escalation.
+fix: "Set 'fs.protected_hardlinks=1' via /etc/sysctl.d/ and run 'sysctl --system'."
+references: [CIS-1.5.7, ATTACK-T1068]

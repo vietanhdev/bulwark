@@ -1,0 +1,11 @@
+id: BLWK-FS-001
+title: A sensitive system file is world-writable
+category: filesystem-permissions
+severity: critical
+collector: file_permissions
+condition: world_writable == true
+explain: >
+  "{{ file_permissions.path }}" is world-writable (mode {{ file_permissions.mode_octal }}).
+  Any local user — or any process running as any user — can modify it directly.
+fix: "chmod o-w {{ file_permissions.path }}"
+references: [CIS-6.1, ATTACK-T1222]

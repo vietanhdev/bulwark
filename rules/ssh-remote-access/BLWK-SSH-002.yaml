@@ -1,0 +1,11 @@
+id: BLWK-SSH-002
+title: SSH root login is permitted
+category: ssh-remote-access
+severity: high
+collector: sshd_config
+condition: permit_root_login == "yes"
+explain: >
+  PermitRootLogin is set to "{{ sshd.permit_root_login }}", allowing direct root logins
+  over SSH. A compromised root password or key is a single step from full system control.
+fix: "Set 'PermitRootLogin no' (or 'prohibit-password' if key-based root access is required) in /etc/ssh/sshd_config."
+references: [CIS-5.2.8, ATTACK-T1078]

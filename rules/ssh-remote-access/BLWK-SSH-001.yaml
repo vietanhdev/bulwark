@@ -1,0 +1,12 @@
+id: BLWK-SSH-001
+title: SSH password authentication is enabled
+category: ssh-remote-access
+severity: critical
+collector: sshd_config
+condition: password_authentication == "yes"
+explain: >
+  PasswordAuthentication is set to "{{ sshd.password_authentication }}" in sshd_config,
+  which allows an attacker to brute-force their way in with a password guess instead of
+  needing a private key.
+fix: "Set 'PasswordAuthentication no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'."
+references: [CIS-5.2.10, ATTACK-T1110]

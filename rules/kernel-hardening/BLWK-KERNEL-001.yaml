@@ -1,0 +1,12 @@
+id: BLWK-KERNEL-001
+title: ptrace scope allows tracing sibling processes
+category: kernel-hardening
+severity: medium
+collector: sysctl_kernel
+condition: ptrace_scope == 0
+explain: >
+  kernel.yama.ptrace_scope is 0, meaning any process can attach to (and read the memory
+  of) any other process owned by the same user — including credential-scraping via
+  /proc/<pid>/mem, a documented credential-access technique.
+fix: "Set 'kernel.yama.ptrace_scope=1' via /etc/sysctl.d/ and run 'sysctl --system'."
+references: [ATTACK-T1003.007]

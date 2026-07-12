@@ -1,0 +1,38 @@
+[package]
+name = "bulwark-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Bulwark CLI - scan a Linux host from a terminal or over SSH, no display session required"
+
+[[bin]]
+name = "bulwark"
+path = "src/main.rs"
+
+[dependencies]
+bulwark-core = { path = "../bulwark-core" }
+clap.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+
+# `cargo install cargo-deb` then `cargo deb -p bulwark-cli` from the workspace root.
+[package.metadata.deb]
+maintainer = "Viet Anh Nguyen"
+copyright = "2026, Viet Anh Nguyen"
+license-file = ["../../LICENSE", "0"]
+extended-description = "Scans a Linux host for security misconfigurations and intrusion indicators using a native Rust rule engine over declarative YAML rules, and explains findings in plain language with a suggested fix. CLI front-door — see bulwark-app for the GUI."
+depends = "$auto"
+section = "admin"
+priority = "optional"
+assets = [
+    ["target/release/bulwark", "usr/bin/", "755"],
+    ["../../rules/**/*.yaml", "usr/share/bulwark/rules/", "644"],
+]
+
+# `cargo install cargo-generate-rpm` then `cargo generate-rpm -p crates/bulwark-cli` after a release build.
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/bulwark", dest = "/usr/bin/bulwark", mode = "755" },
+]

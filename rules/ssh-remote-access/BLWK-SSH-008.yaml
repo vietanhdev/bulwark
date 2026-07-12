@@ -1,0 +1,13 @@
+id: BLWK-SSH-008
+title: SSH StrictModes is disabled
+category: ssh-remote-access
+severity: medium
+collector: sshd_config
+condition: strict_modes == "no"
+explain: >
+  StrictModes is set to "{{ sshd.strict_modes }}" in sshd_config. With StrictModes off,
+  sshd no longer verifies that a user's home directory and key files have safe ownership
+  and permissions before trusting them — a world-writable home directory or key file then
+  becomes a usable login bypass instead of a rejected, obviously-broken config.
+fix: "Set 'StrictModes yes' in /etc/ssh/sshd_config and run 'systemctl restart sshd'."
+references: [CIS-5.2.9]

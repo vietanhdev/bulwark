@@ -1,0 +1,14 @@
+id: BLWK-KERNEL-009
+title: Core dumps of setuid processes are not restricted
+category: kernel-hardening
+severity: medium
+collector: sysctl_kernel
+condition: suid_dumpable == 1
+explain: >
+  fs.suid_dumpable is 1 ("debuggable") — a crashed setuid/setgid process dumps core as a
+  file the invoking (unprivileged) user can read, which can leak secrets that were in that
+  process's memory (keys, passwords, tokens) to a lower-privileged user. This is distinct
+  from the safer "0" (no dump) or "2" (routed through a controlled dump handler like
+  systemd-coredump/apport) settings.
+fix: "Set 'fs.suid_dumpable=0' via /etc/sysctl.d/ and run 'sysctl --system'."
+references: [CIS-1.5.6, ATTACK-T1003]

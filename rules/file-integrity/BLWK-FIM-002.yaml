@@ -1,0 +1,16 @@
+id: BLWK-FIM-002
+title: "File deleted since baseline: {{ file_integrity.path }}"
+category: file-integrity
+severity: high
+collector: file_integrity
+condition: changed == true and currently_present == false
+explain: >
+  {{ file_integrity.path }} was present when the file-integrity baseline was recorded and is
+  now missing. Deleting a security-critical file (rather than modifying it) is also a
+  documented defense-evasion pattern — removing logs, PAM modules, or cron definitions to
+  cover tracks or disable a control.
+fix: >
+  Confirm whether the deletion was intentional (e.g. deliberate service removal). If not,
+  restore the file from a package manager reinstall or backup, then run 'bulwark fim baseline'
+  once the host is back to a known-good state.
+references: [ATTACK-T1070]

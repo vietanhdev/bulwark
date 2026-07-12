@@ -1,0 +1,26 @@
+[package]
+name = "bulwark-app"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Bulwark GUI - Tauri desktop front-door over bulwark-core"
+
+[lib]
+name = "bulwark_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+bulwark-core = { path = "../../../crates/bulwark-core" }
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-notification = "2"
+tokio = { version = "1", features = ["time", "sync"] }
+notify = "6"
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+chrono.workspace = true

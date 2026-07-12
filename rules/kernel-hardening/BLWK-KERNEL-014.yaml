@@ -1,0 +1,12 @@
+id: BLWK-KERNEL-014
+title: ICMP redirects are accepted
+category: kernel-hardening
+severity: medium
+collector: sysctl_kernel
+condition: accept_redirects == 1
+explain: >
+  net.ipv4.conf.all.accept_redirects is 1 — this host will update its routing table based
+  on unauthenticated ICMP redirect packets from anyone on the local network, a classic
+  man-in-the-middle primitive for redirecting traffic through an attacker-controlled host.
+fix: "Set 'net.ipv4.conf.all.accept_redirects=0' via /etc/sysctl.d/ and run 'sysctl --system'."
+references: [CIS-3.2.1, ATTACK-T1557]

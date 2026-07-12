@@ -1,0 +1,13 @@
+id: BLWK-SSH-007
+title: SSH tun-device (layer 2/3) tunneling is enabled
+category: ssh-remote-access
+severity: medium
+collector: sshd_config
+condition: permit_tunnel == "yes"
+explain: >
+  PermitTunnel is set to "{{ sshd.permit_tunnel }}" in sshd_config. Unlike ordinary TCP
+  port forwarding, tun-device tunneling gives an SSH client a full virtual network
+  interface into this host's network — a much broader pivot/VPN-like capability that's
+  rarely needed and should be off by default.
+fix: "Set 'PermitTunnel no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'."
+references: [ATTACK-T1572]

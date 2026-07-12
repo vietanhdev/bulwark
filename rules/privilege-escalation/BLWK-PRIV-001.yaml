@@ -1,0 +1,12 @@
+id: BLWK-PRIV-001
+title: A sudoers entry allows passwordless root
+category: privilege-escalation
+severity: high
+collector: sudoers
+condition: nopasswd == true
+explain: >
+  A NOPASSWD sudo rule in {{ sudoers.source }} ("{{ sudoers.line }}") lets that
+  user/group run commands as root without re-authenticating — anyone who reaches that
+  account, even briefly, has unrestricted root with no password prompt to slow them down.
+fix: "Review the entry and remove NOPASSWD unless there's a specific, scoped reason for it (e.g. a single monitoring command, not 'ALL')."
+references: [ATTACK-T1548.003]

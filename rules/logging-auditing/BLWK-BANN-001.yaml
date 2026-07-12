@@ -1,0 +1,15 @@
+id: BLWK-BANN-001
+title: "No custom legal warning banner is set (/etc/{{ banners.file }})"
+category: logging-auditing
+severity: info
+collector: banners
+condition: is_default == true
+explain: >
+  /etc/{{ banners.file }} still contains the distro's default auto-generated content (OS
+  name and getty templating codes), not a deliberate legal warning. In some jurisdictions,
+  a clear "unauthorized access is prohibited" banner is what establishes that someone
+  connecting without authorization was actually warned — the default OS-identification
+  banner doesn't do that, and also unnecessarily advertises the exact OS version to anyone
+  who connects.
+fix: "Replace the contents of /etc/issue (local login) and /etc/issue.net (remote login) with a warning banner, not OS version info."
+references: [CIS-1.7.1]

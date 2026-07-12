@@ -1,0 +1,11 @@
+id: BLWK-KERNEL-019
+title: TCP SYN cookies are disabled
+category: kernel-hardening
+severity: medium
+collector: sysctl_kernel
+condition: tcp_syncookies == 0
+explain: >
+  net.ipv4.tcp_syncookies is 0 — this host's TCP stack has no fallback protection against
+  a SYN-flood connection-table exhaustion denial of service.
+fix: "Set 'net.ipv4.tcp_syncookies=1' via /etc/sysctl.d/ and run 'sysctl --system'."
+references: [CIS-3.1.1]

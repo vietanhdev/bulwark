@@ -1,0 +1,13 @@
+id: BLWK-EVASION-001
+title: Shell history recording is suppressed
+category: defense-evasion
+severity: medium
+collector: shell_history_config
+condition: history_suppressed == true
+explain: >
+  A shell startup file sets HISTSIZE=0, clears HISTFILE, or unsets it — commands run in
+  that shell leave no trace in history. This is either a deliberate defense-evasion step
+  by an attacker with a shell on the box, or a privacy tweak you made yourself; worth
+  confirming which.
+fix: "If unrecognized, remove the HISTSIZE/HISTFILE override from ~/.bashrc, ~/.zshrc, or ~/.profile."
+references: [ATTACK-T1070.003]

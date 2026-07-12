@@ -1,0 +1,12 @@
+id: BLWK-KERNEL-011
+title: Symlink following protection is disabled
+category: kernel-hardening
+severity: medium
+collector: sysctl_kernel
+condition: protected_symlinks == 0
+explain: >
+  fs.protected_symlinks is 0 — a process can follow a symlink in a world-writable
+  sticky directory (like /tmp) even when it doesn't own the link, a long-standing
+  local-privilege-escalation and file-clobbering primitive.
+fix: "Set 'fs.protected_symlinks=1' via /etc/sysctl.d/ and run 'sysctl --system'."
+references: [CIS-1.5.8, ATTACK-T1068]

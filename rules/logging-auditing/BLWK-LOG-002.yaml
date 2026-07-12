@@ -1,0 +1,12 @@
+id: BLWK-LOG-002
+title: System logs are not forwarded off-box
+category: logging-auditing
+severity: low
+collector: logging
+condition: rsyslog_forwards_remote == false
+explain: >
+  rsyslog has no remote forwarding rule configured — logs only exist locally. Anyone with
+  root on this machine can edit or delete them, so local-only logging can't be trusted as
+  evidence of what a root-level attacker did.
+fix: "Add a forwarding rule to /etc/rsyslog.conf (e.g. '*.* @@logs.example.com:514') pointing at a log destination this machine doesn't control."
+references: []

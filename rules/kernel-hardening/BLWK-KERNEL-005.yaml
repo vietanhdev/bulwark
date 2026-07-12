@@ -1,0 +1,13 @@
+id: BLWK-KERNEL-005
+title: Magic SysRq key is fully enabled
+category: kernel-hardening
+severity: medium
+collector: sysctl_kernel
+condition: sysrq == 1
+explain: >
+  kernel.sysrq is 1 — every SysRq function is enabled, including immediate reboot and
+  kernel memory dumps, triggerable by anyone with keyboard or console access (physical or
+  via a hijacked serial/BMC console). Most distros ship a restricted bitmask instead of
+  full-on; a plain 1 usually means something intentionally widened it.
+fix: "Set 'kernel.sysrq=176' (Ubuntu's restricted default) or '0' via /etc/sysctl.d/ and run 'sysctl --system'."
+references: [CIS-1.5.4]

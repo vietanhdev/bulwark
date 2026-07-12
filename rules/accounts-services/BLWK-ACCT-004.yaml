@@ -1,0 +1,13 @@
+id: BLWK-ACCT-004
+title: Password hashing rounds are not explicitly configured
+category: accounts-services
+severity: low
+collector: login_defs
+condition: sha_crypt_min_rounds_configured == false
+explain: >
+  SHA_CRYPT_MIN_ROUNDS isn't set in /etc/login.defs, so new passwords get whatever the
+  system's compiled-in default hashing cost is rather than a deliberately chosen one —
+  fine until you actually need to raise the cost to keep pace with faster cracking
+  hardware, at which point "never configured" means nobody has ever checked.
+fix: "Set 'SHA_CRYPT_MIN_ROUNDS 5000' (or higher, per current guidance) in /etc/login.defs."
+references: [CIS-6.2.2]

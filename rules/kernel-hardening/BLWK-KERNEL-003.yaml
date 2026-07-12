@@ -1,0 +1,12 @@
+id: BLWK-KERNEL-003
+title: No mandatory access control framework is enforcing
+category: kernel-hardening
+severity: medium
+collector: mac_status
+condition: any_mac_enforcing == false
+explain: >
+  Neither AppArmor nor SELinux has any profile in enforcing mode. Without MAC, a
+  compromised service runs with the full privileges of its process owner instead of
+  being confined to what it actually needs.
+fix: "On Debian/Ubuntu: 'sudo aa-enforce /etc/apparmor.d/*' for the profiles you want enforced, or install apparmor-profiles."
+references: [CIS-1.4]

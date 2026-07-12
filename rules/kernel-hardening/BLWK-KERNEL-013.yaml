@@ -1,0 +1,12 @@
+id: BLWK-KERNEL-013
+title: Regular-file creation protection in sticky directories is disabled
+category: kernel-hardening
+severity: low
+collector: sysctl_kernel
+condition: protected_regular == 0
+explain: >
+  fs.protected_regular is 0 — a process can open a regular file it doesn't own inside a
+  world-writable sticky directory in write mode, the same class of interception/tampering
+  risk as the FIFO case but for plain files.
+fix: "Set 'fs.protected_regular=1' (or 2 for stricter mode) via /etc/sysctl.d/ and run 'sysctl --system'."
+references: [CIS-1.5.9]

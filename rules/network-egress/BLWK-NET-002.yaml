@@ -1,0 +1,12 @@
+id: BLWK-NET-002
+title: ngrok's local API port is listening
+category: network-egress
+severity: medium
+collector: listening_ports
+condition: port == 4040
+explain: >
+  Port 4040 is listening — this is ngrok's local web-inspector/API port, only present while
+  an ngrok tunnel is active. If you're not deliberately running ngrok right now, something
+  else is.
+fix: "Check 'ps aux | grep ngrok' and 'systemctl list-units | grep -i ngrok' to find what started it."
+references: [ATTACK-T1090]

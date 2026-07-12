@@ -1,0 +1,12 @@
+id: BLWK-KERNEL-012
+title: FIFO creation protection in sticky directories is disabled
+category: kernel-hardening
+severity: low
+collector: sysctl_kernel
+condition: protected_fifos == 0
+explain: >
+  fs.protected_fifos is 0 — a process can write to a FIFO it doesn't own inside a
+  world-writable sticky directory, which has been used to intercept or tamper with data
+  another (possibly privileged) process expects to read back.
+fix: "Set 'fs.protected_fifos=1' (or 2 for stricter mode) via /etc/sysctl.d/ and run 'sysctl --system'."
+references: [CIS-1.5.9]
