@@ -29,6 +29,7 @@ const SITE = "bulwark.nrl.ai";
 const CARD_TITLES = {
   "index.md": "Bulwark",
   "guide/architecture.md": "Architecture",
+  "guide/agent-security.md": "AI Agent Security",
   "articles/ssh-hardening-checklist.md": "SSH Hardening on Linux",
   "articles/linux-persistence-techniques.md": "How Attackers Persist on Linux",
   "articles/choosing-a-linux-security-scanner.md": "Choosing a Linux Security Scanner",
@@ -44,9 +45,15 @@ const CARD_TITLES = {
   "articles/fail2ban-vs-crowdsec-vs-denyhosts.md": "fail2ban vs. CrowdSec vs. denyhosts",
 };
 
-/** Every page that should carry a card: the landing page, the guide, and all articles. */
+/** Every page that should carry a card: the landing page, the guide, and all articles.
+ *
+ * Guide pages are listed explicitly rather than globbed, so adding one means adding it here too.
+ * That is a footgun worth knowing about: a page absent from this list silently falls back to the
+ * site-wide card (see `ogSlugFor` in config.mts), so it *looks* fine — `og:check` passes — while
+ * every link to it previews as the generic homepage blurb. `guide/agent-security.md` was added
+ * for exactly that reason. */
 function pagesNeedingCards() {
-  const pages = ["index.md", "guide/architecture.md"];
+  const pages = ["index.md", "guide/architecture.md", "guide/agent-security.md"];
   for (const f of readdirSync(join(DOCS, "articles")).sort()) {
     if (f.endsWith(".md")) pages.push(`articles/${f}`);
   }

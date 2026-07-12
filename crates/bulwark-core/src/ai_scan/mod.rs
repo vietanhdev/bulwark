@@ -595,7 +595,10 @@ mod tests {
         fs::create_dir_all(proj.join(".git")).unwrap();
         write(&proj.join("CLAUDE.md"), "marker\n"); // makes it a workspace
                                                     // A committed-risk secret file NOT ignored.
-        let openai_key = format!("sk-proj-{}T3BlbkFJ{}", "a".repeat(30), "b".repeat(30));
+                                                    // A structurally valid OpenAI key: 20-char body either side of the embedded `T3BlbkFJ`.
+                                                    // An invented length is not a valid key and the rule correctly refuses to match it.
+        let seg = "a1B2c3D4e5F6g7H8i9J0";
+        let openai_key = format!("sk-proj-{seg}T3BlbkFJ{seg}");
         write(
             &proj.join(".env"),
             &format!("OPENAI_API_KEY={openai_key}\n"),

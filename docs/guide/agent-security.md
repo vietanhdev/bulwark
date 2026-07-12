@@ -15,6 +15,8 @@ It's a first-class **Agent Security** tab in the desktop app — one of the four
 Compliance, Antivirus and File integrity — and a `bulwarkctl ai` subcommand in the CLI. Its findings
 also roll up into the Overview, which is the one page that accounts for every scanner at once.
 
+![The Agent Security tab: secrets found in AI assistant context, and dangerous agent configuration, each with its CVE / ATT&CK reference](/screenshots/agent-security.png)
+
 ::: warning A scan reads real secrets. Treat its output accordingly.
 Findings are stored and displayed with the secret **masked** (`sk-a…3f`), never in full, and the
 raw value is never written to the database or the logs. But the *file paths* a finding points at

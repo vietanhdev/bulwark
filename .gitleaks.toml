@@ -1,0 +1,25 @@
+# gitleaks configuration for Bulwark's own repository.
+#
+# This governs the pre-commit hook (`gitleaks protect --staged`, see .githooks/pre-commit) — it is
+# about keeping *our* secrets out of *this* repo, and has nothing to do with the secret-detection
+# Bulwark itself performs on a user's machine (that's crates/bulwark-core/src/ai_scan/).
+#
+# Keep the default rule pack; we only add exceptions.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Files that are *about* secrets, and therefore necessarily contain things shaped like them."
+paths = [
+  # The vendored secret-detection rule pack. It carries upstream's example keys inside the CEL
+  # `validate` blocks — that's what they're for: proving a rule matches what it claims to. They are
+  # published, synthetic, and inert, and the file is data we do not hand-edit, so the exception is
+  # for the whole file rather than a thicket of inline pragmas through someone else's data.
+  '''crates/bulwark-core/src/ai_scan/secret_rules\.toml''',
+
+  # The secret scanner's own tests. A detector for Anthropic keys cannot be tested without
+  # something shaped exactly like an Anthropic key. Every value in here is synthetic — structurally
+  # valid so the rule fires, never a live credential.
+  '''crates/bulwark-core/src/ai_scan/secrets\.rs''',
+  '''crates/bulwarkctl/tests/ai_cli\.rs''',
+]
