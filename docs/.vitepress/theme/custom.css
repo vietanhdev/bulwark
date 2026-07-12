@@ -36,3 +36,23 @@
     oklch(0.72 0.18 149)
   );
 }
+
+/* Screenshots section on the home page (docs/index.md) — plain consecutive markdown images
+   render with no gap at all in VitePress's default prose styles, reading as one smeared strip
+   rather than three distinct app views. */
+.screenshot-gallery {
+  display: flex;
+  flex-direction: column;
+  gap: 2.5rem;
+  margin-top: 1.5rem;
+}
+.screenshot-gallery img {
+  border-radius: 10px;
+  border: 1px solid var(--vp-c-divider);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
+  width: 100%;
+  height: auto;
+}
+.dark .screenshot-gallery img {
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+}

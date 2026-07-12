@@ -8,6 +8,9 @@ hero:
     Built for everyone running Linux — and especially for developers and AI users navigating
     an increasingly AI-driven world. Bulwark checks your machine's real configuration, explains
     every finding in plain language, and keeps watching after the scan ends.
+  image:
+    src: /screenshots/dashboard.png
+    alt: Bulwark's Dashboard showing a scan's findings by severity and category
   actions:
     - theme: brand
       text: Read the architecture
@@ -51,6 +54,12 @@ features:
 
 ## Screenshots
 
+<div class="screenshot-gallery">
+
 ![Dashboard](/screenshots/dashboard.png)
+
 ![Antivirus](/screenshots/antivirus.png)
+
 ![Compliance](/screenshots/compliance.png)
+
+</div>
