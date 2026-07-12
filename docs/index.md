@@ -48,3 +48,20 @@ features:
       No network calls from bulwark-core, ever. Scan history lives in a local SQLite
       database under ~/.local/share/bulwark — nothing leaves the machine.
 ---
+
+## Screenshots
+
+<!--
+  Real screenshots go here — see /public/screenshots/README.md for the exact filenames
+  expected. Once they exist, replace this comment (and the note below) with:
+
+  ![Dashboard](/screenshots/dashboard.png)
+  ![Antivirus](/screenshots/antivirus.png)
+  ![Compliance](/screenshots/compliance.png)
+-->
+
+::: info Coming soon
+Screenshots aren't up yet — the environment this site was built in has no working
+screen-capture tooling. See [`docs/public/screenshots/README.md`](https://github.com/vietanhdev/bulwark/blob/main/docs/public/screenshots/README.md)
+in the repo for what's expected once real ones are captured.
+:::
