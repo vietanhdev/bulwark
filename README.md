@@ -16,9 +16,10 @@ Built with Tauri v2 + Rust + React. One rule engine, one rule pack, two front-do
 
 ## Screenshots
 
-![Dashboard](docs/public/screenshots/dashboard.png)
-![Antivirus](docs/public/screenshots/antivirus.png)
-![Compliance](docs/public/screenshots/compliance.png)
+![Overview — the host's verdict, its hardening index, and every finding with a copyable fix](docs/public/screenshots/overview.png)
+![Antivirus — ClamAV signature scanning and real-time folder watching](docs/public/screenshots/antivirus.png)
+![Compliance — Bulwark's rules mapped to CIS Benchmarks and MITRE ATT&CK](docs/public/screenshots/compliance.png)
+![Rules — the full rule pack, searchable and filterable by severity](docs/public/screenshots/rules.png)
 
 ## Features
 

@@ -64,20 +64,29 @@
 
 /* Screenshots section on the home page (docs/index.md) — plain consecutive markdown images
    render with no gap at all in VitePress's default prose styles, reading as one smeared strip
-   rather than three distinct app views. */
+   rather than distinct app views. */
 .screenshot-gallery {
   display: flex;
   flex-direction: column;
   gap: 2.5rem;
   margin-top: 1.5rem;
 }
+
+/* The PNGs carry their own rounded corners as real alpha — they're captured with a transparent
+   backdrop, so the app shell's own 10px radius is baked into the file (see
+   docs/public/screenshots/README.md). So no border-radius or border here: re-rounding an
+   already-rounded image just clips a second, tighter arc across the first, and a 1px border
+   would trace the image's square bounding box straight through the transparent corners.
+
+   The shadow has to be `filter: drop-shadow()` rather than `box-shadow` for the same reason —
+   box-shadow follows the element's rectangle and would cast a hard right angle out of each
+   corner where the image is transparent. drop-shadow follows the alpha channel instead, so it
+   hugs the rounded edge. */
 .screenshot-gallery img {
-  border-radius: 10px;
-  border: 1px solid var(--vp-c-divider);
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
   width: 100%;
   height: auto;
+  filter: drop-shadow(0 4px 20px rgba(0, 0, 0, 0.1));
 }
 .dark .screenshot-gallery img {
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+  filter: drop-shadow(0 4px 20px rgba(0, 0, 0, 0.45));
 }

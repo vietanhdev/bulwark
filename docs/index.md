@@ -13,14 +13,14 @@ hero:
     alt: Bulwark's shield mark, with a pulsing ring animation and category check nodes
   actions:
     - theme: brand
+      text: Download
+      link: /download
+    - theme: alt
       text: Read the architecture
       link: /guide/architecture
     - theme: alt
       text: View on GitHub
       link: https://github.com/vietanhdev/bulwark
-    - theme: alt
-      text: Research
-      link: /research/lynis-benchmark
 
 features:
   - title: Native CLI and desktop GUI
@@ -56,10 +56,12 @@ features:
 
 <div class="screenshot-gallery">
 
-![Dashboard](/screenshots/dashboard.png)
+![Overview — the host's verdict, its hardening index, and every finding with a copyable fix](/screenshots/overview.png)
 
-![Antivirus](/screenshots/antivirus.png)
+![Antivirus — ClamAV signature scanning and real-time folder watching](/screenshots/antivirus.png)
 
-![Compliance](/screenshots/compliance.png)
+![Compliance — Bulwark's rules mapped to CIS Benchmarks and MITRE ATT&CK](/screenshots/compliance.png)
+
+![Rules — the full rule pack, searchable and filterable by severity](/screenshots/rules.png)
 
 </div>
