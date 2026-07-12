@@ -30,7 +30,7 @@ features:
       pack and the same local scan history.
   - title: Declarative, extensible rules
     details: >-
-      57 rules across 11 categories — SSH hardening, persistence, sudoers, kernel/sysctl
+      59 rules across 11 categories — SSH hardening, persistence, sudoers, kernel/sysctl
       hardening, file permissions, logging, rootkit indicators — each a plain YAML file
       with a condition, a plain-language explanation, and a fix. No Rust required to add one.
   - title: Explains findings, doesn't just list them

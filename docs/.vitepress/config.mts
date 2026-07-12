@@ -26,13 +26,16 @@ function ogSlugFor(relativePath: string): string {
     relativePath.replace(/\.md$/, "").split("/").pop() ??
     OG_FALLBACK;
   // Never point at a card that isn't on disk — an og:image 404 is as bad as none.
-  const onDisk = fileURLToPath(new URL(`../public/og/${slug}.png`, import.meta.url));
+  const onDisk = fileURLToPath(
+    new URL(`../public/og/${slug}.png`, import.meta.url),
+  );
   return existsSync(onDisk) ? slug : OG_FALLBACK;
 }
 
 export default withMermaid({
   title: "Bulwark",
-  description: "A Linux host security scanner with a native CLI and desktop GUI.",
+  description:
+    "A Linux host security scanner with a native CLI and desktop GUI.",
   lang: "en-US",
   cleanUrls: true,
   // Default to light on first visit (no stored preference / no system-preference match yet)
@@ -54,7 +57,13 @@ export default withMermaid({
     ["meta", { name: "robots", content: "index, follow" }],
     ["meta", { property: "og:type", content: "website" }],
     ["meta", { property: "og:site_name", content: "Bulwark" }],
-    ["meta", { property: "og:title", content: "Bulwark — Linux Host Security Scanner" }],
+    [
+      "meta",
+      {
+        property: "og:title",
+        content: "Bulwark — Linux Host Security Scanner",
+      },
+    ],
     [
       "meta",
       {
@@ -66,12 +75,19 @@ export default withMermaid({
       },
     ],
     ["meta", { name: "twitter:card", content: "summary_large_image" }],
-    ["meta", { name: "twitter:title", content: "Bulwark — Linux Host Security Scanner" }],
+    [
+      "meta",
+      {
+        name: "twitter:title",
+        content: "Bulwark — Linux Host Security Scanner",
+      },
+    ],
     [
       "meta",
       {
         name: "twitter:description",
-        content: "A Linux host security scanner with a native CLI and desktop GUI.",
+        content:
+          "A Linux host security scanner with a native CLI and desktop GUI.",
       },
     ],
   ],
@@ -90,7 +106,8 @@ export default withMermaid({
     // Each article's frontmatter `description` is what a reader actually sees in a shared
     // link. Without this, all 13 articles inherit the site-wide og:description from head[]
     // above and every one of them previews as the same generic blurb about Bulwark.
-    const pageDescription = pageData.frontmatter.description ?? pageData.description;
+    const pageDescription =
+      pageData.frontmatter.description ?? pageData.description;
     if (pageDescription) {
       const description = String(pageDescription).replace(/\s+/g, " ").trim();
       pageData.frontmatter.head.push(
@@ -121,11 +138,15 @@ export default withMermaid({
   mermaid: {
     theme: "base",
     themeVariables: {
-      // Deliberately NOT Geist here, unlike the rest of the site — a custom variable
-      // webfont threw off mermaid's own node box-height math (multi-line labels rendered
-      // clipped at the box's bottom edge even with the exact line count mermaid was given).
-      // mermaid's default font stack is what its internal sizing is actually calibrated
-      // against; overriding it re-introduces the clipping bug.
+      // Archivo, the same face as the rest of the site. This used to be deliberately unset, on
+      // the theory that a custom webfont was what threw off mermaid's node box-height math and
+      // clipped the bottom line off every multi-line label. That diagnosis was wrong. The
+      // culprit is VitePress's `.vp-doc p` line-height leaking into the <p> that mermaid wraps
+      // each label in, making every rendered line 4px taller than the box mermaid measured for
+      // it — so the overflow scaled with line count and the last line got sliced in half. It's
+      // fixed at the root in theme/custom.css, and with it fixed the font is safe to set, so
+      // the diagrams no longer sit in Trebuchet MS while the page around them is in Archivo.
+      fontFamily: '"Archivo Variable", ui-sans-serif, system-ui, sans-serif',
 
       primaryColor: "#d5f2f1",
       primaryTextColor: "#081717",
@@ -164,27 +185,70 @@ export default withMermaid({
       {
         text: "Articles",
         items: [
-          { text: "SSH hardening checklist", link: "/articles/ssh-hardening-checklist" },
-          { text: "How attackers persist on Linux", link: "/articles/linux-persistence-techniques" },
-          { text: "Choosing a security scanner", link: "/articles/choosing-a-linux-security-scanner" },
-          { text: "sysctl kernel hardening", link: "/articles/sysctl-kernel-hardening" },
-          { text: "Sudoers hardening checklist", link: "/articles/sudoers-hardening-checklist" },
-          { text: "Is my Linux server hacked?", link: "/articles/is-my-linux-server-hacked" },
-          { text: "auditd rules cheat sheet", link: "/articles/auditd-rules-cheat-sheet" },
-          { text: "Reading rkhunter/chkrootkit output", link: "/articles/rkhunter-chkrootkit-false-positives" },
-          { text: "Does Linux need antivirus?", link: "/articles/does-linux-need-antivirus" },
-          { text: "systemd service sandboxing", link: "/articles/systemd-service-sandboxing" },
+          {
+            text: "SSH hardening checklist",
+            link: "/articles/ssh-hardening-checklist",
+          },
+          {
+            text: "How attackers persist on Linux",
+            link: "/articles/linux-persistence-techniques",
+          },
+          {
+            text: "Choosing a security scanner",
+            link: "/articles/choosing-a-linux-security-scanner",
+          },
+          {
+            text: "sysctl kernel hardening",
+            link: "/articles/sysctl-kernel-hardening",
+          },
+          {
+            text: "Sudoers hardening checklist",
+            link: "/articles/sudoers-hardening-checklist",
+          },
+          {
+            text: "Is my Linux server hacked?",
+            link: "/articles/is-my-linux-server-hacked",
+          },
+          {
+            text: "auditd rules cheat sheet",
+            link: "/articles/auditd-rules-cheat-sheet",
+          },
+          {
+            text: "Reading rkhunter/chkrootkit output",
+            link: "/articles/rkhunter-chkrootkit-false-positives",
+          },
+          {
+            text: "Does Linux need antivirus?",
+            link: "/articles/does-linux-need-antivirus",
+          },
+          {
+            text: "systemd service sandboxing",
+            link: "/articles/systemd-service-sandboxing",
+          },
           { text: "Bulwark vs. Wazuh", link: "/articles/bulwark-vs-wazuh" },
-          { text: "Mapping rules to CIS & MITRE ATT&CK", link: "/articles/cis-mitre-mapping" },
-          { text: "fail2ban vs. CrowdSec vs. denyhosts", link: "/articles/fail2ban-vs-crowdsec-vs-denyhosts" },
+          {
+            text: "Mapping rules to CIS & MITRE ATT&CK",
+            link: "/articles/cis-mitre-mapping",
+          },
+          {
+            text: "fail2ban vs. CrowdSec vs. denyhosts",
+            link: "/articles/fail2ban-vs-crowdsec-vs-denyhosts",
+          },
         ],
       },
       {
         text: "Research",
-        items: [{ text: "Bulwark vs. Lynis benchmark", link: "/research/lynis-benchmark" }],
+        items: [
+          {
+            text: "Bulwark vs. Lynis benchmark",
+            link: "/research/lynis-benchmark",
+          },
+        ],
       },
     ],
-    socialLinks: [{ icon: "github", link: "https://github.com/vietanhdev/bulwark" }],
+    socialLinks: [
+      { icon: "github", link: "https://github.com/vietanhdev/bulwark" },
+    ],
     search: { provider: "local" },
     footer: {
       message: "Released under the AGPL-3.0-or-later License.",

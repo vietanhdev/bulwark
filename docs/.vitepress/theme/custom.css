@@ -1,6 +1,12 @@
-/* Same palette as apps/bulwark-app/src/styles.css — a deliberate blue/green synthesis
-   (oklch hue ~194), not the default VitePress purple/green. Kept in sync by hand since the
-   docs site and the app are separate npm projects with no shared build step. */
+/* Same design language as the desktop app (apps/bulwark-app/src/styles.css): the teal brand
+   (oklch hue ~194 — a deliberate blue/green synthesis, not VitePress's default purple/green),
+   a cool blue-grey paper rather than flat white, and Archivo + IBM Plex Mono. Kept in sync by
+   hand: the docs site and the app are separate npm projects with no shared build step.
+
+   The app's own signature — ink chrome framing paper — isn't reproduced literally here. A
+   docs site is a document, not an instrument, and painting VitePress's nav dark in light mode
+   would mean fighting the framework for every text colour inside it. What carries across is
+   the palette, the type, and the severity rail (see the custom blocks below). */
 
 :root {
   --vp-c-brand-1: oklch(0.5 0.09 194);
@@ -8,8 +14,15 @@
   --vp-c-brand-3: oklch(0.56 0.09 194);
   --vp-c-brand-soft: oklch(0.94 0.03 194);
 
-  --vp-font-family-base: "Geist Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --vp-font-family-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
+  /* Paper, not white — the same cool blue-grey the app's workspace uses. */
+  --vp-c-bg: oklch(0.99 0.003 210);
+  --vp-c-bg-alt: oklch(0.965 0.005 210);
+  --vp-c-bg-soft: oklch(0.965 0.005 210);
+
+  --vp-font-family-base:
+    "Archivo Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --vp-font-family-mono:
+    "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
 }
 
 .dark {
@@ -17,6 +30,185 @@
   --vp-c-brand-2: oklch(0.68 0.12 194);
   --vp-c-brand-3: oklch(0.8 0.1 194);
   --vp-c-brand-soft: oklch(0.3 0.04 194 / 0.4);
+
+  --vp-c-bg: oklch(0.175 0.016 205);
+  --vp-c-bg-alt: oklch(0.145 0.015 205);
+  --vp-c-bg-soft: oklch(0.21 0.016 205);
+}
+
+/* ---------------------------------------------------------------------------
+   Mermaid: stop clipping the last line off every multi-line label.
+
+   Mermaid renders a node label as HTML inside a <foreignObject>, and sizes that box from its
+   own assumed `line-height: 1.5` — 24px at the 16px it sets. But the markup it emits is
+   `<span class="nodeLabel"><p>…</p></span>`, and VitePress's `.vp-doc p` rule then sets
+   `line-height: 28px` on that <p>, which wins over the value it would otherwise inherit. So
+   every line renders 4px taller than mermaid budgeted for, the content overflows the box it
+   was measured into, and the last line is sliced in half at the bottom edge. It compounds with
+   line count: a four-line label overflowed by 16px.
+
+   Pinning the <p> back to the inherited line-height (and killing the prose margins, which
+   would do the same thing to edge labels) makes mermaid's own arithmetic correct again.
+
+   Worth being explicit, because the previous diagnosis in .vitepress/config.mts blamed the
+   webfont and worked around it by refusing to set `fontFamily` in themeVariables: the font was
+   never the cause. With this rule in place mermaid renders correctly in Archivo, so the
+   diagrams are now in the site's own typeface rather than stranded in Trebuchet MS.
+   --------------------------------------------------------------------------- */
+.vp-doc .mermaid .nodeLabel p,
+.vp-doc .mermaid .edgeLabel p,
+.vp-doc .mermaid .label p,
+.vp-doc .mermaid foreignObject p {
+  line-height: inherit;
+  margin: 0;
+  padding: 0;
+}
+
+/* The plate behind an edge label. Mermaid paints this as a CSS background-color (on .edgeLabel
+   and .labelBkg) rather than an SVG rect fill — a mid-grey, rgb(88,88,88), which reads as a
+   dirty smudge laid over the diagram in both themes. It does serve a purpose (it stops the
+   edge line striking through the text), so rather than removing it, it becomes the page
+   background: the label still masks the line beneath it, but invisibly.
+
+   !important because mermaid injects its own rules ID-scoped (`#mermaid-68 .edgeLabel { … }`),
+   which outranks any class selector here. */
+.vp-doc .mermaid .edgeLabel,
+.vp-doc .mermaid .edgeLabel p,
+.vp-doc .mermaid .edgeLabel span,
+.vp-doc .mermaid .labelBkg {
+  background: var(--vp-c-bg) !important;
+}
+
+.vp-doc .mermaid {
+  display: flex;
+  justify-content: center;
+  margin: 1.5rem 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Mermaid in dark mode.
+
+   vitepress-plugin-mermaid forces mermaid's own built-in dark theme whenever `.dark` is on
+   <html>, and the `themeVariables` in config.mts have no effect there — that much was already
+   known. What wasn't: the result is not merely off-palette, it's unreadable. Mermaid's dark
+   theme paints node fills near-black (rgb(31,32,32)) while our configured `primaryTextColor`
+   (#081717) still lands on the labels, so every diagram rendered near-black text on a
+   near-black box at roughly 1:1 contrast. The words were effectively invisible.
+
+   Since the plugin won't let the theme be configured for dark, the fix is to restyle the
+   rendered SVG directly, mapping it onto the app's own dark tokens. Mermaid emits its styles
+   ID-scoped (`#mermaid-68 .node rect { … }`), which outranks any class selector here, so these
+   need !important to land — that's the reason for them, not carelessness.
+   --------------------------------------------------------------------------- */
+
+/* Flowchart nodes */
+.dark .vp-doc .mermaid .node rect,
+.dark .vp-doc .mermaid .node circle,
+.dark .vp-doc .mermaid .node ellipse,
+.dark .vp-doc .mermaid .node polygon,
+.dark .vp-doc .mermaid .node path {
+  fill: oklch(0.28 0.035 194) !important;
+  stroke: oklch(0.75 0.12 194) !important;
+}
+
+/* Node + edge label text. `color` for the HTML-in-foreignObject labels, `fill` for the plain
+   SVG <text> that non-flowchart diagram types use instead. */
+.dark .vp-doc .mermaid .nodeLabel,
+.dark .vp-doc .mermaid .nodeLabel p,
+.dark .vp-doc .mermaid .edgeLabel,
+.dark .vp-doc .mermaid .edgeLabel p,
+.dark .vp-doc .mermaid .edgeLabel span,
+.dark .vp-doc .mermaid .label,
+.dark .vp-doc .mermaid .titleText {
+  color: oklch(0.94 0.01 205) !important;
+  fill: oklch(0.94 0.01 205) !important;
+}
+
+/* The plate mermaid draws behind an edge label, so the label doesn't sit on top of its own
+   line. Matches the page background rather than mermaid's grey. */
+.dark .vp-doc .mermaid .edgeLabel rect,
+.dark .vp-doc .mermaid .edgeLabel .label-container {
+  fill: oklch(0.175 0.016 205) !important;
+  opacity: 0.92;
+}
+
+/* Edges and their arrowheads */
+.dark .vp-doc .mermaid .flowchart-link,
+.dark .vp-doc .mermaid .edgePath .path,
+.dark .vp-doc .mermaid path.path {
+  stroke: oklch(0.72 0.11 194) !important;
+}
+.dark .vp-doc .mermaid marker path,
+.dark .vp-doc .mermaid defs marker path {
+  fill: oklch(0.72 0.11 194) !important;
+  stroke: oklch(0.72 0.11 194) !important;
+}
+
+/* Subgraph / cluster boxes sit *behind* the nodes, so they take the recessed surface. */
+.dark .vp-doc .mermaid .cluster rect {
+  fill: oklch(0.21 0.016 205) !important;
+  stroke: oklch(1 0 0 / 14%) !important;
+}
+.dark .vp-doc .mermaid .cluster text,
+.dark .vp-doc .mermaid .cluster span {
+  fill: oklch(0.8 0.02 205) !important;
+  color: oklch(0.8 0.02 205) !important;
+}
+
+/* Sequence diagram (guide/architecture's privilege-elevation flow) */
+.dark .vp-doc .mermaid .actor {
+  fill: oklch(0.28 0.035 194) !important;
+  stroke: oklch(0.75 0.12 194) !important;
+}
+.dark .vp-doc .mermaid text.actor > tspan,
+.dark .vp-doc .mermaid .messageText,
+.dark .vp-doc .mermaid .labelText,
+.dark .vp-doc .mermaid .loopText,
+.dark .vp-doc .mermaid .noteText {
+  fill: oklch(0.94 0.01 205) !important;
+  stroke: none !important;
+}
+.dark .vp-doc .mermaid .messageLine0,
+.dark .vp-doc .mermaid .messageLine1 {
+  stroke: oklch(0.72 0.11 194) !important;
+}
+.dark .vp-doc .mermaid .note {
+  fill: oklch(0.24 0.02 205) !important;
+  stroke: oklch(1 0 0 / 14%) !important;
+}
+
+/* Entity-relationship diagram (the SQLite schema) */
+.dark .vp-doc .mermaid .er.entityBox {
+  fill: oklch(0.28 0.035 194) !important;
+  stroke: oklch(0.75 0.12 194) !important;
+}
+.dark .vp-doc .mermaid .er.attributeBoxOdd,
+.dark .vp-doc .mermaid .er.attributeBoxEven {
+  fill: oklch(0.22 0.018 205) !important;
+  stroke: oklch(1 0 0 / 14%) !important;
+}
+.dark .vp-doc .mermaid .er.entityLabel,
+.dark .vp-doc .mermaid .er.relationshipLabel {
+  fill: oklch(0.94 0.01 205) !important;
+}
+.dark .vp-doc .mermaid .er.relationshipLine {
+  stroke: oklch(0.72 0.11 194) !important;
+}
+
+/* Pie chart (rules-per-category). The slice fills stay mermaid's own — they're categorical and
+   need to stay distinguishable — but the text around them has to be legible on our background,
+   and the slice labels sit on saturated fills, so they take white rather than the page fg. */
+.dark .vp-doc .mermaid .pieTitleText,
+.dark .vp-doc .mermaid .legend text {
+  fill: oklch(0.94 0.01 205) !important;
+}
+.dark .vp-doc .mermaid .slice {
+  fill: #ffffff !important;
+  stroke: none !important;
+}
+.dark .vp-doc .mermaid .pieOuterCircle,
+.dark .vp-doc .mermaid .pieCircle {
+  stroke: oklch(1 0 0 / 20%) !important;
 }
 
 :root {
