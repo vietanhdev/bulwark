@@ -82,7 +82,7 @@ export function AboutView() {
           </a>
           <div className="flex items-center gap-2.5 rounded-lg border border-border p-3 text-sm font-medium">
             <Scale className="h-4 w-4 shrink-0 text-muted-foreground" />
-            MIT License
+            AGPL-3.0 License
           </div>
         </div>
 

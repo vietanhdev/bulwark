@@ -128,7 +128,10 @@ export default withMermaid({
     sidebar: [
       {
         text: "Guide",
-        items: [{ text: "Architecture & design", link: "/guide/architecture" }],
+        items: [
+          { text: "Architecture & design", link: "/guide/architecture" },
+          { text: "Contributing", link: "/guide/contributing" },
+        ],
       },
       {
         text: "Articles",
@@ -146,7 +149,7 @@ export default withMermaid({
     socialLinks: [{ icon: "github", link: "https://github.com/vietanhdev/bulwark" }],
     search: { provider: "local" },
     footer: {
-      message: "Released under the MIT License.",
+      message: "Released under the AGPL-3.0-or-later License.",
       copyright: "Bulwark is an open-source project.",
     },
   },
