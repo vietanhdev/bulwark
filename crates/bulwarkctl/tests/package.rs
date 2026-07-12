@@ -111,12 +111,16 @@ fn installed_deb_runs_config_and_log_scans() {
     );
     assert!(ok, "installing the .deb failed:\n{err}");
 
-    // 1) The binary runs and reports the new version.
+    // 1) The binary runs and reports the current version. Read the expected value from
+    //    `CARGO_PKG_VERSION` rather than hardcoding it: a literal here drifts every release (it
+    //    was pinned at "0.2.0" through the 0.2.1 bump, silently failing this ignored test), and
+    //    the whole point of the check is that the *packaged* binary matches the *source* version.
+    let expected = env!("CARGO_PKG_VERSION");
     let (ok, ver, err) = exec(&name, "bulwarkctl --version");
     assert!(ok, "`bulwarkctl --version` failed:\n{err}");
     assert!(
-        ver.contains("0.2.0"),
-        "expected version 0.2.0, got: {ver:?}"
+        ver.contains(expected),
+        "expected version {expected}, got: {ver:?}"
     );
 
     // 2) The packaged asset trees actually shipped to their installed locations.
