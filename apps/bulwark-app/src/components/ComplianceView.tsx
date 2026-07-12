@@ -13,6 +13,8 @@ interface RuleSummary {
   severity: Severity;
   references: string[];
   collector: string;
+  os: string[];
+  profiles: string[];
 }
 
 interface Finding {
@@ -60,9 +62,22 @@ export function ComplianceView() {
   // during an unprivileged scan) told you nothing either way. Mirrors that directly: any
   // rule whose collector shows up in privileged_collectors_skipped is excluded from both the
   // numerator and denominator, not silently counted as "passing."
+  //
+  // Same treatment for the two newer gates a rule can fail to run for: `os` (this GUI only
+  // ever runs on Linux, so a macOS/Windows-tagged rule structurally never ran here) and
+  // `profiles` (a "needs: server"-tagged rule only ran if the last scan opted into that need
+  // — which this view can't directly see). A needs-gated rule that shows up as an open
+  // finding proves it DID run and failed, so it's still counted; one that doesn't appear is
+  // ambiguous (never ran vs. ran-and-passed) and is conservatively excluded rather than risk
+  // counting a rule that never actually executed as a free "pass."
   const hardeningIndex = useMemo(() => {
     if (!rules || !hasScanned) return null;
-    const evaluated = rules.filter((r) => !skippedCollectors.has(r.collector));
+    const evaluated = rules.filter((r) => {
+      if (skippedCollectors.has(r.collector)) return false;
+      if (!r.os.includes("linux")) return false;
+      if (r.profiles.length > 0 && !openRuleIds.has(r.id)) return false;
+      return true;
+    });
     if (evaluated.length === 0) return null;
     const passing = evaluated.filter((r) => !openRuleIds.has(r.id)).length;
     return {

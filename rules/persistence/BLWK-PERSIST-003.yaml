@@ -1,0 +1,13 @@
+id: BLWK-PERSIST-003
+title: Unexpected LaunchAgent/LaunchDaemon found
+category: persistence
+severity: high
+collector: launchd_persistence
+os: [macos]
+profiles: [desktop]
+condition: recognized == false
+explain: >
+  The LaunchAgent/LaunchDaemon "{{ launchd_persistence.label }}" runs on every login/boot and
+  isn't one this host's baseline recognizes — macOS's equivalent of a rogue systemd unit.
+fix: "Review the plist under ~/Library/LaunchAgents or /Library/Launch{Agents,Daemons} and remove it if you didn't create it."
+references: [ATTACK-T1543.001]

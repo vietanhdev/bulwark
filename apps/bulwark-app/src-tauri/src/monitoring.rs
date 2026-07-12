@@ -1,15 +1,15 @@
 //! Continuous monitoring, architected honestly: this is periodic re-scanning (plus a file
 //! watcher for the handful of sensitive paths below) with cross-run finding reconciliation —
 //! not a kernel-level real-time hook (that's eBPF/syscall monitoring, explicitly deferred,
-//! see design doc §2, §13 Option C). What Bulwark checks (sshd_config, systemd units,
+//! see architecture doc §2, §13 Option C). What Bulwark checks (sshd_config, systemd units,
 //! sudoers, cron, ...) doesn't change second-to-second, so a periodic loop plus "wake up
 //! immediately when one of these specific files changes" is the architecturally correct
 //! shape for *this* category of check — genuinely faster than the timer without touching
 //! kernel infrastructure. Ticks only ever run the unprivileged collector set — `pkexec`
 //! needs an interactive prompt, which an unattended background loop can never provide
-//! (design doc §4, ADR-0004 extends naturally to this: no silent privilege escalation).
+//! (architecture doc §4, ADR-0004 extends naturally to this: no silent privilege escalation).
 
-use bulwark_core::{all_collectors, engine, Store};
+use bulwark_core::{all_collectors, engine, Profile, Store};
 use chrono::{DateTime, Utc};
 use notify::{RecursiveMode, Watcher};
 use serde::Serialize;
@@ -232,7 +232,10 @@ fn run_tick(app: &AppHandle, rules_dir: &Path) {
     // Unprivileged only — see module doc. `privileged_collectors_skipped` on the resulting
     // scan still gets recorded like any other scan; the UI's existing "run privileged
     // checks" affordance is what covers that gap, on demand, with a real auth prompt.
-    let scan = engine::run_scan(rules_dir, &collectors, false);
+    // Default profile (host OS, no opted-in needs) — the background loop doesn't currently
+    // know the user's active profile selection from the Dashboard; see the Profiles section
+    // of the architecture doc's open questions for wiring a persisted selection through here.
+    let scan = engine::run_scan(rules_dir, &collectors, false, &Profile::default());
 
     let new_findings = if let Ok(db_path) = super_db_path() {
         Store::open(&db_path)

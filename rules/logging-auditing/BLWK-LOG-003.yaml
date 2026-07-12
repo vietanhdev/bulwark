@@ -3,6 +3,7 @@ title: Kernel-level process accounting is not installed
 category: logging-auditing
 severity: low
 collector: process_accounting
+profiles: [server]
 condition: installed == false
 explain: >
   Neither 'accton' nor 'lastcomm' is present, so there's no kernel-level record of every

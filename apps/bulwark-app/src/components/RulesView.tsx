@@ -14,6 +14,8 @@ interface RuleSummary {
   collector: string;
   explain: string;
   fix: string;
+  os: string[];
+  profiles: string[];
 }
 
 export function RulesView() {
@@ -91,6 +93,19 @@ export function RulesView() {
                               <span className="truncate text-xs text-muted-foreground">
                                 via {r.collector}
                               </span>
+                              {/* Linux is the default for every pre-profile rule — only worth a
+                                  badge when a rule is scoped to something else, so 57+ identical
+                                  "linux" badges don't drown out the 2 that actually differ. */}
+                              {!(r.os.length === 1 && r.os[0] === "linux") && (
+                                <Badge variant="outline" className="shrink-0 text-[10px] capitalize">
+                                  {r.os.join(" / ")}
+                                </Badge>
+                              )}
+                              {r.profiles.map((p) => (
+                                <Badge key={p} variant="outline" className="shrink-0 text-[10px] capitalize">
+                                  needs: {p}
+                                </Badge>
+                              ))}
                             </div>
                           </div>
                           <SeverityBadge severity={r.severity} />

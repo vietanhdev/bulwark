@@ -133,13 +133,20 @@
   * {
     @apply border-border outline-ring/50;
   }
+  /* html/body are deliberately left transparent, not `bg-background` — the OS window itself
+     is transparent (tauri.conf.json's `transparent: true`), and `.app-shell` below is the
+     only element that paints an opaque background. If body painted bg-background too, it
+     would fill the whole window rectangle and hide the transparency `.app-shell`'s rounded
+     corners are supposed to reveal, making the frameless window look like a plain square. */
   body {
-    @apply bg-background text-foreground;
+    @apply text-foreground;
     margin: 0;
+    background: transparent;
     overscroll-behavior: none;
   }
   html {
     @apply font-sans;
+    background: transparent;
   }
 }
 

@@ -21,12 +21,42 @@ pub enum FindingStatus {
     Resolved,
 }
 
+/// The operating system(s) a rule or collector targets. Everything in this project has been
+/// Linux-only through v0.1 — this exists so that support for another OS is "add a collector
+/// and tag some rules," not "redesign the rule/collector model." See docs/guide/architecture.md.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OperatingSystem {
+    Linux,
+    Macos,
+    Windows,
+}
+
+impl OperatingSystem {
+    /// The OS this binary is actually running on, or `None` on a target `std::env::consts::OS`
+    /// doesn't recognize — treated as "matches nothing" by rule/collector filtering rather than
+    /// defaulting to Linux, so an unrecognized host fails closed (no rules silently run) instead
+    /// of silently assuming Linux on a platform nobody has actually validated this against.
+    pub fn current() -> Option<Self> {
+        match std::env::consts::OS {
+            "linux" => Some(Self::Linux),
+            "macos" => Some(Self::Macos),
+            "windows" => Some(Self::Windows),
+            _ => None,
+        }
+    }
+}
+
+fn default_rule_os() -> Vec<OperatingSystem> {
+    vec![OperatingSystem::Linux]
+}
+
 /// One fact row produced by a collector. Most collectors produce exactly one row;
 /// list-shaped collectors (listening ports, cron entries, ...) produce one row per item,
 /// and each row is evaluated against the rule's condition independently.
 pub type Fact = BTreeMap<String, serde_json::Value>;
 
-/// A rule as authored in YAML. See design-docs/001-bulwark-security-scanner/index.md §5.
+/// A rule as authored in YAML. See docs/guide/architecture.md §5.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Rule {
     pub id: String,
@@ -39,6 +69,21 @@ pub struct Rule {
     pub fix: String,
     #[serde(default)]
     pub references: Vec<String>,
+    /// Which OS(es) this rule applies to. Defaults to `[linux]` so all pre-existing rule
+    /// files need no change — every rule authored before this field existed was implicitly
+    /// Linux-only anyway. A rule should list every OS its collector can produce facts on;
+    /// see `Collector::supported_os` for the collector-level half of this same gate.
+    #[serde(default = "default_rule_os")]
+    pub os: Vec<OperatingSystem>,
+    /// Free-form "need" tags (e.g. "desktop", "server", "developer") a profile opts into.
+    /// Empty (the default) means universal — the rule runs regardless of which needs are
+    /// selected. A non-empty list means "only run this when the active profile has opted
+    /// into at least one of these needs" — e.g. a process-accounting check is real but
+    /// mostly a server-hardening concern, not something a laptop user needs surfaced by
+    /// default. No fixed enum of valid tags on purpose: adding a new need is "write it in a
+    /// YAML file," matching this project's "no Rust required to add a rule" philosophy.
+    #[serde(default)]
+    pub profiles: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,7 +127,7 @@ pub struct ScanRun {
     pub rule_load_errors: Vec<RuleLoadError>,
     pub collector_errors: Vec<CollectorError>,
     /// Collectors that needed elevation and were skipped because this run wasn't
-    /// privileged — never silent (design doc §8, "N checks skipped (no privilege)").
+    /// privileged — never silent (architecture doc §8, "N checks skipped (no privilege)").
     pub privileged_collectors_skipped: Vec<String>,
     pub findings: Vec<Finding>,
 }

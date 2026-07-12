@@ -24,6 +24,8 @@ interface RuleSummary {
   id: string;
   category: string;
   references: string[];
+  os: string[];
+  profiles: string[];
 }
 
 interface MonitoringStatus {
@@ -57,6 +59,12 @@ interface ScanRunResult {
 
 const SEVERITY_ORDER: Severity[] = ["critical", "high", "medium", "low", "info"];
 
+// Opt-in need tags a rule's `profiles` field can reference. Kept as one small list here
+// rather than derived from the loaded rule pack, since the point is to offer a need before
+// any rule using it necessarily exists yet — same "declarative, no Rust required" spirit as
+// adding a rule itself (docs/guide/architecture.md's Profiles section).
+const PROFILE_NEEDS = ["server"];
+
 function categoryLabel(category: string): string {
   return category.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
@@ -79,6 +87,11 @@ export function Dashboard({
   const [loadingSnapshot, setLoadingSnapshot] = useState(true);
   const [rules, setRules] = useState<RuleSummary[] | null>(null);
   const [monitoringOn, setMonitoringOn] = useState<boolean | null>(null);
+  // Opt-in "need" tags a rule can require via its `profiles` field (e.g. a process-accounting
+  // check is real but mostly a server concern, not something a laptop user needs surfaced by
+  // default). Only "server" has any real rule tagged with it today — see docs/guide/
+  // architecture.md's Profiles section. Not persisted across restarts yet (open question there).
+  const [activeNeeds, setActiveNeeds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     invoke<MonitoringStatus>("monitoring_get_status")
@@ -125,9 +138,17 @@ export function Dashboard({
   }, [rules, findings, ruleCategoryById]);
 
   const compliance = useMemo(() => {
-    const mapped = rules?.filter((r) => r.references.length > 0) ?? [];
-    if (mapped.length === 0) return null;
     const openIds = new Set(findings.map((f) => f.rule_id));
+    // Same reasoning as ComplianceView's hardening index: a rule that couldn't have run on
+    // this host (wrong OS, or a "needs" tag the last scan didn't opt into) must not count as
+    // a free "pass" just because it never produced a finding — see that component for detail.
+    const mapped = (rules ?? []).filter((r) => {
+      if (r.references.length === 0) return false;
+      if (!r.os.includes("linux")) return false;
+      if (r.profiles.length > 0 && !openIds.has(r.id)) return false;
+      return true;
+    });
+    if (mapped.length === 0) return null;
     const passing = mapped.filter((r) => !openIds.has(r.id)).length;
     return { passing, total: mapped.length };
   }, [rules, findings]);
@@ -181,11 +202,20 @@ export function Dashboard({
     };
 
     try {
-      await invoke("scan_start", { onEvent });
+      await invoke("scan_start", { onEvent, needs: Array.from(activeNeeds) });
     } catch (e) {
       setErrors((prev) => [...prev, String(e)]);
       setScanning(false);
     }
+  }
+
+  function toggleNeed(need: string) {
+    setActiveNeeds((prev) => {
+      const next = new Set(prev);
+      if (next.has(need)) next.delete(need);
+      else next.add(need);
+      return next;
+    });
   }
 
   const counts = SEVERITY_ORDER.map((sev) => ({
@@ -219,6 +249,28 @@ export function Dashboard({
               {rules.length} rules · {categories.length} categories
             </span>
           )}
+          {/* Opt-in need tags — see the `activeNeeds` state above. Only "server" has any
+              real rule behind it today; the toggle button group is written to grow (map
+              over PROFILE_NEEDS) rather than one-off, since more tags are a YAML change,
+              not a Rust one. */}
+          <div className="hidden items-center gap-1 sm:flex" role="group" aria-label="Scan profile">
+            {PROFILE_NEEDS.map((need) => (
+              <button
+                key={need}
+                type="button"
+                onClick={() => toggleNeed(need)}
+                title={`Also run rules tagged for "${need}" hosts`}
+                className={cn(
+                  "rounded-full border px-2.5 py-1 text-[11px] font-medium capitalize transition-colors",
+                  activeNeeds.has(need)
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-border text-muted-foreground hover:bg-accent",
+                )}
+              >
+                {need}
+              </button>
+            ))}
+          </div>
           <Button onClick={runScan} disabled={scanning} size="sm">
             {scanning ? <RotateCw className="h-4 w-4 animate-spin" /> : <Radar className="h-4 w-4" />}
             {scanning ? "Scanning…" : "Run a scan"}

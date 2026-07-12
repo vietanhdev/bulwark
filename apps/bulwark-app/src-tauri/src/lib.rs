@@ -5,8 +5,8 @@ use bulwark_core::av_scan::ClamscanLine;
 use bulwark_core::models::Severity;
 use bulwark_core::{
     all_collectors, av_scan, clamav_install_command, clamav_version_info, engine,
-    fim_establish_baseline, AvScanResult, ClamavVersionInfo, Finding, LatestScanMeta, ScanRun,
-    ScanRunSummary, Store, FIM_UNPRIVILEGED_WATCHED_PATHS,
+    fim_establish_baseline, AvScanResult, ClamavVersionInfo, Finding, LatestScanMeta, Profile,
+    ScanRun, ScanRunSummary, Store, FIM_UNPRIVILEGED_WATCHED_PATHS,
 };
 use monitoring::MonitoringState;
 use serde::Serialize;
@@ -25,10 +25,12 @@ struct RuleSummary {
     references: Vec<String>,
     explain: String,
     fix: String,
+    os: Vec<String>,
+    profiles: Vec<String>,
 }
 
 /// Streamed to the frontend one message at a time over a Tauri Channel — Channels, not the
-/// global event system, per design doc §4 ADR-0003 (ordered delivery under load).
+/// global event system, per architecture doc §4 ADR-0003 (ordered delivery under load).
 #[derive(Clone, Serialize)]
 #[serde(tag = "event", content = "data", rename_all = "camelCase")]
 enum ScanEvent {
@@ -122,7 +124,11 @@ fn db_path() -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-async fn scan_start(app: tauri::AppHandle, on_event: Channel<ScanEvent>) -> Result<(), String> {
+async fn scan_start(
+    app: tauri::AppHandle,
+    on_event: Channel<ScanEvent>,
+    needs: Option<Vec<String>>,
+) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let rules_dir = match resolve_rules_dir(Some(&app)) {
             Ok(d) => d,
@@ -132,10 +138,14 @@ async fn scan_start(app: tauri::AppHandle, on_event: Channel<ScanEvent>) -> Resu
             }
         };
         let collectors = all_collectors();
+        let profile = Profile {
+            needs: needs.unwrap_or_default(),
+            ..Profile::current_host()
+        };
         // This first pass always runs unprivileged — [`scan_privileged`] is the separate,
         // explicit pkexec-elevated path the UI offers when `privileged_collectors_skipped`
-        // below is non-empty (design doc §4).
-        let scan = engine::run_scan(&rules_dir, &collectors, false);
+        // below is non-empty (architecture doc §4).
+        let scan = engine::run_scan(&rules_dir, &collectors, false, &profile);
 
         for e in &scan.collector_errors {
             let _ = on_event.send(ScanEvent::CollectorError {
@@ -173,7 +183,7 @@ async fn scan_start(app: tauri::AppHandle, on_event: Channel<ScanEvent>) -> Resu
 /// returns the parsed result. Deliberately shells out to the already-built, already-tested
 /// CLI rather than duplicating collector-invocation logic here — the polkit prompt this
 /// triggers is defined by `polkit/com.bulwark.policy` (`auth_admin_keep`, one prompt per
-/// session), matching design doc §4's GUI privilege model. This replaces the current
+/// session), matching architecture doc §4's GUI privilege model. This replaces the current
 /// finding list rather than merging into it — it's a strictly more complete re-scan, not
 /// an incremental addition, so there's nothing to de-duplicate against the prior partial run.
 #[tauri::command]
@@ -214,7 +224,7 @@ async fn scan_privileged(app: tauri::AppHandle) -> Result<ScanRun, String> {
 }
 
 /// Streamed the same way `scan_start` streams findings (Channel, not the global event bus —
-/// design doc §4 ADR-0003) rather than one `AvScanResult` returned at the end. A ClamAV pass
+/// architecture doc §4 ADR-0003) rather than one `AvScanResult` returned at the end. A ClamAV pass
 /// over even the default target set can take minutes; a UI with zero feedback for that whole
 /// window reads as hung, not as working.
 #[derive(Clone, Serialize)]
@@ -336,6 +346,13 @@ async fn rules_list(app: tauri::AppHandle) -> Result<Vec<RuleSummary>, String> {
             references: r.rule.references,
             explain: r.rule.explain,
             fix: r.rule.fix,
+            os: r
+                .rule
+                .os
+                .iter()
+                .map(|os| format!("{os:?}").to_lowercase())
+                .collect(),
+            profiles: r.rule.profiles,
         })
         .collect())
 }
@@ -368,7 +385,7 @@ async fn dashboard_snapshot() -> Result<DashboardSnapshot, String> {
 }
 
 /// Total past scan runs — backs a small "N scans recorded" line rather than a full history
-/// browser, which is intentionally out of scope for this pass (see CLAUDE.md's status notes).
+/// browser, which is intentionally out of scope for this pass (see AGENTS.md's status notes).
 #[tauri::command]
 async fn history_count() -> Result<i64, String> {
     let db_path = db_path()?;
@@ -396,6 +413,7 @@ async fn history_list() -> Result<Vec<ScanRunSummary>, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .manage(MonitoringState(Mutex::new(monitoring::Inner::default())))
         .setup(|app| {

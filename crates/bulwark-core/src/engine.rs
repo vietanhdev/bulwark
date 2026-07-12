@@ -1,6 +1,8 @@
 use crate::collectors::Collector;
 use crate::condition::Condition;
-use crate::models::{CollectorError, Finding, FindingStatus, Rule, RuleLoadError, ScanRun};
+use crate::models::{
+    CollectorError, Finding, FindingStatus, OperatingSystem, Rule, RuleLoadError, ScanRun,
+};
 use chrono::Utc;
 use std::collections::HashMap;
 use std::path::Path;
@@ -12,10 +14,44 @@ pub struct LoadedRule {
     pub condition: Condition,
 }
 
+/// Which OS to scan as, and which opt-in "needs" are active — the two axes rules are
+/// filtered by (docs/guide/architecture.md's Profiles section). `os` is a hard filter (a
+/// macOS-tagged rule never runs on Linux, full stop); `needs` is additive opt-in (a rule
+/// tagged `profiles: [server]` only runs when "server" is in `needs`; a rule with no
+/// `profiles` tag at all is universal and always runs regardless of `needs`).
+#[derive(Debug, Clone)]
+pub struct Profile {
+    pub os: OperatingSystem,
+    pub needs: Vec<String>,
+}
+
+impl Profile {
+    /// The host's actual OS, no opted-in needs — i.e. exactly the rule set that ran before
+    /// profiles existed. Every pre-existing rule defaults to `os: [linux]`, `profiles: []`,
+    /// so this reproduces the old unconditional behavior on a Linux host bit-for-bit.
+    pub fn current_host() -> Self {
+        Self {
+            os: OperatingSystem::current().unwrap_or(OperatingSystem::Linux),
+            needs: Vec::new(),
+        }
+    }
+}
+
+impl Default for Profile {
+    fn default() -> Self {
+        Self::current_host()
+    }
+}
+
+fn rule_matches_profile(rule: &Rule, profile: &Profile) -> bool {
+    rule.os.contains(&profile.os)
+        && (rule.profiles.is_empty() || rule.profiles.iter().any(|p| profile.needs.contains(p)))
+}
+
 /// Loads every `.yaml`/`.yml` file under `dir` as a [`Rule`], parsing its condition too.
 /// A rule that fails to parse (bad YAML, unknown fields, or a bad condition expression)
 /// is collected as a [`RuleLoadError`] and skipped — never a silent drop and never a panic
-/// that takes the rest of the pack down with it (design doc §8).
+/// that takes the rest of the pack down with it (architecture doc §8).
 pub fn load_rules(dir: &Path) -> (Vec<LoadedRule>, Vec<RuleLoadError>) {
     let mut loaded = Vec::new();
     let mut errors = Vec::new();
@@ -60,7 +96,7 @@ pub fn load_rules(dir: &Path) -> (Vec<LoadedRule>, Vec<RuleLoadError>) {
 }
 
 /// True when running with an effective UID of 0 — the CLI's `--privileged` flag is only
-/// honored under `sudo` (design doc §4 ADR-0004: no `pkexec` self-elevation from the CLI).
+/// honored under `sudo` (architecture doc §4 ADR-0004: no `pkexec` self-elevation from the CLI).
 pub fn is_running_as_root() -> bool {
     unsafe { libc::geteuid() == 0 }
 }
@@ -71,12 +107,24 @@ pub fn is_running_as_root() -> bool {
 /// but the failure itself is still surfaced in `collector_errors` — never silent (§8).
 /// `privileged` gates collectors that declare [`Collector::requires_privilege`]; when
 /// false, they're skipped and named in `privileged_collectors_skipped` rather than run
-/// (and failing with a permission error) or silently omitted.
-pub fn run_scan(rules_dir: &Path, collectors: &[Box<dyn Collector>], privileged: bool) -> ScanRun {
+/// (and failing with a permission error) or silently omitted. `profile` gates both rules
+/// (by `Rule::os`/`Rule::profiles`) and collectors (by `Collector::supported_os`) — a
+/// macOS/Windows-only collector's `collect()` is structurally unreachable on Linux, not
+/// just conventionally skipped.
+pub fn run_scan(
+    rules_dir: &Path,
+    collectors: &[Box<dyn Collector>],
+    privileged: bool,
+    profile: &Profile,
+) -> ScanRun {
     let started_at = Utc::now();
     let scan_run_id = Uuid::new_v4();
 
-    let (rules, rule_load_errors) = load_rules(rules_dir);
+    let (all_rules, rule_load_errors) = load_rules(rules_dir);
+    let rules: Vec<LoadedRule> = all_rules
+        .into_iter()
+        .filter(|r| rule_matches_profile(&r.rule, profile))
+        .collect();
 
     let mut needed: HashMap<&str, ()> = HashMap::new();
     for r in &rules {
@@ -89,6 +137,9 @@ pub fn run_scan(rules_dir: &Path, collectors: &[Box<dyn Collector>], privileged:
 
     for collector in collectors {
         if !needed.contains_key(collector.name()) {
+            continue;
+        }
+        if !collector.supported_os().contains(&profile.os) {
             continue;
         }
         if !collector.is_applicable() {
@@ -248,7 +299,7 @@ references: [CIS-5.2.10]
         let collectors: Vec<Box<dyn Collector>> =
             vec![Box::new(FixedCollector { rows: vec![fact] })];
 
-        let scan = run_scan(tmp.path(), &collectors, false);
+        let scan = run_scan(tmp.path(), &collectors, false, &Profile::default());
         assert_eq!(scan.rules_loaded, 1);
         assert!(scan.rule_load_errors.is_empty());
         assert_eq!(scan.findings.len(), 1);
@@ -296,14 +347,14 @@ fix: "f"
         let collectors: Vec<Box<dyn Collector>> =
             vec![Box::new(PrivilegedFixedCollector { rows: vec![fact] })];
 
-        let unprivileged = run_scan(tmp.path(), &collectors, false);
+        let unprivileged = run_scan(tmp.path(), &collectors, false, &Profile::default());
         assert_eq!(unprivileged.privileged_collectors_skipped, vec!["sudoers"]);
         assert!(
             unprivileged.findings.is_empty(),
             "a skipped collector must not silently pass as clean"
         );
 
-        let privileged = run_scan(tmp.path(), &collectors, true);
+        let privileged = run_scan(tmp.path(), &collectors, true, &Profile::default());
         assert!(privileged.privileged_collectors_skipped.is_empty());
         assert_eq!(privileged.findings.len(), 1);
     }
@@ -487,7 +538,7 @@ fix: "f"
 "#,
         );
         let collectors: Vec<Box<dyn Collector>> = vec![Box::new(FailingCollector)];
-        let scan = run_scan(tmp.path(), &collectors, false);
+        let scan = run_scan(tmp.path(), &collectors, false, &Profile::default());
         assert!(scan.findings.is_empty());
         assert_eq!(scan.collector_errors.len(), 1);
         assert_eq!(scan.collector_errors[0].collector, "sshd_config");

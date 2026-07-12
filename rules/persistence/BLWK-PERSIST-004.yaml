@@ -1,0 +1,14 @@
+id: BLWK-PERSIST-004
+title: Unexpected registry Run-key entry found
+category: persistence
+severity: high
+collector: windows_run_keys
+os: [windows]
+profiles: [desktop, server]
+condition: recognized == false
+explain: >
+  The registry Run-key entry "{{ windows_run_keys.name }}" launches "{{ windows_run_keys.command }}"
+  on every login and isn't one this host's baseline recognizes — Windows's equivalent of a
+  rogue systemd unit.
+fix: "Review the entry under HKLM/HKCU ...\\CurrentVersion\\Run and remove it if you didn't create it."
+references: [ATTACK-T1547.001]

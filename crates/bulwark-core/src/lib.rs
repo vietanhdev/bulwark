@@ -16,6 +16,6 @@ pub use collectors::file_integrity::{
 };
 pub use collectors::{all_collectors, Collector};
 pub use condition::Condition;
-pub use engine::{load_rules, run_scan};
-pub use models::{Fact, Finding, FindingStatus, Rule, ScanRun, Severity};
+pub use engine::{load_rules, run_scan, Profile};
+pub use models::{Fact, Finding, FindingStatus, OperatingSystem, Rule, ScanRun, Severity};
 pub use store::{LatestScanMeta, ScanRunSummary, Store};

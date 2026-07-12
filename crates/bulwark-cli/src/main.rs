@@ -1,7 +1,7 @@
 use anyhow::Context;
 use bulwark_core::{
-    all_collectors, engine, fim_baseline_path, fim_establish_baseline, models::Severity, Store,
-    FIM_PRIVILEGED_WATCHED_PATHS, FIM_UNPRIVILEGED_WATCHED_PATHS,
+    all_collectors, engine, fim_baseline_path, fim_establish_baseline, models::Severity, Profile,
+    Store, FIM_PRIVILEGED_WATCHED_PATHS, FIM_UNPRIVILEGED_WATCHED_PATHS,
 };
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
@@ -36,9 +36,15 @@ enum Commands {
         #[arg(long)]
         no_persist: bool,
         /// Also run collectors that need root (e.g. sudoers). Refuses unless actually
-        /// running under sudo — see design doc §4 ADR-0004: the CLI never self-elevates.
+        /// running under sudo — see architecture doc §4 ADR-0004: the CLI never self-elevates.
         #[arg(long)]
         privileged: bool,
+        /// Comma-separated opt-in need tags (e.g. "server", "developer"). A rule with no
+        /// `profiles` tag always runs regardless of this; a rule tagged `profiles: [server]`
+        /// only runs when "server" is listed here. Empty by default — see the Profiles
+        /// section of the architecture doc.
+        #[arg(long, value_delimiter = ',')]
+        needs: Vec<String>,
     },
     /// Inspect the loaded rule pack
     Rules {
@@ -147,6 +153,7 @@ fn main() -> anyhow::Result<()> {
             json,
             no_persist,
             privileged,
+            needs,
         } => {
             if privileged && !engine::is_running_as_root() {
                 anyhow::bail!(
@@ -155,7 +162,11 @@ fn main() -> anyhow::Result<()> {
             }
             let rules_dir = resolve_rules_dir(cli.rules_dir)?;
             let collectors = all_collectors();
-            let scan = engine::run_scan(&rules_dir, &collectors, privileged);
+            let profile = Profile {
+                needs,
+                ..Profile::current_host()
+            };
+            let scan = engine::run_scan(&rules_dir, &collectors, privileged, &profile);
 
             if !no_persist {
                 let db_path = resolve_db_path(cli.db_path)?;
@@ -181,8 +192,15 @@ fn main() -> anyhow::Result<()> {
                 let rules_dir = resolve_rules_dir(cli.rules_dir)?;
                 let (rules, errors) = engine::load_rules(&rules_dir);
                 for r in &rules {
+                    let os_tag = r
+                        .rule
+                        .os
+                        .iter()
+                        .map(|os| format!("{os:?}").to_lowercase())
+                        .collect::<Vec<_>>()
+                        .join(",");
                     println!(
-                        "{:<20} [{:<8}] {}",
+                        "{:<20} [{:<8}] ({os_tag:<7}) {}",
                         r.rule.id,
                         severity_label(r.rule.severity),
                         r.rule.title
@@ -310,7 +328,7 @@ fn print_scan_table(scan: &bulwark_core::ScanRun) {
         return;
     }
     let mut sorted = scan.findings.clone();
-    sorted.sort_by(|a, b| b.severity.cmp(&a.severity));
+    sorted.sort_by_key(|f| std::cmp::Reverse(f.severity));
     for f in &sorted {
         println!(
             "[{:<8}] {} — {}",
