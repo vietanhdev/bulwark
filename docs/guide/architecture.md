@@ -230,6 +230,8 @@ There's no network API — the "client" and "server" are the same process, expos
 | `bulwarkctl scan --json` | Same as `scan`, machine-readable output | same as above |
 | `bulwarkctl rules list` | List loaded rules, including load failures | `0` / `1` if any rule failed to load |
 | `bulwarkctl rules validate <path>` | Lint a rule file without running a scan (used in CI for the bundled pack) | `0` valid / `1` invalid |
+| `bulwarkctl fim baseline` | Record the current hashes of the watched files as the known-good baseline. Never runs automatically — a baseline taken *after* a compromise would enshrine it as clean | `0` |
+| `bulwarkctl fim baseline --privileged` | Also baseline the root-only paths (`/etc/shadow`, `/etc/sudoers`); refuses unless run as root | `0` |
 | `bulwarkctl history` | List past `ScanRun`s (shared with the GUI's history) | `0` |
 
 There is no traditional authn/authz layer — this is a single-user local app; the OS login session is the trust boundary, and `pkexec` (GUI) / `sudo` (CLI) are the only elevation gates (see §10).
