@@ -28,6 +28,31 @@ export default withMermaid({
     ["meta", { property: "og:url", content: SITE_URL }],
   ],
 
+  // Teal palette matching apps/bulwark-app/src/styles.css's tokens (oklch hue ~194, converted
+  // to hex since mermaid doesn't understand oklch()). Only governs light mode — the plugin
+  // forces mermaid's own built-in dark theme when `.dark` is on <html>, this config has no
+  // effect there (a vitepress-plugin-mermaid limitation, not a choice made here).
+  mermaid: {
+    theme: "base",
+    themeVariables: {
+      fontFamily: "Geist Variable, Geist, ui-sans-serif, system-ui, sans-serif",
+      primaryColor: "#d5f2f1",
+      primaryTextColor: "#081717",
+      primaryBorderColor: "#007372",
+      lineColor: "#007372",
+      secondaryColor: "#fafcfc",
+      secondaryBorderColor: "#dae3e3",
+      tertiaryColor: "#ffffff",
+      tertiaryBorderColor: "#dae3e3",
+      textColor: "#081717",
+      actorBkg: "#d5f2f1",
+      actorBorder: "#007372",
+      actorTextColor: "#081717",
+      signalColor: "#007372",
+      signalTextColor: "#081717",
+    },
+  },
+
   themeConfig: {
     logo: "/shield.svg",
     nav: [
