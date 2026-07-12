@@ -1,15 +1,18 @@
-import { defineConfig } from "vitepress";
+import { withMermaid } from "vitepress-plugin-mermaid";
 
 // Canonical domain (not yet deployed — see AGENTS.md's current-status notes). Set here so
 // the sitemap and social-preview tags are correct from day one instead of needing a
 // find-and-replace once hosting is actually wired up.
 const SITE_URL = "https://bulwark.nrl.ai";
 
-export default defineConfig({
+export default withMermaid({
   title: "Bulwark",
   description: "A Linux host security scanner with a native CLI and desktop GUI.",
   lang: "en-US",
   cleanUrls: true,
+  // Default to light on first visit (no stored preference / no system-preference match yet)
+  // — the toggle is still there, this only changes the initial pick.
+  appearance: "light",
   sitemap: { hostname: SITE_URL },
   head: [
     ["link", { rel: "icon", type: "image/svg+xml", href: "/shield.svg" }],
