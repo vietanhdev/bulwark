@@ -14,9 +14,43 @@ use monitoring::MonitoringState;
 use realtime_av::RealtimeAvState;
 use serde::Serialize;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use tauri::ipc::Channel;
 use tauri::Manager;
+
+/// The stop button, as shared state.
+///
+/// One flag for every user-initiated scan (compliance, agent, antivirus), because the Overview
+/// runs them back-to-back from a single button and "Stop" has to mean *stop all of this*, not
+/// just the one currently executing. Each scan command clears it before starting and polls it
+/// between units of work; `scan_cancel` sets it.
+///
+/// It's an `AtomicBool` rather than a channel or a `Mutex<bool>` because the poll happens on a
+/// blocking worker thread inside a tight loop, and this is exactly the shape that's free there.
+#[derive(Clone, Default)]
+pub struct ScanControl(Arc<AtomicBool>);
+
+impl ScanControl {
+    fn begin(&self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+    fn cancel(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+    /// A closure the core engines can poll without knowing anything about Tauri.
+    fn is_cancelled(&self) -> impl Fn() -> bool {
+        let flag = self.0.clone();
+        move || flag.load(Ordering::SeqCst)
+    }
+}
+
+/// Stops whatever scan is running. Idempotent, and safe to call when nothing is running — the
+/// flag is cleared by the next scan that starts.
+#[tauri::command]
+fn scan_cancel(control: tauri::State<ScanControl>) {
+    control.cancel();
+}
 
 #[derive(Clone, Serialize)]
 struct RuleSummary {
@@ -48,6 +82,8 @@ enum ScanEvent {
     Complete {
         total_findings: usize,
         host_fingerprint: String,
+        /// The scan was stopped early — its findings are partial and were not persisted.
+        cancelled: bool,
     },
     Error {
         message: String,
@@ -143,9 +179,13 @@ fn db_path() -> Result<PathBuf, String> {
 #[tauri::command]
 async fn scan_start(
     app: tauri::AppHandle,
+    control: tauri::State<'_, ScanControl>,
     on_event: Channel<ScanEvent>,
     needs: Option<Vec<String>>,
 ) -> Result<(), String> {
+    let control = control.inner().clone();
+    control.begin();
+
     tauri::async_runtime::spawn_blocking(move || {
         let rules_dir = match resolve_rules_dir(Some(&app)) {
             Ok(d) => d,
@@ -162,7 +202,13 @@ async fn scan_start(
         // This first pass always runs unprivileged — [`scan_privileged`] is the separate,
         // explicit pkexec-elevated path the UI offers when `privileged_collectors_skipped`
         // below is non-empty (architecture doc §4).
-        let scan = engine::run_scan(&rules_dir, &collectors, false, &profile);
+        let scan = engine::run_scan_cancellable(
+            &rules_dir,
+            &collectors,
+            false,
+            &profile,
+            &control.is_cancelled(),
+        );
 
         for e in &scan.collector_errors {
             let _ = on_event.send(ScanEvent::CollectorError {
@@ -179,17 +225,24 @@ async fn scan_start(
             let _ = on_event.send(ScanEvent::Finding(finding.clone()));
         }
 
-        if let Ok(db_path) = db_path() {
-            if let Ok(mut store) = Store::open(&db_path) {
-                // Reconciled, same as the periodic monitoring loop — a manual scan and a
-                // background tick finding the same issue must not produce two rows for it.
-                let _ = store.persist_and_reconcile(&scan);
+        // A stopped scan is *partial*, so it never reaches the database. Persisting it would be
+        // actively harmful, not merely incomplete: reconciliation would treat the collectors it
+        // never reached as "ran and found nothing" for the rules it did evaluate, and the run
+        // would overwrite a complete picture with a half-finished one.
+        if !scan.cancelled {
+            if let Ok(db_path) = db_path() {
+                if let Ok(mut store) = Store::open(&db_path) {
+                    // Reconciled, same as the periodic monitoring loop — a manual scan and a
+                    // background tick finding the same issue must not produce two rows for it.
+                    let _ = store.persist_and_reconcile(&scan);
+                }
             }
         }
 
         let _ = on_event.send(ScanEvent::Complete {
             total_findings: scan.findings.len(),
             host_fingerprint: scan.host_fingerprint.clone(),
+            cancelled: scan.cancelled,
         });
     })
     .await
@@ -265,9 +318,13 @@ enum AvScanEvent {
 /// the `HOME`-dependent default lookup only runs when nothing custom was chosen.
 #[tauri::command]
 async fn run_virus_scan(
+    control: tauri::State<'_, ScanControl>,
     on_event: Channel<AvScanEvent>,
     paths: Option<Vec<String>>,
 ) -> Result<(), String> {
+    let control = control.inner().clone();
+    control.begin();
+
     tauri::async_runtime::spawn_blocking(move || {
         let targets = match paths {
             Some(p) if !p.is_empty() => p.into_iter().map(PathBuf::from).collect(),
@@ -284,15 +341,19 @@ async fn run_virus_scan(
                 av_scan::default_scan_targets(std::path::Path::new(&home))
             }
         };
-        let result = av_scan::scan_streaming(&targets, |line| {
-            let event = match line {
-                ClamscanLine::Clean(path) | ClamscanLine::Error(path) => {
-                    AvScanEvent::FileScanned { path: path.clone() }
-                }
-                ClamscanLine::Infected(threat) => AvScanEvent::ThreatFound(threat.clone()),
-            };
-            let _ = on_event.send(event);
-        });
+        let result = av_scan::scan_streaming_cancellable(
+            &targets,
+            |line| {
+                let event = match line {
+                    ClamscanLine::Clean(path) | ClamscanLine::Error(path) => {
+                        AvScanEvent::FileScanned { path: path.clone() }
+                    }
+                    ClamscanLine::Infected(threat) => AvScanEvent::ThreatFound(threat.clone()),
+                };
+                let _ = on_event.send(event);
+            },
+            &control.is_cancelled(),
+        );
         match result {
             Ok(r) => {
                 let _ = on_event.send(AvScanEvent::Complete(r));
@@ -388,8 +449,51 @@ async fn rules_list(app: tauri::AppHandle) -> Result<Vec<RuleSummary>, String> {
 
 #[derive(Serialize)]
 struct DashboardSnapshot {
+    /// Every open issue on this host, from *all* scanners — the config rule engine and the
+    /// agent-artifact scanner alike. The Overview is the one place that answers "what's wrong
+    /// with this machine," so it must not silently omit a whole scanner's findings.
     findings: Vec<Finding>,
     meta: Option<LatestScanMeta>,
+    /// Whether an agent-security scan has ever run. Without this the Overview can't tell
+    /// "no agent issues" from "the agent scanner never ran" — and claiming a clean bill of
+    /// health nobody earned is the one thing this codebase consistently refuses to do.
+    agent_scanned: bool,
+}
+
+/// Projects an [`AiFinding`] into the common [`Finding`] shape so the Overview can render every
+/// scanner's issues in one list without knowing which engine produced them. The agent-specific
+/// locality (file, line, which assistant, the masked evidence) is preserved in `context` rather
+/// than thrown away — the Agent Security tab reads the richer `AiFinding` directly from its own
+/// table, this is purely the aggregate view's flattening.
+fn ai_finding_as_finding(
+    f: &bulwark_core::AiFinding,
+    seen_at: chrono::DateTime<chrono::Utc>,
+) -> Finding {
+    let mut context = bulwark_core::Fact::new();
+    context.insert("file".into(), serde_json::Value::String(f.file.clone()));
+    context.insert("tool".into(), serde_json::Value::String(f.tool.clone()));
+    context.insert(
+        "evidence".into(),
+        serde_json::Value::String(f.evidence.clone()),
+    );
+    if let Some(line) = f.line {
+        context.insert("line".into(), serde_json::Value::from(line as u64));
+    }
+    Finding {
+        id: f.id,
+        rule_id: f.rule_id.clone(),
+        severity: f.severity,
+        title: f.title.clone(),
+        explanation: f.explanation.clone(),
+        fix_hint: f.fix_hint.clone(),
+        context,
+        first_seen: seen_at,
+        last_seen: seen_at,
+        status: bulwark_core::FindingStatus::Open,
+        // The agent scanner keeps its own run table; a config `scan_runs` id would be a lie, so
+        // this carries the nil UUID rather than inventing an association that doesn't exist.
+        scan_run_id: uuid::Uuid::nil(),
+    }
 }
 
 /// What a freshly-opened window loads instead of starting blank. Regression-motivated: the
@@ -404,12 +508,30 @@ async fn dashboard_snapshot() -> Result<DashboardSnapshot, String> {
         return Ok(DashboardSnapshot {
             findings: Vec::new(),
             meta: None,
+            agent_scanned: false,
         });
     }
     let store = Store::open(&db_path).map_err(|e| e.to_string())?;
+
+    let mut findings = store.open_findings().map_err(|e| e.to_string())?;
+
+    // Fold in the latest agent-security scan. Its findings live in their own table (different
+    // shape, latest-run-wins rather than reconciled — see store::persist_ai_scan), but the
+    // Overview's contract is "all issues", so they're flattened in here.
+    let agent = store.latest_ai_scan().map_err(|e| e.to_string())?;
+    let agent_scanned = agent.is_some();
+    if let Some(snap) = agent {
+        findings.extend(
+            snap.findings
+                .iter()
+                .map(|f| ai_finding_as_finding(f, snap.started_at)),
+        );
+    }
+
     Ok(DashboardSnapshot {
-        findings: store.open_findings().map_err(|e| e.to_string())?,
+        findings,
         meta: store.latest_scan_run_meta().map_err(|e| e.to_string())?,
+        agent_scanned,
     })
 }
 
@@ -445,6 +567,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
+        .manage(ScanControl::default())
         .manage(MonitoringState(Mutex::new(monitoring::initial_inner())))
         .manage(RealtimeAvState(Mutex::new(realtime_av::initial_state())))
         .setup(|app| {
@@ -493,6 +616,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             scan_start,
+            scan_cancel,
             scan_privileged,
             rules_list,
             history_count,

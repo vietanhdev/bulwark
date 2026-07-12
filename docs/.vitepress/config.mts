@@ -179,7 +179,7 @@ export default withMermaid({
         text: "Guide",
         items: [
           { text: "Architecture & design", link: "/guide/architecture" },
-          { text: "AI security scanning", link: "/guide/ai-security" },
+          { text: "Agent Security", link: "/guide/ai-security" },
           { text: "Contributing", link: "/guide/contributing" },
           { text: "Collaborate", link: "/collaborate" },
         ],

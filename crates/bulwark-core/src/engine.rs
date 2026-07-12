@@ -117,8 +117,25 @@ pub fn run_scan(
     privileged: bool,
     profile: &Profile,
 ) -> ScanRun {
+    run_scan_cancellable(rules_dir, collectors, privileged, profile, &|| false)
+}
+
+/// [`run_scan`] plus the ability to stop. `should_cancel` is polled between collectors — the
+/// coarsest unit that still makes Stop responsive, since an individual collector is a sub-second
+/// file read. A cancelled run reports `cancelled: true`, and its `rules_evaluated` covers only
+/// the collectors that actually got to run, so nothing downstream can mistake "we stopped before
+/// checking this" for "this passed" (see `Store::persist_and_reconcile`). Callers should decline
+/// to persist a cancelled run at all.
+pub fn run_scan_cancellable(
+    rules_dir: &Path,
+    collectors: &[Box<dyn Collector>],
+    privileged: bool,
+    profile: &Profile,
+    should_cancel: &dyn Fn() -> bool,
+) -> ScanRun {
     let started_at = Utc::now();
     let scan_run_id = Uuid::new_v4();
+    let mut cancelled = false;
 
     let (all_rules, rule_load_errors) = load_rules(rules_dir);
     let rules: Vec<LoadedRule> = all_rules
@@ -136,6 +153,10 @@ pub fn run_scan(
     let mut privileged_collectors_skipped = Vec::new();
 
     for collector in collectors {
+        if should_cancel() {
+            cancelled = true;
+            break;
+        }
         if !needed.contains_key(collector.name()) {
             continue;
         }
@@ -161,11 +182,17 @@ pub fn run_scan(
     }
 
     let mut findings = Vec::new();
+    // Rules that actually got evaluated against real facts. A rule whose collector was skipped
+    // (no privilege), inapplicable, or errored never lands here — so "this rule produced no
+    // finding" can be read as "it passed" only for the rules in this list. See
+    // `ScanRun::rules_evaluated` and `Store::persist_and_reconcile`.
+    let mut rules_evaluated = Vec::new();
     let now = Utc::now();
     for loaded in &rules {
         let Some(rows) = facts_by_collector.get(loaded.rule.collector.as_str()) else {
             continue;
         };
+        rules_evaluated.push(loaded.rule.id.clone());
         for row in rows {
             match loaded.condition.eval(row) {
                 Ok(true) => findings.push(Finding {
@@ -206,6 +233,8 @@ pub fn run_scan(
         rule_load_errors,
         collector_errors,
         privileged_collectors_skipped,
+        rules_evaluated,
+        cancelled,
         findings,
     }
 }
@@ -359,6 +388,55 @@ fix: "f"
         let privileged = run_scan(tmp.path(), &collectors, true, &Profile::default());
         assert!(privileged.privileged_collectors_skipped.is_empty());
         assert_eq!(privileged.findings.len(), 1);
+    }
+
+    /// Stopping a scan must not be mistaken for a scan that ran and passed. A cancelled run
+    /// reports `cancelled`, and — critically — leaves the collectors it never reached out of
+    /// `rules_evaluated`, so `Store::persist_and_reconcile` can't resolve their findings as
+    /// "fixed". Without that, pressing Stop would silently mark unchecked issues as clean.
+    #[test]
+    fn a_cancelled_scan_evaluates_nothing_and_reports_itself() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_rule(
+            tmp.path(),
+            "ssh.yaml",
+            r#"
+id: BLWK-SSH-001
+title: t
+category: c
+severity: high
+collector: sshd_config
+condition: password_authentication == "yes"
+explain: "e"
+fix: "f"
+"#,
+        );
+        let mut fact = crate::models::Fact::new();
+        fact.insert(
+            "password_authentication".to_string(),
+            serde_json::Value::String("yes".to_string()),
+        );
+        let collectors: Vec<Box<dyn Collector>> =
+            vec![Box::new(FixedCollector { rows: vec![fact] })];
+
+        // Cancelled before the first collector runs.
+        let scan =
+            run_scan_cancellable(tmp.path(), &collectors, false, &Profile::default(), &|| {
+                true
+            });
+        assert!(scan.cancelled);
+        assert!(scan.findings.is_empty());
+        assert!(
+            scan.rules_evaluated.is_empty(),
+            "a rule whose collector never ran must not count as evaluated — otherwise Stop would \
+             resolve its open findings as fixed"
+        );
+
+        // The same scan, allowed to finish, does find the issue.
+        let full = run_scan(tmp.path(), &collectors, false, &Profile::default());
+        assert!(!full.cancelled);
+        assert_eq!(full.findings.len(), 1);
+        assert_eq!(full.rules_evaluated, vec!["BLWK-SSH-001"]);
     }
 
     #[test]

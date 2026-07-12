@@ -85,6 +85,8 @@ pub enum AiScanEvent {
         artifacts_scanned: usize,
         workspaces_scanned: usize,
         workspaces_capped: bool,
+        /// Stopped early — the findings are partial and were not persisted.
+        cancelled: bool,
         errors: Vec<String>,
     },
     Error {
@@ -96,9 +98,13 @@ pub enum AiScanEvent {
 /// those folders and skips whole-machine discovery — the GUI's "scan this project" path.
 #[tauri::command]
 pub async fn ai_scan_start(
+    control: tauri::State<'_, crate::ScanControl>,
     on_event: Channel<AiScanEvent>,
     targets: Option<Vec<String>>,
 ) -> Result<(), String> {
+    let control = control.inner().clone();
+    control.begin();
+
     tauri::async_runtime::spawn_blocking(move || {
         let explicit = targets
             .unwrap_or_default()
@@ -113,19 +119,27 @@ pub async fn ai_scan_start(
             }
         };
 
-        let report = run_ai_scan(&opts, |path| {
-            let _ = on_event.send(AiScanEvent::Artifact {
-                path: path.to_string(),
-            });
-        });
+        let report = bulwark_core::ai_scan::scan_cancellable(
+            &opts,
+            |path| {
+                let _ = on_event.send(AiScanEvent::Artifact {
+                    path: path.to_string(),
+                });
+            },
+            &control.is_cancelled(),
+        );
 
         for f in &report.findings {
             let _ = on_event.send(AiScanEvent::Finding(f.clone()));
         }
 
-        if let Some(p) = db_path() {
-            if let Ok(mut store) = Store::open(&p) {
-                let _ = store.persist_ai_scan(&report);
+        // A stopped sweep saw only some of the machine. Persisting it would replace a complete
+        // picture with a partial one (this table is latest-run-wins), so it doesn't get stored.
+        if !report.cancelled {
+            if let Some(p) = db_path() {
+                if let Ok(mut store) = Store::open(&p) {
+                    let _ = store.persist_ai_scan(&report);
+                }
             }
         }
 
@@ -134,6 +148,7 @@ pub async fn ai_scan_start(
             artifacts_scanned: report.artifacts_scanned,
             workspaces_scanned: report.workspaces_scanned.len(),
             workspaces_capped: report.workspaces_capped,
+            cancelled: report.cancelled,
             errors: report.errors.clone(),
         });
     })

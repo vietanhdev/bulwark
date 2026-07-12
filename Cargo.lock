@@ -399,6 +399,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tempfile",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -433,6 +434,7 @@ dependencies = [
  "chrono",
  "clap",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

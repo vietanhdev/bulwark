@@ -248,6 +248,16 @@ impl Store {
     /// a privileged one during an unprivileged periodic run) — conflating those would be a
     /// worse bug than not auto-resolving at all, so resolving stays an explicit user action.
     ///
+    /// **Fixed issues are closed, but only when the scan can prove they're fixed.** An open row
+    /// whose rule is in `scan.rules_evaluated` (the rule demonstrably ran) and which nothing in
+    /// this scan matched is marked `resolved` — the check ran and no longer fires, so the issue
+    /// is genuinely gone. A row whose rule is *not* in that list (its collector was skipped for
+    /// lack of privilege, was inapplicable, or errored) is left untouched, because absence there
+    /// proves nothing. This is the distinction that makes auto-resolution safe; before it existed
+    /// the reconciler could only ever add findings, so a remediated issue stayed on the dashboard
+    /// forever — recording a FIM baseline, for instance, left "no file-integrity baseline yet"
+    /// on screen permanently even though every later scan came back clean.
+    ///
     /// "Same underlying issue" is *not* exact-string equality on the serialized context —
     /// a real bug caught live in this project's own dashboard: extending `login_defs.rs` to
     /// add two new always-present fields changed the context JSON shape for the *existing*
@@ -265,6 +275,10 @@ impl Store {
         Self::insert_scan_run(&tx, scan)?;
 
         let mut newly_appeared = Vec::new();
+        // Every pre-existing open row this scan re-observed. Whatever is left over — for a rule
+        // that demonstrably ran — is a fixed issue, and gets closed below.
+        let mut matched_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
         for f in &scan.findings {
             let mut stmt = tx.prepare(
                 "SELECT id, context FROM findings WHERE rule_id = ?1 AND status = 'open'",
@@ -275,6 +289,11 @@ impl Store {
             drop(stmt);
 
             let existing_id = candidates.into_iter().find_map(|(id, context_json)| {
+                if matched_ids.contains(&id) {
+                    // Already claimed by an earlier finding in this same scan — a list-shaped
+                    // collector's two rows must not both reconcile onto one stored row.
+                    return None;
+                }
                 let old_context: crate::models::Fact = serde_json::from_str(&context_json).ok()?;
                 is_context_subset(&old_context, &f.context).then_some(id)
             });
@@ -291,13 +310,41 @@ impl Store {
                             existing_id
                         ],
                     )?;
+                    matched_ids.insert(existing_id);
                 }
                 None => {
                     Self::insert_finding(&tx, f)?;
+                    // Register it as observed by *this* scan, or the resolve pass below would
+                    // immediately close the row we just inserted — it is, after all, an open row
+                    // for an evaluated rule that nothing has "matched".
+                    matched_ids.insert(f.id.to_string());
                     newly_appeared.push(f.clone());
                 }
             }
         }
+
+        // Close what's demonstrably fixed: open rows belonging to a rule that ran in this scan
+        // and that this scan did not re-observe. Rules whose collector never ran are skipped
+        // here on purpose — see this function's doc comment.
+        for rule_id in &scan.rules_evaluated {
+            let mut stmt =
+                tx.prepare("SELECT id FROM findings WHERE rule_id = ?1 AND status = 'open'")?;
+            let open_ids: Vec<String> = stmt
+                .query_map(params![rule_id], |r| r.get(0))?
+                .collect::<Result<_, _>>()?;
+            drop(stmt);
+
+            for id in open_ids {
+                if matched_ids.contains(&id) {
+                    continue;
+                }
+                tx.execute(
+                    "UPDATE findings SET status = 'resolved', last_seen = ?1 WHERE id = ?2",
+                    params![scan.started_at.to_rfc3339(), id],
+                )?;
+            }
+        }
+
         tx.commit()?;
         Ok(newly_appeared)
     }
@@ -825,6 +872,8 @@ mod tests {
                 message: "denied".into(),
             }],
             privileged_collectors_skipped: vec!["sudoers".into()],
+            rules_evaluated: vec!["BLWK-SSH-001".into()],
+            cancelled: false,
             findings: vec![Finding {
                 id: Uuid::new_v4(),
                 rule_id: "BLWK-SSH-001".into(),
@@ -1257,6 +1306,114 @@ mod tests {
         );
     }
 
+    /// The bug this closes, reported from the running app: record a file-integrity baseline, and
+    /// the "no file-integrity baseline yet" findings stayed on the dashboard forever — every
+    /// later scan came back clean, but the reconciler could only ever *add* findings, never close
+    /// one. A fixed issue must actually disappear.
+    #[test]
+    fn a_fixed_issue_is_resolved_once_its_rule_runs_clean() {
+        let mut store = Store::open_in_memory().unwrap();
+
+        // Scan 1: BLWK-FIM-003 fires (no baseline recorded yet).
+        let mut first = sample_scan();
+        first.findings[0].rule_id = "BLWK-FIM-003".into();
+        first.rules_evaluated = vec!["BLWK-FIM-003".into()];
+        store.persist_and_reconcile(&first).unwrap();
+        assert_eq!(store.open_findings().unwrap().len(), 1);
+
+        // Scan 2: the user recorded a baseline. The rule ran (it's in rules_evaluated) and no
+        // longer fires, so the issue is demonstrably fixed and must be closed.
+        let mut second = sample_scan();
+        second.findings.clear();
+        second.rules_evaluated = vec!["BLWK-FIM-003".into()];
+        store.persist_and_reconcile(&second).unwrap();
+        assert!(
+            store.open_findings().unwrap().is_empty(),
+            "a rule that ran and no longer fires must resolve its finding, not leave it open forever"
+        );
+    }
+
+    /// The other half of the same contract, and the reason auto-resolution was avoided before:
+    /// absence must NOT be read as "fixed" when the check never actually ran. A privileged
+    /// collector skipped during an unprivileged tick must leave its findings untouched.
+    #[test]
+    fn a_finding_is_not_resolved_when_its_rule_never_ran() {
+        let mut store = Store::open_in_memory().unwrap();
+
+        let mut first = sample_scan();
+        first.findings[0].rule_id = "BLWK-PRIV-001".into();
+        first.rules_evaluated = vec!["BLWK-PRIV-001".into()];
+        store.persist_and_reconcile(&first).unwrap();
+        assert_eq!(store.open_findings().unwrap().len(), 1);
+
+        // An unprivileged tick: the sudoers collector was skipped, so BLWK-PRIV-001 never ran.
+        // It produced no finding — but that proves nothing, so the row must stay open.
+        let mut second = sample_scan();
+        second.findings.clear();
+        second.rules_evaluated = vec![]; // did not run
+        second.privileged_collectors_skipped = vec!["sudoers".into()];
+        store.persist_and_reconcile(&second).unwrap();
+        assert_eq!(
+            store.open_findings().unwrap().len(),
+            1,
+            "a skipped check must never be mistaken for a passing one"
+        );
+    }
+
+    /// A list-shaped rule (one finding per watched file) must resolve only the rows that are
+    /// actually gone — fixing one file must not silently close the findings for the others.
+    #[test]
+    fn resolving_is_per_row_for_a_list_shaped_rule() {
+        let mut store = Store::open_in_memory().unwrap();
+        let now = Utc::now();
+
+        let row = |path: &str| {
+            let mut ctx = crate::models::Fact::new();
+            ctx.insert("path".into(), serde_json::Value::String(path.into()));
+            Finding {
+                id: Uuid::new_v4(),
+                rule_id: "BLWK-FIM-003".into(),
+                severity: Severity::Info,
+                title: format!("no baseline: {path}"),
+                explanation: "e".into(),
+                fix_hint: "f".into(),
+                context: ctx,
+                first_seen: now,
+                last_seen: now,
+                status: FindingStatus::Open,
+                scan_run_id: Uuid::new_v4(),
+            }
+        };
+
+        let mut first = sample_scan();
+        first.findings = vec![row("/etc/passwd"), row("/etc/crontab")];
+        // The findings table has an FK onto scan_runs — a finding must belong to its own run.
+        first
+            .findings
+            .iter_mut()
+            .for_each(|f| f.scan_run_id = first.id);
+        first.rules_evaluated = vec!["BLWK-FIM-003".into()];
+        store.persist_and_reconcile(&first).unwrap();
+        assert_eq!(store.open_findings().unwrap().len(), 2);
+
+        // Only /etc/crontab still lacks a baseline now.
+        let mut second = sample_scan();
+        second.findings = vec![row("/etc/crontab")];
+        second
+            .findings
+            .iter_mut()
+            .for_each(|f| f.scan_run_id = second.id);
+        second.rules_evaluated = vec!["BLWK-FIM-003".into()];
+        store.persist_and_reconcile(&second).unwrap();
+
+        let open = store.open_findings().unwrap();
+        assert_eq!(open.len(), 1, "only the fixed row should close");
+        assert_eq!(
+            open[0].context.get("path").unwrap(),
+            &serde_json::Value::String("/etc/crontab".into())
+        );
+    }
+
     #[test]
     fn ai_scan_round_trips_through_the_store() {
         use crate::ai_scan::{AiFinding, AiScanReport};
@@ -1271,6 +1428,7 @@ mod tests {
             workspaces_scanned: vec!["/home/u/proj".into()],
             artifacts_scanned: 5,
             workspaces_capped: false,
+            cancelled: false,
             errors: vec![],
             findings: vec![AiFinding {
                 id: uuid::Uuid::new_v4(),

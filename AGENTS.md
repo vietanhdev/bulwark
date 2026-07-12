@@ -49,6 +49,12 @@ The workflow asserts on package *contents* (≥50 rule files in each of the CLI 
 
 **Known gap:** the GUI package does *not* ship `bulwarkctl`, and doesn't depend on it. The GUI's privileged path shells out to `pkexec bulwarkctl`, so on a GUI-only install "Run privileged checks" fails. A package dependency would fix the `.deb`/`.rpm` but *cannot* fix the AppImage (single portable file) — bundling the binary into the GUI (Tauri `externalBin`, plus teaching `resolve_cli_binary` to look next to `current_exe`) is the fix that covers all three.
 
+### Finding lifecycle (open → resolved)
+
+`Store::persist_and_reconcile` both **adds** and **closes** findings, and the thing that makes closing safe is `ScanRun::rules_evaluated` — the set of rule IDs that demonstrably ran (collector applicable, privileged enough, returned facts without erroring). An open row whose rule is in that set and which the new scan did not re-observe is marked `resolved`: the check ran and no longer fires, so the issue is genuinely fixed. A row whose rule is *not* in that set is left alone, because a skipped/errored collector proves nothing — conflating "skipped" with "passing" is the failure mode this design exists to prevent.
+
+Historically the reconciler could only ever add, never close, so **any remediated issue stayed on the dashboard forever** — recording a FIM baseline left seven "no file-integrity baseline yet" findings on screen permanently even though every subsequent scan came back clean. Regression cover: `a_fixed_issue_is_resolved_once_its_rule_runs_clean`, `a_finding_is_not_resolved_when_its_rule_never_ran`, `resolving_is_per_row_for_a_list_shaped_rule`.
+
 ### Database migrations
 
 Schema changes go in `MIGRATIONS` in `crates/bulwark-core/src/store.rs`, versioned via SQLite's `PRAGMA user_version` (`rusqlite_migration`). **Append only** — never edit or reorder a migration that has shipped: a database already stamped at version N will never re-run it, so an edit silently splits users into two different schemas depending on when they first installed. Add a new `M::up` instead.

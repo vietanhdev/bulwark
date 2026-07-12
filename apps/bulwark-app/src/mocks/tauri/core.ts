@@ -101,7 +101,11 @@ async function streamScan(channel: Channel<unknown>) {
   }
   channel.onmessage?.({
     event: "complete",
-    data: { total_findings: findings.length, host_fingerprint: dashboardSnapshot.meta.host_fingerprint },
+    data: {
+      total_findings: findings.length,
+      host_fingerprint: dashboardSnapshot.meta.host_fingerprint,
+      cancelled: false,
+    },
   });
 }
 
@@ -125,6 +129,7 @@ async function streamAvScan(channel: Channel<unknown>) {
       files_scanned: avScanPaths.length,
       threats: [{ path: avScanPaths.find((p) => p.includes("eicar")), signature: "Win.Test.EICAR_HDB-1" }],
       clamscan_available: true,
+      cancelled: false,
     },
   });
 }
@@ -149,6 +154,7 @@ async function streamAiScan(channel: Channel<unknown>) {
       artifactsScanned: 34,
       workspacesScanned: 2,
       workspacesCapped: false,
+      cancelled: false,
       errors: [],
     },
   });
@@ -183,7 +189,7 @@ const handlers: Record<string, (args: Args) => unknown> = {
       errors: [],
     };
   },
-  dashboard_snapshot: () => dashboardSnapshot,
+  dashboard_snapshot: () => ({ ...dashboardSnapshot, agent_scanned: true }),
   history_count: () => historyRuns.length,
   history_list: () => historyRuns,
   monitoring_get_status: () => monitoringStatus,
@@ -198,6 +204,7 @@ const handlers: Record<string, (args: Args) => unknown> = {
   scan_privileged: () => scanRunResult,
   clamav_info: () => clamavInfo,
   fim_baseline: () => 7,
+  scan_cancel: () => null,
   realtime_av_get_status: () => realtimeAvStatus,
   realtime_av_set_enabled: (args) => {
     realtimeAvStatus = { ...realtimeAvStatus, enabled: Boolean(args?.enabled) };

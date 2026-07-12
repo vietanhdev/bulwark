@@ -77,6 +77,11 @@ pub struct AiScanReport {
     pub findings: Vec<AiFinding>,
     /// True when the workspace cap was reached and discovery stopped early.
     pub workspaces_capped: bool,
+    /// True when the user stopped the scan before it finished. The findings are then partial —
+    /// callers must not persist such a run as the machine's current picture, or a half-finished
+    /// sweep would silently replace a complete one.
+    #[serde(default)]
+    pub cancelled: bool,
     /// Per-artifact read/scan failures — never a silent drop (architecture doc §8).
     pub errors: Vec<String>,
 }
@@ -128,9 +133,22 @@ impl AiScanOptions {
 /// Runs a full AI-artifact scan. `on_artifact` is called with each artifact's path just before
 /// it's examined, so a GUI can show live "scanning: <path>" progress; pass a no-op closure for a
 /// non-interactive run.
-pub fn scan(opts: &AiScanOptions, mut on_artifact: impl FnMut(&str)) -> AiScanReport {
+pub fn scan(opts: &AiScanOptions, on_artifact: impl FnMut(&str)) -> AiScanReport {
+    scan_cancellable(opts, on_artifact, &|| false)
+}
+
+/// [`scan`] plus the ability to stop. `should_cancel` is polled once per artifact — the natural
+/// unit of work here, and frequent enough that Stop feels immediate even on a machine with
+/// hundreds of workspaces. A cancelled run comes back with `cancelled: true` and whatever it had
+/// found so far; it is *not* a picture of the machine, and callers must not persist it as one.
+pub fn scan_cancellable(
+    opts: &AiScanOptions,
+    mut on_artifact: impl FnMut(&str),
+    should_cancel: &dyn Fn() -> bool,
+) -> AiScanReport {
     let started_at = Utc::now();
     let mut errors = Vec::new();
+    let mut cancelled = false;
 
     let (workspaces, capped) = if opts.explicit_targets.is_empty() {
         let ws = discovery::discover_workspaces(
@@ -161,8 +179,14 @@ pub fn scan(opts: &AiScanOptions, mut on_artifact: impl FnMut(&str)) -> AiScanRe
     artifacts.retain(|a| seen.insert(a.path.clone()));
 
     let mut findings = Vec::new();
+    let mut artifacts_scanned = 0usize;
     for artifact in &artifacts {
+        if should_cancel() {
+            cancelled = true;
+            break;
+        }
         on_artifact(&artifact.path.to_string_lossy());
+        artifacts_scanned += 1;
         match scan_artifact(artifact) {
             Ok(mut fs) => findings.append(&mut fs),
             Err(e) => errors.push(format!("{}: {e}", artifact.path.display())),
@@ -183,9 +207,12 @@ pub fn scan(opts: &AiScanOptions, mut on_artifact: impl FnMut(&str)) -> AiScanRe
         finished_at: Some(Utc::now()),
         host_fingerprint: crate::engine::host_fingerprint(),
         workspaces_scanned: workspaces.iter().map(|p| p.display().to_string()).collect(),
-        artifacts_scanned: artifacts.len(),
+        // What we actually examined, not what we enumerated — after a cancel these differ, and
+        // reporting the enumerated total would overstate the coverage of a run that stopped early.
+        artifacts_scanned,
         findings,
         workspaces_capped: capped,
+        cancelled,
         errors,
     }
 }
@@ -615,6 +642,46 @@ mod tests {
             Path::new(".aider.chat.history.md")
         ));
         assert!(!is_git_ignored(ws.path(), Path::new("CLAUDE.md")));
+    }
+
+    #[test]
+    fn a_cancelled_scan_stops_early_and_says_so() {
+        let home = tempfile::tempdir().unwrap();
+        let proj = home.path().join("Projects/app");
+        // Several artifacts, so there is something left to skip after the first.
+        write(&proj.join("CLAUDE.md"), &format!("{}\n", anthropic_key()));
+        write(
+            &proj.join(".claude/settings.json"),
+            r#"{"hooks":{"x":[1]}}"#,
+        );
+        write(&proj.join(".mcp.json"), r#"{"mcpServers":{}}"#);
+        write(&proj.join("AGENTS.md"), "notes\n");
+
+        // Cancel as soon as the first artifact has been handed to us.
+        let seen = std::cell::Cell::new(0usize);
+        let report = scan_cancellable(
+            &AiScanOptions::for_home(home.path().to_path_buf()),
+            |_| seen.set(seen.get() + 1),
+            &|| seen.get() >= 1,
+        );
+
+        assert!(
+            report.cancelled,
+            "a stopped scan must report itself as cancelled"
+        );
+        assert!(
+            report.artifacts_scanned <= 2,
+            "cancelling must actually stop the walk, not merely flag it: scanned {}",
+            report.artifacts_scanned
+        );
+    }
+
+    #[test]
+    fn an_uncancelled_scan_is_not_marked_cancelled() {
+        let home = tempfile::tempdir().unwrap();
+        write(&home.path().join("Projects/app/CLAUDE.md"), "clean\n");
+        let report = scan(&AiScanOptions::for_home(home.path().to_path_buf()), |_| {});
+        assert!(!report.cancelled);
     }
 
     #[test]

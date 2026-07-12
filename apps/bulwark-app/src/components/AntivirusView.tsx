@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Bug, Eye, Loader2, ShieldCheck, ShieldX, X } from "lucide-react";
+import { Bug, Eye, ShieldCheck, ShieldX, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Switch } from "@/components/ui/switch";
@@ -21,6 +21,8 @@ interface AvScanResult {
   files_scanned: number | null;
   threats: ThreatDetection[];
   clamscan_available: boolean;
+  /** Stopped early — the counts and threat list are partial, so this must not read as "clean". */
+  cancelled: boolean;
 }
 
 interface DashboardSnapshot {
@@ -113,6 +115,14 @@ export function AntivirusView({ active }: { active: boolean }) {
 
   const unavailable = clamav !== null && !clamav.version;
 
+  async function stopScan() {
+    try {
+      await invoke("scan_cancel");
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   async function runScan() {
     setScanning(true);
     setError(null);
@@ -191,14 +201,19 @@ export function AntivirusView({ active }: { active: boolean }) {
       title="Antivirus"
       description="Signature-based malware scanning through ClamAV. Bulwark shells out to it rather than reimplementing detection."
       action={
-        <Button onClick={runScan} disabled={scanning || unavailable}>
-          {scanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Bug className="h-4 w-4" />}
-          {scanning
-            ? "Scanning…"
-            : customPaths.length > 0
+        scanning ? (
+          <Button onClick={stopScan} variant="outline">
+            <Square className="h-3.5 w-3.5 fill-current" />
+            Stop
+          </Button>
+        ) : (
+          <Button onClick={runScan} disabled={unavailable}>
+            <Bug className="h-4 w-4" />
+            {customPaths.length > 0
               ? `Scan ${customPaths.length} item${customPaths.length === 1 ? "" : "s"}`
               : "Run a virus scan"}
-        </Button>
+          </Button>
+        )
       }
     >
       <div className="flex flex-col gap-8">
@@ -363,7 +378,14 @@ export function AntivirusView({ active }: { active: boolean }) {
             </Callout>
           )}
 
-          {result?.clamscan_available && (
+          {result?.cancelled && (
+            <Callout tone="warning" className="mt-4">
+              <span className="font-medium">Scan stopped.</span> {result.files_scanned ?? filesScanned}{" "}
+              file(s) were checked before you stopped; the rest were not scanned.
+            </Callout>
+          )}
+
+          {result?.clamscan_available && !result.cancelled && (
             <div
               className="rail mt-4 flex items-center gap-3 rounded-md border border-border bg-card py-3.5 pr-4"
               style={railStyle(result.threats.length > 0 ? "critical" : "resolved")}

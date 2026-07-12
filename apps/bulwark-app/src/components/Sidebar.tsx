@@ -12,7 +12,7 @@ import {
 import { cn } from "@/lib/utils";
 
 export type View =
-  "overview" | "ai-security" | "antivirus" | "integrity" | "rules" | "compliance" | "history" | "settings";
+  "overview" | "agent-security" | "antivirus" | "integrity" | "rules" | "compliance" | "history" | "settings";
 
 interface SidebarProps {
   view: View;
@@ -25,35 +25,54 @@ interface NavItem {
   id: View;
   label: string;
   icon: LucideIcon;
-  /** Draws the item with a standing accent (not just the on-active rail), marking it as the
-   *  product's newest, most-promoted capability rather than one more reference tab. */
-  highlight?: boolean;
+  /** Marks the item as new, with a small "New" badge.
+   *
+   *  Deliberately NOT a colour treatment. The first cut of this gave the promoted item a
+   *  standing primary rail and a primary background wash — which is precisely the vocabulary
+   *  this sidebar uses for *the page you are currently on*. The result was that sitting on
+   *  Overview, Agent Security still looked selected, and the Overview's own findings read as
+   *  though they belonged to Agent Security. Selection state owns the rail and the wash; nothing
+   *  else may borrow them, or the nav stops being able to answer "where am I". */
+  badge?: string;
 }
 
-/* Three groups, cut by the question each answers rather than by build order.
-   `Overview` is ungrouped and alone at the top because it is the answer — everything else is
-   a way of getting to it or of explaining it.
+/* The nav mirrors the product's actual shape: one scanner per tab, and one page that adds them
+   up.
 
-   What moved, and why (the old nav had seven items too, but two of them were doing someone
-   else's job):
+   `Overview` is ungrouped and alone at the top because it is *the answer* — it aggregates every
+   scanner's findings into a single "what is wrong with this machine" list, and its scan button
+   drives all of them.
+
+   "Scans" is the four engines, ordered oldest-and-most-load-bearing first: Compliance (the
+   configuration rule pack, and the results the Rules pack is a view over), Antivirus (ClamAV),
+   Agent Security (AI assistant artifacts), File integrity. Each page is where you go to run that
+   engine on its own and read its results in detail.
+
+   "Reference" is what explains the results rather than producing them: the rule pack itself, and
+   the scan timeline.
+
+   What moved, and why:
      - File integrity was a right-hand column inside a page called "Antivirus", despite being
-       an independent pillar of the product with its own threat model. It gets its own page.
+       an independent pillar with its own threat model. It gets its own page.
      - "Monitoring" was a cadence setting dressed as a destination, and "About" was a footer.
        Both are Settings.
-     - The Overview's three quick-nav cards duplicated sidebar entries exactly. Deleted: the
-       sidebar is right there. */
+     - Compliance sat under "Reference" as though it were documentation, but it reports the
+       results of a scan — it belongs with the scanners.
+     - The group was called "Protection", which described a *property* rather than what the
+       items are. They are scanners; the label now says so. */
 const GROUPS: { label: string | null; items: NavItem[] }[] = [
   {
     label: null,
     items: [{ id: "overview", label: "Overview", icon: LayoutDashboard }],
   },
   {
-    label: "Protection",
+    label: "Scans",
     items: [
-      // Highlighted: AI-assistant artifact scanning is the product's newest pillar, and the one
-      // most users won't yet know to look for — so it gets a standing accent, not just parity.
-      { id: "ai-security", label: "AI Security", icon: Bot, highlight: true },
+      { id: "compliance", label: "Compliance", icon: BadgeCheck },
       { id: "antivirus", label: "Antivirus", icon: ShieldCheck },
+      // The newest pillar, and the one most users won't know to look for — so it carries a "new"
+      // badge. A badge, not a colour: see NavItem.badge for why it must not borrow the rail.
+      { id: "agent-security", label: "Agent Security", icon: Bot, badge: "New" },
       { id: "integrity", label: "File integrity", icon: FileCheck2 },
     ],
   },
@@ -61,7 +80,6 @@ const GROUPS: { label: string | null; items: NavItem[] }[] = [
     label: "Reference",
     items: [
       { id: "rules", label: "Rules", icon: ListChecks },
-      { id: "compliance", label: "Compliance", icon: BadgeCheck },
       { id: "history", label: "History", icon: History },
     ],
   },
@@ -76,7 +94,7 @@ function NavButton({
   active: boolean;
   onChange: (view: View) => void;
 }) {
-  const { id, label, icon: Icon, highlight } = item;
+  const { id, label, icon: Icon, badge } = item;
   return (
     <button
       onClick={() => onChange(id)}
@@ -90,22 +108,16 @@ function NavButton({
         active
           ? "bg-ink-raised font-medium text-ink-fg"
           : "font-normal text-ink-muted hover:bg-ink-raised/50 hover:text-ink-fg",
-        // A promoted item keeps a faint primary wash even at rest, so the eye lands on it.
-        highlight && !active && "bg-primary/10 text-ink-fg hover:bg-primary/15",
       )}
-      style={
-        {
-          // A highlighted item shows its accent rail even when inactive; a normal item only
-          // paints the rail on the active page.
-          "--rail-color": active || highlight ? "var(--primary)" : "transparent",
-        } as React.CSSProperties
-      }
+      // The rail is painted only for the active page — see NavItem.badge for why a "new" item
+      // must not borrow it.
+      style={{ "--rail-color": active ? "var(--primary)" : "transparent" } as React.CSSProperties}
     >
       <Icon className="h-4 w-4 shrink-0" strokeWidth={active ? 2.25 : 1.75} />
-      <span className="flex-1">{label}</span>
-      {highlight && (
-        <span className="rounded-full bg-primary/20 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-wider text-primary">
-          New
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {badge && (
+        <span className="shrink-0 rounded-full border border-ink-border px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-wider text-ink-muted">
+          {badge}
         </span>
       )}
     </button>
