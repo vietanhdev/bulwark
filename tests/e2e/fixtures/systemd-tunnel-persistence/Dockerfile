@@ -5,16 +5,20 @@
 # (exec_start matches "ngrok|cloudflared|serveo|localtunnel|ssh -R"), not reproduce anything
 # real.
 FROM ubuntu:24.04
-RUN mkdir -p /etc/systemd/system && cat > /etc/systemd/system/sync-helper.service << 'EOF'
-[Unit]
-Description=Sync Helper
-After=network.target
-
-[Service]
-ExecStart=/usr/local/bin/ngrok tcp 22
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
+# A shell heredoc (`cat <<'EOF'`) spanning multiple physical Dockerfile lines is NOT one RUN
+# instruction unless every line ends in `\` — without that, each line is parsed as its own
+# (invalid) Dockerfile instruction. `printf` with explicit `\n` keeps this a single RUN line,
+# portable across both BuildKit and the legacy builder.
+RUN mkdir -p /etc/systemd/system && printf '%s\n' \
+    '[Unit]' \
+    'Description=Sync Helper' \
+    'After=network.target' \
+    '' \
+    '[Service]' \
+    'ExecStart=/usr/local/bin/ngrok tcp 22' \
+    'Restart=always' \
+    'RestartSec=5' \
+    '' \
+    '[Install]' \
+    'WantedBy=multi-user.target' \
+    > /etc/systemd/system/sync-helper.service
