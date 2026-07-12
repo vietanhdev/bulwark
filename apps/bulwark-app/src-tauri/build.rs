@@ -29,9 +29,24 @@ fn stage_cli_sidecar() {
     let _ = std::fs::create_dir_all(&binaries_dir);
 
     // The workspace target dir is `<workspace>/target`; from `apps/bulwark-app/src-tauri` that's
-    // three levels up. Prefer a release build, fall back to debug.
+    // three levels up.
+    //
+    // Stage the CLI from **the profile currently being built**, falling back to the other only if
+    // that one doesn't exist yet. This used to unconditionally prefer `release`, which was a real
+    // bug rather than a preference: Tauri copies the staged `externalBin` back out next to the app
+    // binary (`target/debug/bulwarkctl`), so a debug build would take a stale, possibly
+    // months-old `target/release/bulwarkctl` and *overwrite the freshly-compiled debug CLI with
+    // it*. Every `cargo test --workspace` then ran the old binary — which is exactly how
+    // `tests/ai_cli.rs` caught this, failing with "unrecognized subcommand 'ai'" against a CLI
+    // that demonstrably had the subcommand.
     let workspace_target = manifest_dir.join("..").join("..").join("..").join("target");
-    let source = ["release", "debug"]
+    let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
+    let preferred: [&str; 2] = if profile == "release" {
+        ["release", "debug"]
+    } else {
+        ["debug", "release"]
+    };
+    let source = preferred
         .iter()
         .map(|p| workspace_target.join(p).join("bulwarkctl"))
         .find(|p| p.is_file());
