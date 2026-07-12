@@ -1,3 +1,10 @@
+---
+description: >-
+  A hands-on benchmark of Bulwark against Lynis, rkhunter, chkrootkit, AIDE, and OpenSCAP —
+  real commands, real captured output, and a finding-by-finding comparison, not a literature
+  review.
+---
+
 # Bulwark vs. 5 established tools — a real, reproducible run, not a literature review
 
 Every claim below comes from actually executing these tools against the same live machine, in

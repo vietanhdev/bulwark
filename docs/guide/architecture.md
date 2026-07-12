@@ -1,6 +1,11 @@
-# Bulwark — Linux Host Security Scanner
+---
+description: >-
+  How Bulwark's native Rust rule engine, collector model, and OS/profile system work — the
+  architecture behind a Linux host security scanner built as a GUI-native alternative to
+  Lynis and rkhunter.
+---
 
-> **Status:** Implemented (v0.1) • **Author:** vietanhdev • **Originally drafted:** 2026-07-11, updated 2026-07-12 • **Reversibility:** hours for most collector/rule changes — becomes weeks-tier for the rule-file format itself once external contributors depend on it, since format changes then break community-contributed rules.
+# Bulwark — Linux Host Security Scanner
 
 ## TL;DR
 

@@ -1,5 +1,9 @@
 # Bulwark
 
+[![CI](https://github.com/vietanhdev/bulwark/actions/workflows/ci.yml/badge.svg)](https://github.com/vietanhdev/bulwark/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-bulwark.nrl.ai-007372)](https://bulwark.nrl.ai)
+
 A Linux host security scanner with a native CLI and desktop GUI, built for everyone running
 Linux — desktops and servers alike. Bulwark checks a machine's configuration against a
 declarative rule pack — SSH hardening, systemd/cron persistence, sudoers, kernel/sysctl
