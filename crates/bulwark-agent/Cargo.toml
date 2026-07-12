@@ -1,0 +1,8 @@
+[package]
+name = "bulwark-agent"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Background monitoring daemon for Bulwark (placeholder — implementation in progress, see bulwark-core)"

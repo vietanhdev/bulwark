@@ -11,7 +11,7 @@ hardening, file permissions, logging, rootkit indicators — and explains every 
 language with a concrete fix, alongside real ClamAV virus scanning and continuous background
 monitoring.
 
-Built with Tauri v2 + Rust + React. One rule engine, one rule pack, two front-doors: `bulwark`
+Built with Tauri v2 + Rust + React. One rule engine, one rule pack, two front-doors: `bulwarkctl`
 (CLI) and the desktop app.
 
 ## Screenshots
@@ -81,7 +81,7 @@ the rule pack to grow into, not architectural blockers.
 ```bash
 # Core + CLI
 cargo build --workspace
-cargo run -p bulwark-cli -- scan
+cargo run -p bulwarkctl -- scan
 
 # GUI (from apps/bulwark-app/)
 npm install

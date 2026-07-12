@@ -35,7 +35,7 @@ jobs:
         run: cargo test --workspace
 
       - name: Validate the bundled rule pack
-        run: cargo run -p bulwark-cli -- rules validate rules/
+        run: cargo run -p bulwarkctl -- rules validate rules/
 
   changes:
     runs-on: ubuntu-24.04
@@ -51,7 +51,7 @@ jobs:
               - 'rules/**'
               - 'crates/bulwark-core/src/collectors/**'
               - 'tests/e2e/**'
-              - 'crates/bulwark-cli/tests/e2e.rs'
+              - 'crates/bulwarkctl/tests/e2e.rs'
 
   # Gated to only run when rules/collectors/fixtures actually changed — building the fixture
   # images adds real CI time (a handful of small apt-installs, not compilation, but not free)
@@ -76,7 +76,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run e2e fixture tests
-        run: cargo test -p bulwark-cli --test e2e -- --ignored --test-threads=1
+        run: cargo test -p bulwarkctl --test e2e -- --ignored --test-threads=1
 
   frontend:
     runs-on: ubuntu-24.04

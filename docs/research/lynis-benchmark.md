@@ -41,7 +41,7 @@ captured output. Every number below is from an actual run, not a manual page.
   minutes on the systemd-journal-integrity plugin (`PLGN-3814`) on this machine's
   long-lived journal (159 recorded boots) — plugins aren't Lynis's core hardening checks
   and aren't what this comparison is about.
-- **Bulwark**: `cargo build --release -p bulwark-cli`, then `bulwark scan --no-persist --json`
+- **Bulwark**: `cargo build --release -p bulwarkctl`, then `bulwarkctl scan --no-persist --json`
   — also unprivileged, for the same reason.
 - Both tools ran within the same few minutes, against the same unmodified machine state.
 
@@ -75,11 +75,11 @@ checks, prioritized by how directly they map to a scoped, low-false-positive Bul
 
 1. ~~**`FINT-4350`** — no file integrity monitoring tool installed.~~ **Closed.** Bulwark now
    ships baseline-and-diff file-integrity monitoring (`rules/file-integrity/BLWK-FIM-001..005`,
-   `bulwark fim baseline`) over the same class of critical paths AIDE exists to watch —
+   `bulwarkctl fim baseline`) over the same class of critical paths AIDE exists to watch —
    `/etc/passwd`, PAM configs, `sshd_config`, `su`/`sudo`, plus `/etc/shadow`/`/etc/sudoers`
    behind `--privileged`. Verified live on this machine: a scan before baselining correctly
    flagged all 7 world-readable watched files as unbaselined (`BLWK-FIM-003`); after running
-   `bulwark fim baseline`, an immediate rescan produced zero FIM findings, confirming the
+   `bulwarkctl fim baseline`, an immediate rescan produced zero FIM findings, confirming the
    baseline-write and the diff-read agree with each other on real files, not just in unit tests.
 2. **`BANN-7126` / `BANN-7130`** — no legal banner in `/etc/issue` / `/etc/issue.net`. Trivial,
    low-false-positive check (file exists and is non-empty) — good near-term add.
@@ -188,8 +188,8 @@ git clone --depth 1 https://github.com/CISOfy/lynis.git && cd lynis
 grep '^hardening_index=' lynis-report.dat
 grep -c '^suggestion\[' lynis-report.dat
 
-cd /path/to/bulwark && cargo build --release -p bulwark-cli
-./target/release/bulwark scan --no-persist --json | jq '.findings | length'
+cd /path/to/bulwark && cargo build --release -p bulwarkctl
+./target/release/bulwarkctl scan --no-persist --json | jq '.findings | length'
 
 # rkhunter / chkrootkit / AIDE / OpenSCAP — real root via a disposable container, not the host
 docker run --rm ubuntu:24.04 bash -c '

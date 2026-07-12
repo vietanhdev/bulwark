@@ -14,9 +14,9 @@ cargo build --workspace
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all                        # cargo fmt --all -- --check in CI
-cargo run -p bulwark-cli -- scan
-cargo run -p bulwark-cli -- rules validate rules/
-cargo test -p bulwark-cli --test e2e -- --ignored --test-threads=1   # needs Docker; see below
+cargo run -p bulwarkctl -- scan
+cargo run -p bulwarkctl -- rules validate rules/
+cargo test -p bulwarkctl --test e2e -- --ignored --test-threads=1   # needs Docker; see below
 
 # GUI (from apps/bulwark-app/)
 npm install
@@ -32,8 +32,8 @@ npm run dev                            # local preview
 npm run build                          # static build to docs/.vitepress/dist
 
 # Packaging (from workspace root, after a release build)
-cargo build --release -p bulwark-cli
-cargo deb -p bulwark-cli --no-build    # requires `cargo install cargo-deb`
+cargo build --release -p bulwarkctl
+cargo deb -p bulwarkctl --no-build    # requires `cargo install cargo-deb`
 ```
 
 CI (`.github/workflows/ci.yml`) runs fmt-check, clippy `-D warnings`, `cargo test --workspace`, `rules validate rules/`, and a frontend typecheck — run all of these locally before considering a change done.
@@ -59,8 +59,8 @@ Enforced by `.githooks/commit-msg` (same `core.hooksPath` setup as pre-commit ab
 Cargo workspace, three members:
 
 - **`crates/bulwark-core`** — pure library, zero UI/CLI-specific code. Fact collectors (`src/collectors/`), the condition-DSL parser/evaluator (`src/condition.rs`), the rule-loading + scan engine (`src/engine.rs`), the `Finding`/`Rule`/`ScanRun` model (`src/models.rs`), SQLite persistence (`src/store.rs`).
-- **`crates/bulwark-cli`** — thin CLI front-door (`clap`). `scan`, `rules list`, `rules validate`, `history`.
-- **`apps/bulwark-app`** — thin Tauri v2 + React front-door. `scan_start` streams findings over a Tauri Channel; `scan_privileged` shells out to `pkexec bulwark scan --privileged --json` and deserializes the result — it does **not** duplicate collector logic.
+- **`crates/bulwarkctl`** — thin CLI front-door (`clap`), package/binary name `bulwarkctl`. `scan`, `rules list`, `rules validate`, `history`.
+- **`apps/bulwark-app`** — thin Tauri v2 + React front-door. `scan_start` streams findings over a Tauri Channel; `scan_privileged` shells out to `pkexec bulwarkctl scan --privileged --json` and deserializes the result — it does **not** duplicate collector logic.
 
 Both front-doors share one on-disk SQLite history (`~/.local/share/bulwark/bulwark.db`) and one rule pack (`rules/`, bundled as a Tauri resource for the GUI, installed to `/usr/share/bulwark/rules` for the CLI's `.deb`).
 
@@ -69,16 +69,16 @@ Both front-doors share one on-disk SQLite history (`~/.local/share/bulwark/bulwa
 1. If no existing collector produces the fact you need, add one under `crates/bulwark-core/src/collectors/` implementing the `Collector` trait (see any existing collector for the pattern — `is_applicable()` for graceful skip, `requires_privilege()` if it needs root, return one `Fact` row per item for list-shaped data).
 2. Register it in `collectors/mod.rs::all_collectors()`.
 3. Write a YAML rule under `rules/<category>/BLWK-<CATEGORY>-<NNN>.yaml` (see any existing rule for the exact schema; condition grammar is documented in `docs/guide/architecture.md` §5 — `==` `!=` `in` `contains` `matches` `<` `>` `<=` `>=`, `and`/`or`/`not`, one collector per rule, no cross-collector joins).
-4. Run `cargo run -p bulwark-cli -- rules validate rules/` and `cargo test --workspace`.
+4. Run `cargo run -p bulwarkctl -- rules validate rules/` and `cargo test --workspace`.
 5. Write a collector unit test with a fixture, **and** — if the rule's condition itself is non-trivial (especially anything with a regex) — a test asserting it does *not* false-positive on a plausible benign input. A backslash-escaping bug in `BLWK-ACCT-001`'s regex once flagged every ordinary `.sh` cron script as critical; it was only caught by testing against a real machine, not by the rule loading without error.
 
 ### Privilege model
 
-Two different mechanisms, deliberately: the GUI uses `pkexec` with `polkit/com.bulwark.policy` (`auth_admin_keep`, one prompt per session — see `install-polkit.sh`); the CLI uses `sudo bulwark scan --privileged` directly and refuses to run privileged without an actual root EUID. `pkexec` depends on a GUI-session-bound polkit agent that's normally absent over plain SSH, which is the whole reason the CLI doesn't use it (`docs/guide/architecture.md` §4, ADR-0004). Don't unify these into one mechanism without re-reading that reasoning.
+Two different mechanisms, deliberately: the GUI uses `pkexec` with `polkit/com.bulwark.policy` (`auth_admin_keep`, one prompt per session — see `install-polkit.sh`); the CLI uses `sudo bulwarkctl scan --privileged` directly and refuses to run privileged without an actual root EUID. `pkexec` depends on a GUI-session-bound polkit agent that's normally absent over plain SSH, which is the whole reason the CLI doesn't use it (`docs/guide/architecture.md` §4, ADR-0004). Don't unify these into one mechanism without re-reading that reasoning.
 
-### End-to-end fixture tests (`crates/bulwark-cli/tests/e2e.rs`)
+### End-to-end fixture tests (`crates/bulwarkctl/tests/e2e.rs`)
 
-Collector unit tests prove parsing logic works against a fixture *string*; they don't prove the full pipeline — a real file on a real filesystem, read by the real collector, evaluated by the real rule engine, surfaced in the real CLI's JSON output — actually works together. `tests/e2e/fixtures/<scenario>/` pairs a `Dockerfile` (a known-bad or known-good config baked into `ubuntu:24.04`) with `expected-findings.json` (rule IDs that must appear) and an optional `forbidden-findings.json` (rule IDs that must not). The harness builds the image, mounts the just-built `bulwark` binary and `rules/` into a container, runs a real `bulwark scan --json` via `docker exec`, and checks the result.
+Collector unit tests prove parsing logic works against a fixture *string*; they don't prove the full pipeline — a real file on a real filesystem, read by the real collector, evaluated by the real rule engine, surfaced in the real CLI's JSON output — actually works together. `tests/e2e/fixtures/<scenario>/` pairs a `Dockerfile` (a known-bad or known-good config baked into `ubuntu:24.04`) with `expected-findings.json` (rule IDs that must appear) and an optional `forbidden-findings.json` (rule IDs that must not). The harness builds the image, mounts the just-built `bulwarkctl` binary and `rules/` into a container, runs a real `bulwarkctl scan --json` via `docker exec`, and checks the result.
 
 **Subset checks, not exact-set equality, on purpose.** A bare `ubuntu:24.04` container has its own baseline of unrelated findings (no ClamAV, no rsyslog, no FIM baseline, default login.defs policy) that have nothing to do with what a given fixture is testing. Kernel/sysctl rules specifically read the *host's* live sysctl values — sysctls aren't containerized/namespaced by default — so they vary by whatever machine actually runs the suite. Don't add new fixtures for kernel-hardening rules; they can't be pinned to a specific expected value this way. SSH/cron/systemd-persistence rules (reading config files/units, not live kernel state) are the right shape for this harness.
 
@@ -100,6 +100,6 @@ Not yet done, and genuinely open (as opposed to the above): visual/animation pol
 
 - Never add an AI/agent co-author to git commits — human contributor only.
 - Don't commit or push unless explicitly asked, even mid-task — this project's history includes long unattended implementation stretches; committing without being asked is not an exception to make just because a lot of work happened.
-- Before trusting that packaging works, actually build the artifact and inspect its contents (`dpkg-deb --contents`) or run it — `cargo deb`/`cargo tauri build` succeeding only proves the metadata is syntactically valid, not that the runtime paths inside it are correct. This caught a real bug once (`bulwark-cli`'s rules-directory resolver only worked inside the dev workspace, not when installed).
+- Before trusting that packaging works, actually build the artifact and inspect its contents (`dpkg-deb --contents`) or run it — `cargo deb`/`cargo tauri build` succeeding only proves the metadata is syntactically valid, not that the runtime paths inside it are correct. This caught a real bug once (`bulwarkctl`'s rules-directory resolver only worked inside the dev workspace, not when installed).
 - A collector or rule that fails should be visible (a `CollectorError`, a `RuleLoadError`, a `privileged_collectors_skipped` entry) — never a silent drop. This is a hard invariant, not a style preference; see `docs/guide/architecture.md` §8.
 - `bulwark-core` has zero UI/CLI-specific code and no network calls. Keep it that way — both front-doors' value depends on staying thin wrappers over one real engine, and the no-network-calls invariant is load-bearing for the "fully local, no telemetry" claim in `docs/guide/architecture.md` §10.

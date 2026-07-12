@@ -11,6 +11,6 @@ explain: >
   cover tracks or disable a control.
 fix: >
   Confirm whether the deletion was intentional (e.g. deliberate service removal). If not,
-  restore the file from a package manager reinstall or backup, then run 'bulwark fim baseline'
+  restore the file from a package manager reinstall or backup, then run 'bulwarkctl fim baseline'
   once the host is back to a known-good state.
 references: [ATTACK-T1070]

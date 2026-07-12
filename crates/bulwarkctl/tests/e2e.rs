@@ -1,6 +1,6 @@
 //! End-to-end fixture tests: build a container with a real, known-bad-or-good sshd_config/
-//! cron entry/systemd unit, mount the real `bulwark` binary and rule pack into it, run a real
-//! `bulwark scan --json`, and check the actual findings against `expected-findings.json`
+//! cron entry/systemd unit, mount the real `bulwarkctl` binary and rule pack into it, run a real
+//! `bulwarkctl scan --json`, and check the actual findings against `expected-findings.json`
 //! (rule IDs that MUST appear) and an optional `forbidden-findings.json` (rule IDs that must
 //! NOT appear) checked in alongside each fixture's Dockerfile. This is the layer collector
 //! unit tests (fixture strings parsed in isolation) don't cover: proving the full pipeline —
@@ -17,7 +17,7 @@
 //!
 //! `#[ignore]`d so plain `cargo test --workspace` (what every contributor runs, Docker or not)
 //! stays fast and Docker-independent; CI runs these explicitly in their own job
-//! (`cargo test -p bulwark-cli --test e2e -- --ignored`), gated on changes to `rules/` or
+//! (`cargo test -p bulwarkctl --test e2e -- --ignored`), gated on changes to `rules/` or
 //! `crates/bulwark-core/src/collectors/` — see .github/workflows/ci.yml.
 //!
 //! Deliberately shells out to the `docker` CLI directly (`std::process::Command`) rather than
@@ -82,7 +82,7 @@ fn run_fixture(scenario: &str) -> BTreeSet<String> {
     );
 
     let container_name = format!("bulwark-e2e-{scenario}-{}", std::process::id());
-    let bulwark_bin = env!("CARGO_BIN_EXE_bulwark");
+    let bulwark_bin = env!("CARGO_BIN_EXE_bulwarkctl");
     let rules_dir = root.join("rules");
 
     let run = Command::new("docker")
@@ -92,7 +92,7 @@ fn run_fixture(scenario: &str) -> BTreeSet<String> {
             "--name",
             &container_name,
             "-v",
-            &format!("{bulwark_bin}:/usr/local/bin/bulwark:ro"),
+            &format!("{bulwark_bin}:/usr/local/bin/bulwarkctl:ro"),
             "-v",
             &format!("{}:/rules:ro", rules_dir.display()),
             &image_tag,
@@ -114,7 +114,7 @@ fn run_fixture(scenario: &str) -> BTreeSet<String> {
         .args([
             "exec",
             &container_name,
-            "bulwark",
+            "bulwarkctl",
             "scan",
             "--json",
             "--no-persist",
@@ -123,12 +123,12 @@ fn run_fixture(scenario: &str) -> BTreeSet<String> {
         ])
         .output()
         .expect("failed to invoke `docker exec`");
-    // `bulwark scan` exits 1/2 when findings exist — that's expected for the weak-config
+    // `bulwarkctl scan` exits 1/2 when findings exist — that's expected for the weak-config
     // fixtures, not a real failure, so don't assert on exit status; the JSON body is the
     // actual assertion surface below.
     let scan: serde_json::Value = serde_json::from_slice(&exec.stdout).unwrap_or_else(|e| {
         panic!(
-            "scenario '{scenario}': `bulwark scan --json` produced invalid JSON: {e}\nstdout: {}\nstderr: {}",
+            "scenario '{scenario}': `bulwarkctl scan --json` produced invalid JSON: {e}\nstdout: {}\nstderr: {}",
             String::from_utf8_lossy(&exec.stdout),
             String::from_utf8_lossy(&exec.stderr)
         )
@@ -163,7 +163,7 @@ fn read_rule_id_set(scenario: &str, filename: &str) -> BTreeSet<String> {
 macro_rules! e2e_scenario {
     ($test_name:ident, $scenario:literal) => {
         #[test]
-        #[ignore = "needs Docker; run via `cargo test -p bulwark-cli --test e2e -- --ignored`"]
+        #[ignore = "needs Docker; run via `cargo test -p bulwarkctl --test e2e -- --ignored`"]
         fn $test_name() {
             if !docker_available() {
                 eprintln!(

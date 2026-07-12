@@ -1,0 +1,8 @@
+[package]
+name = "bulwark-proto"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared wire types between bulwark-agent and its clients (placeholder — implementation in progress, see bulwark-core)"

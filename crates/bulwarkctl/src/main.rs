@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(
-    name = "bulwark",
+    name = "bulwarkctl",
     version,
     about = "Linux host security scanner — CLI front-door over bulwark-core"
 )]
@@ -84,7 +84,7 @@ enum RulesAction {
 
 /// Standard installed location — `cargo-deb`'s `assets` entry in `Cargo.toml` puts the
 /// bundled rule pack here. Caught by actually building and inspecting a real `.deb`: a
-/// packaged `bulwark` run from an arbitrary directory (the common case — a real user isn't
+/// packaged `bulwarkctl` run from an arbitrary directory (the common case — a real user isn't
 /// sitting in the workspace root) has no `rules/` to walk up to, so this fallback isn't
 /// optional polish, it's what makes the packaged binary work at all.
 const INSTALLED_RULES_DIR: &str = "/usr/share/bulwark/rules";
@@ -157,7 +157,7 @@ fn main() -> anyhow::Result<()> {
         } => {
             if privileged && !engine::is_running_as_root() {
                 anyhow::bail!(
-                    "--privileged requires root — re-run as: sudo bulwark scan --privileged"
+                    "--privileged requires root — re-run as: sudo bulwarkctl scan --privileged"
                 );
             }
             let rules_dir = resolve_rules_dir(cli.rules_dir)?;
@@ -270,7 +270,7 @@ fn main() -> anyhow::Result<()> {
             FimAction::Baseline { privileged } => {
                 if privileged && !engine::is_running_as_root() {
                     anyhow::bail!(
-                        "--privileged requires root — re-run as: sudo bulwark fim baseline --privileged"
+                        "--privileged requires root — re-run as: sudo bulwarkctl fim baseline --privileged"
                     );
                 }
                 let mut paths: Vec<&str> = FIM_UNPRIVILEGED_WATCHED_PATHS.to_vec();
@@ -317,7 +317,7 @@ fn print_scan_table(scan: &bulwark_core::ScanRun) {
     }
     if !scan.privileged_collectors_skipped.is_empty() {
         println!(
-            "⚠ {} check(s) skipped (no privilege) — re-run with 'sudo bulwark scan --privileged': {}",
+            "⚠ {} check(s) skipped (no privilege) — re-run with 'sudo bulwarkctl scan --privileged': {}",
             scan.privileged_collectors_skipped.len(),
             scan.privileged_collectors_skipped.join(", ")
         );

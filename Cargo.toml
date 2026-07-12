@@ -1,6 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["crates/bulwark-core", "crates/bulwark-cli", "apps/bulwark-app/src-tauri"]
+members = [
+    "crates/bulwark-core",
+    "crates/bulwarkctl",
+    "crates/bulwark-agent",
+    "crates/bulwark-proto",
+    "apps/bulwark-app/src-tauri",
+]
 
 [workspace.package]
 version = "0.1.0"

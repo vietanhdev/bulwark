@@ -1,5 +1,5 @@
 [package]
-name = "bulwark-cli"
+name = "bulwarkctl"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -8,16 +8,16 @@ repository.workspace = true
 description = "Bulwark CLI - scan a Linux host from a terminal or over SSH, no display session required"
 
 [[bin]]
-name = "bulwark"
+name = "bulwarkctl"
 path = "src/main.rs"
 
 [dependencies]
-bulwark-core = { path = "../bulwark-core" }
+bulwark-core = { path = "../bulwark-core", version = "0.1.0" }
 clap.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 
-# `cargo install cargo-deb` then `cargo deb -p bulwark-cli` from the workspace root.
+# `cargo install cargo-deb` then `cargo deb -p bulwarkctl` from the workspace root.
 [package.metadata.deb]
 maintainer = "Viet Anh Nguyen"
 copyright = "2026, Viet Anh Nguyen"
@@ -27,12 +27,12 @@ depends = "$auto"
 section = "admin"
 priority = "optional"
 assets = [
-    ["target/release/bulwark", "usr/bin/", "755"],
+    ["target/release/bulwarkctl", "usr/bin/", "755"],
     ["../../rules/**/*.yaml", "usr/share/bulwark/rules/", "644"],
 ]
 
-# `cargo install cargo-generate-rpm` then `cargo generate-rpm -p crates/bulwark-cli` after a release build.
+# `cargo install cargo-generate-rpm` then `cargo generate-rpm -p crates/bulwarkctl` after a release build.
 [package.metadata.generate-rpm]
 assets = [
-    { source = "target/release/bulwark", dest = "/usr/bin/bulwark", mode = "755" },
+    { source = "target/release/bulwarkctl", dest = "/usr/bin/bulwarkctl", mode = "755" },
 ]

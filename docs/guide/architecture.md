@@ -16,7 +16,7 @@ Bulwark is a Tauri + Rust desktop app that scans a Linux host for security misco
 This document was written before implementation and has been revised to describe what actually shipped, not just what was planned. As of v0.1:
 
 - **57 rules across all 11 planned categories** (SSH/remote access, persistence, privilege escalation, defense evasion, credential/secrets exposure via filesystem permissions, network egress, kernel/sysctl hardening, logging/auditing, accounts & services, rootkit/malware indicators, file integrity).
-- **Both front-doors work end-to-end**: `bulwark-cli` (scan, rules list/validate, history) and `bulwark-app` (Tauri v2 + React GUI), sharing one `bulwark-core` engine and one local SQLite store, exactly as designed in §4.
+- **Both front-doors work end-to-end**: `bulwarkctl` (scan, rules list/validate, history) and `bulwark-app` (Tauri v2 + React GUI), sharing one `bulwark-core` engine and one local SQLite store, exactly as designed in §4.
 - **Real ClamAV integration** — not a placeholder: live streamed per-file scan progress, real engine/database version and staleness reporting, and a distro-aware install command shown when ClamAV isn't installed at all.
 - **File-integrity monitoring** for a curated set of security-relevant files, plus a background monitoring loop that re-scans on an interval and reconciles findings across runs.
 - **A system tray icon** so closing the window hides the app instead of killing the monitoring loop — verified live against the real `org.kde.StatusNotifierWatcher` D-Bus registration, not just "no error thrown."
@@ -73,7 +73,7 @@ The research groundwork is already done — a checklist grounded in Lynis's test
 | Deadline | None fixed — personal tool sharpened into OSS, no external deadline pressure |
 | Team / headcount | Solo-maintained |
 | Budget | $0 — OSS; distribution via GitHub Releases |
-| Existing stack | Tauri + Rust backend, React + Vite frontend. Cargo workspace ships both a GUI (`bulwark-app`) and a CLI (`bulwark-cli`) over the same `bulwark-core` library, so headless/SSH-only boxes are scannable without a display session. |
+| Existing stack | Tauri + Rust backend, React + Vite frontend. Cargo workspace ships both a GUI (`bulwark-app`) and a CLI (`bulwarkctl`) over the same `bulwark-core` library, so headless/SSH-only boxes are scannable without a display session. |
 | Compliance / security | No formal compliance target, but findings reference CIS/MITRE ATT&CK IDs where applicable, leaving headroom for compliance-mapping later |
 | SLA | None — desktop app, no uptime commitment |
 
@@ -100,7 +100,7 @@ flowchart TB
 ```mermaid
 flowchart LR
   ui["React UI (Tauri webview)"] -->|"IPC commands"| shell["Tauri Rust shell\n(bulwark-app)"]
-  term["Terminal / SSH session"] -->|"args, stdout, exit code"| cli["bulwark-cli"]
+  term["Terminal / SSH session"] -->|"args, stdout, exit code"| cli["bulwarkctl"]
   shell -->|"invoke scan"| core["bulwark-core\n(collectors + rule engine)"]
   cli -->|"invoke scan"| core
   core -->|"loads"| rules["rules/\n(YAML rule pack)"]
@@ -113,9 +113,9 @@ flowchart LR
   db -->|"shared history / diffing"| cli
 ```
 
-**`bulwark-core` has zero UI/Tauri/CLI-specific code.** Both `bulwark-app` (Tauri GUI) and `bulwark-cli` are thin front-doors over the same library crate — same collectors, same rule engine, same `Finding`/`Rule`/`ScanRun` model, same local SQLite history. A scan run from the CLI shows up in the GUI's history and vice versa, since they share one on-disk store rather than each keeping their own. This also means the CLI can ship and be dogfooded before the GUI is polished, and it's the only form factor that can reach a headless box (`ssh host 'bulwark scan'`) — the case that matters most for catching lateral movement on a local network.
+**`bulwark-core` has zero UI/Tauri/CLI-specific code.** Both `bulwark-app` (Tauri GUI) and `bulwarkctl` are thin front-doors over the same library crate — same collectors, same rule engine, same `Finding`/`Rule`/`ScanRun` model, same local SQLite history. A scan run from the CLI shows up in the GUI's history and vice versa, since they share one on-disk store rather than each keeping their own. This also means the CLI can ship and be dogfooded before the GUI is polished, and it's the only form factor that can reach a headless box (`ssh host 'bulwarkctl scan'`) — the case that matters most for catching lateral movement on a local network.
 
-**Privilege model decision:** the GUI uses `pkexec` with a bundled polkit policy (`auth_admin_keep`) so a session only prompts once. The CLI does **not** use `pkexec` — `pkexec` depends on a running polkit authentication agent, which is normally GUI-session-bound and typically absent on a box reached only over SSH. Instead `bulwark-cli` requires the elevated subset to be run as `sudo bulwark scan --privileged`; unprivileged checks run either way without elevation. This is a deliberate, resolved decision, not an open question — `sudo` has no GUI-agent dependency and is the one elevation path guaranteed to work identically in a local terminal and over plain SSH.
+**Privilege model decision:** the GUI uses `pkexec` with a bundled polkit policy (`auth_admin_keep`) so a session only prompts once. The CLI does **not** use `pkexec` — `pkexec` depends on a running polkit authentication agent, which is normally GUI-session-bound and typically absent on a box reached only over SSH. Instead `bulwarkctl` requires the elevated subset to be run as `sudo bulwarkctl scan --privileged`; unprivileged checks run either way without elevation. This is a deliberate, resolved decision, not an open question — `sudo` has no GUI-agent dependency and is the one elevation path guaranteed to work identically in a local terminal and over plain SSH.
 
 **Since v0.1 (implemented, not just reserved):** a system tray icon (`apps/bulwark-app/src-tauri/src/tray.rs`) keeps the app resident when the window is closed — the window's `CloseRequested` event is intercepted and the window is hidden rather than destroyed, so a background monitoring loop that's mid-interval keeps running. The monitoring loop periodically re-invokes the same `bulwark-core` scan path used by a manual "Scan" click and reconciles findings across runs (see §5).
 
@@ -221,16 +221,16 @@ There's no network API — the "client" and "server" are the same process, expos
 | `monitoring_get_status` / `monitoring_set_interval` | Query/configure the background re-scan loop | none |
 | `history_count` | Total past scan runs, backing the sidebar's "N scans recorded" line | none |
 
-### CLI commands (`bulwark-cli`)
+### CLI commands (`bulwarkctl`)
 
 | Command | Purpose | Exit code |
 |---------|---------|-----------|
-| `bulwark scan` | Run unprivileged checks only, print a table to stdout | `0` clean, `1` findings ≥ medium, `2` findings ≥ critical (CI-friendly) |
-| `bulwark scan --privileged` | Full scan; must be run under `sudo` (see §4) | same as above |
-| `bulwark scan --json` | Same as `scan`, machine-readable output | same as above |
-| `bulwark rules list` | List loaded rules, including load failures | `0` / `1` if any rule failed to load |
-| `bulwark rules validate <path>` | Lint a rule file without running a scan (used in CI for the bundled pack) | `0` valid / `1` invalid |
-| `bulwark history` | List past `ScanRun`s (shared with the GUI's history) | `0` |
+| `bulwarkctl scan` | Run unprivileged checks only, print a table to stdout | `0` clean, `1` findings ≥ medium, `2` findings ≥ critical (CI-friendly) |
+| `bulwarkctl scan --privileged` | Full scan; must be run under `sudo` (see §4) | same as above |
+| `bulwarkctl scan --json` | Same as `scan`, machine-readable output | same as above |
+| `bulwarkctl rules list` | List loaded rules, including load failures | `0` / `1` if any rule failed to load |
+| `bulwarkctl rules validate <path>` | Lint a rule file without running a scan (used in CI for the bundled pack) | `0` valid / `1` invalid |
+| `bulwarkctl history` | List past `ScanRun`s (shared with the GUI's history) | `0` |
 
 There is no traditional authn/authz layer — this is a single-user local app; the OS login session is the trust boundary, and `pkexec` (GUI) / `sudo` (CLI) are the only elevation gates (see §10).
 
@@ -281,7 +281,7 @@ sequenceDiagram
   Shell-->>UI: scan_complete (summary)
 ```
 
-The CLI path is identical minus the Tauri/React layer: `bulwark-cli` calls `bulwark-core` directly and prints each finding as it arrives instead of streaming it over a Channel. The background monitoring loop reuses this exact same path on a timer, so there is no separate "monitoring" code path to keep in sync with the manual scan path.
+The CLI path is identical minus the Tauri/React layer: `bulwarkctl` calls `bulwark-core` directly and prints each finding as it arrives instead of streaming it over a Channel. The background monitoring loop reuses this exact same path on a timer, so there is no separate "monitoring" code path to keep in sync with the manual scan path.
 
 ---
 
@@ -290,7 +290,7 @@ The CLI path is identical minus the Tauri/React layer: `bulwark-cli` calls `bulw
 | Failure | Likelihood | Impact | Detection | Mitigation |
 |---------|------------|--------|-----------|------------|
 | Privileged collector's elevation denied or not run (`sudo` omitted on CLI, polkit prompt denied on GUI) | Medium | Partial scan — some categories skipped | Explicit "N checks skipped (no privilege)" banner/line, never silent | Re-run just the privileged subset without a full rescan |
-| Rule file has invalid YAML/condition syntax | Low-medium (rises as community rules grow) | That rule silently fails to load | Rule-load validation at startup; `rules_failed` count surfaced in `ScanRun` | `bulwark rules validate` (§6); CI lint on the bundled rule pack |
+| Rule file has invalid YAML/condition syntax | Low-medium (rises as community rules grow) | That rule silently fails to load | Rule-load validation at startup; `rules_failed` count surfaced in `ScanRun` | `bulwarkctl rules validate` (§6); CI lint on the bundled rule pack |
 | A collector hangs (e.g. a spawned process never returns) | Low | Whole scan stalls | Per-collector timeout (5s default) | Collector reported as timed-out; scan continues without it |
 | Host has an unusual layout (non-systemd init, non-Debian distro) | Medium (v1 targets Debian/Ubuntu) | Irrelevant checks or false negatives | Each collector declares its own applicability precondition (e.g. "requires systemd") | Collector skips gracefully, excluded from coverage stats — never reported as false "clean" |
 | A collector's fact shape changes (new fields added) | Realized once, fixed | Would silently duplicate existing findings on the next scan | Reconciliation tests (`reconcile_tolerates_a_collector_gaining_new_context_fields`) | Subset-match reconciliation (§5), not exact-string context equality |
@@ -334,7 +334,7 @@ Reframed as release channels, since there's no %-traffic rollout for a desktop a
 
 | Step | What | Status |
 |------|------|--------|
-| 1 | `bulwark-cli` only, dogfood on real machines, including over SSH | ✅ Done |
+| 1 | `bulwarkctl` only, dogfood on real machines, including over SSH | ✅ Done |
 | 2 | v0.1 GitHub Release, CLI binary only (`.deb`/`.rpm`/tarball) | ✅ `bulwark-core` stable, CLI builds clean |
 | 3 | `bulwark-app` (Tauri GUI) joins the release, full `.deb`/`.rpm`/AppImage line-up | ✅ GUI built, packaged, and dogfooded end-to-end including the `pkexec` privileged path and tray icon |
 | 4 | Public announce (README only, no paid promo) | Not yet — repository is currently private |
@@ -435,7 +435,7 @@ Both axes are enforced in `engine::run_scan`, via a `Profile { os, needs }` pass
 
 ### What's real today, and what's a skeleton
 
-- The **schema, engine filtering, and collector gate are fully real** — tested (`crates/bulwark-core/src/engine.rs`'s `rule_matches_profile`, plus per-collector tests), and live in both front-doors: the CLI's `bulwark scan --needs server,...` flag and the GUI Dashboard's need-toggle chips (currently just "Server," since that's the only tag with a real rule behind it).
+- The **schema, engine filtering, and collector gate are fully real** — tested (`crates/bulwark-core/src/engine.rs`'s `rule_matches_profile`, plus per-collector tests), and live in both front-doors: the CLI's `bulwarkctl scan --needs server,...` flag and the GUI Dashboard's need-toggle chips (currently just "Server," since that's the only tag with a real rule behind it).
 - **`macos_launchd::LaunchdPersistenceCollector`** and **`windows_persistence::WindowsRunKeysCollector`** are intentionally-honest skeletons: they declare their target OS, `is_applicable()` unconditionally returns `false`, and `collect()` returns an explicit "not yet implemented" error rather than fabricating plausible-looking facts. There is no macOS or Windows machine available in this project's environment to build and verify a real plist parser or registry/Task-Scheduler reader against — a stub that silently claimed to work would be worse than one that's honest about not having run for real yet. Two demonstration rules (`BLWK-PERSIST-003`, `BLWK-PERSIST-004`) exist so the OS-tagging pipeline has real end-to-end test coverage (rule loads, validates, and is correctly excluded from a Linux scan), even though neither can fire on any machine this project currently builds on.
 - Turning a skeleton into a real collector is "implement `collect()` against real OS APIs, verified on a real machine of that OS" — it does not require touching the engine, the rule schema, or any existing Linux collector.
 

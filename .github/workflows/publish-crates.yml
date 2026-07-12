@@ -1,0 +1,41 @@
+name: Publish crates
+
+on:
+  workflow_dispatch:
+    inputs:
+      crates:
+        description: "Space-separated crate names to publish, in dependency order"
+        required: false
+        default: "bulwark-core bulwarkctl bulwark-agent bulwark-proto"
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # bulwarkctl depends on bulwark-core, so it must publish after — the default input
+      # ordering above reflects that; a custom input should preserve it too.
+      - name: Publish selected crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -e
+          for crate in ${{ inputs.crates }}; do
+            version=$(cargo metadata --no-deps --format-version 1 \
+              | jq -r --arg name "$crate" '.packages[] | select(.name == $name) | .version')
+            if [ -z "$version" ]; then
+              echo "::error::no such workspace member: $crate"
+              exit 1
+            fi
+            if curl -sf "https://crates.io/api/v1/crates/$crate/$version" > /dev/null; then
+              echo "$crate $version is already published, skipping"
+            else
+              echo "Publishing $crate $version..."
+              cargo publish -p "$crate"
+            fi
+          done

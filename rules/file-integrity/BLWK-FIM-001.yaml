@@ -12,6 +12,6 @@ explain: >
 fix: >
   Review the file's current contents against what you expect (version control, package
   manager, or your own memory of the last legitimate change). If the change wasn't yours,
-  treat this as a likely compromise. If it was legitimate, run 'bulwark fim baseline' to
+  treat this as a likely compromise. If it was legitimate, run 'bulwarkctl fim baseline' to
   record the new state as the baseline.
 references: [ATTACK-T1098, ATTACK-T1556]
