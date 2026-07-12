@@ -5,7 +5,11 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Collectors, rule engine, and finding model shared by bulwark-cli and bulwark-app"
+homepage.workspace = true
+description = "Collectors, rule engine, and finding model shared by bulwarkctl and bulwark-app"
+readme = "README.md"
+keywords = ["security", "linux", "hardening", "audit", "scanner"]
+categories = ["os::linux-apis", "config", "development-tools"]
 
 [dependencies]
 serde.workspace = true
@@ -19,6 +23,7 @@ uuid.workspace = true
 regex.workspace = true
 walkdir.workspace = true
 libc.workspace = true
+rusqlite_migration = "1"
 
 [dev-dependencies]
 tempfile = "3"

@@ -5,14 +5,18 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
 description = "Bulwark CLI - scan a Linux host from a terminal or over SSH, no display session required"
+readme = "README.md"
+keywords = ["security", "linux", "hardening", "audit", "cli"]
+categories = ["command-line-utilities", "os::linux-apis", "config"]
 
 [[bin]]
 name = "bulwarkctl"
 path = "src/main.rs"
 
 [dependencies]
-bulwark-core = { path = "../bulwark-core", version = "0.1.0" }
+bulwark-core = { path = "../bulwark-core", version = "0.1.1" }
 clap.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
@@ -32,7 +36,12 @@ assets = [
 ]
 
 # `cargo install cargo-generate-rpm` then `cargo generate-rpm -p crates/bulwarkctl` after a release build.
+# The rule pack is not optional dressing — `resolve_rules_dir` falls back to
+# `/usr/share/bulwark/rules` on an installed system, so an RPM carrying only the binary installs
+# a CLI that fails on every invocation with "couldn't find a 'rules' directory". The `.deb`
+# above always shipped them; the RPM's asset list had simply drifted out of sync with it.
 [package.metadata.generate-rpm]
 assets = [
     { source = "target/release/bulwarkctl", dest = "/usr/bin/bulwarkctl", mode = "755" },
+    { source = "rules/*/*.yaml", dest = "/usr/share/bulwark/rules/", mode = "644" },
 ]
