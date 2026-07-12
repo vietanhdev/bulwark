@@ -30,6 +30,7 @@ const CARD_TITLES = {
   "index.md": "Bulwark",
   "guide/architecture.md": "Architecture",
   "guide/agent-security.md": "AI Agent Security",
+  "articles/ai-coding-assistant-security.md": "AI Coding Assistant Security",
   "articles/ssh-hardening-checklist.md": "SSH Hardening on Linux",
   "articles/linux-persistence-techniques.md": "How Attackers Persist on Linux",
   "articles/choosing-a-linux-security-scanner.md": "Choosing a Linux Security Scanner",

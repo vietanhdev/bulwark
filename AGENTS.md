@@ -77,6 +77,40 @@ Every commit message (subject line) must follow [Conventional Commits v1.0.0](ht
 
 Enforced by `.githooks/commit-msg` (same `core.hooksPath` setup as pre-commit above, so no extra install step) — it rejects a non-conforming subject line, and skips validation for `git`-generated `Merge ...` and `Revert "..."` messages. The entire pre-existing history was rewritten to this convention (message-only — file contents and tree hashes are untouched) rather than left inconsistent; the base of that rewrite lives in the repo's public GitHub history now, not as a separate migration commit.
 
+## Documentation is part of the change, not a follow-up
+
+**When you change the code or the architecture, update the docs in the same change.** A design doc
+that describes a system which no longer exists is worse than no doc at all: it is confidently
+wrong, and the next person believes it. Treat the docs as part of the diff, not as cleanup for
+later.
+
+Concretely, when you touch something structural, walk this list:
+
+| You changed… | Update… |
+|---|---|
+| A module's responsibility, or added one | `docs/guide/architecture.md` (and its diagram) + this file's Architecture section |
+| The database schema | `crates/bulwark-core/migrations/` (append-only!) + `schema.rs` + the migration note below |
+| A rule, collector, or detector | The rule table in the relevant `docs/guide/*.md` |
+| A CLI command or flag | The CLI section of the relevant guide page + `README.md` if it's user-facing |
+| Anything a user sees in the GUI | The screenshots (`apps/bulwark-app/scripts/capture-screenshots.mjs`) |
+| A new docs page | Its sidebar entry in `docs/.vitepress/config.mts` **and** the OG card list in `docs/scripts/generate-og.mjs` — a page missing from the latter silently previews as the generic homepage card |
+
+**Explain with diagrams, not just prose.** The docs site renders [mermaid](https://mermaid.js.org/)
+(via `vitepress-plugin-mermaid`), so a data flow, a state machine, or a decision belongs in a
+diagram rather than in three paragraphs the reader has to hold in their head:
+
+````markdown
+```mermaid
+flowchart LR
+  A[Collectors] -->|Facts| B[Rule engine]
+  B -->|Findings| C[(SQLite)]
+```
+````
+
+Aim for a diagram that answers "what talks to what, and in which direction" at a glance. Prose then
+explains *why* it is shaped that way — which is the part a diagram cannot carry, and the part this
+codebase actually cares about.
+
 ## Architecture
 
 Cargo workspace, three members:

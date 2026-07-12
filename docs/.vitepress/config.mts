@@ -188,6 +188,10 @@ export default withMermaid({
         text: "Articles",
         items: [
           {
+            text: "AI coding assistant security",
+            link: "/articles/ai-coding-assistant-security",
+          },
+          {
             text: "SSH hardening checklist",
             link: "/articles/ssh-hardening-checklist",
           },
