@@ -1,7 +1,5 @@
 //! Detects network interfaces running in promiscuous mode — the classic packet-sniffer
-//! indicator chkrootkit's own `sniffer` test checks for (`ifpromisc`), confirmed by actually
-//! running chkrootkit against a real machine as part of this project's own benchmark — see
-//! `research/2026-07-12-bulwark-vs-lynis-benchmark/report.md`. A normal desktop/server
+//! indicator chkrootkit's own `sniffer` test checks for (`ifpromisc`). A normal desktop/server
 //! interface is never promiscuous; enabling it is exactly what lets a packet sniffer capture
 //! traffic that isn't addressed to this host.
 

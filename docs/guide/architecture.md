@@ -21,7 +21,6 @@ This document was written before implementation and has been revised to describe
 - **File-integrity monitoring** for a curated set of security-relevant files, plus a background monitoring loop that re-scans on an interval and reconciles findings across runs.
 - **A system tray icon** so closing the window hides the app instead of killing the monitoring loop — verified live against the real `org.kde.StatusNotifierWatcher` D-Bus registration, not just "no error thrown."
 - **A Lynis-style hardening index** score on the Compliance view, computed the same way Lynis computes its own (skipped/privileged-only checks don't count against the score).
-- **Benchmarked hands-on against 5 real tools** — Lynis directly, and rkhunter/chkrootkit/AIDE/OpenSCAP via a disposable root container — see [the research page](/research/lynis-benchmark).
 - **A profile system (OS + opt-in "needs")** is now built into the rule/collector model, with macOS and Windows collector *skeletons* wired end-to-end but not yet real — see §17.
 
 Sections below are the original design reasoning, updated in place where the as-shipped decision differs from the draft (notably §16's color decision). Section numbers are preserved since other project docs (`AGENTS.md`) reference them by number.

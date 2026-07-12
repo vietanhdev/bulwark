@@ -1,7 +1,7 @@
 ---
 description: >-
   How to read rkhunter and chkrootkit output without panicking — real warnings from a real
-  run, and which ones turned out to be container/environment artifacts, not rootkits.
+  run, and which ones turned out to be environment artifacts, not rootkits.
 ---
 
 # Reading rkhunter and chkrootkit output without panicking
@@ -12,19 +12,32 @@ report with essentially no built-in context about *why* something fired. A "Warn
 tool's output means "this matched a suspicious pattern," not "this is confirmed malware" — and
 distinguishing the two is the actual skill, one that's poorly documented because most writeups
 either explain the tools' internals or just tell you to panic. Below is real output from actually
-running both — not a hypothetical — with each warning explained, from
-[Bulwark's own benchmark run](/research/lynis-benchmark) of five established Linux security
-tools against a real machine.
+running both — not a hypothetical — with each warning explained.
+
+## Run them yourself first
+
+Both tools are architecturally "root or nothing": on an unprivileged account they refuse to run at
+all (`rkhunter`: "You must be the root user to run this program."; `chkrootkit`: "./chkrootkit needs
+root privileges") rather than degrading to a partial unprivileged mode the way Lynis does. The
+cheapest way to see their real output — including the false positives below — is a disposable
+container, which is real root by construction and costs you nothing if you break it:
+
+```bash
+docker run --rm ubuntu:24.04 bash -c '
+  apt-get update -qq && apt-get install -y -qq rkhunter chkrootkit >/dev/null
+  rkhunter --check --sk --nocolors --logfile /tmp/rkhunter.log
+  chkrootkit
+'
+```
+
+Every warning quoted below came from exactly that command. Your output will differ in the details
+(signature counts move with each release), and that's the point — the *categories* of false positive
+are what generalize, not the specific numbers.
 
 ## What actually happened when we ran them
 
-Both `rkhunter` and `chkrootkit` are architecturally "root or nothing" — on an unprivileged
-account, both refuse to run at all (`rkhunter`: "You must be the root user to run this program.";
-`chkrootkit`: "./chkrootkit needs root privileges") rather than degrading to a partial
-unprivileged mode the way Lynis does. Run with real root inside a disposable container:
-
-- **rkhunter 1.4.6** checked 461 rootkit signatures and 116 file properties in 49 seconds.
-  It raised warnings in three distinct categories, and confirmed zero rootkits:
+- **rkhunter 1.4.6** checked 461 rootkit signatures and 116 file properties in 49 seconds. It raised
+  warnings in three distinct categories, and confirmed zero rootkits:
   - `postfix` user and group present in `/etc/passwd`/`/etc/group` — this was rkhunter itself
     pulling in `postfix` as a package dependency during install inside the test container, not a
     finding about the host. A rootkit-scanner warning about an account that its own installation
@@ -63,11 +76,11 @@ which checks are heuristic versus confirmed-signature matches. The mistake is tr
    (skip-keypress mode, for scripted runs) writes a detailed log to
    `/var/log/rkhunter.log` — the summary line and the log entry for the same finding often carry
    very different amounts of context.
-2. **Check whether it's a known false-positive pattern for that specific check.** rkhunter's own
-   FAQ and changelog document several recurring ones (the Suckit LKM heuristic above is one);
-   chkrootkit's `aliens` test against Ruby's `.document` files is another well-known one. A quick
-   search for `<tool> <specific warning text>` usually surfaces whether this is a common,
-   already-triaged pattern before you assume the worst.
+2. **Check whether it's a known false-positive pattern for that specific check.**
+   [rkhunter's own FAQ and documentation](https://rkhunter.sourceforge.net/) document several
+   recurring ones (the Suckit LKM heuristic above is one); chkrootkit's `aliens` test against Ruby's
+   `.document` files is another well-known one. A quick search for `<tool> <specific warning text>`
+   usually surfaces whether this is a common, already-triaged pattern before you assume the worst.
 3. **After a legitimate system change** (a package update that replaced a binary chkrootkit or
    rkhunter fingerprints, a deliberate config change), re-baseline rather than re-panicking:
    `rkhunter --propupd` updates rkhunter's stored file-property baseline to the current
@@ -77,8 +90,8 @@ which checks are heuristic versus confirmed-signature matches. The mistake is tr
    still generating the same volume of environment-noise warnings on old ones.
 5. **Cross-check with a second tool when a warning is ambiguous.** rkhunter and chkrootkit use
    different signature/heuristic engines and occasionally disagree — running both isn't
-   redundant, it's a real second opinion, which is exactly why the benchmark above ran both
-   rather than treating one as sufficient.
+   redundant, it's a real second opinion, which is exactly why the command above runs both rather
+   than treating one as sufficient.
 
 ```mermaid
 flowchart TD
@@ -92,10 +105,21 @@ flowchart TD
 ## Where a scheduled scan fits alongside these
 
 [Bulwark](/) deliberately doesn't reimplement rootkit signature scanning — its `rootkit-malware`
-category shells out to ClamAV for signature-based detection and adds a small set of scoped,
-low-false-positive indicators of its own (like the promiscuous-network-interface check,
-`BLWK-ROOTKIT-001`, verified against the same real chkrootkit `sniffer`-test behavior referenced
-above). For full signature-based rootkit coverage, rkhunter and chkrootkit — read with the triage
-process above, not just their raw warning count — remain the right dedicated tools; see the
-[full scanner comparison](/articles/choosing-a-linux-security-scanner) for how all of these fit
-together.
+category shells out to ClamAV for signature-based detection (see [what that actually
+catches](/articles/does-linux-need-antivirus)) and adds a small set of scoped, low-false-positive
+indicators of its own, like the promiscuous-network-interface check `BLWK-ROOTKIT-001` — the same
+condition chkrootkit's `sniffer` test looks at, which is exactly why the container run above is a
+useful sanity check on it.
+
+For full signature-based rootkit coverage, rkhunter and chkrootkit — read with the triage process
+above, not just their raw warning count — remain the right dedicated tools. What Bulwark adds is the
+part neither does: running the scoped checks unattended and showing you the result without a log to
+parse, in the desktop app on the machine in front of you or via `bulwarkctl scan` over SSH on a
+server. See the [full scanner comparison](/articles/choosing-a-linux-security-scanner) for how these
+fit together.
+
+## References
+
+- [rkhunter](https://rkhunter.sourceforge.net/) — the project's own documentation and FAQ, including which checks are heuristic rather than signature matches.
+- [chkrootkit](https://www.chkrootkit.org/) — the test list (`aliens`, `bindshell`, `lkm`, `sniffer`, `chkutmp`, `chkdirs`) referenced above.
+- The warnings quoted here are from a single `ubuntu:24.04` container run using the command at the top of this article — rkhunter 1.4.6 and chkrootkit 0.53-github2, as packaged by Ubuntu. Re-run it and you'll get the same categories, with counts that track whatever versions `apt` gives you.

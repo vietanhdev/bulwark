@@ -570,7 +570,7 @@
     "severity": "high",
     "collector": "network_interfaces",
     "references": ["ATTACK-T1040"],
-    "explain": "{{ network_interfaces.interface }} is in promiscuous mode \u2014 it's capturing all traffic on its network segment, not just traffic addressed to this host. This is the defining behavior of a packet sniffer, and is exactly what chkrootkit's own \"sniffer\" test checks for (verified by actually running chkrootkit against a real machine as part of this project's own benchmark \u2014 see research/2026-07-12-bulwark-vs-lynis-benchmark/report.md).",
+    "explain": "{{ network_interfaces.interface }} is in promiscuous mode \u2014 it's capturing all traffic on its network segment, not just traffic addressed to this host. This is the defining behavior of a packet sniffer, and is exactly what chkrootkit's own \"sniffer\" test checks for.",
     "fix": "Run 'ip -d link show {{ network_interfaces.interface }}' and check 'ps aux' for a legitimate reason (tcpdump, Wireshark/tshark, a VM bridge). If nothing legitimate explains it, treat this as active traffic interception and investigate immediately.\n",
     "os": ["linux"],
     "profiles": []

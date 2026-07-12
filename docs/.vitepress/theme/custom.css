@@ -86,6 +86,162 @@
 }
 
 /* ---------------------------------------------------------------------------
+   Click-to-zoom (see theme/MermaidLightbox.vue).
+
+   The wide flowcharts get scaled down to fit the prose column, which can leave their labels
+   smaller than the body text around them. Every rendered diagram is therefore a button that
+   opens a zoomable overlay; these rules are just the affordance that says so.
+   --------------------------------------------------------------------------- */
+.vp-doc .mermaid[data-zoomable="true"] {
+  position: relative;
+  cursor: zoom-in;
+  border-radius: 8px;
+  padding: 0.5rem;
+  transition:
+    background-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.vp-doc .mermaid[data-zoomable="true"]:hover,
+.vp-doc .mermaid[data-zoomable="true"]:focus-visible {
+  background-color: var(--vp-c-default-soft);
+  box-shadow: 0 0 0 1px var(--vp-c-divider);
+  outline: none;
+}
+
+/* "Click to zoom", shown on hover only — a permanent badge would be visual noise on a page
+   that already has several diagrams. */
+.vp-doc .mermaid[data-zoomable="true"]::after {
+  content: "Click to zoom";
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: var(--vp-c-bg-soft);
+  border: 1px solid var(--vp-c-divider);
+  color: var(--vp-c-text-2);
+  font-size: 0.72rem;
+  font-weight: 500;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.vp-doc .mermaid[data-zoomable="true"]:hover::after,
+.vp-doc .mermaid[data-zoomable="true"]:focus-visible::after {
+  opacity: 1;
+}
+
+/* Solid, not translucent. A see-through backdrop leaves the page text showing through the
+   diagram, which defeats the entire purpose of opening it larger in the first place. */
+.mermaid-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  background: var(--vp-c-bg);
+}
+
+.mermaid-lightbox__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--vp-c-divider);
+  background: var(--vp-c-bg);
+}
+
+.mermaid-lightbox__toolbar button {
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0 0.6rem;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 6px;
+  background: var(--vp-c-bg-soft);
+  color: var(--vp-c-text-1);
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.mermaid-lightbox__toolbar button:hover {
+  border-color: var(--vp-c-brand-1);
+  color: var(--vp-c-brand-1);
+}
+
+.mermaid-lightbox__text {
+  font-size: 0.85rem !important;
+  font-weight: 500 !important;
+}
+
+.mermaid-lightbox__level {
+  min-width: 3.5rem;
+  text-align: center;
+  color: var(--vp-c-text-2);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.8rem;
+}
+
+.mermaid-lightbox__viewport {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+}
+
+.mermaid-lightbox__viewport:active {
+  cursor: grabbing;
+}
+
+/* The stage carries the transform; overriding the .mermaid margin/padding it inherits from the
+   in-page rules above keeps the translate maths anchored to the viewport centre. */
+.mermaid-lightbox__stage {
+  width: min(1600px, 96vw);
+  transform-origin: center center;
+  will-change: transform;
+}
+
+/* The in-page `.vp-doc .mermaid` rule adds vertical margin; here it would offset the transform's
+   centre and leave the diagram sitting off-axis while panning. */
+.mermaid-lightbox__stage .mermaid {
+  margin: 0;
+  padding: 0;
+}
+
+.mermaid-lightbox__stage svg {
+  max-width: none;
+  width: 100%;
+  height: auto;
+}
+
+.mermaid-lightbox__hint {
+  margin: 0;
+  padding: 0.6rem 1rem 1rem;
+  text-align: center;
+  color: var(--vp-c-text-3);
+  font-size: 0.8rem;
+}
+
+.mermaid-lightbox__hint kbd {
+  padding: 0.1rem 0.35rem;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 4px;
+  background: var(--vp-c-bg-soft);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.75rem;
+}
+
+/* ---------------------------------------------------------------------------
    Mermaid in dark mode.
 
    vitepress-plugin-mermaid forces mermaid's own built-in dark theme whenever `.dark` is on

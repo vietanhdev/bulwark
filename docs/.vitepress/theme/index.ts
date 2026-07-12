@@ -1,4 +1,6 @@
+import { h } from "vue";
 import DefaultTheme from "vitepress/theme";
+import MermaidLightbox from "./MermaidLightbox.vue";
 
 // Same pairing as the desktop app (apps/bulwark-app/src/styles.css): Archivo for prose, IBM
 // Plex Mono for anything that is data — rule IDs, paths, commands, config directives. These
@@ -11,4 +13,11 @@ import "@fontsource/ibm-plex-mono/500.css";
 import "@fontsource/ibm-plex-mono/600.css";
 import "./custom.css";
 
-export default DefaultTheme;
+export default {
+  extends: DefaultTheme,
+  Layout() {
+    return h(DefaultTheme.Layout, null, {
+      "layout-bottom": () => h(MermaidLightbox),
+    });
+  },
+};

@@ -13,11 +13,14 @@ file, so this only holds up fully once events are forwarded somewhere the compro
 control (see `BLWK-LOG-002` below).
 
 The real catch is `auditd`'s rule syntax, which is unforgiving and spread across three dense man
-pages (`auditctl(8)`, `audit.rules(7)`, `auditd.conf(5)`) that reward reading end-to-end and
-punish skimming — which is why most people end up copying a rule file from a gist instead. This is
-a practical starting point: the rule syntax, a sensible baseline set, how to investigate what
-fires, and the one configuration gotcha that can make every rule below silently do nothing. It's
-what backs [Bulwark](/)'s `BLWK-LOG-001` check, which flags when `auditd` isn't installed at all.
+pages ([`auditctl(8)`](https://man7.org/linux/man-pages/man8/auditctl.8.html),
+[`audit.rules(7)`](https://man7.org/linux/man-pages/man7/audit.rules.7.html),
+[`auditd.conf(5)`](https://man7.org/linux/man-pages/man5/auditd.conf.5.html)) that reward reading
+end-to-end and punish skimming — which is why most people end up copying a rule file from a gist
+instead. This is a practical starting point: the rule syntax, a sensible baseline set, how to
+investigate what fires, and the one configuration gotcha that can make every rule below silently do
+nothing. It's what backs [Bulwark](/)'s `BLWK-LOG-001` check, which flags when `auditd` isn't
+installed at all.
 
 ## Install and enable it first
 
@@ -39,8 +42,12 @@ size, failure mode:
 
 ```bash
 auditctl -D                        # delete all existing rules first (standard practice before reloading a rule file)
-auditctl -b 8192                   # max outstanding audit buffers (kernel default: 64 — far too low for real rule sets)
+auditctl -b 8192                   # max outstanding audit buffers
 ```
+
+The kernel's own default for `-b` is [64](https://man7.org/linux/man-pages/man8/auditctl.8.html)
+("Kernel Default=64") — far too low for a real rule set, and when the buffers fill, the kernel
+consults the failure flag rather than quietly carrying on.
 
 **File watches** monitor access to a specific file or directory (recursive if it's a directory):
 
@@ -49,9 +56,11 @@ auditctl -b 8192                   # max outstanding audit buffers (kernel defau
 ```
 
 `perm` takes any combination of `r` (read), `w` (write), `x` (execute), `a` (attribute change).
-The older `-w /etc/passwd -p wa -k identity` shorthand still works and is more common in
-example configs, but is deprecated in favor of the syscall-rule form above for performance
-reasons.
+The older `-w /etc/passwd -p wa -k identity` shorthand still works and is more common in example
+configs, but [`auditctl(8)` is blunt about
+it](https://man7.org/linux/man-pages/man8/auditctl.8.html): "The -w form of writing watches is for
+backwards compatibility and is deprecated due to poor system performance. Convert watches of this
+form to the syscall based form."
 
 **Syscall rules** match on the syscall itself, with optional field filters:
 
@@ -61,16 +70,20 @@ reasons.
 
 Always specify `-F arch=b64` (and a matching `-F arch=b32` rule if this is a bi-arch machine).
 
-For a **file watch**, the `perm` field works by making the kernel select the specific syscalls
-that perform that kind of access. Without an `arch` to narrow that selection, it can't — so
-*every* system call gets audited instead, which is a real and entirely avoidable performance cost.
+For a **file watch**, the `perm` field works by making the kernel select the specific syscalls that
+perform that kind of access. Without an `arch` to narrow that selection, it can't — and
+[`audit.rules(7)`](https://man7.org/linux/man-pages/man7/audit.rules.7.html) spells out the
+consequence: "Not supplying the arch will cause the selection of all system calls which will affect
+performance as all system calls will be evaluated." A real and entirely avoidable cost.
 
 For a **syscall rule** like the `execve` one above, it's worse than a performance issue — it's a
 correctness one. Syscall names resolve to numbers per-ABI, and those numbers don't always line up
-between 32-bit and 64-bit, so an unqualified rule can end up auditing *a different syscall
-entirely* on one of the two ABIs. `auditctl` will even warn you about this ("32/64 bit syscall
-mismatch... you are likely auditing the wrong syscall") — a warning worth not ignoring, because a
-rule that's silently watching the wrong syscall looks exactly like a rule that's working.
+between 32-bit and 64-bit, so an unqualified rule can end up auditing *a different syscall entirely*
+on one of the two ABIs. On a bi-arch machine `auditctl` will warn you when it detects exactly that
+mismatch — [`WARNING - 32/64 bit syscall mismatch in line %d, you should specify an
+arch`](https://github.com/linux-audit/audit-userspace/blob/master/src/auditctl.c) — and it's a
+warning worth not ignoring, because a rule that's silently watching the wrong syscall looks exactly
+like a rule that's working.
 
 ## A sensible starter rule set
 
@@ -97,49 +110,55 @@ scan. They're complementary, not redundant:
 -a always,exit -F arch=b64 -S execve -F euid=0 -F auid>=1000 -F auid!=unset -F key=root-exec
 ```
 
-The last rule is the most valuable and the easiest to get wrong: `auid` (the *login* UID, set once
-at login by `pam_loginuid` and carried through `su`/`sudo` unchanged) is what actually tells you
-which human triggered an event, as opposed to `uid`/`euid`, which reflect the current process
-identity. `-F auid!=unset` excludes kernel threads and system-initiated processes with no login
-UID, which would otherwise show up as noise with an unsigned representation of `-1`
-(`4294967295`).
+The last rule is the most valuable and the easiest to get wrong: `auid` (the *login* UID,
+[set once at login by `pam_loginuid`](https://man7.org/linux/man-pages/man8/pam_loginuid.8.html) and
+carried through `su`/`sudo` unchanged) is what actually tells you which human triggered an event, as
+opposed to `uid`/`euid`, which reflect the current process identity. `-F auid!=unset` excludes kernel
+threads and system-initiated processes with no login UID, which would otherwise show up as noise
+with [an unsigned representation of
+`-1`](https://man7.org/linux/man-pages/man7/audit.rules.7.html) (`4294967295`).
 
-One caveat that matters, because `auid` is usually described as "immutable" and it isn't: by
-default a process with `CAP_AUDIT_CONTROL` — i.e. root — can rewrite `/proc/<pid>/loginuid` and
-forge the very attribution this rule exists to establish. If you want that attribution to hold up
-against the attacker the rest of this cheat sheet is about, you have to explicitly make it
-tamper-proof:
+One caveat that matters, because `auid` is usually described as "immutable" and it isn't: by default
+a process with `CAP_AUDIT_CONTROL` — i.e. root — can rewrite `/proc/<pid>/loginuid` and change the
+very attribution this rule exists to establish. (The change is itself audited, in a record carrying
+both `old-auid=` and `auid=`, so it isn't *invisible* — but the record it forges afterwards looks
+clean.) If you want that attribution to hold up against the attacker the rest of this cheat sheet is
+about, [make it tamper-proof
+explicitly](https://man7.org/linux/man-pages/man8/auditctl.8.html) — "setting this makes loginuid
+tamper-proof":
 
 ```bash
 auditctl --loginuid-immutable   # or: add --loginuid-immutable to /etc/audit/rules.d/
 ```
 
-Until you do, `auid` is a reliable record of what happened, not evidence that survives someone
-with root deciding otherwise.
+Until you do, `auid` is a reliable record of what happened, not evidence that survives someone with
+root deciding otherwise.
 
 ## First, check that auditing is actually on
 
-Before trusting any of the above, verify the rules can fire at all. Several distributions ship a
-file — typically `/etc/audit/rules.d/10-no-audit.rules` — containing a single line:
+Before trusting any of the above, verify the rules can fire at all. `auditctl(8)` has an entire
+section titled ["DISABLED BY
+DEFAULT"](https://man7.org/linux/man-pages/man8/auditctl.8.html) for this: "On many systems auditd
+is configured to install an `-a never,task` rule by default. This rule causes every new process to
+skip all audit rule processing." It's shipped deliberately (auditing has a real cost, and most
+systems don't want it on by default) — Fedora, for instance, installs
+[upstream's `10-no-audit.rules`](https://github.com/linux-audit/audit-userspace/blob/master/rules/10-no-audit.rules)
+as its default `/etc/audit/rules.d/audit.rules`, while RHEL 9, Debian and Ubuntu ship a base-config
+file with no such rule.
 
-```
--a never,task
-```
-
-That rule is evaluated *first* and suppresses auditing for every task, which means every rule in
-this cheat sheet loads successfully, reports no error, and **silently never fires**. It's shipped
-deliberately (auditing has a real cost, and most systems don't want it on by default), but it's an
-easy thing to miss, and the failure mode is the worst kind: a system that looks fully instrumented
-and is recording nothing.
+Which means you cannot go by distro, or by filename. Grep for the rule itself:
 
 ```bash
-grep -rn 'never,task' /etc/audit/rules.d/    # if this matches, delete or comment the line
-auditctl -l                                  # confirm your rules are actually loaded
-ausearch -k identity --start today           # confirm events are actually landing
+grep -rn 'never,task\|task,never' /etc/audit/rules.d/   # if this matches, delete or comment the line
+auditctl -l                                             # confirm your rules are actually loaded
+ausearch -k identity --start today                      # confirm events are actually landing
 ```
 
-Don't stop at `auditctl -l` showing your rules. The rules being *loaded* and the rules being
-*effective* are different things, and only the third command distinguishes them.
+(The rule is written `-a task,never` in the shipped files and `-a never,task` in the man page's
+prose; `auditctl` accepts either order, so search for both.) The failure mode is the worst kind: a
+system that looks fully instrumented, loads every rule without error, and records nothing. Don't
+stop at `auditctl -l` showing your rules — the rules being *loaded* and the rules being *effective*
+are different things, and only the third command distinguishes them.
 
 ## Give every rule a `key`, or the investigation later is much harder
 
@@ -159,14 +178,19 @@ during an incident and one that's just accumulating noise nobody reads.
 
 ## Don't over-audit
 
-`auditd`'s own manual is direct about this: every syscall rule adds real per-syscall overhead on a
-busy host — with ten syscall rules loaded, *every program on the system* pays an evaluation cost on
-every syscall. The fix isn't fewer rules so much as *combined* ones: one rule listing multiple `-S`
-syscalls is far cheaper than the same syscalls spread across separate rules, because all the
-syscall fields are packed into a single mask and one comparison decides whether the syscall is of
-interest. Rules can only be merged this way when their filter, action, key, and fields are
-otherwise identical. The manual's other headline tip is worth repeating too: prefer file-system
-watches to syscall rules wherever practical — they're cheaper.
+[`auditctl(8)`'s own performance guidance](https://man7.org/linux/man-pages/man8/auditctl.8.html) is
+direct about the cost: "Syscall rules get evaluated for each syscall for every program. If you have
+10 syscall rules, every program on your system will delay during a syscall while the audit system
+evaluates each rule."
+
+The fix isn't fewer rules so much as *combined* ones — the man page's own advice is to "try to
+combine as many as you can whenever the filter, action, key, and fields are identical," so one rule
+listing multiple `-S` syscalls beats the same syscalls spread across separate rules. Its other
+headline tip is to "use file system auditing wherever practical," which is worth reading carefully,
+because it does **not** mean going back to the deprecated `-w` watches: it means putting a `-F path=`
+or `-F dir=` filter on an arch-scoped syscall rule, exactly as the starter set above does. That way
+"the kernel will not evaluate it each and every syscall. It will be handled by the filesystem
+auditing code and only checked on filesystem related syscalls."
 
 Start from the short list above, confirm it's not generating more volume than you can actually
 review, and extend deliberately from there rather than starting from a 200-line rule file copied
@@ -181,8 +205,20 @@ flowchart LR
     E -. tune volume .-> B
 ```
 
-Persist your rules in `/etc/audit/rules.d/*.rules` (loaded automatically on `auditd` start, via
-`augenrules`) rather than only running `auditctl` interactively — rules added with bare
+Persist your rules in `/etc/audit/rules.d/*.rules` — [`augenrules` merges them into
+`/etc/audit/audit.rules`](https://man7.org/linux/man-pages/man8/augenrules.8.html) and the daemon
+loads them on start — rather than only running `auditctl` interactively, since rules added with bare
 `auditctl` don't survive a reboot. [Bulwark](/)'s own `logging-auditing` category checks that
-`auditd` is installed at all, alongside remote log forwarding and process accounting — the config
-above is what to actually put in it once it is.
+`auditd` is installed at all, alongside remote log forwarding and process accounting — on servers
+via `bulwarkctl scan` over SSH, and on a desktop in the GUI, where "this machine has no audit trail
+at all" is exactly the kind of finding that otherwise goes unnoticed for years. The config above is
+what to actually put in it once it is.
+
+## References
+
+- [`auditctl(8)`](https://man7.org/linux/man-pages/man8/auditctl.8.html) — the `-b` kernel default of 64, the `-w` watch deprecation ("deprecated due to poor system performance"), the "DISABLED BY DEFAULT" `never,task` section, `--loginuid-immutable`, and the PERFORMANCE TIPS quoted above.
+- [`audit.rules(7)`](https://man7.org/linux/man-pages/man7/audit.rules.7.html) — why an arch-less file watch audits every syscall, and the `auid` / `unset` / `4294967295` equivalence.
+- [`augenrules(8)`](https://man7.org/linux/man-pages/man8/augenrules.8.html) — how `/etc/audit/rules.d/*.rules` gets loaded.
+- [`pam_loginuid(8)`](https://man7.org/linux/man-pages/man8/pam_loginuid.8.html) — where `auid` is set, and why it must not be reset by `su`/`sudo`.
+- [audit-userspace `src/auditctl.c`](https://github.com/linux-audit/audit-userspace/blob/master/src/auditctl.c) — the exact 32/64-bit mismatch warning text.
+- [audit-userspace `rules/10-no-audit.rules`](https://github.com/linux-audit/audit-userspace/blob/master/rules/10-no-audit.rules) — the upstream file whose `never,task` rule silently suppresses everything.

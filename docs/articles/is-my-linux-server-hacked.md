@@ -35,8 +35,9 @@ lsof -i             # every process with an open network connection (helps confi
 Read `ss -tulpn` looking specifically for a listening port you don't recognize, or a familiar
 port owned by a process that shouldn't be able to bind it. [Bulwark](/)'s `network-egress`
 rules automate exactly two of the most common opportunistic patterns here: a VNC/remote-desktop
-listener on port 5900-range or 6080 that was never intentionally set up, and ngrok's local
-inspector port (4040) — the telltale sign of an active outbound tunnel.
+listener on port 5900-range or 6080 that was never intentionally set up, and
+[ngrok's local inspector port (4040)](https://ngrok.com/docs/agent/web-inspection-interface/) —
+the telltale sign of an active outbound tunnel.
 
 ## Who has actually logged in
 
@@ -148,4 +149,14 @@ scan that reads the same locations (listening ports, systemd units, cron, shell 
 behind, on a schedule short enough to matter, which is the entire design premise behind
 [Bulwark](/) — see the [architecture doc](/guide/architecture) for the full reasoning. Running
 that scan regularly, before you have a reason to suspect anything, is what turns this checklist
-from a stressful hour into a five-minute "no, we're clean" confirmation.
+from a stressful hour into a five-minute "no, we're clean" confirmation. On a server that's
+`bulwarkctl scan` over SSH; on your own Linux desktop — which is a target too, and the machine
+where nobody is watching the logs — it's the app running in the background and telling you when
+one of these checks starts failing.
+
+## References
+
+- [How do I deal with a compromised server?](https://serverfault.com/questions/218005/how-do-i-deal-with-a-compromised-server) — the 2011 Server Fault thread this checklist updates.
+- [ngrok web inspection interface](https://ngrok.com/docs/agent/web-inspection-interface/) — why a listener on port 4040 means an active tunnel.
+- [MITRE ATT&CK: Persistence (TA0003)](https://attack.mitre.org/tactics/TA0003/) and [Defense Evasion (TA0005)](https://attack.mitre.org/tactics/TA0005/) — the technique catalogs behind the persistence and track-covering checks above.
+- [Bulwark's rule pack](https://github.com/vietanhdev/bulwark/tree/main/rules) — the rules named here (`BLWK-PERSIST-001`/`002`, `BLWK-ACCT-001`, `BLWK-EVASION-001`, `BLWK-ROOTKIT-001`, `BLWK-FIM-003`), as shipped.

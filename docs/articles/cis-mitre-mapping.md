@@ -9,7 +9,9 @@ description: >-
 "CIS-mapped" and "MITRE ATT&CK-aligned" show up on a lot of security-tool marketing pages as an
 unverifiable claim. [Bulwark](/)'s rule pack carries these references as a structured field on
 every rule YAML file, not prose — which means the mapping below isn't a summary, it's a direct
-count pulled from `rules/*/*.yaml` right now.
+count pulled from [`rules/*/*.yaml`](https://github.com/vietanhdev/bulwark/tree/main/rules) right
+now. Every number on this page is one command away from being checked, and the commands are at the
+bottom.
 
 ## The real numbers
 
@@ -112,10 +114,33 @@ framework, what's actually covered, and what's failing right now?* Because the r
 structured data on every rule rather than a separate document to keep in sync by hand, Bulwark's
 Compliance view cross-references it against open findings automatically — showing per-framework
 pass/fail coverage that updates the moment a scan re-runs, not a static mapping table that drifts
-out of date the first time a rule changes. This is also directly checkable against an established
-tool: the [Lynis benchmark](/research/lynis-benchmark) documents a specific case where Bulwark's
-kernel-hardening rules itemize individual findings (`BLWK-KERNEL-008`/`016`/`017`, covering kexec,
-ICMP redirects, and martian-packet logging respectively) where Lynis's own report only surfaces
-one aggregate "some sysctl values differ from profile" line — the structured mapping isn't just
-bookkeeping, it's what makes a finding traceable back to the specific control or technique it
-affects instead of a general hardening suggestion you have to go dig into a log to decode.
+out of date the first time a rule changes. It's the difference between a finding that says "some
+sysctl values differ from the profile" and one that says *this* kernel setting is wrong, here's its
+live value, here's the CIS control and the ATT&CK technique it belongs to, here's the fix. That's
+also why the desktop app can render a compliance view at all rather than a wall of log lines — and
+why `bulwarkctl scan --json` on a server emits the same references in machine-readable form, for
+whatever you pipe it into.
+
+## Check every number on this page yourself
+
+The rule pack is [plain YAML in the repository](https://github.com/vietanhdev/bulwark/tree/main/rules).
+Nothing above is a claim you have to take on trust:
+
+```bash
+git clone https://github.com/vietanhdev/bulwark && cd bulwark
+
+ls rules/*/*.yaml | wc -l                              # 59 rules
+grep -ho 'CIS-[A-Za-z0-9._-]*' rules/*/*.yaml | sort -u | wc -l    # 33 distinct CIS control IDs
+grep -ho 'ATTACK-T[0-9.]*'     rules/*/*.yaml | sort -u | wc -l    # 27 distinct ATT&CK technique IDs
+grep -l 'references: \[\]'     rules/*/*.yaml                      # the 4 rules with no reference
+```
+
+Or, without cloning anything, `bulwarkctl rules list` prints the same rule set with its references
+straight from the binary you're already running.
+
+## References
+
+- [Bulwark's rule pack](https://github.com/vietanhdev/bulwark/tree/main/rules) — the source of every count on this page; each rule's `references:` field is what's being counted.
+- [CIS Benchmarks](https://www.cisecurity.org/cis-benchmarks) — the control numbering (§1.5.x, §3.1–3.2, §5.2.x, §6.1–6.2) cited by the `CIS-*` references.
+- [MITRE ATT&CK](https://attack.mitre.org/) — the technique IDs cited by the `ATTACK-T*` references; each `T####` above links from ATT&CK's own catalog.
+- [Bulwark's architecture doc](/guide/architecture) — how the rule engine reads these fields and what the Compliance view does with them.

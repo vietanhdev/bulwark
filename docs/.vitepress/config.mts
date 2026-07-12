@@ -94,7 +94,7 @@ export default withMermaid({
   transformPageData(pageData) {
     // Per-page canonical + og:url — without this every page's <head> claims the homepage
     // as canonical (the head[] array above is site-wide), which tells search engines to
-    // ignore /guide/architecture and /research/lynis-benchmark as duplicates of "/".
+    // ignore /guide/architecture and the articles as duplicates of "/".
     const canonicalUrl = `${SITE_URL}/${pageData.relativePath}`
       .replace(/index\.md$/, "")
       .replace(/\.md$/, "");
@@ -171,7 +171,6 @@ export default withMermaid({
       { text: "Download", link: "/download" },
       { text: "Guide", link: "/guide/architecture" },
       { text: "Articles", link: "/articles/ssh-hardening-checklist" },
-      { text: "Research", link: "/research/lynis-benchmark" },
       { text: "Collaborate", link: "/collaborate" },
       { text: "GitHub", link: "https://github.com/vietanhdev/bulwark" },
     ],
@@ -180,6 +179,7 @@ export default withMermaid({
         text: "Guide",
         items: [
           { text: "Architecture & design", link: "/guide/architecture" },
+          { text: "AI security scanning", link: "/guide/ai-security" },
           { text: "Contributing", link: "/guide/contributing" },
           { text: "Collaborate", link: "/collaborate" },
         ],
@@ -235,15 +235,6 @@ export default withMermaid({
           {
             text: "fail2ban vs. CrowdSec vs. denyhosts",
             link: "/articles/fail2ban-vs-crowdsec-vs-denyhosts",
-          },
-        ],
-      },
-      {
-        text: "Research",
-        items: [
-          {
-            text: "Bulwark vs. Lynis benchmark",
-            link: "/research/lynis-benchmark",
           },
         ],
       },

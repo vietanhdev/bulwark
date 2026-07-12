@@ -29,7 +29,6 @@ const SITE = "bulwark.nrl.ai";
 const CARD_TITLES = {
   "index.md": "Bulwark",
   "guide/architecture.md": "Architecture",
-  "research/lynis-benchmark.md": "Bulwark vs. 5 Established Tools",
   "articles/ssh-hardening-checklist.md": "SSH Hardening on Linux",
   "articles/linux-persistence-techniques.md": "How Attackers Persist on Linux",
   "articles/choosing-a-linux-security-scanner.md": "Choosing a Linux Security Scanner",
@@ -45,9 +44,9 @@ const CARD_TITLES = {
   "articles/fail2ban-vs-crowdsec-vs-denyhosts.md": "fail2ban vs. CrowdSec vs. denyhosts",
 };
 
-/** Every page that should carry a card: the landing page, the guide, research, all articles. */
+/** Every page that should carry a card: the landing page, the guide, and all articles. */
 function pagesNeedingCards() {
-  const pages = ["index.md", "guide/architecture.md", "research/lynis-benchmark.md"];
+  const pages = ["index.md", "guide/architecture.md"];
   for (const f of readdirSync(join(DOCS, "articles")).sort()) {
     if (f.endsWith(".md")) pages.push(`articles/${f}`);
   }

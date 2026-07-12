@@ -32,7 +32,9 @@ opens an *outbound* connection that the attacker connects back through. This is 
 chosen over an inbound listener: outbound connections routinely sail past firewall rules that
 would block anything trying to listen for incoming traffic, and `Restart=always` means it
 survives both reboots and manual kills. Bulwark's `BLWK-PERSIST-001` matches `ExecStart` against
-exactly this class of tool.
+exactly this class of tool — MITRE catalogs the mechanism as
+[T1543.002 (Create or Modify System Process: Systemd Service)](https://attack.mitre.org/techniques/T1543/002/)
+and the tunnel itself as [T1572 (Protocol Tunneling)](https://attack.mitre.org/techniques/T1572/).
 
 **Exfil notifications.** A close cousin:
 
@@ -63,7 +65,8 @@ from the host entirely — nothing malicious is ever written to disk between run
 and executed in memory each time. It also means the attacker can change what runs at any time,
 on their own schedule, without touching the compromised host again. Bulwark's `BLWK-ACCT-001`
 matches this `curl|wget ... | sh` shape specifically, across `crontab`, `/etc/cron.d/`, and the
-systemd-timer equivalents.
+systemd-timer equivalents — MITRE's entry for this one is
+[T1053.003 (Scheduled Task/Job: Cron)](https://attack.mitre.org/techniques/T1053/003/).
 
 ## Defense evasion: covering the tracks
 
@@ -80,12 +83,15 @@ Setting `HISTSIZE=0` or clearing `HISTFILE` means every command run in that shel
 the one that installed the persistence mechanism in the first place — leaves no trace. This
 isn't always malicious; some people do this deliberately for privacy on a shared machine. But
 it's worth *confirming* which, rather than assuming. `BLWK-EVASION-001` flags shell startup
-files that suppress history recording, precisely so this gets a second look instead of a pass.
+files that suppress history recording, precisely so this gets a second look instead of a pass —
+MITRE tracks it as
+[T1070.003 (Indicator Removal: Clear Command History)](https://attack.mitre.org/techniques/T1070/003/).
 
 ## Why these three, specifically
 
-There's a long tail of persistence techniques — MITRE ATT&CK's Persistence tactic alone lists
-dozens of sub-techniques. These three (systemd, cron, and history suppression) are the ones
+There's a long tail of persistence techniques —
+[MITRE ATT&CK's Persistence tactic](https://attack.mitre.org/tactics/TA0003/) alone lists dozens of
+sub-techniques. These three (systemd, cron, and history suppression) are the ones
 that show up overwhelmingly often in real opportunistic compromises of Linux desktops and
 small servers, because they require no special privilege beyond what a compromised user account
 already has, they're simple to set up, and — critically — they're static configuration that sits
@@ -97,6 +103,17 @@ planted.
 That's the actual design premise behind Bulwark: rather than trying to catch an intrusion at the
 exact moment it happens (which needs kernel-level real-time monitoring — eBPF, Falco-style —
 explicitly out of scope for a v1 desktop tool), catch the durable *evidence* it leaves behind,
-on a schedule short enough to matter. See the [architecture doc](/guide/architecture) for the
+on a schedule short enough to matter. The desktop app does this continuously on the machine
+you're using, with a file watcher on exactly the paths above (`/etc/systemd/system/`, crontab,
+shell startup files), so a unit planted this afternoon surfaces this afternoon; `bulwarkctl scan`
+runs the same rules over SSH on a server. See the [architecture doc](/guide/architecture) for the
 full reasoning, or the [SSH hardening checklist](/articles/ssh-hardening-checklist) for the other
 half of the picture — how the attacker most likely got in to begin with.
+
+## References
+
+- [MITRE ATT&CK: Persistence (TA0003)](https://attack.mitre.org/tactics/TA0003/) — the full catalog these three techniques sit inside.
+- [T1543.002 — Create or Modify System Process: Systemd Service](https://attack.mitre.org/techniques/T1543/002/), and [T1572 — Protocol Tunneling](https://attack.mitre.org/techniques/T1572/) for the reverse-tunnel `ExecStart`.
+- [T1053.003 — Scheduled Task/Job: Cron](https://attack.mitre.org/techniques/T1053/003/) — the cron downloader.
+- [T1070.003 — Indicator Removal: Clear Command History](https://attack.mitre.org/techniques/T1070/003/) — `HISTSIZE=0` / `unset HISTFILE`.
+- [Bulwark's rule pack](https://github.com/vietanhdev/bulwark/tree/main/rules) — `BLWK-PERSIST-001`/`002`, `BLWK-ACCT-001` and `BLWK-EVASION-001` as shipped, each carrying the ATT&CK reference above as a structured field (see [the mapping](/articles/cis-mitre-mapping)).
