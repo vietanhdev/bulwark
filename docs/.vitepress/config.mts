@@ -172,6 +172,7 @@ export default withMermaid({
       { text: "Guide", link: "/guide/architecture" },
       { text: "Articles", link: "/articles/ssh-hardening-checklist" },
       { text: "Research", link: "/research/lynis-benchmark" },
+      { text: "Collaborate", link: "/collaborate" },
       { text: "GitHub", link: "https://github.com/vietanhdev/bulwark" },
     ],
     sidebar: [
@@ -180,6 +181,7 @@ export default withMermaid({
         items: [
           { text: "Architecture & design", link: "/guide/architecture" },
           { text: "Contributing", link: "/guide/contributing" },
+          { text: "Collaborate", link: "/collaborate" },
         ],
       },
       {
