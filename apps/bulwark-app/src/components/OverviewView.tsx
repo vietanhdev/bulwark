@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { Check, Radar, RotateCw, Square } from "lucide-react";
+import { Check, ChevronRight, Radar, RotateCw, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { PageShell, SectionLabel } from "@/components/PageShell";
-import { HardeningRing } from "@/components/HardeningRing";
 import { StatusHero, type ProtectionStatus } from "@/components/StatusHero";
 import { type Finding } from "@/components/FindingCard";
 import { CategoryFindings, groupFindingsByCategory } from "@/components/CategoryFindings";
-import { SEVERITY_ORDER, railStyle, type Severity } from "@/components/Severity";
-import { computeHardeningIndex } from "@/lib/hardening";
+import { SEVERITY_ORDER, SeverityDot, railStyle, type Severity } from "@/components/Severity";
+import { type View } from "@/components/Sidebar";
+import { computeHardeningIndex, type HardeningIndex } from "@/lib/hardening";
 import { useRevision } from "@/lib/revision";
 import { cn } from "@/lib/utils";
 
@@ -99,7 +99,7 @@ const PROFILE_NEEDS = ["server"];
 const bySeverity = (a: Finding, b: Finding) =>
   SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity);
 
-export function OverviewView() {
+export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) {
   const { revision, bump } = useRevision();
 
   const [scanning, setScanning] = useState(false);
@@ -185,13 +185,19 @@ export function OverviewView() {
   const scanModules = useMemo(() => {
     const worstOf = (fs: Finding[]): Severity | null =>
       SEVERITY_ORDER.find((s) => fs.some((f) => f.severity === s)) ?? null;
-    const isFim = (f: Finding) => ruleCategoryById.get(f.rule_id) === "file-integrity";
-    const compliance = findings.filter((f) => !f.rule_id.startsWith("BLWK-AI-") && !isFim(f));
+    // Bucket by the same rule-id identity each detail tab uses, so a tile's count always matches
+    // the tab it links to: File integrity keys on BLWK-FIM- (see IntegrityView), Agent Security on
+    // BLWK-AI-, and Compliance is everything else from the config engine (file-integrity excluded —
+    // it has its own tab).
+    const isFim = (f: Finding) => f.rule_id.startsWith("BLWK-FIM-");
+    const isAgent = (f: Finding) => f.rule_id.startsWith("BLWK-AI-");
+    const compliance = findings.filter((f) => !isAgent(f) && !isFim(f));
     const fim = findings.filter(isFim);
-    const agent = findings.filter((f) => f.rule_id.startsWith("BLWK-AI-"));
+    const agent = findings.filter(isAgent);
     return [
       {
         key: "compliance",
+        view: "compliance" as View,
         label: "Compliance",
         issueCount: compliance.length,
         worst: worstOf(compliance),
@@ -199,6 +205,7 @@ export function OverviewView() {
       },
       {
         key: "antivirus",
+        view: "antivirus" as View,
         label: "Antivirus",
         issueCount: threats.length,
         worst: threats.length > 0 ? ("critical" as Severity) : null,
@@ -206,6 +213,7 @@ export function OverviewView() {
       },
       {
         key: "agent-security",
+        view: "agent-security" as View,
         label: "Agent Security",
         issueCount: agent.length,
         worst: worstOf(agent),
@@ -213,17 +221,43 @@ export function OverviewView() {
       },
       {
         key: "file-integrity",
+        view: "integrity" as View,
         label: "File integrity",
         issueCount: fim.length,
         worst: worstOf(fim),
         scanned: hasScanned,
       },
     ];
-  }, [findings, ruleCategoryById, threats, hasScanned, agentScanned, avScanned]);
+  }, [findings, threats, hasScanned, agentScanned, avScanned]);
 
   const counts = useMemo(
     () => SEVERITY_ORDER.map((sev) => ({ sev, count: findings.filter((f) => f.severity === sev).length })),
     [findings],
+  );
+
+  // Findings filters. A machine with issues across every subsystem is a long list; a reader who
+  // wants "just the criticals" or "just Agent Security" should be able to say so. The posture bar's
+  // legend doubles as the severity control — clicking a severity there filters the list to it.
+  const [severityFilter, setSeverityFilter] = useState<Severity | null>(null);
+  const [scanFilter, setScanFilter] = useState<"compliance" | "agent-security" | "file-integrity" | null>(
+    null,
+  );
+  const toggleSeverityFilter = (sev: Severity) => setSeverityFilter((cur) => (cur === sev ? null : sev));
+
+  const scanOf = (f: Finding): "compliance" | "agent-security" | "file-integrity" =>
+    f.rule_id.startsWith("BLWK-AI-")
+      ? "agent-security"
+      : f.rule_id.startsWith("BLWK-FIM-")
+        ? "file-integrity"
+        : "compliance";
+
+  const visibleFindings = useMemo(
+    () =>
+      findings.filter(
+        (f) =>
+          (!severityFilter || f.severity === severityFilter) && (!scanFilter || scanOf(f) === scanFilter),
+      ),
+    [findings, severityFilter, scanFilter],
   );
 
   // Findings grouped by the category that produced them, worst-severity group first. Browsing and
@@ -231,8 +265,8 @@ export function OverviewView() {
   // kernel ones — matches how you'd actually remediate: you open one config file and fix every
   // finding that lives in it, rather than hopping between subsystems down a flat list.
   const groupedFindings = useMemo(
-    () => groupFindingsByCategory(findings, (id) => ruleCategoryById.get(id) ?? "other"),
-    [findings, ruleCategoryById],
+    () => groupFindingsByCategory(visibleFindings, (id) => ruleCategoryById.get(id) ?? "other"),
+    [visibleFindings, ruleCategoryById],
   );
 
   // Which category sections are collapsed. Everything starts expanded — the findings are what you
@@ -471,12 +505,24 @@ export function OverviewView() {
       }
     >
       <div className="flex flex-col gap-8">
-        {/* The verdict, and the number behind it, side by side — the two things you open this
-            app to find out. */}
-        <div className="flex flex-wrap items-center justify-between gap-6 rounded-lg border border-border bg-card px-6 py-5">
-          <StatusHero status={status} counts={counts} host={host} />
-          {hardening && <HardeningRing index={hardening} />}
-        </div>
+        <VerdictPanel
+          status={status}
+          counts={counts}
+          host={host}
+          hardening={hardening}
+          severityFilter={severityFilter}
+          onToggleSeverity={toggleSeverityFilter}
+        />
+
+        {/* The four scanners, at a glance and one click from their detail page. */}
+        <section>
+          <SectionLabel>Scans</SectionLabel>
+          <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
+            {scanModules.map((m) => (
+              <ScanTile key={m.key} module={m} onClick={() => onNavigate(m.view)} />
+            ))}
+          </div>
+        </section>
 
         <section>
           <SectionLabel>Scan scope</SectionLabel>
@@ -582,45 +628,53 @@ export function OverviewView() {
         ))}
 
         <section>
-          <SectionLabel>Scans</SectionLabel>
-          <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
-            {scanModules.map(({ key, label, issueCount, worst, scanned }) => (
-              <div
-                key={key}
-                className="rail flex items-center gap-2.5 rounded-md border border-border bg-card py-2.5 pr-3"
-                style={railStyle(!scanned ? "info" : (worst ?? "resolved"))}
-              >
-                {!scanned ? (
-                  // Not run this session — unknown, not clean. A dash rather than a tick or a count.
-                  <span className="flex h-4 w-4 shrink-0 items-center justify-center font-mono text-[11px] text-muted-foreground/60">
-                    –
-                  </span>
-                ) : issueCount === 0 ? (
-                  <Check
-                    className="h-4 w-4 shrink-0"
-                    style={{ color: "var(--sev-resolved)" }}
-                    strokeWidth={2.5}
-                  />
-                ) : (
-                  <span
-                    className="flex h-4 w-4 shrink-0 items-center justify-center font-mono text-[11px] font-semibold"
-                    style={{ color: `var(--sev-${worst}-fg)` }}
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+            <div className="font-mono text-[11px] font-semibold tracking-widest text-muted-foreground uppercase">
+              {severityFilter || scanFilter
+                ? `${visibleFindings.length} of ${findings.length} findings`
+                : `${findings.length} finding${findings.length === 1 ? "" : "s"}`}
+            </div>
+            {findings.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Filter findings">
+                {(["compliance", "agent-security", "file-integrity"] as const)
+                  .filter((k) => findings.some((f) => scanOf(f) === k))
+                  .map((k) => {
+                    const on = scanFilter === k;
+                    const label =
+                      k === "agent-security" ? "Agent" : k === "file-integrity" ? "Integrity" : "Compliance";
+                    return (
+                      <button
+                        key={k}
+                        type="button"
+                        aria-pressed={on}
+                        onClick={() => setScanFilter(on ? null : k)}
+                        className={cn(
+                          "rounded-md border px-2 py-1 text-[11px] transition-colors",
+                          "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+                          on
+                            ? "border-foreground/25 bg-accent font-medium text-accent-foreground"
+                            : "border-border text-muted-foreground hover:bg-accent/50",
+                        )}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                {(severityFilter || scanFilter) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSeverityFilter(null);
+                      setScanFilter(null);
+                    }}
+                    className="rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
                   >
-                    {issueCount}
-                  </span>
+                    Clear
+                  </button>
                 )}
-                <span className="min-w-0 flex-1 truncate text-sm">{label}</span>
               </div>
-            ))}
+            )}
           </div>
-        </section>
-
-        <section>
-          {findings.length > 0 && (
-            <SectionLabel>
-              {findings.length} finding{findings.length === 1 ? "" : "s"}
-            </SectionLabel>
-          )}
 
           {findings.length === 0 && !scanning && !loading && (
             <div className="rounded-lg border border-dashed border-border py-14 text-center">
@@ -631,6 +685,15 @@ export function OverviewView() {
                 {hasScanned
                   ? "Every rule that ran came back clean."
                   : "Run a scan to check its configuration against the rule pack."}
+              </p>
+            </div>
+          )}
+
+          {findings.length > 0 && visibleFindings.length === 0 && (
+            <div className="rounded-lg border border-dashed border-border py-10 text-center">
+              <p className="text-sm font-medium">No findings match this filter.</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Clear the filter to see all {findings.length} findings.
               </p>
             </div>
           )}
@@ -651,5 +714,159 @@ export function OverviewView() {
         </section>
       </div>
     </PageShell>
+  );
+}
+
+/** score → the severity token that colours the hardening figure, on the same scale Lynis uses. */
+function hardeningColor(score: number): string {
+  if (score >= 85) return "var(--sev-resolved-fg)";
+  if (score >= 65) return "var(--sev-medium-fg)";
+  return "var(--sev-critical-fg)";
+}
+
+/**
+ * The Overview's thesis, as one panel: the verdict in plain words (the shield, coloured by how the
+ * host is doing), the hardening index as a plain figure rather than a gauge, and — the signature —
+ * a full-width *posture bar* that shows the machine's threat surface as a proportioned band of its
+ * open findings by severity. The band's legend is also the severity filter for the list below, so
+ * the picture of what's wrong and the control for reading it are the same object.
+ */
+function VerdictPanel({
+  status,
+  counts,
+  host,
+  hardening,
+  severityFilter,
+  onToggleSeverity,
+}: {
+  status: ProtectionStatus;
+  counts: { sev: Severity; count: number }[];
+  host: string | null;
+  hardening: HardeningIndex | null;
+  severityFilter: Severity | null;
+  onToggleSeverity: (sev: Severity) => void;
+}) {
+  const present = counts.filter((c) => c.count > 0);
+  const total = present.reduce((n, c) => n + c.count, 0);
+
+  return (
+    <div className="rounded-lg border border-border bg-card px-6 py-5">
+      <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
+        <StatusHero status={status} counts={counts} host={host} showBreakdown={false} />
+        {hardening && (
+          <div className="text-right">
+            <div className="font-mono text-[10px] font-semibold tracking-widest text-muted-foreground uppercase">
+              Hardening index
+            </div>
+            <div className="mt-0.5 flex items-baseline justify-end gap-1">
+              <span
+                className="font-heading text-3xl font-semibold tabular-nums"
+                style={{ color: hardeningColor(hardening.score) }}
+              >
+                {hardening.score}
+              </span>
+              <span className="font-mono text-xs text-muted-foreground">/100</span>
+            </div>
+            <div className="font-mono text-[11px] text-muted-foreground">
+              {hardening.passing}/{hardening.evaluated} checks passing
+            </div>
+          </div>
+        )}
+      </div>
+
+      {total > 0 && (
+        <div className="mt-5">
+          {/* The bar: one segment per present severity, width proportional to its share of the
+              open findings — the machine's threat surface at a glance, not just a count. */}
+          <div
+            className="flex h-2 w-full overflow-hidden rounded-full bg-muted"
+            role="img"
+            aria-label="Findings by severity"
+          >
+            {present.map(({ sev, count }) => (
+              <div
+                key={sev}
+                style={{ width: `${(count / total) * 100}%`, background: `var(--sev-${sev})` }}
+                className={cn(
+                  "h-full transition-opacity",
+                  severityFilter && severityFilter !== sev && "opacity-30",
+                )}
+              />
+            ))}
+          </div>
+          <div className="mt-2.5 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+            {present.map(({ sev, count }) => {
+              const on = severityFilter === sev;
+              return (
+                <button
+                  key={sev}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() => onToggleSeverity(sev)}
+                  title={`Show only ${sev} findings`}
+                  className={cn(
+                    "flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs transition-colors",
+                    "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+                    on
+                      ? "border-foreground/25 bg-accent"
+                      : "border-transparent text-muted-foreground hover:bg-accent/50",
+                  )}
+                >
+                  <SeverityDot severity={sev} />
+                  <span className="font-mono font-semibold tabular-nums text-foreground">{count}</span>
+                  <span className="capitalize">{sev}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One scanner, as a button into its detail tab: a severity-railed tile showing the engine name and
+ *  its status — a tick when clean, the open-issue count when not, a dash when it hasn't run this
+ *  session (unknown, never a false all-clear). */
+function ScanTile({
+  module: m,
+  onClick,
+}: {
+  module: {
+    key: string;
+    label: string;
+    issueCount: number;
+    worst: Severity | null;
+    scanned: boolean;
+  };
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "rail group flex items-center gap-2.5 rounded-md border border-border bg-card py-2.5 pr-2.5 pl-3 text-left transition-colors",
+        "hover:bg-accent/40 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
+      )}
+      style={railStyle(!m.scanned ? "info" : (m.worst ?? "resolved"))}
+    >
+      {!m.scanned ? (
+        <span className="flex h-4 w-4 shrink-0 items-center justify-center font-mono text-[11px] text-muted-foreground/60">
+          –
+        </span>
+      ) : m.issueCount === 0 ? (
+        <Check className="h-4 w-4 shrink-0" style={{ color: "var(--sev-resolved)" }} strokeWidth={2.5} />
+      ) : (
+        <span
+          className="flex h-4 w-4 shrink-0 items-center justify-center font-mono text-[11px] font-semibold"
+          style={{ color: `var(--sev-${m.worst}-fg)` }}
+        >
+          {m.issueCount}
+        </span>
+      )}
+      <span className="min-w-0 flex-1 truncate text-sm">{m.label}</span>
+      <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/40 transition-transform group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
+    </button>
   );
 }

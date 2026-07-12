@@ -15,8 +15,8 @@ import { SettingsView, type MonitoringStatus } from "@/components/SettingsView";
 import { RevisionProvider, useRevision } from "@/lib/revision";
 import { cn } from "@/lib/utils";
 
-const VIEWS: { id: View; render: (active: boolean) => React.ReactNode }[] = [
-  { id: "overview", render: () => <OverviewView /> },
+const VIEWS: { id: View; render: (active: boolean, navigate: (v: View) => void) => React.ReactNode }[] = [
+  { id: "overview", render: (_active, navigate) => <OverviewView onNavigate={navigate} /> },
   { id: "agent-security", render: (active) => <AgentSecurityView active={active} /> },
   { id: "antivirus", render: (active) => <AntivirusView active={active} /> },
   { id: "integrity", render: () => <IntegrityView /> },
@@ -95,7 +95,7 @@ function Shell() {
               `{view === "x" && <X/>}`. */}
           {VIEWS.filter(({ id }) => visited.has(id)).map(({ id, render }) => (
             <div key={id} className={cn("h-full", view !== id && "hidden")}>
-              {render(view === id)}
+              {render(view === id, setView)}
             </div>
           ))}
         </main>

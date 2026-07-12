@@ -42,9 +42,12 @@ type ScanEvent =
 const bySeverity = (a: Finding, b: Finding) =>
   SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity);
 
-// A finding from the configuration rule pack, as opposed to the agent scanner whose findings share
-// the same shape but carry BLWK-AI- ids. This tab is the config engine's own results page.
-const isComplianceFinding = (f: Finding) => !f.rule_id.startsWith("BLWK-AI-");
+// A finding this tab owns: the configuration rule pack, minus the two engines that have their own
+// tabs — the agent scanner (BLWK-AI-) and file integrity (BLWK-FIM-). Excluding FIM here is what
+// keeps this tab's count equal to the Overview's Compliance tile and distinct from the File
+// integrity tab, so the same issue is never counted in two places.
+const isComplianceFinding = (f: Finding) =>
+  !f.rule_id.startsWith("BLWK-AI-") && !f.rule_id.startsWith("BLWK-FIM-");
 
 /**
  * The Compliance scan's results: every configuration issue the rule pack found on this host —
@@ -122,8 +125,11 @@ export function ComplianceView() {
     onEvent.onmessage = (msg) => {
       switch (msg.event) {
         case "finding":
-          // Every finding over this Channel is from the config engine, so no filtering needed.
-          setFindings((prev) => [...prev, msg.data].sort(bySeverity));
+          // The config engine streams file-integrity findings too; they belong to the File
+          // integrity tab, so filter them out here to match the reloaded/aggregated views.
+          if (isComplianceFinding(msg.data)) {
+            setFindings((prev) => [...prev, msg.data].sort(bySeverity));
+          }
           break;
         case "privilegedSkipped":
           setSkippedPrivileged(msg.data.collectors);

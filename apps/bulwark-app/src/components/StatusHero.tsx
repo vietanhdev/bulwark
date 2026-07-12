@@ -38,6 +38,9 @@ interface StatusHeroProps {
   counts: { sev: Severity; count: number }[];
   /** Host fingerprint of the most recent scan, or null if nothing has run. */
   host: string | null;
+  /** When false, the inline severity-dot breakdown is suppressed — used where a fuller breakdown
+   *  (e.g. the Overview's posture bar) already owns that job, so the two don't duplicate. */
+  showBreakdown?: boolean;
 }
 
 /**
@@ -48,7 +51,7 @@ interface StatusHeroProps {
  * host still displayed a row of five zeros — five reminders of things that aren't wrong, which
  * is precisely the opposite of what a clean scan should feel like.
  */
-export function StatusHero({ status, counts, host }: StatusHeroProps) {
+export function StatusHero({ status, counts, host, showBreakdown = true }: StatusHeroProps) {
   const scanning = status === "scanning";
   const { icon: Icon, headline, shieldColor } = CONFIG[scanning ? "idle" : status];
   const present = counts.filter((c) => c.count > 0);
@@ -80,7 +83,7 @@ export function StatusHero({ status, counts, host }: StatusHeroProps) {
           {scanning ? "Scanning this host…" : headline}
         </h2>
 
-        {!scanning && present.length > 0 && (
+        {showBreakdown && !scanning && present.length > 0 && (
           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
             {present.map(({ sev, count }) => (
               <span key={sev} className="flex items-center gap-1.5 text-sm">
