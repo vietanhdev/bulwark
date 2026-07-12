@@ -75,7 +75,7 @@ jobs:
       rules_or_collectors: ${{ steps.filter.outputs.rules_or_collectors }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
