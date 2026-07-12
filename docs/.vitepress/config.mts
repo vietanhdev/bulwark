@@ -1,11 +1,29 @@
 import { defineConfig } from "vitepress";
 
+// Canonical domain (not yet deployed — see AGENTS.md's current-status notes). Set here so
+// the sitemap and social-preview tags are correct from day one instead of needing a
+// find-and-replace once hosting is actually wired up.
+const SITE_URL = "https://bulwark.nrl.ai";
+
 export default defineConfig({
   title: "Bulwark",
   description: "A Linux host security scanner with a native CLI and desktop GUI.",
   lang: "en-US",
   cleanUrls: true,
-  head: [["link", { rel: "icon", type: "image/svg+xml", href: "/shield.svg" }]],
+  sitemap: { hostname: SITE_URL },
+  head: [
+    ["link", { rel: "icon", type: "image/svg+xml", href: "/shield.svg" }],
+    ["meta", { property: "og:type", content: "website" }],
+    ["meta", { property: "og:title", content: "Bulwark" }],
+    [
+      "meta",
+      {
+        property: "og:description",
+        content: "A Linux host security scanner with a native CLI and desktop GUI.",
+      },
+    ],
+    ["meta", { property: "og:url", content: SITE_URL }],
+  ],
 
   themeConfig: {
     logo: "/shield.svg",
