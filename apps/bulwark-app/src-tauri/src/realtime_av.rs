@@ -127,18 +127,18 @@ pub fn initial_state() -> Inner {
             .unwrap_or_default()
     };
 
-    let stored = db_path()
+    let mut stored = db_path()
         .filter(|p| p.exists())
         .and_then(|p| Store::open(&p).ok());
 
     let enabled = stored
-        .as_ref()
+        .as_mut()
         .and_then(|s| s.get_setting(KEY_ENABLED).ok().flatten())
         .map(|v| v == "true")
         .unwrap_or(false);
 
     let watched_paths = stored
-        .as_ref()
+        .as_mut()
         .and_then(|s| s.get_setting(KEY_WATCHED_PATHS).ok().flatten())
         .and_then(|v| serde_json::from_str::<Vec<String>>(&v).ok())
         .map(|paths| paths.into_iter().map(PathBuf::from).collect::<Vec<_>>())

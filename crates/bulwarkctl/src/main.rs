@@ -389,7 +389,7 @@ fn main() -> anyhow::Result<()> {
                 println!("no scans recorded yet at {}", db_path.display());
                 return Ok(());
             }
-            let store = Store::open(&db_path)?;
+            let mut store = Store::open(&db_path)?;
             println!("{} scan run(s) recorded", store.count_scan_runs()?);
         }
         Commands::Fim { action } => match action {

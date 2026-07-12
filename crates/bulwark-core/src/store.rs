@@ -1,729 +1,731 @@
-use crate::models::{Finding, FindingStatus, ScanRun, Severity};
-use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, OptionalExtension};
-use rusqlite_migration::{Migrations, M};
-use std::path::Path;
-use std::sync::LazyLock;
+//! Persistence, on Diesel.
+//!
+//! Every query in here is expressed through Diesel's typed DSL rather than as a SQL string. That
+//! is not a stylistic preference: the columns a query touches are checked against `schema.rs` at
+//! **compile time**, so adding or renaming a column fails the build at every site that needed
+//! updating, instead of at runtime on a user's machine — which is precisely how the previous
+//! hand-written SQL let a column drift out of sync with the code that read it.
+//!
+//! The one place raw SQL survives is `PRAGMA` statements and schema introspection, which are not
+//! expressible in the DSL by design (they aren't queries over the schema, they're statements
+//! *about* it).
+//!
+//! Three engines, three table pairs, three different reconciliation models — see
+//! `migrations/*/up.sql` for why they are deliberately not one table.
 
-/// Ordered, versioned schema migrations, tracked in SQLite's built-in `PRAGMA user_version`.
+use crate::models::{Finding, FindingStatus, ScanRun, Severity};
+use crate::schema::{
+    ai_findings, ai_scan_runs, findings, log_findings, log_scan_runs, scan_runs, settings,
+};
+use chrono::{DateTime, Utc};
+use diesel::prelude::*;
+use diesel::sqlite::SqliteConnection;
+use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
+use std::path::Path;
+
+/// The migrations, compiled into the binary. Nothing at runtime needs the `diesel` CLI or a
+/// migrations directory on disk — a packaged `bulwarkctl` or desktop app carries its own schema.
 ///
-/// This replaces an earlier `CREATE TABLE IF NOT EXISTS` + best-effort `ALTER TABLE` approach
-/// that had no version number at all: it couldn't tell what state a given user's database was
-/// actually in, it swallowed *every* `ALTER` error (not just the expected "duplicate column"
-/// one, so a genuinely failed upgrade passed silently — against this project's own
-/// never-a-silent-drop invariant), and it had no way to express a data backfill or a
-/// non-defaulted `NOT NULL` column. Bulwark is shipping installable packages now, so a user's
-/// database survives across upgrades and the schema has to be able to evolve under it safely.
-///
-/// **Append only.** Never edit or reorder a migration that has shipped — a database already
-/// stamped at version N will never re-run it, so an edit silently splits users into two
-/// different schemas depending on when they first installed. Add a new `M::up` instead.
-static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
-    Migrations::new(vec![
-        // V1 — the schema as it stood when versioning was introduced.
-        M::up(
-            r#"
-            CREATE TABLE IF NOT EXISTS scan_runs (
-                id                 TEXT PRIMARY KEY,
-                started_at         TEXT NOT NULL,
-                finished_at        TEXT,
-                host_fingerprint   TEXT NOT NULL,
-                rules_loaded       INTEGER NOT NULL,
-                rules_failed       INTEGER NOT NULL,
-                collectors_failed  INTEGER NOT NULL,
-                rule_load_errors   TEXT NOT NULL,
-                collector_errors   TEXT NOT NULL,
-                privileged_skipped TEXT NOT NULL,
-                total_findings     INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE TABLE IF NOT EXISTS findings (
-                id            TEXT PRIMARY KEY,
-                scan_run_id   TEXT NOT NULL REFERENCES scan_runs(id),
-                rule_id       TEXT NOT NULL,
-                severity      TEXT NOT NULL,
-                title         TEXT NOT NULL,
-                explanation   TEXT NOT NULL,
-                fix_hint      TEXT NOT NULL,
-                context       TEXT NOT NULL,
-                first_seen    TEXT NOT NULL,
-                last_seen     TEXT NOT NULL,
-                status        TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_findings_rule_status ON findings(rule_id, status);
-            CREATE INDEX IF NOT EXISTS idx_findings_scan_run ON findings(scan_run_id);
-            "#,
-        ),
-        // V2 — small key-value store for persisted preferences (real-time AV protection's
-        // enabled flag and watched-folder list). See `get_setting`/`set_setting`.
-        M::up(
-            r#"
-            CREATE TABLE IF NOT EXISTS settings (
-                key   TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-            "#,
-        ),
-        // V3 — the log-analysis pipeline's own tables, kept separate from the config-scan
-        // `scan_runs`/`findings` on purpose: log alerts are event-shaped (timestamped, they
-        // recur), config findings are state-shaped (they persist until fixed), and their
-        // reconciliation identities differ ((rule_id, group_key) vs a context subset). Sharing
-        // one table would also mean relaxing the `findings.scan_run_id → scan_runs.id` FK.
-        M::up(
-            r#"
-            CREATE TABLE IF NOT EXISTS log_scan_runs (
-                id                  TEXT PRIMARY KEY,
-                started_at          TEXT NOT NULL,
-                finished_at         TEXT,
-                host_fingerprint    TEXT NOT NULL,
-                events_read         INTEGER NOT NULL,
-                events_decoded      INTEGER NOT NULL,
-                decoders_loaded     INTEGER NOT NULL,
-                rules_loaded        INTEGER NOT NULL,
-                total_findings      INTEGER NOT NULL,
-                decoder_load_errors TEXT NOT NULL,
-                rule_load_errors    TEXT NOT NULL,
-                read_errors         TEXT NOT NULL,
-                rule_eval_errors    TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS log_findings (
-                id               TEXT PRIMARY KEY,
-                log_scan_run_id  TEXT NOT NULL REFERENCES log_scan_runs(id),
-                rule_id          TEXT NOT NULL,
-                severity         TEXT NOT NULL,
-                category         TEXT NOT NULL,
-                title            TEXT NOT NULL,
-                explanation      TEXT NOT NULL,
-                fix_hint         TEXT NOT NULL,
-                group_key        TEXT NOT NULL,
-                match_count      INTEGER NOT NULL,
-                context          TEXT NOT NULL,
-                refs             TEXT NOT NULL,
-                observed_at      TEXT NOT NULL,
-                first_seen       TEXT NOT NULL,
-                last_seen        TEXT NOT NULL,
-                occurrences      INTEGER NOT NULL DEFAULT 1
-            );
-            CREATE INDEX IF NOT EXISTS idx_log_findings_rule_key ON log_findings(rule_id, group_key);
-            CREATE INDEX IF NOT EXISTS idx_log_findings_scan ON log_findings(log_scan_run_id);
-            "#,
-        ),
-        // V4 — the AI-artifact scan's own tables, separate from the config `scan_runs`/`findings`
-        // for the same reasons V3's log tables are: AI findings carry a different shape (a file
-        // path, a line, which assistant, a redactable flag), and their persistence model is
-        // latest-run-wins rather than the config path's cross-run reconciliation — a redacted
-        // secret should simply be *absent* from the next scan, not linger as an "open" row the
-        // config reconciler would never auto-close (see `persist_ai_scan`).
-        M::up(
-            r#"
-            CREATE TABLE IF NOT EXISTS ai_scan_runs (
-                id                 TEXT PRIMARY KEY,
-                started_at         TEXT NOT NULL,
-                finished_at        TEXT,
-                host_fingerprint   TEXT NOT NULL,
-                workspaces_scanned TEXT NOT NULL,
-                artifacts_scanned  INTEGER NOT NULL,
-                total_findings     INTEGER NOT NULL,
-                workspaces_capped  INTEGER NOT NULL,
-                scan_errors        TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS ai_findings (
-                id             TEXT PRIMARY KEY,
-                ai_scan_run_id TEXT NOT NULL REFERENCES ai_scan_runs(id),
-                rule_id        TEXT NOT NULL,
-                severity       TEXT NOT NULL,
-                tool           TEXT NOT NULL,
-                title          TEXT NOT NULL,
-                explanation    TEXT NOT NULL,
-                fix_hint       TEXT NOT NULL,
-                file           TEXT NOT NULL,
-                line           INTEGER,
-                evidence       TEXT NOT NULL,
-                refs           TEXT NOT NULL,
-                redactable     INTEGER NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_ai_findings_run ON ai_findings(ai_scan_run_id);
-            "#,
-        ),
-    ])
-});
+/// **Append-only.** A database already stamped with a migration will never re-run it, so editing
+/// one silently splits users into two different schemas depending on when they first installed.
+/// Add a new migration directory instead.
+pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
 pub struct Store {
-    conn: Connection,
+    conn: SqliteConnection,
+}
+
+// ---- row types -----------------------------------------------------------------------------
+//
+// Diesel maps a table row to a struct. These are the *storage* shapes, kept separate from the
+// domain types in `models` — timestamps are RFC 3339 text and UUIDs are text on disk (legible to
+// anyone who opens the database with `sqlite3`, which matters for a security tool), and the
+// conversion to and from the typed domain model happens here rather than leaking into callers.
+
+#[derive(Queryable, Selectable, Insertable)]
+#[diesel(table_name = scan_runs)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+struct ScanRunRow {
+    id: String,
+    started_at: String,
+    finished_at: Option<String>,
+    host_fingerprint: String,
+    rules_loaded: i64,
+    rules_failed: i64,
+    collectors_failed: i64,
+    rule_load_errors: String,
+    collector_errors: String,
+    privileged_skipped: String,
+    total_findings: i64,
+}
+
+impl ScanRunRow {
+    fn from_scan(scan: &ScanRun) -> anyhow::Result<Self> {
+        Ok(Self {
+            id: scan.id.to_string(),
+            started_at: scan.started_at.to_rfc3339(),
+            finished_at: scan.finished_at.map(|t| t.to_rfc3339()),
+            host_fingerprint: scan.host_fingerprint.clone(),
+            rules_loaded: scan.rules_loaded as i64,
+            rules_failed: scan.rule_load_errors.len() as i64,
+            collectors_failed: scan.collector_errors.len() as i64,
+            rule_load_errors: serde_json::to_string(&scan.rule_load_errors)?,
+            collector_errors: serde_json::to_string(&scan.collector_errors)?,
+            privileged_skipped: serde_json::to_string(&scan.privileged_collectors_skipped)?,
+            // The full count the engine produced for *this* scan, independent of how
+            // persist_and_reconcile later reassigns individual findings' scan_run_id to whichever
+            // run most recently observed them — that reassignment is about "what does the
+            // dashboard show right now", this column is about "what did this point in time look
+            // like", which is what the History view needs.
+            total_findings: scan.findings.len() as i64,
+        })
+    }
+}
+
+#[derive(Queryable, Selectable, Insertable, AsChangeset)]
+#[diesel(table_name = findings)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+struct FindingRow {
+    id: String,
+    scan_run_id: String,
+    rule_id: String,
+    severity: String,
+    title: String,
+    explanation: String,
+    fix_hint: String,
+    context: String,
+    first_seen: String,
+    last_seen: String,
+    status: String,
+}
+
+impl FindingRow {
+    fn from_finding(f: &Finding) -> anyhow::Result<Self> {
+        Ok(Self {
+            id: f.id.to_string(),
+            scan_run_id: f.scan_run_id.to_string(),
+            rule_id: f.rule_id.clone(),
+            severity: severity_str(f.severity).to_string(),
+            title: f.title.clone(),
+            explanation: f.explanation.clone(),
+            fix_hint: f.fix_hint.clone(),
+            context: serde_json::to_string(&f.context)?,
+            first_seen: f.first_seen.to_rfc3339(),
+            last_seen: f.last_seen.to_rfc3339(),
+            status: status_str(f.status).to_string(),
+        })
+    }
+
+    /// Fallible on purpose. A row whose `id`/`scan_run_id` isn't a UUID was never written by
+    /// Bulwark, but "can't happen" is not a licence to silently substitute a nil UUID and carry on
+    /// — that's the silent-corruption failure mode this project refuses everywhere else. It
+    /// surfaces as an error instead.
+    fn try_into_finding(self) -> anyhow::Result<Finding> {
+        Ok(Finding {
+            id: self
+                .id
+                .parse()
+                .map_err(|e| anyhow::anyhow!("findings.id '{}' is not a UUID: {e}", self.id))?,
+            scan_run_id: self.scan_run_id.parse().map_err(|e| {
+                anyhow::anyhow!(
+                    "findings.scan_run_id '{}' is not a UUID: {e}",
+                    self.scan_run_id
+                )
+            })?,
+            rule_id: self.rule_id,
+            severity: parse_severity(&self.severity),
+            title: self.title,
+            explanation: self.explanation,
+            fix_hint: self.fix_hint,
+            context: serde_json::from_str(&self.context).unwrap_or_default(),
+            first_seen: parse_ts(&self.first_seen),
+            last_seen: parse_ts(&self.last_seen),
+            status: parse_status(&self.status),
+        })
+    }
+}
+
+#[derive(Queryable, Selectable, Insertable)]
+#[diesel(table_name = log_scan_runs)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+struct LogScanRunRow {
+    id: String,
+    started_at: String,
+    finished_at: Option<String>,
+    host_fingerprint: String,
+    events_read: i64,
+    events_decoded: i64,
+    decoders_loaded: i64,
+    rules_loaded: i64,
+    total_findings: i64,
+    decoder_load_errors: String,
+    rule_load_errors: String,
+    read_errors: String,
+    rule_eval_errors: String,
+}
+
+#[derive(Queryable, Selectable, Insertable)]
+#[diesel(table_name = log_findings)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+struct LogFindingRow {
+    id: String,
+    log_scan_run_id: String,
+    rule_id: String,
+    severity: String,
+    category: String,
+    title: String,
+    explanation: String,
+    fix_hint: String,
+    group_key: String,
+    match_count: i64,
+    context: String,
+    refs: String,
+    observed_at: String,
+    first_seen: String,
+    last_seen: String,
+    occurrences: i64,
+}
+
+#[derive(Queryable, Selectable, Insertable)]
+#[diesel(table_name = ai_scan_runs)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+struct AiScanRunRow {
+    id: String,
+    started_at: String,
+    finished_at: Option<String>,
+    host_fingerprint: String,
+    workspaces_scanned: String,
+    artifacts_scanned: i64,
+    total_findings: i64,
+    workspaces_capped: bool,
+    scan_errors: String,
+}
+
+#[derive(Queryable, Selectable, Insertable)]
+#[diesel(table_name = ai_findings)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+struct AiFindingRow {
+    id: String,
+    ai_scan_run_id: String,
+    rule_id: String,
+    severity: String,
+    tool: String,
+    title: String,
+    explanation: String,
+    fix_hint: String,
+    file: String,
+    line: Option<i64>,
+    evidence: String,
+    refs: String,
+    redactable: bool,
+}
+
+impl AiFindingRow {
+    fn from_finding(f: &crate::ai_scan::AiFinding, run_id: &str) -> anyhow::Result<Self> {
+        Ok(Self {
+            id: f.id.to_string(),
+            ai_scan_run_id: run_id.to_string(),
+            rule_id: f.rule_id.clone(),
+            severity: severity_str(f.severity).to_string(),
+            tool: f.tool.clone(),
+            title: f.title.clone(),
+            explanation: f.explanation.clone(),
+            fix_hint: f.fix_hint.clone(),
+            file: f.file.clone(),
+            line: f.line.map(|l| l as i64),
+            evidence: f.evidence.clone(),
+            refs: serde_json::to_string(&f.references)?,
+            redactable: f.redactable,
+        })
+    }
+
+    fn try_into_finding(self) -> anyhow::Result<crate::ai_scan::AiFinding> {
+        Ok(crate::ai_scan::AiFinding {
+            id: self
+                .id
+                .parse()
+                .map_err(|e| anyhow::anyhow!("ai_findings.id '{}' is not a UUID: {e}", self.id))?,
+            rule_id: self.rule_id,
+            severity: parse_severity(&self.severity),
+            tool: self.tool,
+            title: self.title,
+            explanation: self.explanation,
+            fix_hint: self.fix_hint,
+            file: self.file,
+            line: self.line.map(|l| l as usize),
+            evidence: self.evidence,
+            references: serde_json::from_str(&self.refs).unwrap_or_default(),
+            redactable: self.redactable,
+        })
+    }
 }
 
 impl Store {
+    /// Opens (creating if needed) the database at `path` and brings its schema up to date.
+    ///
+    /// A database written by a pre-Diesel build is **moved aside**, not migrated: Bulwark's
+    /// findings are a cache of host state, re-derived by the next scan, so there is nothing in
+    /// there worth the risk of a bespoke cross-framework migration. The old file is preserved as
+    /// `<name>.pre-orm.bak` rather than deleted — it is the user's data, even if we no longer read
+    /// it — and the fact is logged rather than done silently.
     pub fn open(path: &Path) -> anyhow::Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let mut conn = Connection::open(path)?;
-        Self::migrate(&mut conn)?;
-        Ok(Store { conn })
+        if is_pre_orm_database(path)? {
+            let backup = path.with_extension("db.pre-orm.bak");
+            std::fs::rename(path, &backup)?;
+            eprintln!(
+                "[bulwark] the findings database predates the current schema; it has been kept at \
+                 {} and a fresh one created. Findings are rebuilt by the next scan.",
+                backup.display()
+            );
+        }
+
+        let url = path
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("database path is not valid UTF-8"))?;
+        let mut conn = SqliteConnection::establish(url)?;
+        prepare(&mut conn)?;
+        Ok(Self { conn })
     }
 
+    /// An ephemeral database, for tests.
     pub fn open_in_memory() -> anyhow::Result<Self> {
-        let mut conn = Connection::open_in_memory()?;
-        Self::migrate(&mut conn)?;
-        Ok(Store { conn })
+        let mut conn = SqliteConnection::establish(":memory:")?;
+        prepare(&mut conn)?;
+        Ok(Self { conn })
     }
 
-    fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
-        Self::baseline_pre_versioning_db(conn)?;
-        MIGRATIONS.to_latest(conn)?;
-        Ok(())
+    /// True once every embedded migration has been applied — i.e. the schema is current.
+    pub fn is_schema_current(&mut self) -> anyhow::Result<bool> {
+        self.conn
+            .has_pending_migration(MIGRATIONS)
+            .map(|pending| !pending)
+            .map_err(|e| anyhow::anyhow!("checking migrations: {e}"))
     }
 
-    /// Repairs a database created *before* `user_version` tracking existed, so that V1 can then
-    /// be applied to it like any other.
-    ///
-    /// Such a database is indistinguishable from a brand-new one by `user_version` alone (both
-    /// report 0), so the schema itself is what's inspected. V1 is written entirely with
-    /// `IF NOT EXISTS`, which means re-running it over an already-populated legacy database is
-    /// harmless — it no-ops on the tables that exist and creates any that don't. The one thing
-    /// `IF NOT EXISTS` *cannot* express is a column added to a table that already exists, so
-    /// adding `total_findings` is the sole job left here.
-    ///
-    /// Deliberately does not stamp the version itself: letting the normal migration run do that
-    /// keeps a single source of truth for versioning, and means a legacy database still gets
-    /// every `CREATE TABLE` in V1 (an earlier draft that stamped straight to V1 skipped them,
-    /// and any table missing from that old database would have stayed missing).
-    ///
-    /// The column check is a precise `pragma_table_info` lookup rather than the previous
-    /// "run the `ALTER` and discard whatever happens" — a real failure now propagates instead
-    /// of being silently swallowed along with the expected duplicate-column error.
-    fn baseline_pre_versioning_db(conn: &Connection) -> anyhow::Result<()> {
-        let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version != 0 {
-            return Ok(()); // Already under migration control.
-        }
-
-        let has_scan_runs = conn
-            .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'scan_runs'")?
-            .exists([])?;
-        if !has_scan_runs {
-            return Ok(()); // Brand-new database — the migrations build it from scratch.
-        }
-
-        let has_total_findings = conn
-            .prepare("SELECT 1 FROM pragma_table_info('scan_runs') WHERE name = 'total_findings'")?
-            .exists([])?;
-        if !has_total_findings {
-            conn.execute(
-                "ALTER TABLE scan_runs ADD COLUMN total_findings INTEGER NOT NULL DEFAULT 0",
-                [],
-            )?;
-        }
-
-        Ok(())
-    }
-
-    /// The schema version this build expects, for tests and diagnostics.
-    pub fn schema_version(conn: &Connection) -> anyhow::Result<i64> {
-        Ok(conn.pragma_query_value(None, "user_version", |r| r.get(0))?)
-    }
-
-    /// Persists a `ScanRun` as-is: every finding becomes a new row, with no relationship
-    /// to findings from earlier runs. Fine for a one-off `bulwarkctl scan`, but a periodic
-    /// monitoring loop that calls this on every tick would insert a fresh duplicate row
-    /// for every persisting issue every time — see [`Self::persist_and_reconcile`], which
-    /// is what continuous monitoring actually needs.
+    /// Inserts a scan and all of its findings verbatim. No reconciliation — every finding becomes
+    /// a new row. Used where a raw record of one run is wanted; the monitoring/scan paths use
+    /// [`Self::persist_and_reconcile`] instead.
     pub fn persist(&mut self, scan: &ScanRun) -> anyhow::Result<()> {
-        let tx = self.conn.transaction()?;
-        Self::insert_scan_run(&tx, scan)?;
-        for f in &scan.findings {
-            Self::insert_finding(&tx, f)?;
-        }
-        tx.commit()?;
-        Ok(())
+        self.conn.transaction(|conn| {
+            diesel::insert_into(scan_runs::table)
+                .values(ScanRunRow::from_scan(scan)?)
+                .execute(conn)?;
+            for f in &scan.findings {
+                diesel::insert_into(findings::table)
+                    .values(FindingRow::from_finding(f)?)
+                    .execute(conn)?;
+            }
+            Ok::<_, anyhow::Error>(())
+        })
     }
 
-    /// Persists a `ScanRun` the way continuous monitoring needs: a finding matching an
-    /// already-*open* finding from a previous run gets its `last_seen` (and stored context)
-    /// updated in place rather than becoming a duplicate row, and keeps its original
-    /// `first_seen`. Anything left over — genuinely new, or a rule_id+context that was
-    /// previously `resolved`/`acknowledged` and has now reappeared — is inserted fresh and
-    /// returned as "newly appeared," which is what should actually trigger a notification.
-    /// Deliberately does *not* auto-resolve findings that are simply absent from this run:
-    /// absence could mean "fixed," or it could mean the relevant collector was skipped (e.g.
-    /// a privileged one during an unprivileged periodic run) — conflating those would be a
-    /// worse bug than not auto-resolving at all, so resolving stays an explicit user action.
+    /// Persists a `ScanRun` the way continuous monitoring needs.
+    ///
+    /// A finding matching an already-*open* finding from a previous run has its `last_seen` (and
+    /// stored context) updated in place rather than becoming a duplicate row, and keeps its
+    /// original `first_seen`. Anything left over — genuinely new, or a rule_id+context that was
+    /// previously resolved and has reappeared — is inserted fresh and returned as "newly
+    /// appeared", which is what should actually trigger a notification.
     ///
     /// **Fixed issues are closed, but only when the scan can prove they're fixed.** An open row
-    /// whose rule is in `scan.rules_evaluated` (the rule demonstrably ran) and which nothing in
-    /// this scan matched is marked `resolved` — the check ran and no longer fires, so the issue
-    /// is genuinely gone. A row whose rule is *not* in that list (its collector was skipped for
-    /// lack of privilege, was inapplicable, or errored) is left untouched, because absence there
-    /// proves nothing. This is the distinction that makes auto-resolution safe; before it existed
-    /// the reconciler could only ever add findings, so a remediated issue stayed on the dashboard
-    /// forever — recording a FIM baseline, for instance, left "no file-integrity baseline yet"
-    /// on screen permanently even though every later scan came back clean.
+    /// whose rule is in `scan.rules_evaluated` (the rule demonstrably ran and evaluated cleanly)
+    /// and which nothing in this scan matched is marked `resolved`. A row whose rule is *not* in
+    /// that list — its collector was skipped for lack of privilege, was inapplicable, errored, or
+    /// the scan was stopped before reaching it — is left untouched, because absence proves nothing
+    /// there. Before this distinction existed the reconciler could only ever add findings, so a
+    /// remediated issue stayed on the dashboard forever: recording a file-integrity baseline left
+    /// "no baseline yet" on screen permanently even though every later scan came back clean.
     ///
-    /// "Same underlying issue" is *not* exact-string equality on the serialized context —
-    /// a real bug caught live in this project's own dashboard: extending `login_defs.rs` to
-    /// add two new always-present fields changed the context JSON shape for the *existing*
-    /// `BLWK-ACCT-002` rule (which doesn't even read those fields), which broke the old
-    /// exact-match query and produced a second row for the same real-world issue on the very
-    /// next scan. A collector's fact shape evolving over time is routine, not exceptional —
-    /// the identity check has to tolerate it. A stored context now matches if it's a *subset*
-    /// of the newly observed context (every key the old row already had still has the same
-    /// value) — new fields a collector has since started reporting don't break continuity for
-    /// rules that never cared about them, but two genuinely different rows for a list-shaped
-    /// collector (e.g. `module_blacklist`'s five rows, one per module) still can't cross-match
-    /// each other, since their *shared* discriminating field (e.g. `module`) would differ.
+    /// "Same underlying issue" is *not* exact-string equality on the serialized context. A real
+    /// bug caught in this project's own dashboard: extending `login_defs.rs` to add two new
+    /// always-present fields changed the context JSON shape for the *existing* `BLWK-ACCT-002`
+    /// rule (which doesn't even read those fields), which broke the old exact-match query and
+    /// produced a second row for the same real-world issue on the very next scan. A collector's
+    /// fact shape evolving is routine, so the identity check tolerates it: a stored context
+    /// matches if it's a *subset* of the newly observed one. Two genuinely different rows from a
+    /// list-shaped collector still can't cross-match, since their discriminating field differs.
     pub fn persist_and_reconcile(&mut self, scan: &ScanRun) -> anyhow::Result<Vec<Finding>> {
-        let tx = self.conn.transaction()?;
-        Self::insert_scan_run(&tx, scan)?;
+        self.conn.transaction(|conn| {
+            diesel::insert_into(scan_runs::table)
+                .values(ScanRunRow::from_scan(scan)?)
+                .execute(conn)?;
 
-        let mut newly_appeared = Vec::new();
-        // Every pre-existing open row this scan re-observed. Whatever is left over — for a rule
-        // that demonstrably ran — is a fixed issue, and gets closed below.
-        let mut matched_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut newly_appeared = Vec::new();
+            // Every pre-existing open row this scan re-observed. Whatever is left over — for a
+            // rule that demonstrably ran — is a fixed issue, and gets closed below.
+            let mut matched_ids: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
 
-        for f in &scan.findings {
-            let mut stmt = tx.prepare(
-                "SELECT id, context FROM findings WHERE rule_id = ?1 AND status = 'open'",
-            )?;
-            let candidates: Vec<(String, String)> = stmt
-                .query_map(params![f.rule_id], |r| Ok((r.get(0)?, r.get(1)?)))?
-                .collect::<Result<_, _>>()?;
-            drop(stmt);
+            for f in &scan.findings {
+                let candidates: Vec<(String, String)> = findings::table
+                    .filter(findings::rule_id.eq(&f.rule_id))
+                    .filter(findings::status.eq("open"))
+                    .select((findings::id, findings::context))
+                    .load(conn)?;
 
-            let existing_id = candidates.into_iter().find_map(|(id, context_json)| {
-                if matched_ids.contains(&id) {
-                    // Already claimed by an earlier finding in this same scan — a list-shaped
-                    // collector's two rows must not both reconcile onto one stored row.
-                    return None;
-                }
-                let old_context: crate::models::Fact = serde_json::from_str(&context_json).ok()?;
-                is_context_subset(&old_context, &f.context).then_some(id)
-            });
+                let existing_id = candidates.into_iter().find_map(|(id, context_json)| {
+                    if matched_ids.contains(&id) {
+                        // Already claimed by an earlier finding in this same scan — a list-shaped
+                        // collector's two rows must not both reconcile onto one stored row.
+                        return None;
+                    }
+                    let old: crate::models::Fact = serde_json::from_str(&context_json).ok()?;
+                    is_context_subset(&old, &f.context).then_some(id)
+                });
 
-            match existing_id {
-                Some(existing_id) => {
-                    let context_json = serde_json::to_string(&f.context)?;
-                    tx.execute(
-                        "UPDATE findings SET last_seen = ?1, scan_run_id = ?2, context = ?3 WHERE id = ?4",
-                        params![
-                            f.last_seen.to_rfc3339(),
-                            f.scan_run_id.to_string(),
-                            context_json,
-                            existing_id
-                        ],
-                    )?;
-                    matched_ids.insert(existing_id);
-                }
-                None => {
-                    Self::insert_finding(&tx, f)?;
-                    // Register it as observed by *this* scan, or the resolve pass below would
-                    // immediately close the row we just inserted — it is, after all, an open row
-                    // for an evaluated rule that nothing has "matched".
-                    matched_ids.insert(f.id.to_string());
-                    newly_appeared.push(f.clone());
+                match existing_id {
+                    Some(id) => {
+                        diesel::update(findings::table.find(&id))
+                            .set((
+                                findings::last_seen.eq(f.last_seen.to_rfc3339()),
+                                findings::scan_run_id.eq(f.scan_run_id.to_string()),
+                                findings::context.eq(serde_json::to_string(&f.context)?),
+                            ))
+                            .execute(conn)?;
+                        matched_ids.insert(id);
+                    }
+                    None => {
+                        diesel::insert_into(findings::table)
+                            .values(FindingRow::from_finding(f)?)
+                            .execute(conn)?;
+                        // Register it as observed by *this* scan, or the resolve pass below would
+                        // immediately close the row we just inserted — it is, after all, an open
+                        // row for an evaluated rule that nothing has "matched".
+                        matched_ids.insert(f.id.to_string());
+                        newly_appeared.push(f.clone());
+                    }
                 }
             }
-        }
 
-        // Close what's demonstrably fixed: open rows belonging to a rule that ran in this scan
-        // and that this scan did not re-observe. Rules whose collector never ran are skipped
-        // here on purpose — see this function's doc comment.
-        for rule_id in &scan.rules_evaluated {
-            let mut stmt =
-                tx.prepare("SELECT id FROM findings WHERE rule_id = ?1 AND status = 'open'")?;
-            let open_ids: Vec<String> = stmt
-                .query_map(params![rule_id], |r| r.get(0))?
-                .collect::<Result<_, _>>()?;
-            drop(stmt);
+            // Close what's demonstrably fixed.
+            for rule_id in &scan.rules_evaluated {
+                let open_ids: Vec<String> = findings::table
+                    .filter(findings::rule_id.eq(rule_id))
+                    .filter(findings::status.eq("open"))
+                    .select(findings::id)
+                    .load(conn)?;
 
-            for id in open_ids {
-                if matched_ids.contains(&id) {
+                let stale: Vec<String> = open_ids
+                    .into_iter()
+                    .filter(|id| !matched_ids.contains(id))
+                    .collect();
+                if stale.is_empty() {
                     continue;
                 }
-                tx.execute(
-                    "UPDATE findings SET status = 'resolved', last_seen = ?1 WHERE id = ?2",
-                    params![scan.started_at.to_rfc3339(), id],
-                )?;
+                diesel::update(findings::table.filter(findings::id.eq_any(&stale)))
+                    .set((
+                        findings::status.eq("resolved"),
+                        findings::last_seen.eq(scan.started_at.to_rfc3339()),
+                    ))
+                    .execute(conn)?;
             }
-        }
 
-        tx.commit()?;
-        Ok(newly_appeared)
+            Ok::<_, anyhow::Error>(newly_appeared)
+        })
     }
 
-    fn insert_scan_run(tx: &rusqlite::Transaction, scan: &ScanRun) -> anyhow::Result<()> {
-        tx.execute(
-            "INSERT INTO scan_runs (id, started_at, finished_at, host_fingerprint, rules_loaded, rules_failed, collectors_failed, rule_load_errors, collector_errors, privileged_skipped, total_findings)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            params![
-                scan.id.to_string(),
-                scan.started_at.to_rfc3339(),
-                scan.finished_at.map(|t| t.to_rfc3339()),
-                scan.host_fingerprint,
-                scan.rules_loaded as i64,
-                scan.rule_load_errors.len() as i64,
-                scan.collector_errors.len() as i64,
-                serde_json::to_string(&scan.rule_load_errors)?,
-                serde_json::to_string(&scan.collector_errors)?,
-                serde_json::to_string(&scan.privileged_collectors_skipped)?,
-                // The full count the engine produced for *this* scan, independent of how
-                // persist_and_reconcile later reassigns individual findings' scan_run_id to
-                // whichever run most recently observed them — that reassignment is about
-                // "what does the dashboard show right now," this column is about "what did
-                // this specific point in time look like," which is what a history/timeline
-                // view needs and `count_findings_for_run` can't answer after reconciliation
-                // has moved rows off of older runs.
-                scan.findings.len() as i64,
-            ],
-        )?;
-        Ok(())
+    pub fn count_scan_runs(&mut self) -> anyhow::Result<i64> {
+        Ok(scan_runs::table.count().get_result(&mut self.conn)?)
     }
 
-    fn insert_finding(tx: &rusqlite::Transaction, f: &Finding) -> anyhow::Result<()> {
-        tx.execute(
-            "INSERT INTO findings (id, scan_run_id, rule_id, severity, title, explanation, fix_hint, context, first_seen, last_seen, status)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            params![
-                f.id.to_string(),
-                f.scan_run_id.to_string(),
-                f.rule_id,
-                severity_str(f.severity),
-                f.title,
-                f.explanation,
-                f.fix_hint,
-                serde_json::to_string(&f.context)?,
-                f.first_seen.to_rfc3339(),
-                f.last_seen.to_rfc3339(),
-                status_str(f.status),
-            ],
-        )?;
-        Ok(())
+    pub fn count_findings_for_run(&mut self, scan_run_id: &str) -> anyhow::Result<i64> {
+        Ok(findings::table
+            .filter(findings::scan_run_id.eq(scan_run_id))
+            .count()
+            .get_result(&mut self.conn)?)
     }
 
-    pub fn count_scan_runs(&self) -> anyhow::Result<i64> {
-        Ok(self
-            .conn
-            .query_row("SELECT COUNT(*) FROM scan_runs", [], |r| r.get(0))?)
-    }
-
-    pub fn count_findings_for_run(&self, scan_run_id: &str) -> anyhow::Result<i64> {
-        Ok(self.conn.query_row(
-            "SELECT COUNT(*) FROM findings WHERE scan_run_id = ?1",
-            params![scan_run_id],
-            |r| r.get(0),
-        )?)
-    }
-
-    /// Persists a [`LogScanRun`](crate::logs::LogScanRun), reconciling on `(rule_id, group_key)`
-    /// — the log analog of [`Self::persist_and_reconcile`]. A finding whose `(rule_id,
-    /// group_key)` already exists updates that row's `last_seen`/`match_count` and bumps an
-    /// `occurrences` counter in place (so a brute-force from the same IP recurring across
-    /// batches is one row that "keeps happening," not a flood of duplicates), keeping its
-    /// original `first_seen`. Genuinely new `(rule_id, group_key)` pairs are inserted and
-    /// returned as "newly appeared" — the set a notifier should actually fire on.
+    /// Persists a [`LogScanRun`](crate::logs::LogScanRun), reconciling on `(rule_id, group_key)` —
+    /// the log analog of [`Self::persist_and_reconcile`]. A finding whose `(rule_id, group_key)`
+    /// already exists updates that row's `last_seen`/`match_count` and bumps an `occurrences`
+    /// counter in place (a brute-force from the same IP recurring across batches is one row that
+    /// "keeps happening", not a flood of duplicates), keeping its original `first_seen`. Genuinely
+    /// new pairs are inserted and returned as "newly appeared".
     ///
-    /// Unlike the config path, identity here is an exact `(rule_id, group_key)` match rather
-    /// than a context subset: `group_key` is already the natural correlation identity (the
-    /// source IP, the user), so there's nothing to tolerate — two different keys are two
-    /// genuinely different alerts.
+    /// Identity here is an exact `(rule_id, group_key)` match rather than a context subset:
+    /// `group_key` is already the natural correlation identity (the source IP, the user), so
+    /// there's nothing to tolerate — two different keys are two genuinely different alerts.
     pub fn persist_log_scan(
         &mut self,
         scan: &crate::logs::LogScanRun,
     ) -> anyhow::Result<Vec<crate::logs::LogFinding>> {
-        let tx = self.conn.transaction()?;
-        tx.execute(
-            "INSERT INTO log_scan_runs (id, started_at, finished_at, host_fingerprint, events_read, events_decoded, decoders_loaded, rules_loaded, total_findings, decoder_load_errors, rule_load_errors, read_errors, rule_eval_errors)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-            params![
-                scan.id.to_string(),
-                scan.started_at.to_rfc3339(),
-                scan.finished_at.map(|t| t.to_rfc3339()),
-                scan.host_fingerprint,
-                scan.events_read as i64,
-                scan.events_decoded as i64,
-                scan.decoders_loaded as i64,
-                scan.rules_loaded as i64,
-                scan.findings.len() as i64,
-                serde_json::to_string(&scan.decoder_load_errors)?,
-                serde_json::to_string(&scan.rule_load_errors)?,
-                serde_json::to_string(&scan.read_errors)?,
-                serde_json::to_string(&scan.rule_eval_errors)?,
-            ],
-        )?;
+        self.conn.transaction(|conn| {
+            diesel::insert_into(log_scan_runs::table)
+                .values(LogScanRunRow {
+                    id: scan.id.to_string(),
+                    started_at: scan.started_at.to_rfc3339(),
+                    finished_at: scan.finished_at.map(|t| t.to_rfc3339()),
+                    host_fingerprint: scan.host_fingerprint.clone(),
+                    events_read: scan.events_read as i64,
+                    events_decoded: scan.events_decoded as i64,
+                    decoders_loaded: scan.decoders_loaded as i64,
+                    rules_loaded: scan.rules_loaded as i64,
+                    total_findings: scan.findings.len() as i64,
+                    decoder_load_errors: serde_json::to_string(&scan.decoder_load_errors)?,
+                    rule_load_errors: serde_json::to_string(&scan.rule_load_errors)?,
+                    read_errors: serde_json::to_string(&scan.read_errors)?,
+                    rule_eval_errors: serde_json::to_string(&scan.rule_eval_errors)?,
+                })
+                .execute(conn)?;
 
-        let mut newly_appeared = Vec::new();
-        for f in &scan.findings {
-            let existing: Option<String> = tx
-                .query_row(
-                    "SELECT id FROM log_findings WHERE rule_id = ?1 AND group_key = ?2",
-                    params![f.rule_id, f.group_key],
-                    |r| r.get(0),
-                )
-                .optional()?;
+            let mut newly_appeared = Vec::new();
+            for f in &scan.findings {
+                let existing: Option<String> = log_findings::table
+                    .filter(log_findings::rule_id.eq(&f.rule_id))
+                    .filter(log_findings::group_key.eq(&f.group_key))
+                    .select(log_findings::id)
+                    .first(conn)
+                    .optional()?;
 
-            match existing {
-                Some(id) => {
-                    tx.execute(
-                        "UPDATE log_findings SET last_seen = ?1, match_count = ?2, log_scan_run_id = ?3, occurrences = occurrences + 1 WHERE id = ?4",
-                        params![
-                            f.observed_at.to_rfc3339(),
-                            f.match_count as i64,
-                            scan.id.to_string(),
-                            id
-                        ],
-                    )?;
-                }
-                None => {
-                    tx.execute(
-                        "INSERT INTO log_findings (id, log_scan_run_id, rule_id, severity, category, title, explanation, fix_hint, group_key, match_count, context, refs, observed_at, first_seen, last_seen, occurrences)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 1)",
-                        params![
-                            f.id.to_string(),
-                            scan.id.to_string(),
-                            f.rule_id,
-                            severity_str(f.severity),
-                            f.category,
-                            f.title,
-                            f.explanation,
-                            f.fix_hint,
-                            f.group_key,
-                            f.match_count as i64,
-                            serde_json::to_string(&f.context)?,
-                            serde_json::to_string(&f.references)?,
-                            f.observed_at.to_rfc3339(),
-                            f.observed_at.to_rfc3339(),
-                            f.observed_at.to_rfc3339(),
-                        ],
-                    )?;
-                    newly_appeared.push(f.clone());
+                match existing {
+                    Some(id) => {
+                        diesel::update(log_findings::table.find(&id))
+                            .set((
+                                log_findings::last_seen.eq(f.observed_at.to_rfc3339()),
+                                log_findings::match_count.eq(f.match_count as i64),
+                                log_findings::log_scan_run_id.eq(scan.id.to_string()),
+                                log_findings::occurrences.eq(log_findings::occurrences + 1),
+                            ))
+                            .execute(conn)?;
+                    }
+                    None => {
+                        diesel::insert_into(log_findings::table)
+                            .values(LogFindingRow {
+                                id: f.id.to_string(),
+                                log_scan_run_id: scan.id.to_string(),
+                                rule_id: f.rule_id.clone(),
+                                severity: severity_str(f.severity).to_string(),
+                                category: f.category.clone(),
+                                title: f.title.clone(),
+                                explanation: f.explanation.clone(),
+                                fix_hint: f.fix_hint.clone(),
+                                group_key: f.group_key.clone(),
+                                match_count: f.match_count as i64,
+                                context: serde_json::to_string(&f.context)?,
+                                refs: serde_json::to_string(&f.references)?,
+                                observed_at: f.observed_at.to_rfc3339(),
+                                first_seen: f.observed_at.to_rfc3339(),
+                                last_seen: f.observed_at.to_rfc3339(),
+                                occurrences: 1,
+                            })
+                            .execute(conn)?;
+                        newly_appeared.push(f.clone());
+                    }
                 }
             }
-        }
-        tx.commit()?;
-        Ok(newly_appeared)
+            Ok::<_, anyhow::Error>(newly_appeared)
+        })
     }
 
-    pub fn count_log_scan_runs(&self) -> anyhow::Result<i64> {
-        Ok(self
-            .conn
-            .query_row("SELECT COUNT(*) FROM log_scan_runs", [], |r| r.get(0))?)
+    pub fn count_log_scan_runs(&mut self) -> anyhow::Result<i64> {
+        Ok(log_scan_runs::table.count().get_result(&mut self.conn)?)
     }
 
-    pub fn count_log_findings(&self) -> anyhow::Result<i64> {
-        Ok(self
-            .conn
-            .query_row("SELECT COUNT(*) FROM log_findings", [], |r| r.get(0))?)
+    pub fn count_log_findings(&mut self) -> anyhow::Result<i64> {
+        Ok(log_findings::table.count().get_result(&mut self.conn)?)
     }
 
-    /// Persists one AI-artifact scan. Unlike [`Self::persist_and_reconcile`], this is
-    /// latest-run-wins with no cross-run reconciliation: each scan inserts a fresh
-    /// `ai_scan_runs` row and its findings, and the snapshot always reads the most recent run.
-    /// That's the right model for artifact scanning specifically — a secret the user has since
-    /// redacted (or a config they've fixed) should simply be *gone* from the next scan, whereas
-    /// the config reconciler deliberately never auto-closes an absent finding (a privileged
-    /// collector might merely have been skipped). Two different absence-semantics, two tables.
+    /// Persists one agent-artifact scan. Unlike [`Self::persist_and_reconcile`], this is
+    /// latest-run-wins with no cross-run reconciliation: each scan inserts a fresh run and its
+    /// findings, and the snapshot always reads the most recent one. That is the right model for
+    /// artifact scanning specifically — a secret the user has since redacted, or a config they've
+    /// fixed, should simply be *gone* from the next scan, whereas the config reconciler
+    /// deliberately keeps a finding open when the check that would have cleared it never ran.
     pub fn persist_ai_scan(&mut self, report: &crate::ai_scan::AiScanReport) -> anyhow::Result<()> {
-        let tx = self.conn.transaction()?;
-        tx.execute(
-            "INSERT INTO ai_scan_runs (id, started_at, finished_at, host_fingerprint, workspaces_scanned, artifacts_scanned, total_findings, workspaces_capped, scan_errors)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                report.id.to_string(),
-                report.started_at.to_rfc3339(),
-                report.finished_at.map(|t| t.to_rfc3339()),
-                report.host_fingerprint,
-                serde_json::to_string(&report.workspaces_scanned)?,
-                report.artifacts_scanned as i64,
-                report.findings.len() as i64,
-                report.workspaces_capped as i64,
-                serde_json::to_string(&report.errors)?,
-            ],
-        )?;
-        for f in &report.findings {
-            tx.execute(
-                "INSERT INTO ai_findings (id, ai_scan_run_id, rule_id, severity, tool, title, explanation, fix_hint, file, line, evidence, refs, redactable)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-                params![
-                    f.id.to_string(),
-                    report.id.to_string(),
-                    f.rule_id,
-                    severity_str(f.severity),
-                    f.tool,
-                    f.title,
-                    f.explanation,
-                    f.fix_hint,
-                    f.file,
-                    f.line.map(|l| l as i64),
-                    f.evidence,
-                    serde_json::to_string(&f.references)?,
-                    f.redactable as i64,
-                ],
-            )?;
-        }
-        tx.commit()?;
-        Ok(())
+        self.conn.transaction(|conn| {
+            let run_id = report.id.to_string();
+            diesel::insert_into(ai_scan_runs::table)
+                .values(AiScanRunRow {
+                    id: run_id.clone(),
+                    started_at: report.started_at.to_rfc3339(),
+                    finished_at: report.finished_at.map(|t| t.to_rfc3339()),
+                    host_fingerprint: report.host_fingerprint.clone(),
+                    workspaces_scanned: serde_json::to_string(&report.workspaces_scanned)?,
+                    artifacts_scanned: report.artifacts_scanned as i64,
+                    total_findings: report.findings.len() as i64,
+                    workspaces_capped: report.workspaces_capped,
+                    scan_errors: serde_json::to_string(&report.errors)?,
+                })
+                .execute(conn)?;
+
+            for f in &report.findings {
+                diesel::insert_into(ai_findings::table)
+                    .values(AiFindingRow::from_finding(f, &run_id)?)
+                    .execute(conn)?;
+            }
+            Ok::<_, anyhow::Error>(())
+        })
     }
 
-    /// The most recent AI scan's summary + findings, or `None` if no AI scan has run — what a
-    /// freshly-opened AI Security tab shows without forcing a re-scan first, mirroring how
-    /// `dashboard_snapshot` restores the config scan's state.
-    pub fn latest_ai_scan(&self) -> anyhow::Result<Option<AiScanSnapshot>> {
-        let meta = self
-            .conn
-            .query_row(
-                "SELECT id, started_at, host_fingerprint, workspaces_scanned, artifacts_scanned, workspaces_capped
-                 FROM ai_scan_runs ORDER BY started_at DESC LIMIT 1",
-                [],
-                |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, String>(2)?,
-                        r.get::<_, String>(3)?,
-                        r.get::<_, i64>(4)?,
-                        r.get::<_, i64>(5)?,
-                    ))
-                },
-            )
+    /// The most recent agent scan's summary and findings, or `None` if none has run — what a
+    /// freshly-opened Agent Security tab shows without forcing a re-scan first.
+    pub fn latest_ai_scan(&mut self) -> anyhow::Result<Option<AiScanSnapshot>> {
+        let run: Option<AiScanRunRow> = ai_scan_runs::table
+            .order(ai_scan_runs::started_at.desc())
+            .select(AiScanRunRow::as_select())
+            .first(&mut self.conn)
             .optional()?;
 
-        let Some((
-            run_id,
-            started_at,
-            host_fingerprint,
-            workspaces_json,
-            artifacts_scanned,
-            capped,
-        )) = meta
-        else {
-            return Ok(None);
-        };
+        let Some(run) = run else { return Ok(None) };
 
-        let mut stmt = self.conn.prepare(
-            "SELECT id, rule_id, severity, tool, title, explanation, fix_hint, file, line, evidence, refs, redactable
-             FROM ai_findings WHERE ai_scan_run_id = ?1",
-        )?;
-        let findings = stmt
-            .query_map(params![run_id], row_to_ai_finding)?
-            .collect::<Result<Vec<_>, _>>()?;
+        let rows: Vec<AiFindingRow> = ai_findings::table
+            .filter(ai_findings::ai_scan_run_id.eq(&run.id))
+            .select(AiFindingRow::as_select())
+            .load(&mut self.conn)?;
 
         Ok(Some(AiScanSnapshot {
-            started_at: DateTime::parse_from_rfc3339(&started_at)?.with_timezone(&Utc),
-            host_fingerprint,
-            workspaces_scanned: serde_json::from_str(&workspaces_json)?,
-            artifacts_scanned: artifacts_scanned as usize,
-            workspaces_capped: capped != 0,
-            findings,
+            started_at: parse_ts(&run.started_at),
+            host_fingerprint: run.host_fingerprint,
+            workspaces_scanned: serde_json::from_str(&run.workspaces_scanned)?,
+            artifacts_scanned: run.artifacts_scanned as usize,
+            workspaces_capped: run.workspaces_capped,
+            findings: rows
+                .into_iter()
+                .map(AiFindingRow::try_into_finding)
+                .collect::<anyhow::Result<Vec<_>>>()?,
         }))
     }
 
-    /// Generic string key-value read, backing small persisted preferences (e.g. real-time
-    /// antivirus protection's enabled flag and watched-folder list) that don't warrant a
-    /// dedicated table of their own. Callers own their own value encoding (plain strings,
-    /// JSON, ...) — this table just stores and returns bytes-as-text.
-    pub fn get_setting(&self, key: &str) -> anyhow::Result<Option<String>> {
-        self.conn
-            .query_row(
-                "SELECT value FROM settings WHERE key = ?1",
-                params![key],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(Into::into)
+    /// Generic string key-value read, backing small persisted preferences (monitoring interval,
+    /// real-time AV toggle, agent-scan roots) that don't warrant a table of their own. Callers own
+    /// their value encoding; this just stores and returns text.
+    pub fn get_setting(&mut self, key: &str) -> anyhow::Result<Option<String>> {
+        Ok(settings::table
+            .find(key)
+            .select(settings::value)
+            .first(&mut self.conn)
+            .optional()?)
     }
 
     /// Upserts a setting — the counterpart to [`Self::get_setting`].
     pub fn set_setting(&mut self, key: &str, value: &str) -> anyhow::Result<()> {
-        self.conn.execute(
-            "INSERT INTO settings (key, value) VALUES (?1, ?2)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![key, value],
-        )?;
+        diesel::insert_into(settings::table)
+            .values((settings::key.eq(key), settings::value.eq(value)))
+            .on_conflict(settings::key)
+            .do_update()
+            .set(settings::value.eq(value))
+            .execute(&mut self.conn)?;
         Ok(())
     }
 
-    /// The state a freshly-opened window should actually show: everything currently open,
-    /// regardless of whether it was last touched by a manual scan or a background monitoring
-    /// tick. Reconciliation (`persist_and_reconcile`) is what makes `status = 'open'` mean
-    /// "the current picture" rather than "whatever the single latest run happened to see" —
-    /// a privileged finding only ever observed by an earlier manual privileged scan is still
-    /// legitimately open even if the most recent tick was unprivileged-only.
-    pub fn open_findings(&self) -> anyhow::Result<Vec<Finding>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, scan_run_id, rule_id, severity, title, explanation, fix_hint, context, first_seen, last_seen, status
-             FROM findings WHERE status = 'open' ORDER BY last_seen DESC",
-        )?;
-        let rows = stmt.query_map([], row_to_finding)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    /// The state a freshly-opened window should show: everything currently open, regardless of
+    /// whether it was last touched by a manual scan or a background monitoring tick. Reconciliation
+    /// is what makes `status = 'open'` mean "the current picture" rather than "whatever the single
+    /// latest run happened to see" — a privileged finding only ever observed by an earlier manual
+    /// privileged scan is still legitimately open even if the most recent tick was unprivileged.
+    pub fn open_findings(&mut self) -> anyhow::Result<Vec<Finding>> {
+        let rows: Vec<FindingRow> = findings::table
+            .filter(findings::status.eq("open"))
+            .order(findings::last_seen.desc())
+            .select(FindingRow::as_select())
+            .load(&mut self.conn)?;
+        rows.into_iter().map(FindingRow::try_into_finding).collect()
     }
 
     /// Metadata for the most recent scan run — host fingerprint, when it started, and which
-    /// collectors it had to skip for lack of privilege — so a freshly-opened window can show
-    /// "last checked ..." and the privileged-checks banner without the user re-scanning first.
-    pub fn latest_scan_run_meta(&self) -> anyhow::Result<Option<LatestScanMeta>> {
-        self.conn
-            .query_row(
-                "SELECT host_fingerprint, started_at, privileged_skipped
-                 FROM scan_runs ORDER BY started_at DESC LIMIT 1",
-                [],
-                |r| {
-                    let skipped_json: String = r.get(2)?;
-                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, skipped_json))
-                },
-            )
-            .optional()?
-            .map(|(host_fingerprint, started_at, skipped_json)| {
-                Ok(LatestScanMeta {
-                    host_fingerprint,
-                    started_at: DateTime::parse_from_rfc3339(&started_at)?.with_timezone(&Utc),
-                    privileged_collectors_skipped: serde_json::from_str(&skipped_json)?,
-                })
+    /// collectors it had to skip for lack of privilege — so a freshly-opened window can show "last
+    /// checked ..." and the privileged-checks banner without the user re-scanning first.
+    pub fn latest_scan_run_meta(&mut self) -> anyhow::Result<Option<LatestScanMeta>> {
+        let row: Option<(String, String, String)> = scan_runs::table
+            .order(scan_runs::started_at.desc())
+            .select((
+                scan_runs::host_fingerprint,
+                scan_runs::started_at,
+                scan_runs::privileged_skipped,
+            ))
+            .first(&mut self.conn)
+            .optional()?;
+
+        row.map(|(host_fingerprint, started_at, skipped)| {
+            Ok(LatestScanMeta {
+                host_fingerprint,
+                started_at: DateTime::parse_from_rfc3339(&started_at)?.with_timezone(&Utc),
+                privileged_collectors_skipped: serde_json::from_str(&skipped)?,
             })
-            .transpose()
+        })
+        .transpose()
     }
 
-    /// The most recent `limit` scan runs, newest first — backs the History timeline view.
-    /// `total_findings` reflects what that specific scan actually produced (see the doc
-    /// comment on [`Self::insert_scan_run`]'s last param), not a live re-derived count, so
-    /// the trend line stays accurate even as later runs reconcile individual finding rows
-    /// onto themselves.
-    pub fn list_scan_runs(&self, limit: i64) -> anyhow::Result<Vec<ScanRunSummary>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, started_at, finished_at, host_fingerprint, rules_loaded, rules_failed, collectors_failed, privileged_skipped, total_findings
-             FROM scan_runs ORDER BY started_at DESC LIMIT ?1",
-        )?;
-        let rows = stmt.query_map(params![limit], |r| {
-            let privileged_skipped_json: String = r.get(7)?;
-            let privileged_collectors_skipped: Vec<String> =
-                serde_json::from_str(&privileged_skipped_json).unwrap_or_default();
-            let started_at_s: String = r.get(1)?;
-            let finished_at_s: Option<String> = r.get(2)?;
-            Ok(ScanRunSummary {
-                id: r.get(0)?,
-                started_at: DateTime::parse_from_rfc3339(&started_at_s)
-                    .map(|t| t.with_timezone(&Utc))
-                    .unwrap_or_else(|_| Utc::now()),
-                finished_at: finished_at_s.and_then(|s| {
-                    DateTime::parse_from_rfc3339(&s)
-                        .ok()
-                        .map(|t| t.with_timezone(&Utc))
-                }),
-                host_fingerprint: r.get(3)?,
-                rules_loaded: r.get(4)?,
-                rules_failed: r.get(5)?,
-                collectors_failed: r.get(6)?,
-                privileged_collectors_skipped,
-                total_findings: r.get(8)?,
+    /// The most recent `limit` scan runs, newest first — backs the History timeline. Its
+    /// `total_findings` is what that specific scan produced, not a live re-derived count, so the
+    /// trend stays accurate even as later runs reconcile finding rows onto themselves.
+    pub fn list_scan_runs(&mut self, limit: i64) -> anyhow::Result<Vec<ScanRunSummary>> {
+        let rows: Vec<ScanRunRow> = scan_runs::table
+            .order(scan_runs::started_at.desc())
+            .limit(limit)
+            .select(ScanRunRow::as_select())
+            .load(&mut self.conn)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| ScanRunSummary {
+                id: r.id,
+                started_at: parse_ts(&r.started_at),
+                finished_at: r.finished_at.as_deref().map(parse_ts),
+                host_fingerprint: r.host_fingerprint,
+                rules_loaded: r.rules_loaded,
+                rules_failed: r.rules_failed,
+                collectors_failed: r.collectors_failed,
+                privileged_collectors_skipped: serde_json::from_str(&r.privileged_skipped)
+                    .unwrap_or_default(),
+                total_findings: r.total_findings,
             })
-        })?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+            .collect())
     }
 }
 
-/// True if every key `old` has is present in `new` with an equal value — `old` doesn't need
-/// to be a *proper* subset (equal maps count), and `new` is free to carry extra keys `old`
-/// never had. This is `persist_and_reconcile`'s actual identity check for "the same
-/// underlying issue": exact equality on the full context would mean a collector gaining a
-/// new field (routine — see that method's doc comment) breaks continuity for every existing
-/// rule reading that collector, even ones that never touch the new field.
+/// Turns a bare connection into a usable Bulwark database: foreign keys on, schema current.
+///
+/// `PRAGMA` is one of the two things Diesel's DSL deliberately can't express (it isn't a query
+/// over the schema, it's a statement about the connection), so it stays raw SQL. Foreign keys are
+/// **off by default in SQLite** and must be enabled per connection — without this the
+/// `findings.scan_run_id -> scan_runs.id` reference is decoration rather than a constraint.
+fn prepare(conn: &mut SqliteConnection) -> anyhow::Result<()> {
+    diesel::sql_query("PRAGMA foreign_keys = ON").execute(conn)?;
+    conn.run_pending_migrations(MIGRATIONS)
+        .map_err(|e| anyhow::anyhow!("running migrations: {e}"))?;
+    Ok(())
+}
+
+/// True when `path` holds a database written before the store moved to Diesel: it has Bulwark's
+/// tables but not Diesel's migration bookkeeping. Schema introspection, like `PRAGMA`, is not
+/// something the typed DSL models — it's a question *about* the schema rather than a query over it.
+fn is_pre_orm_database(path: &Path) -> anyhow::Result<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    let url = path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("database path is not valid UTF-8"))?;
+    let mut conn = SqliteConnection::establish(url)?;
+
+    #[derive(QueryableByName)]
+    struct TableName {
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        name: String,
+    }
+
+    let tables: Vec<TableName> =
+        diesel::sql_query("SELECT name FROM sqlite_master WHERE type = 'table'").load(&mut conn)?;
+    let names: Vec<&str> = tables.iter().map(|t| t.name.as_str()).collect();
+
+    Ok(names.contains(&"findings") && !names.contains(&"__diesel_schema_migrations"))
+}
+
+fn parse_ts(s: &str) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(s)
+        .map(|t| t.with_timezone(&Utc))
+        .unwrap_or_else(|_| Utc::now())
+}
+
+/// True if every key `old` has is present in `new` with an equal value — `old` needn't be a
+/// *proper* subset (equal maps count), and `new` may carry extra keys `old` never had. This is
+/// `persist_and_reconcile`'s identity check for "the same underlying issue": exact equality on the
+/// full context would mean a collector gaining a new field (routine) breaks continuity for every
+/// existing rule reading that collector, even ones that never touch the new field.
 fn is_context_subset(old: &crate::models::Fact, new: &crate::models::Fact) -> bool {
     old.iter().all(|(k, v)| new.get(k) == Some(v))
 }
@@ -748,9 +750,9 @@ pub struct LatestScanMeta {
     pub privileged_collectors_skipped: Vec<String>,
 }
 
-/// The most recent AI-artifact scan, reconstructed from storage — summary metadata plus its
-/// findings. Backs the AI Security tab's "show last scan on open" the same way [`LatestScanMeta`]
-/// + `open_findings` back the config dashboard.
+/// The most recent agent scan, reconstructed from storage — summary plus findings. Backs the Agent
+/// Security tab's "show the last scan on open", as [`LatestScanMeta`] + `open_findings` do for the
+/// config dashboard.
 #[derive(serde::Serialize)]
 pub struct AiScanSnapshot {
     pub started_at: DateTime<Utc>,
@@ -759,56 +761,6 @@ pub struct AiScanSnapshot {
     pub artifacts_scanned: usize,
     pub workspaces_capped: bool,
     pub findings: Vec<crate::ai_scan::AiFinding>,
-}
-
-fn row_to_ai_finding(r: &rusqlite::Row) -> rusqlite::Result<crate::ai_scan::AiFinding> {
-    let severity_s: String = r.get(2)?;
-    let refs_json: String = r.get(10)?;
-    Ok(crate::ai_scan::AiFinding {
-        id: r.get::<_, String>(0)?.parse().map_err(|_| {
-            rusqlite::Error::InvalidColumnType(0, "id".into(), rusqlite::types::Type::Text)
-        })?,
-        rule_id: r.get(1)?,
-        severity: parse_severity(&severity_s),
-        tool: r.get(3)?,
-        title: r.get(4)?,
-        explanation: r.get(5)?,
-        fix_hint: r.get(6)?,
-        file: r.get(7)?,
-        line: r.get::<_, Option<i64>>(8)?.map(|l| l as usize),
-        evidence: r.get(9)?,
-        references: serde_json::from_str(&refs_json).unwrap_or_default(),
-        redactable: r.get::<_, i64>(11)? != 0,
-    })
-}
-
-fn row_to_finding(r: &rusqlite::Row) -> rusqlite::Result<Finding> {
-    let context_json: String = r.get(7)?;
-    let severity_s: String = r.get(3)?;
-    let status_s: String = r.get(10)?;
-    let first_seen_s: String = r.get(8)?;
-    let last_seen_s: String = r.get(9)?;
-    Ok(Finding {
-        id: r.get::<_, String>(0)?.parse().map_err(|_| {
-            rusqlite::Error::InvalidColumnType(0, "id".into(), rusqlite::types::Type::Text)
-        })?,
-        scan_run_id: r.get::<_, String>(1)?.parse().map_err(|_| {
-            rusqlite::Error::InvalidColumnType(1, "scan_run_id".into(), rusqlite::types::Type::Text)
-        })?,
-        rule_id: r.get(2)?,
-        severity: parse_severity(&severity_s),
-        title: r.get(4)?,
-        explanation: r.get(5)?,
-        fix_hint: r.get(6)?,
-        context: serde_json::from_str(&context_json).unwrap_or_default(),
-        first_seen: DateTime::parse_from_rfc3339(&first_seen_s)
-            .map(|t| t.with_timezone(&Utc))
-            .unwrap_or_else(|_| Utc::now()),
-        last_seen: DateTime::parse_from_rfc3339(&last_seen_s)
-            .map(|t| t.with_timezone(&Utc))
-            .unwrap_or_else(|_| Utc::now()),
-        status: parse_status(&status_s),
-    })
 }
 
 fn parse_severity(s: &str) -> Severity {
@@ -950,13 +902,10 @@ mod tests {
             "the row no longer belongs to the run that first found it once a later run re-observes it"
         );
 
-        let stored_first_seen: String = store
-            .conn
-            .query_row(
-                "SELECT first_seen FROM findings WHERE rule_id = ?1",
-                params!["BLWK-SSH-001"],
-                |r| r.get(0),
-            )
+        let stored_first_seen: String = findings::table
+            .filter(findings::rule_id.eq("BLWK-SSH-001"))
+            .select(findings::first_seen)
+            .first(&mut store.conn)
             .unwrap();
         assert_eq!(
             stored_first_seen,
@@ -1146,38 +1095,6 @@ mod tests {
         assert_eq!(store.list_scan_runs(10).unwrap().len(), 3);
     }
 
-    /// A DB created before `total_findings` existed must not crash `migrate()` on reopen —
-    /// regression test for the defensive `ALTER TABLE` in `migrate()`. Simulates that by
-    /// creating the table without the column, then reopening through the real `Store::open`
-    /// path against the same file.
-    #[test]
-    fn migrate_tolerates_a_db_created_before_total_findings_existed() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db_path = tmp.path().join("old.db");
-        {
-            let conn = Connection::open(&db_path).unwrap();
-            conn.execute_batch(
-                "CREATE TABLE scan_runs (
-                    id TEXT PRIMARY KEY, started_at TEXT NOT NULL, finished_at TEXT,
-                    host_fingerprint TEXT NOT NULL, rules_loaded INTEGER NOT NULL,
-                    rules_failed INTEGER NOT NULL, collectors_failed INTEGER NOT NULL,
-                    rule_load_errors TEXT NOT NULL, collector_errors TEXT NOT NULL,
-                    privileged_skipped TEXT NOT NULL
-                );",
-            )
-            .unwrap();
-        }
-        // Reopening through Store::open must succeed and the new column must be usable.
-        let mut store = Store::open(&db_path).unwrap();
-        store.persist_and_reconcile(&sample_scan()).unwrap();
-        assert_eq!(store.list_scan_runs(10).unwrap()[0].total_findings, 1);
-    }
-
-    /// Every `Severity`/`FindingStatus` variant, round-tripped through real SQLite storage
-    /// and back — the existing tests only ever exercise `Critical`/`Open`, so a typo in one
-    /// of the other match arms of `parse_severity`/`severity_str`/`parse_status`/`status_str`
-    /// (e.g. a stray "hgih") would silently coerce every other severity to `Info` and every
-    /// other status to `Open` without any test catching it.
     #[test]
     fn every_severity_and_status_round_trips_through_storage() {
         let mut store = Store::open_in_memory().unwrap();
@@ -1215,15 +1132,14 @@ mod tests {
         }
         store.persist(&scan).unwrap();
 
-        let mut stmt = store
-            .conn
-            .prepare("SELECT id, scan_run_id, rule_id, severity, title, explanation, fix_hint, context, first_seen, last_seen, status FROM findings ORDER BY rule_id")
-            .unwrap();
-        let rows: Vec<Finding> = stmt
-            .query_map([], row_to_finding)
+        let rows: Vec<Finding> = findings::table
+            .order(findings::rule_id.asc())
+            .select(FindingRow::as_select())
+            .load(&mut store.conn)
             .unwrap()
-            .collect::<Result<_, _>>()
-            .unwrap();
+            .into_iter()
+            .map(|r| r.try_into_finding().unwrap())
+            .collect();
 
         assert_eq!(rows.len(), severities.len());
         for (row, &expected_severity) in rows.iter().zip(severities.iter()) {
@@ -1248,13 +1164,22 @@ mod tests {
         // findings.id has no FK constraint (only scan_run_id references scan_runs), so a
         // corrupted id alone is enough to exercise the parse-error branch without also
         // needing a real scan_runs row for it to point at.
-        store
-            .conn
-            .execute(
-                "INSERT INTO findings (id, scan_run_id, rule_id, severity, title, explanation, fix_hint, context, first_seen, last_seen, status)
-                 VALUES ('not-a-uuid', ?1, 'BLWK-TEST-001', 'high', 't', 'e', 'f', '{}', ?2, ?2, 'open')",
-                params![scan_run_id, Utc::now().to_rfc3339()],
-            )
+        let now = Utc::now().to_rfc3339();
+        diesel::insert_into(findings::table)
+            .values(FindingRow {
+                id: "not-a-uuid".into(),
+                scan_run_id,
+                rule_id: "BLWK-TEST-001".into(),
+                severity: "high".into(),
+                title: "t".into(),
+                explanation: "e".into(),
+                fix_hint: "f".into(),
+                context: "{}".into(),
+                first_seen: now.clone(),
+                last_seen: now,
+                status: "open".into(),
+            })
+            .execute(&mut store.conn)
             .unwrap();
 
         assert!(store.open_findings().is_err());
@@ -1266,24 +1191,41 @@ mod tests {
     /// reaches the `scan_run_id` branch.
     #[test]
     fn a_row_with_a_malformed_scan_run_id_is_a_query_error_not_a_panic() {
-        let store = Store::open_in_memory().unwrap();
+        let mut store = Store::open_in_memory().unwrap();
+        let now = Utc::now().to_rfc3339();
         // A scan_runs row whose own id is the same malformed string, so the FK on
         // findings.scan_run_id is satisfied without needing a well-formed UUID anywhere.
-        store
-            .conn
-            .execute(
-                "INSERT INTO scan_runs (id, started_at, finished_at, host_fingerprint, rules_loaded, rules_failed, collectors_failed, rule_load_errors, collector_errors, privileged_skipped, total_findings)
-                 VALUES ('not-a-uuid-either', ?1, ?1, 'h', 0, 0, 0, '[]', '[]', '[]', 0)",
-                params![Utc::now().to_rfc3339()],
-            )
+        diesel::insert_into(scan_runs::table)
+            .values(ScanRunRow {
+                id: "not-a-uuid-either".into(),
+                started_at: now.clone(),
+                finished_at: Some(now.clone()),
+                host_fingerprint: "h".into(),
+                rules_loaded: 0,
+                rules_failed: 0,
+                collectors_failed: 0,
+                rule_load_errors: "[]".into(),
+                collector_errors: "[]".into(),
+                privileged_skipped: "[]".into(),
+                total_findings: 0,
+            })
+            .execute(&mut store.conn)
             .unwrap();
-        store
-            .conn
-            .execute(
-                "INSERT INTO findings (id, scan_run_id, rule_id, severity, title, explanation, fix_hint, context, first_seen, last_seen, status)
-                 VALUES (?1, 'not-a-uuid-either', 'BLWK-TEST-001', 'high', 't', 'e', 'f', '{}', ?2, ?2, 'open')",
-                params![Uuid::new_v4().to_string(), Utc::now().to_rfc3339()],
-            )
+        diesel::insert_into(findings::table)
+            .values(FindingRow {
+                id: Uuid::new_v4().to_string(),
+                scan_run_id: "not-a-uuid-either".into(),
+                rule_id: "BLWK-TEST-001".into(),
+                severity: "high".into(),
+                title: "t".into(),
+                explanation: "e".into(),
+                fix_hint: "f".into(),
+                context: "{}".into(),
+                first_seen: now.clone(),
+                last_seen: now,
+                status: "open".into(),
+            })
+            .execute(&mut store.conn)
             .unwrap();
 
         assert!(store.open_findings().is_err());
@@ -1470,83 +1412,75 @@ mod tests {
     }
 
     #[test]
-    fn migrations_are_valid_and_reach_the_expected_version() {
-        // Catches a malformed migration (bad SQL, wrong ordering) at test time rather than on
-        // a user's machine mid-upgrade.
-        assert!(MIGRATIONS.validate().is_ok());
-
+    fn migrations_apply_cleanly_to_a_fresh_database() {
+        // Catches a malformed migration (bad SQL, a missing table) at test time rather than on a
+        // user's machine at startup.
         let tmp = tempfile::tempdir().unwrap();
-        let db_path = tmp.path().join("fresh.db");
-        let store = Store::open(&db_path).unwrap();
-        assert_eq!(Store::schema_version(&store.conn).unwrap(), 4);
+        let mut store = Store::open(&tmp.path().join("fresh.db")).unwrap();
+        assert!(
+            store.is_schema_current().unwrap(),
+            "a freshly opened database must have every migration applied"
+        );
+        // Every table the code queries must actually exist after migrating.
+        assert_eq!(store.count_scan_runs().unwrap(), 0);
+        assert_eq!(store.count_log_scan_runs().unwrap(), 0);
+        assert!(store.latest_ai_scan().unwrap().is_none());
+        assert!(store.get_setting("anything").unwrap().is_none());
     }
 
     #[test]
-    fn opening_an_already_current_db_twice_is_a_no_op() {
-        // The upgrade path every existing user hits on every launch after the first: migrations
-        // must not re-run or error against a database already at the latest version.
+    fn opening_an_already_migrated_db_twice_is_a_no_op() {
+        // The path every user hits on every launch after the first: migrations must not re-run or
+        // error against a database that is already current, and the data must survive.
         let tmp = tempfile::tempdir().unwrap();
         let db_path = tmp.path().join("repeat.db");
         {
             let mut store = Store::open(&db_path).unwrap();
             store.persist_and_reconcile(&sample_scan()).unwrap();
         }
-        let store = Store::open(&db_path).unwrap();
-        assert_eq!(Store::schema_version(&store.conn).unwrap(), 4);
+        let mut store = Store::open(&db_path).unwrap();
+        assert!(store.is_schema_current().unwrap());
         assert_eq!(store.open_findings().unwrap().len(), 1, "data must survive");
     }
 
+    /// A database written by a pre-Diesel build has Bulwark's tables but none of Diesel's
+    /// migration bookkeeping. Rather than attempt a bespoke cross-framework migration, it is moved
+    /// aside and a fresh database created — findings are a cache of host state and are rebuilt by
+    /// the next scan. The old file must be *kept*, not deleted: it is still the user's data.
     #[test]
-    fn a_pre_versioning_db_upgrades_without_losing_data() {
-        // The real upgrade scenario once packages ship: a database written by a Bulwark build
-        // from before `user_version` tracking existed — no version stamp, no `total_findings`
-        // column, no `settings` table — must come forward cleanly with its rows intact.
+    fn a_pre_orm_database_is_moved_aside_and_replaced_with_a_fresh_one() {
         let tmp = tempfile::tempdir().unwrap();
         let db_path = tmp.path().join("legacy.db");
         {
-            let conn = Connection::open(&db_path).unwrap();
-            conn.execute_batch(
-                "CREATE TABLE scan_runs (
-                    id TEXT PRIMARY KEY, started_at TEXT NOT NULL, finished_at TEXT,
-                    host_fingerprint TEXT NOT NULL, rules_loaded INTEGER NOT NULL,
-                    rules_failed INTEGER NOT NULL, collectors_failed INTEGER NOT NULL,
-                    rule_load_errors TEXT NOT NULL, collector_errors TEXT NOT NULL,
-                    privileged_skipped TEXT NOT NULL
-                );
-                CREATE TABLE findings (
+            let mut conn = SqliteConnection::establish(db_path.to_str().unwrap()).unwrap();
+            diesel::sql_query(
+                "CREATE TABLE findings (
                     id TEXT PRIMARY KEY, scan_run_id TEXT NOT NULL, rule_id TEXT NOT NULL,
                     severity TEXT NOT NULL, title TEXT NOT NULL, explanation TEXT NOT NULL,
                     fix_hint TEXT NOT NULL, context TEXT NOT NULL, first_seen TEXT NOT NULL,
                     last_seen TEXT NOT NULL, status TEXT NOT NULL
-                );
-                INSERT INTO scan_runs VALUES
-                  ('run-1','2026-01-01T00:00:00Z',NULL,'host',1,0,0,'[]','[]','[]');",
+                )",
             )
+            .execute(&mut conn)
             .unwrap();
-            assert_eq!(
-                conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
-                    .unwrap(),
-                0,
-                "fixture must genuinely look like a pre-versioning database"
-            );
         }
 
-        let store = Store::open(&db_path).unwrap();
+        let mut store = Store::open(&db_path).unwrap();
 
-        assert_eq!(Store::schema_version(&store.conn).unwrap(), 4);
-        assert_eq!(
-            store.count_scan_runs().unwrap(),
-            1,
-            "the user's existing scan history must survive the upgrade, not be recreated empty"
+        assert!(
+            store.is_schema_current().unwrap(),
+            "the replacement database must be fully migrated"
         );
-        // Both things the old schema lacked are now usable.
-        assert!(store.get_setting("anything").unwrap().is_none());
-        assert_eq!(store.list_scan_runs(10).unwrap()[0].total_findings, 0);
+        assert_eq!(store.count_scan_runs().unwrap(), 0);
+        assert!(
+            db_path.with_extension("db.pre-orm.bak").exists(),
+            "the old database must be preserved, not silently deleted — it is the user's data"
+        );
     }
 
     #[test]
     fn missing_setting_is_none_not_an_error() {
-        let store = Store::open_in_memory().unwrap();
+        let mut store = Store::open_in_memory().unwrap();
         assert_eq!(store.get_setting("nope").unwrap(), None);
     }
 
@@ -1627,13 +1561,10 @@ mod tests {
         assert_eq!(store.count_log_findings().unwrap(), 2);
 
         // occurrences bumped for the reconciled key (seen twice), 1 for the new key.
-        let occ: i64 = store
-            .conn
-            .query_row(
-                "SELECT occurrences FROM log_findings WHERE group_key = '203.0.113.7'",
-                [],
-                |r| r.get(0),
-            )
+        let occ: i64 = log_findings::table
+            .filter(log_findings::group_key.eq("203.0.113.7"))
+            .select(log_findings::occurrences)
+            .first(&mut store.conn)
             .unwrap();
         assert_eq!(occ, 2);
     }

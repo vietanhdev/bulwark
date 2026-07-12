@@ -5,6 +5,7 @@ pub mod condition;
 pub mod engine;
 pub mod logs;
 pub mod models;
+pub mod schema;
 pub mod store;
 
 pub use ai_scan::{

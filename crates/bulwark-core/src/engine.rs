@@ -192,7 +192,12 @@ pub fn run_scan_cancellable(
         let Some(rows) = facts_by_collector.get(loaded.rule.collector.as_str()) else {
             continue;
         };
-        rules_evaluated.push(loaded.rule.id.clone());
+        // Only a rule that evaluates cleanly counts as "evaluated". A condition that *errors*
+        // (bad regex, a field of an unexpected type) produces no finding — but that is a failure
+        // to check, not a passing check, and treating it as the latter would let a broken rule
+        // silently resolve the very findings it can no longer test for. Same invariant as a
+        // skipped collector: absence of a finding only means "fixed" when the check actually ran.
+        let mut evaluated_cleanly = true;
         for row in rows {
             match loaded.condition.eval(row) {
                 Ok(true) => findings.push(Finding {
@@ -216,11 +221,17 @@ pub fn run_scan_cancellable(
                     scan_run_id,
                 }),
                 Ok(false) => {}
-                Err(e) => collector_errors.push(CollectorError {
-                    collector: loaded.rule.collector.clone(),
-                    message: format!("rule {} condition error: {}", loaded.rule.id, e),
-                }),
+                Err(e) => {
+                    evaluated_cleanly = false;
+                    collector_errors.push(CollectorError {
+                        collector: loaded.rule.collector.clone(),
+                        message: format!("rule {} condition error: {}", loaded.rule.id, e),
+                    });
+                }
             }
+        }
+        if evaluated_cleanly {
+            rules_evaluated.push(loaded.rule.id.clone());
         }
     }
 
@@ -437,6 +448,53 @@ fix: "f"
         assert!(!full.cancelled);
         assert_eq!(full.findings.len(), 1);
         assert_eq!(full.rules_evaluated, vec!["BLWK-SSH-001"]);
+    }
+
+    /// A rule whose condition *errors* has not passed — it has failed to run. If it were counted
+    /// as evaluated, `Store::persist_and_reconcile` would resolve its open findings as "fixed"
+    /// simply because the broken rule produced none, which is the same "absence means passing"
+    /// mistake a skipped collector would make.
+    #[test]
+    fn a_rule_whose_condition_errors_does_not_count_as_evaluated() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_rule(
+            tmp.path(),
+            "numeric-on-a-string.yaml",
+            r#"
+id: BLWK-BROKEN-001
+title: t
+category: c
+severity: high
+collector: sshd_config
+condition: password_authentication > 5
+explain: "e"
+fix: "f"
+"#,
+        );
+        // The field is a string, so a numeric comparison against it errors at eval time.
+        let mut fact = crate::models::Fact::new();
+        fact.insert(
+            "password_authentication".to_string(),
+            serde_json::Value::String("yes".to_string()),
+        );
+        let collectors: Vec<Box<dyn Collector>> =
+            vec![Box::new(FixedCollector { rows: vec![fact] })];
+
+        let scan = run_scan(tmp.path(), &collectors, false, &Profile::default());
+
+        assert!(scan.findings.is_empty());
+        assert_eq!(
+            scan.collector_errors.len(),
+            1,
+            "the eval failure must be reported"
+        );
+        assert!(
+            !scan
+                .rules_evaluated
+                .contains(&"BLWK-BROKEN-001".to_string()),
+            "a rule that errored must not be treated as having run clean — otherwise it would \
+             resolve the very findings it can no longer check for"
+        );
     }
 
     #[test]

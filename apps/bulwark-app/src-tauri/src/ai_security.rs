@@ -44,7 +44,7 @@ fn read_roots(key: &str) -> Vec<PathBuf> {
     db_path()
         .filter(|p| p.exists())
         .and_then(|p| Store::open(&p).ok())
-        .and_then(|s| s.get_setting(key).ok().flatten())
+        .and_then(|mut s| s.get_setting(key).ok().flatten())
         .and_then(|v| serde_json::from_str::<Vec<String>>(&v).ok())
         .map(|v| v.into_iter().map(PathBuf::from).collect())
         .unwrap_or_default()
@@ -174,7 +174,7 @@ pub async fn ai_scan_snapshot() -> Result<AiSnapshotResponse, String> {
     if !p.exists() {
         return Ok(AiSnapshotResponse { snapshot: None });
     }
-    let store = Store::open(&p).map_err(|e| e.to_string())?;
+    let mut store = Store::open(&p).map_err(|e| e.to_string())?;
     Ok(AiSnapshotResponse {
         snapshot: store.latest_ai_scan().map_err(|e| e.to_string())?,
     })
@@ -252,7 +252,7 @@ fn auto_scan_enabled() -> bool {
     db_path()
         .filter(|p| p.exists())
         .and_then(|p| Store::open(&p).ok())
-        .and_then(|s| s.get_setting(KEY_AUTO_SCAN).ok().flatten())
+        .and_then(|mut s| s.get_setting(KEY_AUTO_SCAN).ok().flatten())
         // Default on — "auto scanning" is the point of the feature; a user can pause it.
         .map(|v| v == "true")
         .unwrap_or(true)
@@ -299,7 +299,7 @@ fn run_background_scan(app: &AppHandle) {
 
     let previous_serious = Store::open(&p)
         .ok()
-        .and_then(|s| s.latest_ai_scan().ok().flatten())
+        .and_then(|mut s| s.latest_ai_scan().ok().flatten())
         .map(|snap| serious_keys(&snap.findings))
         .unwrap_or_default();
 

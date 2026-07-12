@@ -28,6 +28,7 @@ pnpm-debug.log*
 **/src-tauri/gen/
 # Bundled CLI sidecars are staged at build time by src-tauri/build.rs, never
 # committed (also covered by src-tauri/binaries/.gitignore).
+**/src-tauri/binaries/bulwark-cli-*
 **/src-tauri/binaries/bulwarkctl-*
 
 # ─────────────────────────────────────────────────────────────────────────────

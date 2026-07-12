@@ -20,7 +20,12 @@ homepage = "https://bulwark.nrl.ai"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
-rusqlite = { version = "0.31", features = ["bundled"] }
+diesel = { version = "2.2", features = ["sqlite", "returning_clauses_for_sqlite_3_35"] }
+diesel_migrations = { version = "2.2", features = ["sqlite"] }
+# Bundled SQLite so a build never depends on the host having libsqlite3-dev, and every platform
+# gets the same engine version. Diesel pulls this crate in transitively; naming it here is what
+# lets us turn `bundled` on.
+libsqlite3-sys = { version = "0.30", features = ["bundled"] }
 anyhow = "1"
 thiserror = "1"
 chrono = { version = "0.4", features = ["serde"] }

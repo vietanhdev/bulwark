@@ -146,9 +146,13 @@ fn resolve_cli_binary() -> PathBuf {
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let sidecar = dir.join("bulwarkctl");
-            if sidecar.is_file() {
-                return sidecar;
+            // `bulwark-cli` is the bundled sidecar (see build.rs for why it is not called
+            // `bulwarkctl`); `bulwarkctl` covers an install where the CLI package sits alongside.
+            for name in ["bulwark-cli", "bulwarkctl"] {
+                let sidecar = dir.join(name);
+                if sidecar.is_file() {
+                    return sidecar;
+                }
             }
         }
     }
@@ -511,7 +515,7 @@ async fn dashboard_snapshot() -> Result<DashboardSnapshot, String> {
             agent_scanned: false,
         });
     }
-    let store = Store::open(&db_path).map_err(|e| e.to_string())?;
+    let mut store = Store::open(&db_path).map_err(|e| e.to_string())?;
 
     let mut findings = store.open_findings().map_err(|e| e.to_string())?;
 
@@ -543,7 +547,7 @@ async fn history_count() -> Result<i64, String> {
     if !db_path.exists() {
         return Ok(0);
     }
-    let store = Store::open(&db_path).map_err(|e| e.to_string())?;
+    let mut store = Store::open(&db_path).map_err(|e| e.to_string())?;
     store.count_scan_runs().map_err(|e| e.to_string())
 }
 
@@ -557,7 +561,7 @@ async fn history_list() -> Result<Vec<ScanRunSummary>, String> {
     if !db_path.exists() {
         return Ok(Vec::new());
     }
-    let store = Store::open(&db_path).map_err(|e| e.to_string())?;
+    let mut store = Store::open(&db_path).map_err(|e| e.to_string())?;
     store.list_scan_runs(50).map_err(|e| e.to_string())
 }
 

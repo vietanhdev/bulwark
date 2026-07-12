@@ -43,6 +43,6 @@
       "../../../decoders": "decoders",
       "../../../log-rules": "log-rules"
     },
-    "externalBin": ["binaries/bulwarkctl"]
+    "externalBin": ["binaries/bulwark-cli"]
   }
 }

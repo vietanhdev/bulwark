@@ -5,7 +5,15 @@ fn main() {
     tauri_build::build()
 }
 
-/// Stages the `bulwarkctl` CLI as a Tauri `externalBin` sidecar.
+/// Stages the `bulwarkctl` CLI as a Tauri `externalBin` sidecar, under the name `bulwark-cli`.
+///
+/// The rename is load-bearing, not cosmetic. Tauri copies a staged sidecar back out next to the
+/// app binary — i.e. into `target/<profile>/`. When the sidecar was called `bulwarkctl` that
+/// landed *exactly on top of* the CLI crate's own build output, `target/debug/bulwarkctl`. Since
+/// nothing orders this build script against the `bulwarkctl` crate's build, which file won the
+/// race varied between runs, and `cargo test --workspace` intermittently executed a stale binary
+/// (the failure that `crates/bulwarkctl/tests/ai_cli.rs` kept tripping over). A sidecar that
+/// doesn't share a filename with a workspace binary cannot clobber one.
 ///
 /// Tauri expects the sidecar at `binaries/bulwarkctl-<target-triple>`, and its own build step
 /// hard-errors if that file is missing — which would break a plain `cargo build`/`cargo test` of
@@ -25,7 +33,7 @@ fn stage_cli_sidecar() {
     }
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let binaries_dir = manifest_dir.join("binaries");
-    let dest = binaries_dir.join(format!("bulwarkctl-{triple}"));
+    let dest = binaries_dir.join(format!("bulwark-cli-{triple}"));
     let _ = std::fs::create_dir_all(&binaries_dir);
 
     // The workspace target dir is `<workspace>/target`; from `apps/bulwark-app/src-tauri` that's
@@ -69,7 +77,7 @@ fn stage_cli_sidecar() {
     if !dest.exists() {
         let _ = std::fs::write(&dest, b"");
         println!(
-            "cargo:warning=bulwarkctl sidecar not found — staged an empty placeholder at {}. \
+            "cargo:warning=bulwark-cli sidecar not found — staged an empty placeholder at {}. \
              Run `cargo build -p bulwarkctl --release` before bundling so a real CLI ships.",
             dest.display()
         );
