@@ -180,6 +180,7 @@ export default withMermaid({
         items: [
           { text: "Architecture & design", link: "/guide/architecture" },
           { text: "Agent Security", link: "/guide/agent-security" },
+          { text: "Fixing findings", link: "/guide/remediation" },
           { text: "Contributing", link: "/guide/contributing" },
           { text: "Collaborate", link: "/collaborate" },
         ],

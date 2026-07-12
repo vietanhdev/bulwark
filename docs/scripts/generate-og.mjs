@@ -30,6 +30,7 @@ const CARD_TITLES = {
   "index.md": "Bulwark",
   "guide/architecture.md": "Architecture",
   "guide/agent-security.md": "AI Agent Security",
+  "guide/remediation.md": "Fixing Findings",
   "articles/ai-coding-assistant-security.md": "AI Coding Assistant Security",
   "articles/ssh-hardening-checklist.md": "SSH Hardening on Linux",
   "articles/linux-persistence-techniques.md": "How Attackers Persist on Linux",
@@ -54,7 +55,7 @@ const CARD_TITLES = {
  * every link to it previews as the generic homepage blurb. `guide/agent-security.md` was added
  * for exactly that reason. */
 function pagesNeedingCards() {
-  const pages = ["index.md", "guide/architecture.md", "guide/agent-security.md"];
+  const pages = ["index.md", "guide/architecture.md", "guide/agent-security.md", "guide/remediation.md"];
   for (const f of readdirSync(join(DOCS, "articles")).sort()) {
     if (f.endsWith(".md")) pages.push(`articles/${f}`);
   }
