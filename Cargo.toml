@@ -6,7 +6,7 @@ members = ["crates/bulwark-core", "crates/bulwark-cli", "apps/bulwark-app/src-ta
 version = "0.1.0"
 edition = "2021"
 authors = ["Viet Anh Nguyen"]
-license = "MIT"
+license = "AGPL-3.0-or-later"
 repository = "https://github.com/vietanhdev/bulwark"
 
 [workspace.dependencies]

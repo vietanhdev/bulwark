@@ -1,7 +1,7 @@
 # Bulwark
 
 [![CI](https://github.com/vietanhdev/bulwark/actions/workflows/ci.yml/badge.svg)](https://github.com/vietanhdev/bulwark/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/license-AGPLv3-blue.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-bulwark.nrl.ai-007372)](https://bulwark.nrl.ai)
 
 A Linux host security scanner with a native CLI and desktop GUI, built for everyone running
@@ -113,4 +113,5 @@ grammar and testing expectations.
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+AGPL-3.0-or-later — see [`LICENSE`](LICENSE). Contributions are covered by a lightweight CLA;
+see [`CONTRIBUTING.md`](CONTRIBUTING.md).
