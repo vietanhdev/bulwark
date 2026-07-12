@@ -1,0 +1,18 @@
+id: sudo
+program: sudo
+# Order matters (first match wins). The denial/failure lines also contain a COMMAND= field, so
+# their specific patterns must come before the generic "a command was run" pattern below — else
+# a "user NOT in sudoers ... COMMAND=/bin/bash" line would be misread as a normal sudo command.
+patterns:
+  # A user who isn't allowed to run the command (not in sudoers, or command not permitted).
+  - regex: '^\s*(?P<srcuser>\S+) : user NOT in sudoers'
+    tags: [sudo_not_allowed]
+  - regex: '^\s*(?P<srcuser>\S+) : command not allowed'
+    tags: [sudo_not_allowed]
+  # sudo's own repeated-wrong-password message (distinct from the PAM auth-failure line, which
+  # the generic pam decoder handles).
+  - regex: '^\s*(?P<srcuser>\S+) : (?P<attempts>\d+) incorrect password attempt'
+    tags: [authentication_failed, sudo_auth_failure]
+  # A command was run through sudo. `srcuser` is the invoking user, `command` the target.
+  - regex: '^\s*(?P<srcuser>\S+) : .*COMMAND=(?P<command>.+)$'
+    tags: [sudo_command]

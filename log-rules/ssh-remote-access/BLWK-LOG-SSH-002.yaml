@@ -1,0 +1,20 @@
+id: BLWK-LOG-SSH-002
+title: "SSH invalid-user scan from {{ srcip }}"
+category: ssh-remote-access
+severity: medium
+decoder: sshd
+condition: 'tags contains "invalid_user"'
+groups: [authentication_failures, reconnaissance]
+correlate:
+  count: 5
+  window_secs: 60
+  by: [srcip]
+  suppress_secs: 300
+explain: >
+  {{ srcip }} attempted to log in as 5 or more non-existent users within 60 seconds. Spraying
+  common account names (admin, test, oracle, git...) is reconnaissance — the attacker is
+  enumerating valid usernames before focusing a password attack.
+fix: >
+  Block the source IP, and ensure only real, expected accounts are permitted to log in (AllowUsers
+  / AllowGroups in sshd_config). Key-only authentication makes username enumeration pointless.
+references: [ATTACK-T1110.001, ATTACK-T1589]

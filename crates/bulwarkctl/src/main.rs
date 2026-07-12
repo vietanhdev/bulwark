@@ -1,9 +1,13 @@
 use anyhow::Context;
 use bulwark_core::{
-    all_collectors, engine, fim_baseline_path, fim_establish_baseline, models::Severity, Profile,
-    Store, FIM_PRIVILEGED_WATCHED_PATHS, FIM_UNPRIVILEGED_WATCHED_PATHS,
+    all_collectors, engine, fim_baseline_path, fim_establish_baseline, load_decoders,
+    load_log_rules, models::Severity, run_log_scan, JournalRange, JournaldSource, LogScanRun,
+    LogSource, Profile, Store, SyslogLinesSource, FIM_PRIVILEGED_WATCHED_PATHS,
+    FIM_UNPRIVILEGED_WATCHED_PATHS,
 };
+use chrono::Datelike;
 use clap::{Parser, Subcommand};
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
@@ -57,6 +61,53 @@ enum Commands {
     Fim {
         #[command(subcommand)]
         action: FimAction,
+    },
+    /// Analyze system logs for intrusion indicators (SSH brute force, sudo abuse, ...)
+    Logs {
+        #[command(subcommand)]
+        action: LogsAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum LogsAction {
+    /// Decode and correlate a batch of log events, printing any findings
+    Scan {
+        /// Machine-readable JSON output instead of a table
+        #[arg(long)]
+        json: bool,
+        /// Skip persisting this run to the local findings database
+        #[arg(long)]
+        no_persist: bool,
+        /// Read the current boot's systemd journal (the default when neither --since nor
+        /// --from-file is given)
+        #[arg(long)]
+        boot: bool,
+        /// Read the journal at/after a `journalctl --since` spec (e.g. "-1h",
+        /// "2026-07-12 00:00:00"). Relative specs start with '-', so pass them with '='
+        /// (`--since=-1h`) or quoted.
+        #[arg(long, conflicts_with = "from_file", allow_hyphen_values = true)]
+        since: Option<String>,
+        /// Read a classic syslog-format file (e.g. /var/log/auth.log) instead of journald —
+        /// works on non-systemd hosts and for offline analysis
+        #[arg(long)]
+        from_file: Option<PathBuf>,
+        /// Directory of decoder YAML files (defaults to auto-detected ./decoders)
+        #[arg(long)]
+        decoders_dir: Option<PathBuf>,
+        /// Directory of log-rule YAML files (defaults to auto-detected ./log-rules)
+        #[arg(long)]
+        log_rules_dir: Option<PathBuf>,
+    },
+    /// Inspect the loaded log-rule pack
+    Rules {
+        #[command(subcommand)]
+        action: RulesAction,
+    },
+    /// Inspect the loaded decoder pack
+    Decoders {
+        #[command(subcommand)]
+        action: RulesAction,
     },
 }
 
@@ -113,6 +164,39 @@ fn resolve_rules_dir(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
     }
     anyhow::bail!(
         "couldn't find a 'rules' directory — pass --rules-dir explicitly or set BULWARK_RULES_DIR"
+    )
+}
+
+/// Shared resolution for the log pipeline's content dirs (`decoders`, `log-rules`), following
+/// exactly the same precedence as [`resolve_rules_dir`]: explicit flag → env var → walk up from
+/// the CWD (dev mode) → installed `/usr/share/bulwark/<subdir>`.
+fn resolve_content_dir(
+    explicit: Option<PathBuf>,
+    env_var: &str,
+    subdir: &str,
+) -> anyhow::Result<PathBuf> {
+    if let Some(p) = explicit {
+        return Ok(p);
+    }
+    if let Ok(p) = std::env::var(env_var) {
+        return Ok(PathBuf::from(p));
+    }
+    let mut candidate = std::env::current_dir()?;
+    for _ in 0..4 {
+        let dir = candidate.join(subdir);
+        if dir.is_dir() {
+            return Ok(dir);
+        }
+        if !candidate.pop() {
+            break;
+        }
+    }
+    let installed = PathBuf::from("/usr/share/bulwark").join(subdir);
+    if installed.is_dir() {
+        return Ok(installed);
+    }
+    anyhow::bail!(
+        "couldn't find a '{subdir}' directory — pass the corresponding --*-dir flag or set {env_var}"
     )
 }
 
@@ -290,9 +374,197 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         },
+        Commands::Logs { action } => run_logs(action, cli.db_path)?,
     }
 
     Ok(())
+}
+
+/// Handles the `logs` subcommand group. Kept as its own function so `main`'s top-level match
+/// stays readable; the `scan` path calls `std::process::exit` with a severity-derived code just
+/// like `Commands::Scan`, so scripts and cron can gate on it identically.
+fn run_logs(action: LogsAction, db_path: Option<PathBuf>) -> anyhow::Result<()> {
+    match action {
+        LogsAction::Scan {
+            json,
+            no_persist,
+            boot: _,
+            since,
+            from_file,
+            decoders_dir,
+            log_rules_dir,
+        } => {
+            let decoders_dir =
+                resolve_content_dir(decoders_dir, "BULWARK_DECODERS_DIR", "decoders")?;
+            let rules_dir =
+                resolve_content_dir(log_rules_dir, "BULWARK_LOG_RULES_DIR", "log-rules")?;
+
+            let mut source: Box<dyn LogSource> = match from_file {
+                Some(path) => {
+                    let file = std::fs::File::open(&path)
+                        .with_context(|| format!("opening {}", path.display()))?;
+                    // syslog headers carry no year; use the current one for a live file.
+                    let year = chrono::Utc::now().year();
+                    Box::new(SyslogLinesSource::new(BufReader::new(file), year))
+                }
+                None => {
+                    let range = match since {
+                        Some(spec) => JournalRange::Since(spec),
+                        None => JournalRange::CurrentBoot,
+                    };
+                    Box::new(JournaldSource::batch(range)?)
+                }
+            };
+
+            let scan = run_log_scan(&decoders_dir, &rules_dir, source.as_mut());
+
+            if !no_persist {
+                let db_path = resolve_db_path(db_path)?;
+                let mut store = Store::open(&db_path)?;
+                store.persist_log_scan(&scan)?;
+            }
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&scan)?);
+            } else {
+                print_log_scan_table(&scan);
+            }
+            std::process::exit(exit_code_for(scan.worst_severity()));
+        }
+        LogsAction::Rules { action } => match action {
+            RulesAction::List => {
+                let dir = resolve_content_dir(None, "BULWARK_LOG_RULES_DIR", "log-rules")?;
+                let (rules, errors) = load_log_rules(&dir);
+                for r in &rules {
+                    let corr = if r.rule.correlate.is_some() {
+                        " [correlated]"
+                    } else {
+                        ""
+                    };
+                    println!(
+                        "{:<24} [{:<8}] {}{corr}",
+                        r.rule.id,
+                        severity_label(r.rule.severity),
+                        r.rule.title
+                    );
+                }
+                report_load_errors(&errors)?;
+            }
+            RulesAction::Validate { path } => {
+                let (rules, mut errors) = load_log_rules(&path);
+                // Cross-check that every rule's `decoder:` names a real decoder — the log analog
+                // of the config path's "unknown collector" validate-time guard. A typo there
+                // would load cleanly but then silently never match an event.
+                if let Ok(decoders_dir) =
+                    resolve_content_dir(None, "BULWARK_DECODERS_DIR", "decoders")
+                {
+                    let (decoders, _) = load_decoders(&decoders_dir);
+                    let ids: std::collections::HashSet<&str> =
+                        decoders.iter().map(|d| d.id.as_str()).collect();
+                    for r in &rules {
+                        if let Some(dec) = &r.rule.decoder {
+                            if !ids.contains(dec.as_str()) {
+                                errors.push(bulwark_core::models::RuleLoadError {
+                                    path: r.rule.id.clone(),
+                                    message: format!("unknown decoder '{dec}'"),
+                                });
+                            }
+                        }
+                    }
+                }
+                println!(
+                    "{} log rule(s) valid",
+                    rules.len().saturating_sub(errors.len())
+                );
+                report_load_errors(&errors)?;
+            }
+        },
+        LogsAction::Decoders { action } => match action {
+            RulesAction::List => {
+                let dir = resolve_content_dir(None, "BULWARK_DECODERS_DIR", "decoders")?;
+                let (decoders, errors) = load_decoders(&dir);
+                for d in &decoders {
+                    let prog = d.program.as_deref().unwrap_or("(any)");
+                    println!("{:<16} program={prog}", d.id);
+                }
+                report_load_errors(&errors)?;
+            }
+            RulesAction::Validate { path } => {
+                let (decoders, errors) = load_decoders(&path);
+                println!("{} decoder(s) valid", decoders.len());
+                report_load_errors(&errors)?;
+            }
+        },
+    }
+    Ok(())
+}
+
+fn report_load_errors(errors: &[bulwark_core::models::RuleLoadError]) -> anyhow::Result<()> {
+    if !errors.is_empty() {
+        eprintln!("{} item(s) failed to load:", errors.len());
+        for e in errors {
+            eprintln!("  {}: {}", e.path, e.message);
+        }
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn print_log_scan_table(scan: &LogScanRun) {
+    println!(
+        "Bulwark log scan — host {} — {} event(s) read, {} decoded — {} decoder(s), {} rule(s)",
+        scan.host_fingerprint,
+        scan.events_read,
+        scan.events_decoded,
+        scan.decoders_loaded,
+        scan.rules_loaded,
+    );
+    for (label, errs) in [
+        ("decoder", &scan.decoder_load_errors),
+        ("rule", &scan.rule_load_errors),
+    ] {
+        if !errs.is_empty() {
+            println!("⚠ {} {label}(s) failed to load:", errs.len());
+            for e in errs {
+                println!("  {}: {}", e.path, e.message);
+            }
+        }
+    }
+    if !scan.read_errors.is_empty() {
+        println!("⚠ {} line(s) could not be read", scan.read_errors.len());
+    }
+    if !scan.rule_eval_errors.is_empty() {
+        println!(
+            "⚠ {} rule evaluation error(s):",
+            scan.rule_eval_errors.len()
+        );
+        for e in &scan.rule_eval_errors {
+            println!("  {e}");
+        }
+    }
+    println!();
+    if scan.findings.is_empty() {
+        println!("No findings.");
+        return;
+    }
+    let mut sorted = scan.findings.clone();
+    sorted.sort_by_key(|f| std::cmp::Reverse(f.severity));
+    for f in &sorted {
+        println!(
+            "[{:<8}] {} — {}",
+            severity_label(f.severity),
+            f.rule_id,
+            f.title
+        );
+        println!(
+            "           at {} · {} matching event(s)",
+            f.observed_at.to_rfc3339(),
+            f.match_count
+        );
+        println!("           {}", f.explanation.trim());
+        println!("           fix: {}", f.fix_hint.trim());
+    }
+    println!("\n{} finding(s) total.", scan.findings.len());
 }
 
 fn print_scan_table(scan: &bulwark_core::ScanRun) {

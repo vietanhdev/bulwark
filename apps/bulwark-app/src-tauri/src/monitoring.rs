@@ -19,6 +19,13 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 
+/// Persisted-preference keys (see `bulwark_core::Store` k/v settings). Continuous monitoring's
+/// enabled/interval state used to live only in memory and reset to the defaults on every
+/// launch — so a user who turned monitoring off found it silently back on next start. These
+/// keys make the toggle actually stick, mirroring how real-time AV persists its own state.
+const KEY_ENABLED: &str = "monitoring_enabled";
+const KEY_INTERVAL: &str = "monitoring_interval_minutes";
+
 pub struct MonitoringState(pub Mutex<Inner>);
 
 pub struct Inner {
@@ -43,6 +50,87 @@ impl Default for Inner {
             ticks_completed: 0,
             last_tick_new_findings: 0,
         }
+    }
+}
+
+/// Builds the initial monitoring state from persisted settings, falling back to the in-memory
+/// [`Inner::default`] (enabled, 15-minute interval) whenever nothing has been saved yet or the
+/// DB can't be read — a fresh install or a locked-down `HOME` must never block startup. This is
+/// what makes the enable/interval toggles survive a restart, mirroring `realtime_av::initial_state`.
+pub fn initial_inner() -> Inner {
+    let stored = super_db_path()
+        .ok()
+        .filter(|p| p.exists())
+        .and_then(|p| Store::open(&p).ok());
+
+    let mut inner = Inner::default();
+    if let Some(store) = &stored {
+        if let Ok(Some(v)) = store.get_setting(KEY_ENABLED) {
+            inner.enabled = v == "true";
+        }
+        if let Ok(Some(v)) = store.get_setting(KEY_INTERVAL) {
+            if let Ok(minutes) = v.parse::<u64>() {
+                inner.interval_minutes = minutes.max(1);
+            }
+        }
+    }
+    // Only schedule a first tick if monitoring is actually on; a persisted-off state should
+    // start genuinely idle rather than counting down to a tick the loop will then skip.
+    inner.next_tick_at = if inner.enabled {
+        Some(Utc::now() + chrono::Duration::minutes(inner.interval_minutes as i64))
+    } else {
+        None
+    };
+    inner
+}
+
+fn persist_enabled(enabled: bool) {
+    let Ok(path) = super_db_path() else { return };
+    if let Ok(mut store) = Store::open(&path) {
+        let _ = store.set_setting(KEY_ENABLED, if enabled { "true" } else { "false" });
+    }
+}
+
+fn persist_interval(minutes: u64) {
+    let Ok(path) = super_db_path() else { return };
+    if let Ok(mut store) = Store::open(&path) {
+        let _ = store.set_setting(KEY_INTERVAL, &minutes.to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression cover for the actual gap this change closed: monitoring enable/interval used
+    /// to be in-memory only, so a user who paused monitoring found it back on after a restart.
+    /// Persist-then-reload must round-trip, and a paused state must start genuinely idle (no
+    /// scheduled first tick). Uses a unique `BULWARK_DB_PATH` — the only test in this crate that
+    /// touches that env var, so no cross-test race.
+    #[test]
+    fn monitoring_enabled_and_interval_persist_across_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("bulwark.db");
+        std::env::set_var("BULWARK_DB_PATH", &db);
+
+        // A fresh DB with nothing stored falls back to the on/15min default.
+        let fresh = initial_inner();
+        assert!(fresh.enabled);
+        assert_eq!(fresh.interval_minutes, 15);
+
+        // Persist "paused, 45-minute interval" the way the Tauri commands do.
+        persist_enabled(false);
+        persist_interval(45);
+
+        let reloaded = initial_inner();
+        assert!(!reloaded.enabled, "paused state must survive a restart");
+        assert_eq!(reloaded.interval_minutes, 45);
+        assert!(
+            reloaded.next_tick_at.is_none(),
+            "a paused start must be idle, not counting down to a skipped tick"
+        );
+
+        std::env::remove_var("BULWARK_DB_PATH");
     }
 }
 
@@ -86,7 +174,10 @@ pub fn monitoring_set_enabled(
         inner.next_tick_at =
             Some(Utc::now() + chrono::Duration::minutes(inner.interval_minutes as i64));
     }
-    MonitoringStatus::from(&*inner)
+    let status = MonitoringStatus::from(&*inner);
+    drop(inner);
+    persist_enabled(enabled);
+    status
 }
 
 #[tauri::command]
@@ -98,7 +189,11 @@ pub fn monitoring_set_interval_minutes(
     inner.interval_minutes = minutes.max(1);
     inner.next_tick_at =
         Some(Utc::now() + chrono::Duration::minutes(inner.interval_minutes as i64));
-    MonitoringStatus::from(&*inner)
+    let effective = inner.interval_minutes;
+    let status = MonitoringStatus::from(&*inner);
+    drop(inner);
+    persist_interval(effective);
+    status
 }
 
 /// The background loop itself. Polls once a second rather than sleeping for the whole

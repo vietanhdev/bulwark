@@ -1,0 +1,21 @@
+id: BLWK-LOG-SU-001
+title: "Repeated su failures by {{ srcuser }}"
+category: accounts-services
+severity: medium
+decoder: su
+condition: 'tags contains "su_failure"'
+groups: [authentication_failures]
+correlate:
+  count: 3
+  window_secs: 120
+  by: [srcuser]
+  suppress_secs: 300
+explain: >
+  {{ srcuser }} failed to switch user with su 3 or more times within two minutes — repeatedly
+  guessing another account's (often root's) password. On systems that use su instead of sudo,
+  this is the equivalent of a sudo brute-force.
+fix: >
+  Confirm {{ srcuser }} should have access to the target account. Prefer sudo over shared su
+  passwords so escalation is per-user and auditable, and rotate the target password if compromise
+  is possible.
+references: [ATTACK-T1548]

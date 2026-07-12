@@ -2,6 +2,7 @@ pub mod av_scan;
 pub mod collectors;
 pub mod condition;
 pub mod engine;
+pub mod logs;
 pub mod models;
 pub mod store;
 
@@ -17,5 +18,9 @@ pub use collectors::file_integrity::{
 pub use collectors::{all_collectors, Collector};
 pub use condition::Condition;
 pub use engine::{load_rules, run_scan, Profile};
+pub use logs::{
+    load_decoders, load_log_rules, run_log_scan, JournalRange, JournaldSource, LogFinding,
+    LogScanRun, LogSource, SyslogLinesSource,
+};
 pub use models::{Fact, Finding, FindingStatus, OperatingSystem, Rule, ScanRun, Severity};
 pub use store::{LatestScanMeta, ScanRunSummary, Store};

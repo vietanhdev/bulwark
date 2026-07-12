@@ -29,6 +29,12 @@ Built with Tauri v2 + Rust + React. One rule engine, one rule pack, two front-do
   explanation with live values interpolated in, a one-line fix, and CIS/MITRE ATT&CK references.
 - **Antivirus scanning** — shells out to a real ClamAV `clamscan` on demand, plus a fast
   presence/database-freshness check on every routine scan.
+- **Log analysis** — a decode → detect → correlate pipeline over the systemd journal (or any
+  syslog-format file) that catches *events over time* the config scanner can't see: SSH
+  brute-force, invalid-user scans, sudo/su abuse, direct root logins. Decoders (YAML regex →
+  fields) and rules (the same condition DSL as the config engine, plus a `correlate` block) are
+  data, not code, and correlation uses keyed sliding windows — "8 failed logins from one IP in
+  60s," not "a failed login." Run it with `bulwarkctl logs scan`.
 - **Continuous monitoring** — a periodic re-scan loop (default 15 min) plus a filesystem watcher
   on the specific sensitive paths the rule pack actually reads (sshd_config, systemd units,
   sudoers, cron, `authorized_keys`), so an edit to one of those triggers an immediate re-check
@@ -69,7 +75,11 @@ monitoring (eBPF-class), which is a deliberate v1 non-goal (see the design doc, 
 Option C) rather than a gap nobody noticed. It also doesn't do AIDE-style cryptographic
 file-integrity baselining or Wazuh/rkhunter-style rootkit signature databases beyond a small,
 targeted set of persistence/rootkit indicator rules — those are natural, scoped directions for
-the rule pack to grow into, not architectural blockers.
+the rule pack to grow into, not architectural blockers. The one place it now steps toward
+Wazuh's territory is **log analysis**: `bulwarkctl logs scan` decodes and correlates journal/auth
+events (SSH brute-force, sudo abuse, invalid-user scans) with a keyed sliding-window correlator —
+OSSEC's decode→detect→correlate design without its dated XML/global-list internals. This ships as
+a one-shot batch command today; continuous follow-mode is the next step (see the design doc).
 
 [^1]: [Lynis on GitHub](https://github.com/cisofy/lynis) — CLI/agentless tool, plugin-extensible, HIPAA/ISO27001/PCI DSS compliance testing via CISOfy Enterprise.
 [^2]: [Chkrootkit and rkhunter: rootkit detectors for Linux](https://www.fgfgo.com/chkrootkit-and-rkhunter-best-free-rootkit-detectors-for-linux-2026/) — signature/heuristic detection tools, not remediation tools; commonly run together for coverage.

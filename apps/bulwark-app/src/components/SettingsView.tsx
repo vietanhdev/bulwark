@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { Bell, CheckCircle2, Code2, FileText, Radar, Scale, Timer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
+import { Switch } from "@/components/ui/switch";
 import { PageShell, SectionLabel } from "@/components/PageShell";
 import { ShieldMark } from "@/components/ShieldMark";
 import { useRevision } from "@/lib/revision";
@@ -72,6 +73,8 @@ function formatRelative(iso: string | null, now: number): string {
 export function SettingsView() {
   const { bump } = useRevision();
   const [status, setStatus] = useState<MonitoringStatus | null>(null);
+  const [toggleBusy, setToggleBusy] = useState(false);
+  const [toggleError, setToggleError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [version, setVersion] = useState<string | null>(null);
   const [tauriVersion, setTauriVersion] = useState<string | null>(null);
@@ -97,10 +100,17 @@ export function SettingsView() {
     };
   }, []);
 
-  async function toggle() {
-    if (!status) return;
-    setStatus(await invoke<MonitoringStatus>("monitoring_set_enabled", { enabled: !status.enabled }));
-    bump();
+  async function toggle(enabled: boolean) {
+    setToggleBusy(true);
+    setToggleError(null);
+    try {
+      setStatus(await invoke<MonitoringStatus>("monitoring_set_enabled", { enabled }));
+      bump();
+    } catch (e) {
+      setToggleError(String(e));
+    } finally {
+      setToggleBusy(false);
+    }
   }
 
   async function setIntervalMinutes(minutes: number) {
@@ -145,10 +155,15 @@ export function SettingsView() {
                     </div>
                   </div>
                 </div>
-                <Button variant={status.enabled ? "outline" : "default"} size="sm" onClick={toggle}>
-                  {status.enabled ? "Pause" : "Resume"}
-                </Button>
+                <Switch
+                  checked={status.enabled}
+                  disabled={toggleBusy}
+                  onCheckedChange={toggle}
+                  aria-label="Continuous monitoring"
+                />
               </div>
+
+              {toggleError && <Callout tone="critical">Couldn't change monitoring: {toggleError}</Callout>}
 
               <div>
                 <div className="mb-2 text-xs font-medium text-muted-foreground">Check every</div>

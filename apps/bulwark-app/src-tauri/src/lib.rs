@@ -92,26 +92,40 @@ fn resolve_rules_dir(app: Option<&tauri::AppHandle>) -> Result<PathBuf, String> 
 }
 
 /// Locates the `bulwarkctl` CLI binary this GUI shells out to for the privileged path (see
-/// [`scan_privileged`]). In dev mode it's a workspace-relative debug/release build; in an
-/// installed package both binaries land in the same `usr/bin`, so plain `"bulwarkctl"` on
-/// `PATH` resolves correctly there.
+/// [`scan_privileged`]).
+///
+/// Resolution order, most-specific first:
+/// 1. `BULWARK_CLI_PATH` — explicit override (tests, unusual installs).
+/// 2. **Next to the running executable** — this is the one that matters for a GUI-only
+///    install. `bulwarkctl` is bundled as a Tauri `externalBin` sidecar, so it lands beside
+///    `bulwark-app` in every package format — the desktop `.deb`/`.rpm` *and* the single-file
+///    AppImage (which has no `usr/bin` on `PATH` at all). Without this, "Run privileged checks"
+///    would fail for exactly the users most likely to install the desktop package alone.
+/// 3. Dev-mode workspace walk (`target/{debug,release}/bulwarkctl`).
+/// 4. Bare `"bulwarkctl"` on `PATH` — the CLI-package-alongside-GUI case.
 fn resolve_cli_binary() -> PathBuf {
     if let Ok(p) = std::env::var("BULWARK_CLI_PATH") {
         return PathBuf::from(p);
     }
-    let mut candidate = match std::env::current_dir() {
-        Ok(d) => d,
-        Err(_) => return PathBuf::from("bulwarkctl"),
-    };
-    for _ in 0..4 {
-        for profile in ["debug", "release"] {
-            let bin = candidate.join("target").join(profile).join("bulwarkctl");
-            if bin.is_file() {
-                return bin;
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let sidecar = dir.join("bulwarkctl");
+            if sidecar.is_file() {
+                return sidecar;
             }
         }
-        if !candidate.pop() {
-            break;
+    }
+    if let Ok(mut candidate) = std::env::current_dir() {
+        for _ in 0..4 {
+            for profile in ["debug", "release"] {
+                let bin = candidate.join("target").join(profile).join("bulwarkctl");
+                if bin.is_file() {
+                    return bin;
+                }
+            }
+            if !candidate.pop() {
+                break;
+            }
         }
     }
     PathBuf::from("bulwarkctl")
@@ -430,7 +444,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(MonitoringState(Mutex::new(monitoring::Inner::default())))
+        .manage(MonitoringState(Mutex::new(monitoring::initial_inner())))
         .manage(RealtimeAvState(Mutex::new(realtime_av::initial_state())))
         .setup(|app| {
             // Resolves and logs the rule pack location on every launch, dev or packaged.

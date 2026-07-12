@@ -1,0 +1,21 @@
+id: BLWK-LOG-SUDO-001
+title: "Repeated sudo password failures by {{ srcuser }}"
+category: privilege-escalation
+severity: medium
+decoder: sudo
+condition: 'tags contains "sudo_auth_failure"'
+groups: [authentication_failures]
+correlate:
+  count: 3
+  window_secs: 120
+  by: [srcuser]
+  suppress_secs: 300
+explain: >
+  {{ srcuser }} failed the sudo password 3 or more times within two minutes. This is either a
+  user who shouldn't have sudo probing for it, or an attacker on an already-compromised account
+  trying to escalate to root.
+fix: >
+  Confirm {{ srcuser }} is supposed to have sudo access at all (check /etc/sudoers and
+  /etc/sudoers.d). If the account may be compromised, rotate its credentials and review its
+  recent activity.
+references: [ATTACK-T1548.003]

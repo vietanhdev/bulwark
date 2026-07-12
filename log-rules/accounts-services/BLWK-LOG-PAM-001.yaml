@@ -1,0 +1,20 @@
+id: BLWK-LOG-PAM-001
+title: "Repeated authentication failures for {{ user }}"
+category: accounts-services
+severity: medium
+decoder: pam
+condition: 'tags contains "authentication_failed"'
+groups: [authentication_failures]
+correlate:
+  count: 5
+  window_secs: 120
+  by: [user]
+  suppress_secs: 300
+explain: >
+  The account "{{ user }}" failed authentication 5 or more times within two minutes across
+  PAM-using services (login, cron, sshd, su...). Concentrated failures against one account, rather
+  than one source, point at a targeted password attack on that specific user.
+fix: >
+  Confirm the account isn't simply misconfigured (a stale saved password, an expired credential).
+  If not, lock or investigate the account and review where the attempts are coming from.
+references: [ATTACK-T1110]

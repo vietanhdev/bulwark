@@ -380,11 +380,11 @@ dependencies = [
 
 [[package]]
 name = "bulwark-agent"
-version = "0.1.1"
+version = "0.2.0"
 
 [[package]]
 name = "bulwark-app"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bulwark-core",
@@ -397,12 +397,13 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-notification",
  "tauri-plugin-opener",
+ "tempfile",
  "tokio",
 ]
 
 [[package]]
 name = "bulwark-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -421,14 +422,15 @@ dependencies = [
 
 [[package]]
 name = "bulwark-proto"
-version = "0.1.1"
+version = "0.2.0"
 
 [[package]]
 name = "bulwarkctl"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bulwark-core",
+ "chrono",
  "clap",
  "serde_json",
 ]

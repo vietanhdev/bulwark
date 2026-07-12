@@ -1,0 +1,3 @@
+# Sidecar binaries are staged at build time by build.rs (copied from the workspace target dir),
+# never committed. See build.rs `stage_cli_sidecar`.
+bulwarkctl-*

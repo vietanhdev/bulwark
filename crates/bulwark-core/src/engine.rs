@@ -212,7 +212,9 @@ pub fn run_scan(
 
 /// Minimal `{{ field }}` interpolation into a rule's `explain` template — deliberately not a
 /// full template engine, matching the "flat condition DSL, not a new language" philosophy.
-fn render_template(template: &str, fact: &crate::models::Fact) -> String {
+/// Shared with the log pipeline (`logs::run_log_scan`), which templates log-rule titles the
+/// same way against a decoded event's fields.
+pub(crate) fn render_template(template: &str, fact: &crate::models::Fact) -> String {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
     while let Some(start) = rest.find("{{") {
@@ -237,7 +239,7 @@ fn render_template(template: &str, fact: &crate::models::Fact) -> String {
     out
 }
 
-fn host_fingerprint() -> String {
+pub(crate) fn host_fingerprint() -> String {
     let hostname = std::fs::read_to_string("/etc/hostname")
         .unwrap_or_default()
         .trim()

@@ -1,0 +1,13 @@
+# Program-agnostic (no `program:`): PAM lines are emitted by whatever process uses PAM — sshd,
+# sudo, su, login, cron — so this decoder buckets on the `pam_unix(...)` prematch instead of a
+# program name. Program-specific decoders (sshd/sudo/su) are always tried first; this catches the
+# PAM-level auth-failure line they don't parse themselves.
+id: pam
+prematch: 'pam_unix\('
+patterns:
+  # With a remote host (network logins): capture both the source IP and the target user.
+  - regex: 'authentication failure;.*rhost=(?P<srcip>\S+).*user=(?P<user>\S+)'
+    tags: [authentication_failed]
+  # Local logins (no rhost): user only.
+  - regex: 'authentication failure;.*user=(?P<user>\S+)'
+    tags: [authentication_failed]

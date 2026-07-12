@@ -1,0 +1,17 @@
+id: sshd
+program: sshd
+# Cheap guard: skip the (many) sshd lines that aren't about authentication before running any
+# capture regex — connection open/close, key exchange, session lifecycle, etc.
+prematch: '^Failed|^Accepted|^Invalid user'
+patterns:
+  # Invalid-user failures first (more specific than the generic Failed line below), so they get
+  # the extra `invalid_user` tag that the credential-stuffing scan rule keys off.
+  - regex: '^Failed \S+ for invalid user (?P<user>\S+) from (?P<srcip>\S+) port (?P<srcport>\d+)'
+    tags: [authentication_failed, invalid_user]
+  - regex: '^Failed \S+ for (?P<user>\S+) from (?P<srcip>\S+) port (?P<srcport>\d+)'
+    tags: [authentication_failed]
+  - regex: '^Accepted \S+ for (?P<user>\S+) from (?P<srcip>\S+) port (?P<srcport>\d+)'
+    tags: [authentication_success]
+  # Standalone "Invalid user X from Y" line (emitted separately from the Failed line).
+  - regex: '^Invalid user (?P<user>\S+) from (?P<srcip>\S+)'
+    tags: [invalid_user]

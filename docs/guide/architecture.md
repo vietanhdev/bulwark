@@ -200,6 +200,20 @@ A finding is considered "the same" across scan runs if its previously-stored `co
 - **Write path:** the scan engine emits `Finding`s over a stream as they're produced (streamed, not batched); on completion, findings are persisted to local SQLite in one transaction.
 - **Index strategy:** local SQLite (`rusqlite`), indexed on `(rule_id, status)` and `(scan_run_id)` — single-host scale, at most a few thousand rows; nothing heavier is needed.
 
+### Log-analysis pipeline (decode → detect → correlate)
+
+The config scanner above answers "is this machine's *state* wrong right now." A second, parallel pipeline (`bulwark-core::logs`, driven by `bulwarkctl logs scan`) answers "what *happened* over time" — the class of intrusion signals that only exist in logs: SSH brute-force, invalid-user scans, sudo/su abuse, direct root logins. It is modeled on OSSEC's decode→detect→correlate design (the part of OSSEC that aged well and Wazuh kept) while deliberately avoiding OSSEC's dated internals (XML rule language, a single global backward-scanned event list, mutable counters on shared rule objects, `frequency + 2` semantics).
+
+Three stages, each stage reusing the config engine's machinery where it fits:
+
+- **Source** (`logs::source`) — a `LogSource` trait yielding normalized `RawEvent`s. `JournaldSource` shells out to `journalctl -o json` (the shipped driver on a systemd host; no `libsystemd` linkage); `SyslogLinesSource` parses classic `Mon DD HH:MM:SS host prog[pid]: msg` from any reader, powering `--from-file`, tests, and a future offset-tracking file tailer.
+- **Decode** (`logs::decoder`) — YAML decoders under `decoders/` own "get `srcip`/`user` out of *this* vendor's line": a coarse `program` bucket → optional cheap `prematch` guard → ordered capture-regex `patterns` (named captures become fact fields; the matched pattern's `tags` become the event's `tags` array). A decoded line **is a `Fact`** — the same `BTreeMap<String, Value>` collectors produce — so the detect stage is pure reuse.
+- **Detect + correlate** (`logs::rule`, `logs::correlate`, `logs::run_log_scan`) — YAML log rules under `log-rules/` match decoded facts with the **existing condition DSL, unchanged** (`tags contains "authentication_failed"` is OSSEC's `if_group`, no new operator). A rule with no `correlate` block fires per matching event; with one, matches feed a **keyed sliding-window correlator**: `(rule_id, group_key) → VecDeque<event_timestamp>`, evict older than `now − window_secs`, fire when the window reaches `count`. That's an honest group-by (per-`srcip`, per-`user`), O(1) amortized per event, and shardable — not OSSEC's O(history) global scan. **The clock is always the event's own timestamp, never wall-clock**, so replaying a batch of old logs correlates exactly as it would have live, and every test is deterministic. `suppress_secs` gives per-key flood control; `MissingField` on a rule's condition is a non-match (log events are heterogeneous), not an error.
+
+Output is a `LogScanRun` of `LogFinding`s (event-shaped: timestamped, carrying the correlation key and count), persisted to their own `log_scan_runs`/`log_findings` tables (schema migration V3) and reconciled on `(rule_id, group_key)` — a recurring brute-force from one IP is one row whose `occurrences` climbs, not a flood of duplicates. Kept separate from the config `scan_runs`/`findings` because the two have genuinely different lifecycles (config findings persist until fixed; log alerts recur) and reconciliation identities.
+
+**Scope (v1):** one-shot batch only, and *threshold* correlation (N events per key in a window). Deliberately deferred: **sequence** correlation (A-then-B across groups, e.g. "auth failures *followed by* a success"); continuous **follow mode** — which is just `run_log_scan` driven by a following `JournaldSource`, and is the concrete first job of the currently-empty `bulwark-agent` daemon; a persisted-offset file tailer; and any active response (log findings stay advisory, like every other Bulwark finding).
+
 ---
 
 ## 6. API / contracts
@@ -233,6 +247,9 @@ There's no network API — the "client" and "server" are the same process, expos
 | `bulwarkctl fim baseline` | Record the current hashes of the watched files as the known-good baseline. Never runs automatically — a baseline taken *after* a compromise would enshrine it as clean | `0` |
 | `bulwarkctl fim baseline --privileged` | Also baseline the root-only paths (`/etc/shadow`, `/etc/sudoers`); refuses unless run as root | `0` |
 | `bulwarkctl history` | List past `ScanRun`s (shared with the GUI's history) | `0` |
+| `bulwarkctl logs scan` | Decode + correlate the current boot's journal (or `--since=<spec>` / `--from-file <path>`); `--json` for machine-readable output | `0` clean / `1` ≥medium / `2` critical, like `scan` |
+| `bulwarkctl logs rules list` / `rules validate <path>` | Inspect the log-rule pack; `validate` also cross-checks each rule's `decoder:` names a real decoder | `0` / `1` |
+| `bulwarkctl logs decoders list` / `decoders validate <path>` | Inspect the decoder pack | `0` / `1` |
 
 There is no traditional authn/authz layer — this is a single-user local app; the OS login session is the trust boundary, and `pkexec` (GUI) / `sudo` (CLI) are the only elevation gates (see §10).
 

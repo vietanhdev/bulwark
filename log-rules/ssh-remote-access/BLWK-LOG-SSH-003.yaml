@@ -1,0 +1,15 @@
+id: BLWK-LOG-SSH-003
+title: "Successful SSH root login from {{ srcip }}"
+category: ssh-remote-access
+severity: medium
+decoder: sshd
+condition: 'tags contains "authentication_success" and user == "root"'
+groups: [authentication_success]
+explain: >
+  root logged in directly over SSH from {{ srcip }}. Direct root login removes the per-user
+  accountability of sudo and is a common post-compromise foothold — every remote root session
+  is worth an eyeball, even a legitimate one.
+fix: >
+  Set 'PermitRootLogin no' (or 'prohibit-password') in sshd_config and have admins log in as
+  themselves, then escalate with sudo. If this login was you, no action is needed.
+references: [ATTACK-T1078, CIS-5.2.8]

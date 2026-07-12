@@ -16,10 +16,11 @@ name = "bulwarkctl"
 path = "src/main.rs"
 
 [dependencies]
-bulwark-core = { path = "../bulwark-core", version = "0.1.1" }
+bulwark-core = { path = "../bulwark-core", version = "0.2.0" }
 clap.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
+chrono.workspace = true
 
 # `cargo install cargo-deb` then `cargo deb -p bulwarkctl` from the workspace root.
 [package.metadata.deb]
@@ -33,6 +34,8 @@ priority = "optional"
 assets = [
     ["target/release/bulwarkctl", "usr/bin/", "755"],
     ["../../rules/**/*.yaml", "usr/share/bulwark/rules/", "644"],
+    ["../../decoders/**/*.yaml", "usr/share/bulwark/decoders/", "644"],
+    ["../../log-rules/**/*.yaml", "usr/share/bulwark/log-rules/", "644"],
 ]
 
 # `cargo install cargo-generate-rpm` then `cargo generate-rpm -p crates/bulwarkctl` after a release build.
@@ -44,4 +47,6 @@ assets = [
 assets = [
     { source = "target/release/bulwarkctl", dest = "/usr/bin/bulwarkctl", mode = "755" },
     { source = "rules/*/*.yaml", dest = "/usr/share/bulwark/rules/", mode = "644" },
+    { source = "decoders/*.yaml", dest = "/usr/share/bulwark/decoders/", mode = "644" },
+    { source = "log-rules/*/*.yaml", dest = "/usr/share/bulwark/log-rules/", mode = "644" },
 ]

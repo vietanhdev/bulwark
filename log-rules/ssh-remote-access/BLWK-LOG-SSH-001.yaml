@@ -1,0 +1,20 @@
+id: BLWK-LOG-SSH-001
+title: "SSH brute-force from {{ srcip }}"
+category: ssh-remote-access
+severity: high
+decoder: sshd
+condition: 'tags contains "authentication_failed"'
+groups: [authentication_failures]
+correlate:
+  count: 8
+  window_secs: 60
+  by: [srcip]
+  suppress_secs: 300
+explain: >
+  {{ srcip }} produced 8 or more failed SSH logins within 60 seconds — a password brute-force
+  attempt. Repeated failures from a single source in a tight window are the signature of an
+  automated guessing tool, not a user mistyping a password.
+fix: >
+  Block the source IP at the firewall (nft/ipset or fail2ban), confirm PasswordAuthentication is
+  off (key-only auth defeats guessing entirely), and consider moving SSH off port 22.
+references: [ATTACK-T1110, CIS-5.2.10]

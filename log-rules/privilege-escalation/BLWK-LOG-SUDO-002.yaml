@@ -1,0 +1,16 @@
+id: BLWK-LOG-SUDO-002
+title: "Unauthorized sudo attempt by {{ srcuser }}"
+category: privilege-escalation
+severity: high
+decoder: sudo
+condition: 'tags contains "sudo_not_allowed"'
+groups: [privilege_escalation]
+explain: >
+  {{ srcuser }} tried to run a command through sudo that they are not permitted to run (not in
+  sudoers, or the command is outside their allowed set). A single such attempt is worth
+  investigating — legitimate users rarely trip this, but an attacker probing for escalation does.
+fix: >
+  Verify whether {{ srcuser }} should have been attempting this. If the account is not trusted
+  with elevated access, treat it as a possible compromise and review its recent commands and
+  login history.
+references: [ATTACK-T1548.003]

@@ -1,0 +1,10 @@
+id: su
+program: su
+patterns:
+  # util-linux "FAILED SU (to root) alice on pts/0" and the older "FAILED su for root by alice".
+  - regex: '^FAILED SU \(to (?P<dstuser>\S+)\) (?P<srcuser>\S+)'
+    tags: [authentication_failed, su_failure]
+  - regex: '^FAILED su for (?P<dstuser>\S+) by (?P<srcuser>\S+)'
+    tags: [authentication_failed, su_failure]
+  - regex: '^Successful su for (?P<dstuser>\S+) by (?P<srcuser>\S+)'
+    tags: [su_success]

@@ -63,6 +63,50 @@ static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
             );
             "#,
         ),
+        // V3 — the log-analysis pipeline's own tables, kept separate from the config-scan
+        // `scan_runs`/`findings` on purpose: log alerts are event-shaped (timestamped, they
+        // recur), config findings are state-shaped (they persist until fixed), and their
+        // reconciliation identities differ ((rule_id, group_key) vs a context subset). Sharing
+        // one table would also mean relaxing the `findings.scan_run_id → scan_runs.id` FK.
+        M::up(
+            r#"
+            CREATE TABLE IF NOT EXISTS log_scan_runs (
+                id                  TEXT PRIMARY KEY,
+                started_at          TEXT NOT NULL,
+                finished_at         TEXT,
+                host_fingerprint    TEXT NOT NULL,
+                events_read         INTEGER NOT NULL,
+                events_decoded      INTEGER NOT NULL,
+                decoders_loaded     INTEGER NOT NULL,
+                rules_loaded        INTEGER NOT NULL,
+                total_findings      INTEGER NOT NULL,
+                decoder_load_errors TEXT NOT NULL,
+                rule_load_errors    TEXT NOT NULL,
+                read_errors         TEXT NOT NULL,
+                rule_eval_errors    TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS log_findings (
+                id               TEXT PRIMARY KEY,
+                log_scan_run_id  TEXT NOT NULL REFERENCES log_scan_runs(id),
+                rule_id          TEXT NOT NULL,
+                severity         TEXT NOT NULL,
+                category         TEXT NOT NULL,
+                title            TEXT NOT NULL,
+                explanation      TEXT NOT NULL,
+                fix_hint         TEXT NOT NULL,
+                group_key        TEXT NOT NULL,
+                match_count      INTEGER NOT NULL,
+                context          TEXT NOT NULL,
+                refs             TEXT NOT NULL,
+                observed_at      TEXT NOT NULL,
+                first_seen       TEXT NOT NULL,
+                last_seen        TEXT NOT NULL,
+                occurrences      INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE INDEX IF NOT EXISTS idx_log_findings_rule_key ON log_findings(rule_id, group_key);
+            CREATE INDEX IF NOT EXISTS idx_log_findings_scan ON log_findings(log_scan_run_id);
+            "#,
+        ),
     ])
 });
 
@@ -282,6 +326,107 @@ impl Store {
             params![scan_run_id],
             |r| r.get(0),
         )?)
+    }
+
+    /// Persists a [`LogScanRun`](crate::logs::LogScanRun), reconciling on `(rule_id, group_key)`
+    /// — the log analog of [`Self::persist_and_reconcile`]. A finding whose `(rule_id,
+    /// group_key)` already exists updates that row's `last_seen`/`match_count` and bumps an
+    /// `occurrences` counter in place (so a brute-force from the same IP recurring across
+    /// batches is one row that "keeps happening," not a flood of duplicates), keeping its
+    /// original `first_seen`. Genuinely new `(rule_id, group_key)` pairs are inserted and
+    /// returned as "newly appeared" — the set a notifier should actually fire on.
+    ///
+    /// Unlike the config path, identity here is an exact `(rule_id, group_key)` match rather
+    /// than a context subset: `group_key` is already the natural correlation identity (the
+    /// source IP, the user), so there's nothing to tolerate — two different keys are two
+    /// genuinely different alerts.
+    pub fn persist_log_scan(
+        &mut self,
+        scan: &crate::logs::LogScanRun,
+    ) -> anyhow::Result<Vec<crate::logs::LogFinding>> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO log_scan_runs (id, started_at, finished_at, host_fingerprint, events_read, events_decoded, decoders_loaded, rules_loaded, total_findings, decoder_load_errors, rule_load_errors, read_errors, rule_eval_errors)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            params![
+                scan.id.to_string(),
+                scan.started_at.to_rfc3339(),
+                scan.finished_at.map(|t| t.to_rfc3339()),
+                scan.host_fingerprint,
+                scan.events_read as i64,
+                scan.events_decoded as i64,
+                scan.decoders_loaded as i64,
+                scan.rules_loaded as i64,
+                scan.findings.len() as i64,
+                serde_json::to_string(&scan.decoder_load_errors)?,
+                serde_json::to_string(&scan.rule_load_errors)?,
+                serde_json::to_string(&scan.read_errors)?,
+                serde_json::to_string(&scan.rule_eval_errors)?,
+            ],
+        )?;
+
+        let mut newly_appeared = Vec::new();
+        for f in &scan.findings {
+            let existing: Option<String> = tx
+                .query_row(
+                    "SELECT id FROM log_findings WHERE rule_id = ?1 AND group_key = ?2",
+                    params![f.rule_id, f.group_key],
+                    |r| r.get(0),
+                )
+                .optional()?;
+
+            match existing {
+                Some(id) => {
+                    tx.execute(
+                        "UPDATE log_findings SET last_seen = ?1, match_count = ?2, log_scan_run_id = ?3, occurrences = occurrences + 1 WHERE id = ?4",
+                        params![
+                            f.observed_at.to_rfc3339(),
+                            f.match_count as i64,
+                            scan.id.to_string(),
+                            id
+                        ],
+                    )?;
+                }
+                None => {
+                    tx.execute(
+                        "INSERT INTO log_findings (id, log_scan_run_id, rule_id, severity, category, title, explanation, fix_hint, group_key, match_count, context, refs, observed_at, first_seen, last_seen, occurrences)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 1)",
+                        params![
+                            f.id.to_string(),
+                            scan.id.to_string(),
+                            f.rule_id,
+                            severity_str(f.severity),
+                            f.category,
+                            f.title,
+                            f.explanation,
+                            f.fix_hint,
+                            f.group_key,
+                            f.match_count as i64,
+                            serde_json::to_string(&f.context)?,
+                            serde_json::to_string(&f.references)?,
+                            f.observed_at.to_rfc3339(),
+                            f.observed_at.to_rfc3339(),
+                            f.observed_at.to_rfc3339(),
+                        ],
+                    )?;
+                    newly_appeared.push(f.clone());
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(newly_appeared)
+    }
+
+    pub fn count_log_scan_runs(&self) -> anyhow::Result<i64> {
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM log_scan_runs", [], |r| r.get(0))?)
+    }
+
+    pub fn count_log_findings(&self) -> anyhow::Result<i64> {
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM log_findings", [], |r| r.get(0))?)
     }
 
     /// Generic string key-value read, backing small persisted preferences (e.g. real-time
@@ -948,7 +1093,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let db_path = tmp.path().join("fresh.db");
         let store = Store::open(&db_path).unwrap();
-        assert_eq!(Store::schema_version(&store.conn).unwrap(), 2);
+        assert_eq!(Store::schema_version(&store.conn).unwrap(), 3);
     }
 
     #[test]
@@ -962,7 +1107,7 @@ mod tests {
             store.persist_and_reconcile(&sample_scan()).unwrap();
         }
         let store = Store::open(&db_path).unwrap();
-        assert_eq!(Store::schema_version(&store.conn).unwrap(), 2);
+        assert_eq!(Store::schema_version(&store.conn).unwrap(), 3);
         assert_eq!(store.open_findings().unwrap().len(), 1, "data must survive");
     }
 
@@ -1003,7 +1148,7 @@ mod tests {
 
         let store = Store::open(&db_path).unwrap();
 
-        assert_eq!(Store::schema_version(&store.conn).unwrap(), 2);
+        assert_eq!(Store::schema_version(&store.conn).unwrap(), 3);
         assert_eq!(
             store.count_scan_runs().unwrap(),
             1,
@@ -1036,5 +1181,75 @@ mod tests {
         store.set_setting("k", "first").unwrap();
         store.set_setting("k", "second").unwrap();
         assert_eq!(store.get_setting("k").unwrap(), Some("second".to_string()));
+    }
+
+    fn sample_log_scan(group_key: &str) -> crate::logs::LogScanRun {
+        let now = Utc::now();
+        crate::logs::LogScanRun {
+            id: Uuid::new_v4(),
+            started_at: now,
+            finished_at: Some(now),
+            host_fingerprint: "test-host/6.8.0".into(),
+            events_read: 8,
+            events_decoded: 8,
+            decoders_loaded: 4,
+            rules_loaded: 7,
+            decoder_load_errors: vec![],
+            rule_load_errors: vec![],
+            read_errors: vec![],
+            rule_eval_errors: vec![],
+            findings: vec![crate::logs::LogFinding {
+                id: Uuid::new_v4(),
+                rule_id: "BLWK-LOG-SSH-001".into(),
+                severity: Severity::High,
+                category: "ssh-remote-access".into(),
+                title: "SSH brute-force".into(),
+                explanation: "e".into(),
+                fix_hint: "f".into(),
+                group_key: group_key.into(),
+                match_count: 8,
+                context: crate::models::Fact::new(),
+                observed_at: now,
+                references: vec!["ATTACK-T1110".into()],
+            }],
+        }
+    }
+
+    #[test]
+    fn persist_log_scan_reconciles_same_rule_and_key_instead_of_duplicating() {
+        let mut store = Store::open_in_memory().unwrap();
+
+        // First sighting: newly appeared.
+        let newly = store
+            .persist_log_scan(&sample_log_scan("203.0.113.7"))
+            .unwrap();
+        assert_eq!(newly.len(), 1);
+        assert_eq!(store.count_log_findings().unwrap(), 1);
+
+        // Same (rule_id, group_key) again: reconciled in place, nothing "newly appeared".
+        let newly = store
+            .persist_log_scan(&sample_log_scan("203.0.113.7"))
+            .unwrap();
+        assert!(newly.is_empty());
+        assert_eq!(store.count_log_findings().unwrap(), 1, "must not duplicate");
+        assert_eq!(store.count_log_scan_runs().unwrap(), 2);
+
+        // A different source IP is a genuinely different alert.
+        let newly = store
+            .persist_log_scan(&sample_log_scan("198.51.100.9"))
+            .unwrap();
+        assert_eq!(newly.len(), 1);
+        assert_eq!(store.count_log_findings().unwrap(), 2);
+
+        // occurrences bumped for the reconciled key (seen twice), 1 for the new key.
+        let occ: i64 = store
+            .conn
+            .query_row(
+                "SELECT occurrences FROM log_findings WHERE group_key = '203.0.113.7'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(occ, 2);
     }
 }
