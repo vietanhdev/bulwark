@@ -48,6 +48,12 @@ git config core.hooksPath .githooks
 
 Runs gitleaks (staged-secret scan), `cargo fmt --all -- --check` (only if staged `.rs` files), and prettier/eslint/tsc (only if staged files under `apps/bulwark-app/`). Deliberately skips `cargo test`/`cargo clippy` — comprehensive but slow on this workspace; CI is the backstop for those.
 
+### Commit message convention
+
+Every commit message (subject line) must follow [Conventional Commits v1.0.0](https://www.conventionalcommits.org/en/v1.0.0/): `<type>[(scope)][!]: <description>`. `type` is one of `build`, `chore`, `ci`, `docs`, `feat`, `fix`, `perf`, `refactor`, `revert`, `style`, `test`; `!` after the type/scope marks a breaking change. Scope is optional and free-form (e.g. `core`, `docs`, `e2e`, `repo`) — add one when it disambiguates which part of the monorepo changed, skip it when the type alone is clear. The body is unconstrained prose; keep writing the same detailed why-not-just-what commit bodies this project already uses.
+
+Enforced by `.githooks/commit-msg` (same `core.hooksPath` setup as pre-commit above, so no extra install step) — it rejects a non-conforming subject line, and skips validation for `git`-generated `Merge ...` and `Revert "..."` messages. The entire pre-existing history was rewritten to this convention (message-only — file contents and tree hashes are untouched) rather than left inconsistent; the base of that rewrite lives in the repo's public GitHub history now, not as a separate migration commit.
+
 ## Architecture
 
 Cargo workspace, three members:

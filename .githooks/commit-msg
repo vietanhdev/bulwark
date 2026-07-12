@@ -1,0 +1,33 @@
+#!/bin/bash
+# Enforces Conventional Commits (https://www.conventionalcommits.org/en/v1.0.0/) on the
+# commit subject line. Installed via the same native hooksPath as pre-commit — see
+# .githooks/pre-commit's header comment for why (no husky/pre-commit-framework dependency).
+#
+# Skips merge commits and `git revert`'s auto-generated `Revert "..."` messages, since git
+# writes those itself rather than a contributor typing them by hand.
+
+RED='\033[0;31m'
+NC='\033[0m'
+
+commit_msg_file="$1"
+subject=$(grep -v '^#' "$commit_msg_file" | sed -n '1p')
+
+case "$subject" in
+  "Merge "*|"Revert \""*) exit 0 ;;
+esac
+
+types='build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test'
+pattern="^(${types})(\([a-z0-9._-]+\))?!?: .+"
+
+if ! echo "$subject" | grep -qE "$pattern"; then
+  echo -e "${RED}✗ Commit subject doesn't follow Conventional Commits:${NC}"
+  echo "  \"$subject\""
+  echo
+  echo "  Expected: <type>[(scope)][!]: <description>"
+  echo "  type is one of: build, chore, ci, docs, feat, fix, perf, refactor, revert, style, test"
+  echo "  '!' after the type/scope marks a breaking change, e.g. feat(core)!: ..."
+  echo "  Example: fix(core): correct sshd_config first-occurrence-wins parsing"
+  echo
+  echo "  See https://www.conventionalcommits.org/en/v1.0.0/"
+  exit 1
+fi
