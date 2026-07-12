@@ -170,8 +170,8 @@ have, since Bulwark's rules aren't tied to a specific OS release at all.
   `BLWK-KERNEL-008/016/017`) — this is the direct, current-session payoff of building Bulwark's
   kernel-hardening rules from Lynis's own `default.prf` data rather than wrapping Lynis's report
   output.
-- **ClamAV integration**: real, verified with an EICAR file earlier this session (see
-  `CLAUDE.md`); Lynis has no equivalent without a separate plugin.
+- **ClamAV integration**: real, verified with an EICAR file (see `AGENTS.md`); Lynis has no
+  equivalent without a separate plugin.
 
 ## Reproducing this
 

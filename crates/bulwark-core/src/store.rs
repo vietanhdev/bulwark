@@ -771,7 +771,7 @@ mod tests {
     }
 
     /// A row with a corrupted `id`/`scan_run_id` (never written by Bulwark itself, but not
-    /// a scenario this test should just assume can't happen — see CLAUDE.md's "no silent
+    /// a scenario this test should just assume can't happen — see AGENTS.md's "no silent
     /// failures" rule) must surface as a query error, not panic and not silently produce a
     /// nil/garbage UUID.
     #[test]
