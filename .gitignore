@@ -5,3 +5,4 @@ dist
 **/src-tauri/gen
 *.db
 .DS_Store
+.playwright-mcp/

@@ -1,0 +1,197 @@
+name: Release
+
+# Tag-driven: `git tag v0.1.0 && git push origin v0.1.0` cuts a release. `workflow_dispatch`
+# builds every artifact and uploads them to the run itself *without* publishing a GitHub
+# Release, so the packaging can be exercised end to end before a version number is burned —
+# a tag, once pushed and released, is not something you want to be debugging.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    # Deliberately NOT ubuntu-latest. The oldest glibc the build links against becomes the
+    # oldest distro the artifacts will run on, and `ubuntu-latest` silently moves that floor up
+    # whenever GitHub re-points it. Pinning to 22.04 keeps `.deb`/`.rpm`/AppImage usable on
+    # Ubuntu 22.04+ and Debian 12+; building on 24.04 would produce packages that refuse to
+    # install on a two-year-old distro for no reason the user could act on.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          CARGO_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+            # A tag that disagrees with the workspace version would publish assets whose
+            # filenames and embedded --version output contradict each other.
+            if [ "${TAG_VERSION}" != "${CARGO_VERSION}" ]; then
+              echo "::error::tag ${GITHUB_REF_NAME} does not match workspace version ${CARGO_VERSION} — bump Cargo.toml (and tauri.conf.json / package.json) first"
+              exit 1
+            fi
+          fi
+          echo "version=${CARGO_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Building version ${CARGO_VERSION}"
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/bulwark-app/package-lock.json
+
+      # webkit2gtk + friends, needed to compile and bundle the Tauri GUI on Linux. `rpm` is
+      # what `cargo tauri build` shells out to for the .rpm bundle; without it that bundle is
+      # skipped silently rather than failing loudly.
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf rpm
+
+      - name: Install packaging tools
+        run: cargo install cargo-deb cargo-generate-rpm --locked
+
+      - name: Install frontend dependencies
+        working-directory: apps/bulwark-app
+        run: npm ci
+
+      # ---- CLI (bulwarkctl) ----
+      - name: Build CLI
+        run: cargo build --release -p bulwarkctl
+
+      - name: Package CLI (.deb, .rpm, tarball)
+        run: |
+          set -euo pipefail
+          cargo deb -p bulwarkctl --no-build
+          cargo generate-rpm -p crates/bulwarkctl
+
+          # Plain tarball for distros with neither dpkg nor rpm. Ships the rule pack alongside
+          # the binary — bulwarkctl resolves /usr/share/bulwark/rules when installed, so a
+          # bare binary with no rules is useless on its own.
+          V="${{ steps.version.outputs.version }}"
+          STAGE="bulwarkctl-${V}-x86_64-linux"
+          mkdir -p "${STAGE}"
+          cp target/release/bulwarkctl "${STAGE}/"
+          cp -r rules "${STAGE}/"
+          cp README.md LICENSE "${STAGE}/"
+          tar -czf "${STAGE}.tar.gz" "${STAGE}"
+
+      # ---- GUI (bulwark-app) ----
+      # Produces .deb, .rpm and .AppImage in target/release/bundle/ (bundle.targets = "all").
+      - name: Build and bundle GUI
+        working-directory: apps/bulwark-app
+        run: npm run tauri build
+
+      - name: Collect artifacts
+        id: collect
+        run: |
+          set -euo pipefail
+          V="${{ steps.version.outputs.version }}"
+          mkdir -p dist
+
+          cp target/debian/bulwarkctl_${V}-1_amd64.deb        "dist/bulwarkctl_${V}_amd64.deb"
+          cp target/generate-rpm/bulwarkctl-${V}-1.x86_64.rpm "dist/bulwarkctl-${V}.x86_64.rpm"
+          cp bulwarkctl-${V}-x86_64-linux.tar.gz              "dist/"
+
+          cp target/release/bundle/deb/bulwark_${V}_amd64.deb          "dist/bulwark-desktop_${V}_amd64.deb"
+          cp target/release/bundle/rpm/bulwark-${V}-1.x86_64.rpm       "dist/bulwark-desktop-${V}.x86_64.rpm"
+          cp target/release/bundle/appimage/bulwark_${V}_amd64.AppImage "dist/bulwark-desktop-${V}-x86_64.AppImage"
+
+          cd dist
+          sha256sum * > SHA256SUMS
+          echo "--- release assets ---"
+          ls -la
+
+      # Fails the build rather than shipping a package whose contents are wrong. `cargo deb`
+      # succeeding only proves the metadata parsed — it says nothing about whether the rule
+      # pack actually made it in, which is exactly the bug this project has hit before.
+      - name: Verify package contents
+        run: |
+          set -euo pipefail
+          V="${{ steps.version.outputs.version }}"
+
+          check_rules() {
+            local label="$1" count="$2"
+            if [ "${count}" -lt 50 ]; then
+              echo "::error::${label} contains only ${count} rule files — the rule pack is missing or truncated"
+              exit 1
+            fi
+            echo "OK: ${label} ships ${count} rules"
+          }
+
+          check_rules "CLI .deb" \
+            "$(dpkg-deb --contents dist/bulwarkctl_${V}_amd64.deb | grep -c '\.yaml$')"
+          check_rules "CLI .rpm" \
+            "$(rpm -qlp dist/bulwarkctl-${V}.x86_64.rpm 2>/dev/null | grep -c '\.yaml$')"
+          check_rules "GUI .deb" \
+            "$(dpkg-deb --contents dist/bulwark-desktop_${V}_amd64.deb | grep -c '\.yaml$')"
+
+          # The CLI binary must actually run — a package that installs a binary the target
+          # distro can't execute is worse than no package.
+          dpkg-deb --contents dist/bulwarkctl_${V}_amd64.deb | grep -q 'usr/bin/bulwarkctl'
+          echo "OK: CLI .deb ships /usr/bin/bulwarkctl"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bulwark-linux-x86_64
+          path: dist/*
+          retention-days: 14
+
+      # Only on a real tag. A workflow_dispatch run stops at the artifact upload above, so the
+      # whole pipeline can be rehearsed without creating a public release.
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          draft: true
+          generate_release_notes: true
+          name: Bulwark ${{ github.ref_name }}
+          body: |
+            ## Install
+
+            **Desktop app (GUI)** — Debian/Ubuntu:
+            ```bash
+            sudo dpkg -i bulwark-desktop_${{ steps.version.outputs.version }}_amd64.deb
+            ```
+            Fedora/RHEL:
+            ```bash
+            sudo rpm -i bulwark-desktop-${{ steps.version.outputs.version }}.x86_64.rpm
+            ```
+            Any distro (portable, no install):
+            ```bash
+            chmod +x bulwark-desktop-${{ steps.version.outputs.version }}-x86_64.AppImage
+            ./bulwark-desktop-${{ steps.version.outputs.version }}-x86_64.AppImage
+            ```
+
+            **CLI (headless / over SSH)** — Debian/Ubuntu:
+            ```bash
+            sudo dpkg -i bulwarkctl_${{ steps.version.outputs.version }}_amd64.deb
+            bulwarkctl scan
+            ```
+            Fedora/RHEL:
+            ```bash
+            sudo rpm -i bulwarkctl-${{ steps.version.outputs.version }}.x86_64.rpm
+            ```
+
+            Verify your download against `SHA256SUMS`:
+            ```bash
+            sha256sum -c SHA256SUMS --ignore-missing
+            ```
+
+            Built on Ubuntu 22.04 (glibc 2.35) — runs on Ubuntu 22.04+, Debian 12+, Fedora 36+.

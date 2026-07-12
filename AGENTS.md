@@ -33,10 +33,27 @@ npm run build                          # static build to docs/.vitepress/dist
 
 # Packaging (from workspace root, after a release build)
 cargo build --release -p bulwarkctl
-cargo deb -p bulwarkctl --no-build    # requires `cargo install cargo-deb`
+cargo deb -p bulwarkctl --no-build       # requires `cargo install cargo-deb`
+cargo generate-rpm -p crates/bulwarkctl  # requires `cargo install cargo-generate-rpm`
 ```
 
 CI (`.github/workflows/ci.yml`) runs fmt-check, clippy `-D warnings`, `cargo test --workspace`, `rules validate rules/`, and a frontend typecheck — run all of these locally before considering a change done.
+
+### Releases
+
+`.github/workflows/release.yml` builds and publishes every artifact: the GUI (`.deb`, `.rpm`, AppImage, via `cargo tauri build`) and the CLI (`.deb`, `.rpm`, tarball). Cutting a release is `git tag v0.1.0 && git push origin v0.1.0`; the workflow refuses to build if the tag disagrees with the workspace version, and it publishes as a **draft** so the assets can be looked at before anything goes public. `workflow_dispatch` runs the whole pipeline without publishing, which is how you rehearse a release without burning a version number.
+
+Built on `ubuntu-22.04`, deliberately not `ubuntu-latest`: the oldest glibc linked against becomes the oldest distro the artifacts run on, and `ubuntu-latest` silently raises that floor whenever GitHub re-points it.
+
+The workflow asserts on package *contents* (≥50 rule files in each of the CLI `.deb`, CLI `.rpm`, and GUI `.deb`), not merely that the packaging command exited 0 — `cargo deb`/`cargo tauri build` succeeding only proves the metadata parsed. The CLI's `.rpm` shipped **zero** rules for a while precisely because nothing checked: its asset list had drifted out of sync with the `.deb`'s, and `bulwarkctl` resolves `/usr/share/bulwark/rules` on an installed system, so every invocation failed with "couldn't find a 'rules' directory."
+
+**Known gap:** the GUI package does *not* ship `bulwarkctl`, and doesn't depend on it. The GUI's privileged path shells out to `pkexec bulwarkctl`, so on a GUI-only install "Run privileged checks" fails. A package dependency would fix the `.deb`/`.rpm` but *cannot* fix the AppImage (single portable file) — bundling the binary into the GUI (Tauri `externalBin`, plus teaching `resolve_cli_binary` to look next to `current_exe`) is the fix that covers all three.
+
+### Database migrations
+
+Schema changes go in `MIGRATIONS` in `crates/bulwark-core/src/store.rs`, versioned via SQLite's `PRAGMA user_version` (`rusqlite_migration`). **Append only** — never edit or reorder a migration that has shipped: a database already stamped at version N will never re-run it, so an edit silently splits users into two different schemas depending on when they first installed. Add a new `M::up` instead.
+
+Databases created before versioning existed report `user_version = 0` and are indistinguishable from a brand-new one by the pragma alone; `baseline_pre_versioning_db` inspects the actual schema to bring them forward. Now that packages ship, a user's database survives across upgrades, so any new migration wants a test proving existing rows survive it (see `a_pre_versioning_db_upgrades_without_losing_data`).
 
 ### Pre-commit hooks
 
