@@ -86,9 +86,9 @@ The research groundwork is already done — a checklist grounded in Lynis's test
 ```mermaid
 flowchart TB
   user(["Linux desktop user"])
-  sys["Bulwark\nscans host, evaluates rules, explains findings"]
-  os[["Linux host OS\nfiles, processes, ports, systemd, sshd config"]]
-  polkit[["polkit / pkexec\nelevation for the privileged subset only"]]
+  sys["Bulwark\nscans, evaluates, explains"]
+  os[["Linux host OS\nfiles, processes, config"]]
+  polkit[["polkit / pkexec\nprivileged elevation only"]]
 
   user -->|"runs scans, reviews findings"| sys
   sys -->|"reads system state\n(mostly unprivileged)"| os
@@ -101,7 +101,7 @@ flowchart TB
 flowchart LR
   ui["React UI (Tauri webview)"] -->|"IPC commands"| shell["Tauri Rust shell\n(bulwark-app)"]
   term["Terminal / SSH session"] -->|"args, stdout, exit code"| cli["bulwark-cli"]
-  shell -->|"invoke scan"| core["bulwark-core\n(collectors + rule engine, pure lib)"]
+  shell -->|"invoke scan"| core["bulwark-core\n(collectors + rule engine)"]
   cli -->|"invoke scan"| core
   core -->|"loads"| rules["rules/\n(YAML rule pack)"]
   core -->|"elevated collectors"| pkexec["pkexec (GUI)\nor sudo (CLI, see below)"]
@@ -125,39 +125,50 @@ flowchart LR
 
 ## 5. Data model
 
-```
-Finding
-  id            uuid        primary key
-  rule_id       text        references Rule.id (e.g. "BLWK-SSH-001")
-  severity      enum        critical | high | medium | low | info
-  title         text        not null
-  explanation   text        plain-language, rendered from the rule's template
-  fix_hint      text        suggested command or action
-  context       json        raw fact snippet that triggered the rule
-  first_seen    timestamptz not null
-  last_seen     timestamptz not null
-  status        enum        open | acknowledged | resolved
-  scan_run_id   uuid        references ScanRun.id
+`Rule` is YAML source, not DB-stored — modeled here alongside the two real tables for the
+engine's sake, since a `Finding` is what you get when a `Rule`'s condition matches a fact row
+from a given `ScanRun`.
 
-ScanRun
-  id                uuid        primary key
-  started_at        timestamptz not null
-  finished_at       timestamptz
-  host_fingerprint  text        hostname + kernel version, for future multi-host history
-  rules_loaded      int
-  rules_failed      int         rules that failed to parse/load (surfaced, never silent)
-  collectors_failed int         collectors that errored or timed out (surfaced, never silent)
+```mermaid
+erDiagram
+    Rule ||--o{ Finding : "matches produce"
+    ScanRun ||--o{ Finding : "contains"
 
-Rule (YAML source, not DB-stored — modeled here for the engine's sake)
-  id            text    e.g. "BLWK-SSH-001"
-  title         text    short, human-readable — becomes Finding.title
-  category      text    one of the 11 research-checklist categories
-  severity      enum
-  collector     text    which fact-collector produces the fact this rule reads
-  condition     expr    boolean condition over that collector's output fields (grammar below)
-  explain       text    plain-language template, can interpolate condition fields
-  fix           text    suggested command/action
-  references    list    CIS / MITRE ATT&CK IDs
+    Finding {
+        uuid id PK
+        text rule_id FK "e.g. BLWK-SSH-001"
+        enum severity "critical, high, medium, low, info"
+        text title
+        text explanation "rendered from the rule's template"
+        text fix_hint "suggested command or action"
+        json context "raw fact snippet that triggered the rule"
+        timestamptz first_seen
+        timestamptz last_seen
+        enum status "open, acknowledged, resolved"
+        uuid scan_run_id FK
+    }
+
+    ScanRun {
+        uuid id PK
+        timestamptz started_at
+        timestamptz finished_at
+        text host_fingerprint "hostname plus kernel version"
+        int rules_loaded
+        int rules_failed "never silent, always surfaced"
+        int collectors_failed "never silent, always surfaced"
+    }
+
+    Rule {
+        text id PK "e.g. BLWK-SSH-001, YAML file, not DB-stored"
+        text title "becomes Finding dot title"
+        text category "one of 11 categories"
+        enum severity
+        text collector "which collector produces the fact this rule reads"
+        expr condition "boolean condition over the collector output"
+        text explain "plain-language template"
+        text fix "suggested command or action"
+        list references "CIS and MITRE ATT&CK IDs"
+    }
 ```
 
 ### Condition grammar (v1)

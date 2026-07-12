@@ -8,9 +8,8 @@
   --vp-c-brand-3: oklch(0.56 0.09 194);
   --vp-c-brand-soft: oklch(0.94 0.03 194);
 
-  --vp-font-family-base:
-    "Geist Variable", "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --vp-font-family-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --vp-font-family-base: "Geist Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --vp-font-family-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
 }
 
 .dark {
@@ -35,6 +34,32 @@
     oklch(0.75 0.12 194),
     oklch(0.72 0.18 149)
   );
+}
+
+/* VitePress's default hero image slot caps out around 320px wide — too small for the
+   animated shield illustration (docs/public/hero-illustration.svg) to read as more than a
+   tiny badge. Widened, no card/border treatment here (unlike the screenshot gallery below) —
+   the SVG has a transparent background and floating elements, so a bounding box around it
+   would draw a visible rectangle around empty space instead of framing a photo. */
+.VPHero .container {
+  max-width: 1152px !important;
+}
+.VPHero .image {
+  max-width: 560px !important;
+}
+.VPHero .image-container {
+  max-width: 560px !important;
+  transform: none !important;
+}
+.VPHero .image-src {
+  max-width: 100% !important;
+  max-height: none !important;
+  width: 100% !important;
+}
+/* The default theme also draws a big soft gradient blob behind the hero image — nice for a
+   small icon, distracting behind a full rectangular screenshot with its own real content. */
+.VPHero .image-bg {
+  display: none;
 }
 
 /* Screenshots section on the home page (docs/index.md) — plain consecutive markdown images

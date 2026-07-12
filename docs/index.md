@@ -9,8 +9,8 @@ hero:
     an increasingly AI-driven world. Bulwark checks your machine's real configuration, explains
     every finding in plain language, and keeps watching after the scan ends.
   image:
-    src: /screenshots/dashboard.png
-    alt: Bulwark's Dashboard showing a scan's findings by severity and category
+    src: /hero-illustration.svg
+    alt: Bulwark's shield mark, with a pulsing ring animation and category check nodes
   actions:
     - theme: brand
       text: Read the architecture

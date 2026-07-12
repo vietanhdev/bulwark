@@ -94,7 +94,12 @@ export default withMermaid({
   mermaid: {
     theme: "base",
     themeVariables: {
-      fontFamily: "Geist Variable, Geist, ui-sans-serif, system-ui, sans-serif",
+      // Deliberately NOT Geist here, unlike the rest of the site — a custom variable
+      // webfont threw off mermaid's own node box-height math (multi-line labels rendered
+      // clipped at the box's bottom edge even with the exact line count mermaid was given).
+      // mermaid's default font stack is what its internal sizing is actually calibrated
+      // against; overriding it re-introduces the clipping bug.
+
       primaryColor: "#d5f2f1",
       primaryTextColor: "#081717",
       primaryBorderColor: "#007372",

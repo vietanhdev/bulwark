@@ -1,0 +1,61 @@
+<svg viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Bulwark's shield mark, actively scanning">
+  <style>
+    .ring {
+      transform-origin: 200px 200px;
+      animation: pulse 2.4s cubic-bezier(0.2, 0.6, 0.4, 1) infinite;
+    }
+    .ring-delay {
+      animation-delay: 1.2s;
+    }
+    @keyframes pulse {
+      0%   { transform: scale(0.72); opacity: 0.5; }
+      100% { transform: scale(1.4); opacity: 0; }
+    }
+    .node {
+      animation: fade-in 0.6s ease-out both;
+    }
+    .node-1 { animation-delay: 0.2s; }
+    .node-2 { animation-delay: 0.4s; }
+    .node-3 { animation-delay: 0.6s; }
+    .node-4 { animation-delay: 0.8s; }
+    @keyframes fade-in {
+      from { opacity: 0; transform: translateY(4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .ring, .node { animation: none; opacity: 1; }
+      .ring { opacity: 0; }
+    }
+  </style>
+
+  <circle class="ring" cx="200" cy="200" r="68" fill="none" stroke="oklch(0.5 0.09 194)" stroke-width="2" />
+  <circle class="ring ring-delay" cx="200" cy="200" r="68" fill="none" stroke="oklch(0.5 0.09 194)" stroke-width="2" />
+
+  <g class="node node-1">
+    <circle cx="76" cy="86" r="20" fill="oklch(0.94 0.03 194)" stroke="oklch(0.87 0.05 194)" />
+    <path d="M70 86l4 4 8-8" fill="none" stroke="oklch(0.5 0.09 194)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+  </g>
+  <g class="node node-2">
+    <circle cx="324" cy="86" r="20" fill="oklch(0.94 0.03 194)" stroke="oklch(0.87 0.05 194)" />
+    <path d="M318 86l4 4 8-8" fill="none" stroke="oklch(0.5 0.09 194)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+  </g>
+  <g class="node node-3">
+    <circle cx="70" cy="320" r="20" fill="oklch(0.94 0.03 194)" stroke="oklch(0.87 0.05 194)" />
+    <path d="M64 320l4 4 8-8" fill="none" stroke="oklch(0.5 0.09 194)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+  </g>
+  <g class="node node-4">
+    <circle cx="330" cy="316" r="20" fill="oklch(0.58 0.22 27 / 0.12)" stroke="oklch(0.58 0.22 27 / 0.45)" />
+    <path d="M324 310l12 12M336 310l-12 12" fill="none" stroke="oklch(0.58 0.22 27)" stroke-width="2.5" stroke-linecap="round" />
+  </g>
+
+  <!-- Exact path from apps/bulwark-app/src/components/ShieldMark.tsx (100x100 viewBox,
+       shield centered at 50,50.5), scaled/translated as a unit rather than hand-redrawn —
+       redriving the bezier numbers by hand the first time round distorted the proportions. -->
+  <g transform="translate(200 200) scale(1.4) translate(-50 -50.5)">
+    <path
+      d="M50 4 L91 19 V49 C91 73 73 90 50 97 C27 90 9 73 9 49 V19 Z"
+      fill="oklch(0.5 0.09 194)"
+    />
+    <path d="M33 51 L46 64 L69 38" fill="none" stroke="white" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" />
+  </g>
+</svg>
