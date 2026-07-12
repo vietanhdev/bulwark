@@ -182,14 +182,26 @@ pub async fn ai_scan_snapshot() -> Result<AiSnapshotResponse, String> {
 
 /// Set of files the most recent persisted AI scan actually flagged. `ai_redact` uses this as an
 /// allowlist: redaction may only touch a file the user already saw reported, never an arbitrary
-/// path the caller supplies. Paths are canonicalized so `./x` and `/abs/x` compare equal.
+/// path the caller supplies. Each flagged file contributes BOTH its raw stored string and its
+/// canonicalized form to the set, and a request matches if *either* form matches — so a scan that
+/// stored a display path and a frontend that sends the same string still line up even when
+/// `canonicalize` would resolve them differently (or fail), without ever widening the allowlist
+/// beyond the exact files the scan reported.
 fn redactable_files() -> BTreeSet<PathBuf> {
-    let canon = |s: &str| std::fs::canonicalize(s).unwrap_or_else(|_| PathBuf::from(s));
     db_path()
         .filter(|p| p.exists())
         .and_then(|p| Store::open(&p).ok())
         .and_then(|mut s| s.latest_ai_scan().ok().flatten())
-        .map(|snap| snap.findings.iter().map(|f| canon(&f.file)).collect())
+        .map(|snap| {
+            let mut set = BTreeSet::new();
+            for f in &snap.findings {
+                set.insert(PathBuf::from(&f.file));
+                if let Ok(canon) = std::fs::canonicalize(&f.file) {
+                    set.insert(canon);
+                }
+            }
+            set
+        })
         .unwrap_or_default()
 }
 
@@ -212,9 +224,13 @@ pub async fn ai_redact(
         let mut files: Vec<PathBuf> = Vec::new();
         let mut rejected: Vec<String> = Vec::new();
         for p in paths {
-            let canon = std::fs::canonicalize(&p).unwrap_or_else(|_| PathBuf::from(&p));
-            if allowed.contains(&canon) {
-                files.push(PathBuf::from(p));
+            // Match on either the raw path or its canonical form — mirrors how the allowlist is
+            // built, so a legitimately-flagged file is never wrongly rejected.
+            let raw = PathBuf::from(&p);
+            let canon = std::fs::canonicalize(&p).ok();
+            let ok = allowed.contains(&raw) || canon.as_ref().is_some_and(|c| allowed.contains(c));
+            if ok {
+                files.push(raw);
             } else {
                 rejected.push(format!(
                     "{p}: not redacting a path the latest scan did not flag"

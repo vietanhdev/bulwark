@@ -44,12 +44,13 @@ interface NavItem {
    drives all of them.
 
    "Scans" is the four engines, ordered oldest-and-most-load-bearing first: Compliance (the
-   configuration rule pack, and the results the Rules pack is a view over), Antivirus (ClamAV),
-   Agent Security (AI assistant artifacts), File integrity. Each page is where you go to run that
-   engine on its own and read its results in detail.
+   configuration rule pack's scan results — the issues found and how to fix them), Antivirus
+   (ClamAV), Agent Security (AI assistant artifacts), File integrity. Each page is where you go to
+   run that engine on its own and read its results in detail.
 
-   "Reference" is what explains the results rather than producing them: the rule pack itself, and
-   the scan timeline.
+   "Reference" is what explains the results rather than producing them: the rule pack itself —
+   every rule plus how it maps to CIS/MITRE and this host's hardening index (folded in from what
+   used to be a separate Compliance tab) — and the scan timeline.
 
    What moved, and why:
      - File integrity was a right-hand column inside a page called "Antivirus", despite being

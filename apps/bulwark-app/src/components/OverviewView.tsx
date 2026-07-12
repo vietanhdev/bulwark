@@ -3,24 +3,15 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { Check, Radar, RotateCw, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
-import { CommandBlock } from "@/components/ui/copy-button";
 import { PageShell, SectionLabel } from "@/components/PageShell";
 import { HardeningRing } from "@/components/HardeningRing";
 import { StatusHero, type ProtectionStatus } from "@/components/StatusHero";
-import { SEVERITY_ORDER, SeverityLabel, railStyle, type Severity } from "@/components/Severity";
+import { type Finding } from "@/components/FindingCard";
+import { CategoryFindings, groupFindingsByCategory } from "@/components/CategoryFindings";
+import { SEVERITY_ORDER, railStyle, type Severity } from "@/components/Severity";
 import { computeHardeningIndex } from "@/lib/hardening";
-import { categoryLabel } from "@/lib/format";
 import { useRevision } from "@/lib/revision";
 import { cn } from "@/lib/utils";
-
-interface Finding {
-  id: string;
-  rule_id: string;
-  severity: Severity;
-  title: string;
-  explanation: string;
-  fix_hint: string;
-}
 
 interface RuleSummary {
   id: string;
@@ -129,6 +120,10 @@ export function OverviewView() {
   // ClamAV detections from this run. Not findings — no rule fired, a signature matched.
   const [threats, setThreats] = useState<{ path: string; signature: string }[]>([]);
   const [agentScanned, setAgentScanned] = useState(false);
+  // Whether an antivirus sweep ran in this session. Unlike compliance/agent findings, ClamAV
+  // results aren't persisted to the dashboard snapshot, so on a fresh open the Antivirus tile has
+  // no stored state to restore — it stays "unknown" until a sweep runs, rather than faking a tick.
+  const [avScanned, setAvScanned] = useState(false);
   // Set when the user pressed Stop. Held in a ref as well as state because the sequential runner
   // below reads it *between* awaits, where a state value captured at render time would be stale
   // and it would cheerfully start the next scan you just asked it not to run.
@@ -183,30 +178,73 @@ export function OverviewView() {
     return m;
   }, [rules]);
 
-  const modules = useMemo(() => {
-    if (!rules) return [];
-    const byCategory = Array.from(new Set(rules.map((r) => r.category)))
-      .sort()
-      .map((category) => {
-        const issues = findings.filter((f) => ruleCategoryById.get(f.rule_id) === category);
-        const worst = SEVERITY_ORDER.find((s) => issues.some((f) => f.severity === s)) ?? null;
-        return { category, issueCount: issues.length, worst };
-      });
-
-    // The agent scanner isn't part of the YAML rule pack, so it has no category to be derived
-    // from — but it is a protection module like any other, and omitting it here would leave the
-    // grid quietly claiming a coverage it doesn't have. Only shown once it has actually run:
-    // an unscanned module must not render as a green tick.
-    if (!agentScanned) return byCategory;
-    const agentIssues = findings.filter((f) => f.rule_id.startsWith("BLWK-AI-"));
-    const worst = SEVERITY_ORDER.find((s) => agentIssues.some((f) => f.severity === s)) ?? null;
-    return [...byCategory, { category: "agent-security", issueCount: agentIssues.length, worst }];
-  }, [rules, findings, ruleCategoryById, agentScanned]);
+  // The four scanners, not the fine-grained rule categories: the Overview answers "which of my
+  // engines is finding problems," and its tiles mirror the four Scans tabs one-to-one — Compliance,
+  // Antivirus, Agent Security, File integrity. A tile only claims a clean tick once that engine has
+  // actually run this session; an unscanned engine renders as unknown, never as a false all-clear.
+  const scanModules = useMemo(() => {
+    const worstOf = (fs: Finding[]): Severity | null =>
+      SEVERITY_ORDER.find((s) => fs.some((f) => f.severity === s)) ?? null;
+    const isFim = (f: Finding) => ruleCategoryById.get(f.rule_id) === "file-integrity";
+    const compliance = findings.filter((f) => !f.rule_id.startsWith("BLWK-AI-") && !isFim(f));
+    const fim = findings.filter(isFim);
+    const agent = findings.filter((f) => f.rule_id.startsWith("BLWK-AI-"));
+    return [
+      {
+        key: "compliance",
+        label: "Compliance",
+        issueCount: compliance.length,
+        worst: worstOf(compliance),
+        scanned: hasScanned,
+      },
+      {
+        key: "antivirus",
+        label: "Antivirus",
+        issueCount: threats.length,
+        worst: threats.length > 0 ? ("critical" as Severity) : null,
+        scanned: avScanned,
+      },
+      {
+        key: "agent-security",
+        label: "Agent Security",
+        issueCount: agent.length,
+        worst: worstOf(agent),
+        scanned: agentScanned,
+      },
+      {
+        key: "file-integrity",
+        label: "File integrity",
+        issueCount: fim.length,
+        worst: worstOf(fim),
+        scanned: hasScanned,
+      },
+    ];
+  }, [findings, ruleCategoryById, threats, hasScanned, agentScanned, avScanned]);
 
   const counts = useMemo(
     () => SEVERITY_ORDER.map((sev) => ({ sev, count: findings.filter((f) => f.severity === sev).length })),
     [findings],
   );
+
+  // Findings grouped by the category that produced them, worst-severity group first. Browsing and
+  // fixing a machine's issues one category at a time — all the SSH problems together, then all the
+  // kernel ones — matches how you'd actually remediate: you open one config file and fix every
+  // finding that lives in it, rather than hopping between subsystems down a flat list.
+  const groupedFindings = useMemo(
+    () => groupFindingsByCategory(findings, (id) => ruleCategoryById.get(id) ?? "other"),
+    [findings, ruleCategoryById],
+  );
+
+  // Which category sections are collapsed. Everything starts expanded — the findings are what you
+  // opened this page for — but a machine with issues across many subsystems can collapse the ones
+  // it has already dealt with.
+  const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
+  const toggleCategory = (category: string) =>
+    setCollapsedCategories((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(category)) next.add(category);
+      return next;
+    });
 
   const status: ProtectionStatus = scanning
     ? "scanning"
@@ -300,6 +338,7 @@ export function OverviewView() {
             resolve();
             break;
           case "complete":
+            setAvScanned(true);
             if (msg.data.cancelled) markCancelled();
             resolve();
             break;
@@ -542,36 +581,39 @@ export function OverviewView() {
           </Callout>
         ))}
 
-        {modules.length > 0 && (
-          <section>
-            <SectionLabel>Protection modules</SectionLabel>
-            <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-3">
-              {modules.map(({ category, issueCount, worst }) => (
-                <div
-                  key={category}
-                  className="rail flex items-center gap-2.5 rounded-md border border-border bg-card py-2.5 pr-3"
-                  style={railStyle(worst ?? "resolved")}
-                >
-                  {issueCount === 0 ? (
-                    <Check
-                      className="h-4 w-4 shrink-0"
-                      style={{ color: "var(--sev-resolved)" }}
-                      strokeWidth={2.5}
-                    />
-                  ) : (
-                    <span
-                      className="flex h-4 w-4 shrink-0 items-center justify-center font-mono text-[11px] font-semibold"
-                      style={{ color: `var(--sev-${worst}-fg)` }}
-                    >
-                      {issueCount}
-                    </span>
-                  )}
-                  <span className="min-w-0 flex-1 truncate text-sm">{categoryLabel(category)}</span>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
+        <section>
+          <SectionLabel>Scans</SectionLabel>
+          <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
+            {scanModules.map(({ key, label, issueCount, worst, scanned }) => (
+              <div
+                key={key}
+                className="rail flex items-center gap-2.5 rounded-md border border-border bg-card py-2.5 pr-3"
+                style={railStyle(!scanned ? "info" : (worst ?? "resolved"))}
+              >
+                {!scanned ? (
+                  // Not run this session — unknown, not clean. A dash rather than a tick or a count.
+                  <span className="flex h-4 w-4 shrink-0 items-center justify-center font-mono text-[11px] text-muted-foreground/60">
+                    –
+                  </span>
+                ) : issueCount === 0 ? (
+                  <Check
+                    className="h-4 w-4 shrink-0"
+                    style={{ color: "var(--sev-resolved)" }}
+                    strokeWidth={2.5}
+                  />
+                ) : (
+                  <span
+                    className="flex h-4 w-4 shrink-0 items-center justify-center font-mono text-[11px] font-semibold"
+                    style={{ color: `var(--sev-${worst}-fg)` }}
+                  >
+                    {issueCount}
+                  </span>
+                )}
+                <span className="min-w-0 flex-1 truncate text-sm">{label}</span>
+              </div>
+            ))}
+          </div>
+        </section>
 
         <section>
           {findings.length > 0 && (
@@ -593,45 +635,21 @@ export function OverviewView() {
             </div>
           )}
 
-          <div className="flex flex-col gap-2.5">
-            {findings.map((f) => (
-              <FindingCard key={f.id} finding={f} animate={streamed} />
+          <div className="flex flex-col gap-6">
+            {groupedFindings.map(({ category, items, worst }) => (
+              <CategoryFindings
+                key={category}
+                category={category}
+                items={items}
+                worst={worst}
+                streamed={streamed}
+                collapsed={collapsedCategories.has(category)}
+                onToggle={() => toggleCategory(category)}
+              />
             ))}
           </div>
         </section>
       </div>
     </PageShell>
-  );
-}
-
-/**
- * A finding, typeset as a clause in an audit report: the rule ID is the clause number and sits
- * in the gutter in mono, the severity rail runs down the left edge, and the fix is a real
- * command you can copy rather than a grey box you have to retype.
- *
- * `animate` is only true for findings arriving live over the scan Channel. Findings restored
- * from the stored snapshot on open render at rest — re-playing the arrival animation for
- * results that were already there before you opened the window is a lie about what just
- * happened, and it made the whole list flicker on every visit to this tab.
- */
-function FindingCard({ finding: f, animate }: { finding: Finding; animate: boolean }) {
-  return (
-    <article
-      className={cn(
-        "rail rail-dim rounded-md border border-border bg-card py-3.5 pr-4",
-        animate && "finding-enter",
-      )}
-      style={railStyle(f.severity)}
-    >
-      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-        <span className="font-mono text-xs font-semibold tracking-tight text-muted-foreground">
-          {f.rule_id}
-        </span>
-        <SeverityLabel severity={f.severity} />
-      </div>
-      <h3 className="mt-1.5 text-sm font-semibold">{f.title}</h3>
-      <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{f.explanation}</p>
-      <CommandBlock command={f.fix_hint} className="mt-2.5" />
-    </article>
   );
 }

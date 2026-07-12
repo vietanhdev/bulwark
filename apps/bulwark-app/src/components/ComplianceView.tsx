@@ -1,173 +1,267 @@
 import { useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { Check, X } from "lucide-react";
+import { Channel, invoke } from "@tauri-apps/api/core";
+import { Radar, RotateCw, ShieldCheck, Square } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
-import { PageShell } from "@/components/PageShell";
-import { HardeningRing } from "@/components/HardeningRing";
-import { railStyle } from "@/components/Severity";
-import { computeHardeningIndex } from "@/lib/hardening";
+import { PageShell, SectionLabel } from "@/components/PageShell";
+import { CategoryFindings, groupFindingsByCategory } from "@/components/CategoryFindings";
+import { type Finding } from "@/components/FindingCard";
+import { SEVERITY_ORDER } from "@/components/Severity";
 import { useRevision } from "@/lib/revision";
-import { cn } from "@/lib/utils";
-import type { Severity } from "@/components/Severity";
 
 interface RuleSummary {
   id: string;
-  title: string;
-  severity: Severity;
-  references: string[];
-  collector: string;
-  os: string[];
-  profiles: string[];
+  category: string;
+}
+
+interface LatestScanMeta {
+  host_fingerprint: string;
+  started_at: string;
+  privileged_collectors_skipped: string[];
 }
 
 interface DashboardSnapshot {
-  findings: { rule_id: string }[];
-  meta: { privileged_collectors_skipped: string[] } | null;
+  findings: Finding[];
+  meta: LatestScanMeta | null;
 }
 
-const FRAMEWORK_LABELS: Record<string, string> = {
-  CIS: "CIS Benchmarks",
-  ATTACK: "MITRE ATT&CK",
-};
+interface ScanRunResult {
+  findings: Finding[];
+  host_fingerprint: string;
+  privileged_collectors_skipped: string[];
+  collector_errors: { collector: string; message: string }[];
+}
 
-const frameworkOf = (reference: string) => {
-  const prefix = reference.split("-")[0];
-  return FRAMEWORK_LABELS[prefix] ?? prefix;
-};
+type ScanEvent =
+  | { event: "finding"; data: Finding }
+  | { event: "collectorError"; data: { collector: string; message: string } }
+  | { event: "privilegedSkipped"; data: { collectors: string[] } }
+  | { event: "complete"; data: { total_findings: number; host_fingerprint: string; cancelled: boolean } }
+  | { event: "error"; data: { message: string } };
 
+const bySeverity = (a: Finding, b: Finding) =>
+  SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity);
+
+// A finding from the configuration rule pack, as opposed to the agent scanner whose findings share
+// the same shape but carry BLWK-AI- ids. This tab is the config engine's own results page.
+const isComplianceFinding = (f: Finding) => !f.rule_id.startsWith("BLWK-AI-");
+
+/**
+ * The Compliance scan's results: every configuration issue the rule pack found on this host —
+ * grouped by subsystem, each with the reason it matters and the exact command to fix it. This is
+ * the config engine's detail page (the Overview aggregates it with the other scanners; the Rules
+ * tab is the reference catalog and framework mapping). You come here to read and fix.
+ */
 export function ComplianceView() {
-  const { revision } = useRevision();
+  const { revision, bump } = useRevision();
 
   const [rules, setRules] = useState<RuleSummary[] | null>(null);
-  const [openRuleIds, setOpenRuleIds] = useState<Set<string>>(new Set());
-  const [skippedCollectors, setSkippedCollectors] = useState<Set<string>>(new Set());
+  const [findings, setFindings] = useState<Finding[]>([]);
+  const [skippedPrivileged, setSkippedPrivileged] = useState<string[]>([]);
+  const [errors, setErrors] = useState<string[]>([]);
   const [hasScanned, setHasScanned] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [scanning, setScanning] = useState(false);
+  const [elevating, setElevating] = useState(false);
+  const [privilegedRunDone, setPrivilegedRunDone] = useState(false);
+  const [streamed, setStreamed] = useState(false);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    invoke<RuleSummary[]>("rules_list").then(setRules);
+    invoke<RuleSummary[]>("rules_list")
+      .then(setRules)
+      .catch(() => setRules(null));
   }, []);
 
-  // Re-reads on every revision bump. Without that, running a scan on the Overview and then
-  // clicking here showed the pass/fail state from whenever this tab was first opened — the
-  // view is kept mounted for the life of the process (see App.tsx) and used to fetch once.
+  // Load the last stored results on open and whenever anything writes to disk (a scan here, a
+  // background monitoring tick, a redaction elsewhere), rather than showing "not scanned yet" when
+  // real results already exist. Skipped while a scan streams — a mid-scan refetch would clobber the
+  // findings arriving over the Channel with the previous snapshot.
   useEffect(() => {
-    invoke<DashboardSnapshot>("dashboard_snapshot").then((snap) => {
-      setOpenRuleIds(new Set(snap.findings.map((f) => f.rule_id)));
-      if (snap.meta) {
+    if (scanning) return;
+    invoke<DashboardSnapshot>("dashboard_snapshot")
+      .then((snap) => {
+        if (!snap.meta) return;
+        setFindings(snap.findings.filter(isComplianceFinding).sort(bySeverity));
+        setSkippedPrivileged(snap.meta.privileged_collectors_skipped);
         setHasScanned(true);
-        setSkippedCollectors(new Set(snap.meta.privileged_collectors_skipped));
-      }
-    });
+        setStreamed(false);
+      })
+      .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `scanning` guards, must not retrigger
   }, [revision]);
 
-  const hardening = useMemo(() => {
-    if (!rules || !hasScanned) return null;
-    return computeHardeningIndex(rules, openRuleIds, skippedCollectors);
-  }, [rules, openRuleIds, skippedCollectors, hasScanned]);
+  const ruleCategoryById = useMemo(() => {
+    const m = new Map<string, string>();
+    rules?.forEach((r) => m.set(r.id, r.category));
+    return m;
+  }, [rules]);
 
-  const frameworks = useMemo(() => {
-    if (!rules) return [];
-    const byFramework = new Map<string, { reference: string; rule: RuleSummary }[]>();
-    for (const rule of rules) {
-      for (const reference of rule.references) {
-        const fw = frameworkOf(reference);
-        let list = byFramework.get(fw);
-        if (!list) byFramework.set(fw, (list = []));
-        list.push({ reference, rule });
+  const grouped = useMemo(
+    () => groupFindingsByCategory(findings, (id) => ruleCategoryById.get(id) ?? "other"),
+    [findings, ruleCategoryById],
+  );
+
+  const toggle = (category: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(category)) next.add(category);
+      return next;
+    });
+
+  function runScan() {
+    setScanning(true);
+    setHasScanned(true);
+    setStreamed(true);
+    setFindings([]);
+    setSkippedPrivileged([]);
+    setErrors([]);
+    setPrivilegedRunDone(false);
+
+    const onEvent = new Channel<ScanEvent>();
+    onEvent.onmessage = (msg) => {
+      switch (msg.event) {
+        case "finding":
+          // Every finding over this Channel is from the config engine, so no filtering needed.
+          setFindings((prev) => [...prev, msg.data].sort(bySeverity));
+          break;
+        case "privilegedSkipped":
+          setSkippedPrivileged(msg.data.collectors);
+          break;
+        case "collectorError":
+          setErrors((prev) => [...prev, `${msg.data.collector}: ${msg.data.message}`]);
+          break;
+        case "error":
+          setErrors((prev) => [...prev, msg.data.message]);
+          setScanning(false);
+          break;
+        case "complete":
+          setScanning(false);
+          // Re-read the stored snapshot (and let the Overview count refresh) now it's persisted.
+          bump();
+          break;
       }
-    }
-    return Array.from(byFramework.entries())
-      .map(([framework, controls]) => ({
-        framework,
-        controls: controls.sort((a, b) => a.reference.localeCompare(b.reference)),
-        passing: controls.filter((c) => !openRuleIds.has(c.rule.id)).length,
-      }))
-      .sort((a, b) => a.framework.localeCompare(b.framework));
-  }, [rules, openRuleIds]);
+    };
+    invoke("scan_start", { onEvent, needs: [] }).catch((e) => {
+      setErrors((prev) => [...prev, String(e)]);
+      setScanning(false);
+    });
+  }
 
-  const unmapped = rules?.filter((r) => r.references.length === 0).length ?? 0;
+  async function stopScan() {
+    try {
+      await invoke("scan_cancel");
+    } catch (e) {
+      setErrors((prev) => [...prev, String(e)]);
+    }
+  }
+
+  async function runPrivilegedScan() {
+    setElevating(true);
+    setErrors([]);
+    try {
+      const result = await invoke<ScanRunResult>("scan_privileged");
+      setStreamed(false);
+      setFindings(result.findings.filter(isComplianceFinding).sort(bySeverity));
+      setSkippedPrivileged(result.privileged_collectors_skipped);
+      setErrors(result.collector_errors.map((e) => `${e.collector}: ${e.message}`));
+      setPrivilegedRunDone(true);
+      bump();
+    } catch (e) {
+      setErrors((prev) => [...prev, String(e)]);
+    } finally {
+      setElevating(false);
+    }
+  }
 
   return (
     <PageShell
       title="Compliance"
-      description="How Bulwark's rules line up against the frameworks people actually get audited on. This is a view over the references each rule already declares — not a separate compliance engine."
-    >
-      <div className="flex flex-col gap-8">
-        {hardening ? (
-          <div className="rounded-lg border border-border bg-card px-6 py-5">
-            <HardeningRing index={hardening} size="lg" />
-          </div>
+      description="Everything the configuration rule pack found on this host — SSH, sudo, kernel, cron, accounts, logging and more — grouped by subsystem, each with the reason it matters and the exact command to fix it."
+      action={
+        scanning ? (
+          <Button onClick={stopScan} variant="outline" size="sm">
+            <Square className="h-3.5 w-3.5 fill-current" />
+            Stop
+          </Button>
         ) : (
-          <Callout tone="info">
-            Run a scan from the Overview to see which controls this host passes. Until then, the list below is
-            just the mapping — every rule Bulwark has, and the control it answers to.
+          <Button onClick={runScan} size="sm">
+            <Radar className="h-4 w-4" />
+            Run compliance scan
+          </Button>
+        )
+      }
+    >
+      <div className="flex flex-col gap-6">
+        {scanning && (
+          <div className="flex items-center gap-2.5 rounded-md border border-border bg-muted/40 px-3 py-2.5">
+            <RotateCw className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+            <div className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">
+              Scanning configuration…
+            </div>
+          </div>
+        )}
+
+        {skippedPrivileged.length > 0 && !privilegedRunDone && (
+          <Callout
+            tone="warning"
+            action={
+              <Button variant="outline" size="sm" onClick={runPrivilegedScan} disabled={elevating}>
+                {elevating ? "Waiting for authentication…" : "Run privileged checks"}
+              </Button>
+            }
+          >
+            <span className="font-medium">
+              {skippedPrivileged.length} check{skippedPrivileged.length === 1 ? "" : "s"} need root and were
+              skipped.
+            </span>{" "}
+            <span className="font-mono text-xs opacity-80">{skippedPrivileged.join(", ")}</span>
           </Callout>
         )}
 
-        <div className="grid grid-cols-1 gap-x-5 gap-y-6 lg:grid-cols-2">
-          {frameworks.map(({ framework, controls, passing }) => (
-            <section key={framework}>
-              <h2 className="mb-2 flex items-baseline justify-between gap-2">
-                <span className="font-mono text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
-                  {framework}
-                </span>
-                {hasScanned && (
-                  <span className="font-mono text-[11px] tabular-nums text-muted-foreground/70">
-                    {passing}/{controls.length} passing
-                  </span>
-                )}
-              </h2>
-              <div className="overflow-hidden rounded-lg border border-border bg-card">
-                {controls.map(({ reference, rule }, i) => {
-                  // Before any scan has run, nothing is known to fail — but nothing is known to
-                  // pass either. Render those rows as neutral rather than as a wall of green
-                  // ticks that would be claiming a clean bill of health nobody has earned.
-                  const failing = openRuleIds.has(rule.id);
-                  const known = hasScanned;
-                  return (
-                    <div
-                      key={`${reference}-${rule.id}`}
-                      style={railStyle(known ? (failing ? rule.severity : "resolved") : "info")}
-                      className={cn(
-                        "rail flex items-center gap-2.5 py-2.5 pr-3",
-                        !known && "rail-dim",
-                        i > 0 && "border-t border-border",
-                      )}
-                    >
-                      {known ? (
-                        <span
-                          className="flex h-4 w-4 shrink-0 items-center justify-center"
-                          style={{ color: `var(--sev-${failing ? rule.severity : "resolved"}-fg)` }}
-                        >
-                          {failing ? (
-                            <X className="h-3.5 w-3.5" strokeWidth={3} />
-                          ) : (
-                            <Check className="h-3.5 w-3.5" strokeWidth={3} />
-                          )}
-                        </span>
-                      ) : (
-                        <span className="h-4 w-4 shrink-0" />
-                      )}
-                      <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
-                        {reference}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-sm" title={rule.title}>
-                        {rule.title}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
-          ))}
-        </div>
+        {errors.map((e, i) => (
+          <Callout key={i} tone="critical">
+            {e}
+          </Callout>
+        ))}
 
-        {unmapped > 0 && (
-          <p className="text-xs text-muted-foreground">
-            {unmapped} rule{unmapped === 1 ? "" : "s"} aren't mapped to a framework control yet. They still
-            run — mapping only affects what shows up on this page.
-          </p>
-        )}
+        <section>
+          {findings.length > 0 && (
+            <SectionLabel>
+              {findings.length} issue{findings.length === 1 ? "" : "s"} to fix
+            </SectionLabel>
+          )}
+
+          {findings.length === 0 && !scanning && !loading && (
+            <div className="rounded-lg border border-dashed border-border py-14 text-center">
+              <ShieldCheck className="mx-auto h-7 w-7 text-muted-foreground/40" strokeWidth={1.5} />
+              <p className="mt-3 text-sm font-medium">
+                {hasScanned
+                  ? "This host passes every configuration check."
+                  : "No compliance scan has run yet."}
+              </p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {hasScanned
+                  ? "Every rule that ran came back clean."
+                  : "Run a compliance scan to check this host's configuration against the rule pack."}
+              </p>
+            </div>
+          )}
+
+          <div className="flex flex-col gap-6">
+            {grouped.map(({ category, items, worst }) => (
+              <CategoryFindings
+                key={category}
+                category={category}
+                items={items}
+                worst={worst}
+                streamed={streamed}
+                collapsed={collapsed.has(category)}
+                onToggle={() => toggle(category)}
+              />
+            ))}
+          </div>
+        </section>
       </div>
     </PageShell>
   );
