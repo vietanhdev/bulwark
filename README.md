@@ -16,18 +16,9 @@ Built with Tauri v2 + Rust + React. One rule engine, one rule pack, two front-do
 
 ## Screenshots
 
-<!--
-  Real screenshots go here, not placeholders — see docs/public/screenshots/README.md for the
-  exact filenames expected and why this environment couldn't capture them directly. Once
-  dashboard.png/antivirus.png/compliance.png exist there, this comment block should be replaced
-  with (or the image tags below un-commented):
-
-  ![Dashboard](docs/public/screenshots/dashboard.png)
-  ![Antivirus](docs/public/screenshots/antivirus.png)
-  ![Compliance](docs/public/screenshots/compliance.png)
--->
-
-*Screenshots coming soon — see [`docs/public/screenshots/README.md`](docs/public/screenshots/README.md).*
+![Dashboard](docs/public/screenshots/dashboard.png)
+![Antivirus](docs/public/screenshots/antivirus.png)
+![Compliance](docs/public/screenshots/compliance.png)
 
 ## Features
 
