@@ -1,0 +1,472 @@
+import { useEffect, useMemo, useState } from "react";
+import { Channel, invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { Bot, Eraser, Loader2, ScanSearch, ShieldCheck, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Callout } from "@/components/ui/callout";
+import { CommandBlock } from "@/components/ui/copy-button";
+import { Switch } from "@/components/ui/switch";
+import { PageShell, SectionLabel } from "@/components/PageShell";
+import { PathDropZone } from "@/components/PathDropZone";
+import { SeverityLabel, railStyle, SEVERITY_ORDER, type Severity } from "@/components/Severity";
+import { useRevision } from "@/lib/revision";
+import { cn } from "@/lib/utils";
+
+interface AiFinding {
+  id: string;
+  rule_id: string;
+  severity: Severity;
+  tool: string;
+  title: string;
+  explanation: string;
+  fix_hint: string;
+  file: string;
+  line: number | null;
+  evidence: string;
+  references: string[];
+  redactable: boolean;
+}
+
+interface AiSnapshot {
+  started_at: string;
+  host_fingerprint: string;
+  workspaces_scanned: string[];
+  artifacts_scanned: number;
+  workspaces_capped: boolean;
+  findings: AiFinding[];
+}
+
+interface AiSettings {
+  configured_roots: string[];
+  excluded_roots: string[];
+  auto_scan_enabled: boolean;
+}
+
+interface RedactionReport {
+  dry_run: boolean;
+  entries: { path: string; secrets_redacted: number; applied: boolean }[];
+  total_secrets: number;
+  errors: string[];
+}
+
+type AiScanEvent =
+  | { event: "artifact"; data: { path: string } }
+  | { event: "finding"; data: AiFinding }
+  | {
+      event: "complete";
+      data: {
+        totalFindings: number;
+        artifactsScanned: number;
+        workspacesScanned: number;
+        workspacesCapped: boolean;
+        errors: string[];
+      };
+    }
+  | { event: "error"; data: { message: string } };
+
+interface Complete {
+  artifactsScanned: number;
+  workspacesScanned: number;
+  workspacesCapped: boolean;
+  errors: string[];
+}
+
+export function AiSecurityView({ active }: { active: boolean }) {
+  const { revision, bump } = useRevision();
+
+  const [findings, setFindings] = useState<AiFinding[]>([]);
+  const [summary, setSummary] = useState<Complete | null>(null);
+  const [hasScanned, setHasScanned] = useState(false);
+
+  const [scanning, setScanning] = useState(false);
+  const [currentFile, setCurrentFile] = useState<string | null>(null);
+  const [artifactCount, setArtifactCount] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+
+  const [settings, setSettings] = useState<AiSettings | null>(null);
+  const [redacting, setRedacting] = useState(false);
+  const [redactResult, setRedactResult] = useState<RedactionReport | null>(null);
+
+  // Restore the last (possibly background) scan whenever this tab is re-read — first mount, a
+  // background `ai_security:tick`, or any other revision bump.
+  useEffect(() => {
+    invoke<{ snapshot: AiSnapshot | null }>("ai_scan_snapshot")
+      .then(({ snapshot }) => {
+        if (!snapshot) {
+          setHasScanned(false);
+          return;
+        }
+        setFindings(snapshot.findings);
+        setSummary({
+          artifactsScanned: snapshot.artifacts_scanned,
+          workspacesScanned: snapshot.workspaces_scanned.length,
+          workspacesCapped: snapshot.workspaces_capped,
+          errors: [],
+        });
+        setHasScanned(true);
+      })
+      .catch(() => setHasScanned(false));
+    invoke<AiSettings>("ai_settings_get")
+      .then(setSettings)
+      .catch(() => setSettings(null));
+  }, [revision]);
+
+  useEffect(() => {
+    // A background auto-scan can change stored state with no user action — refresh on its tick,
+    // the same mechanism the config dashboard uses for `monitoring:tick`.
+    const unlisten = listen("ai_security:tick", bump);
+    return () => {
+      unlisten.then((u) => u());
+    };
+  }, [bump]);
+
+  const redactableFiles = useMemo(
+    () => Array.from(new Set(findings.filter((f) => f.redactable).map((f) => f.file))),
+    [findings],
+  );
+  const secretCount = useMemo(() => findings.filter((f) => f.redactable).length, [findings]);
+
+  async function runScan() {
+    setScanning(true);
+    setError(null);
+    setRedactResult(null);
+    setCurrentFile(null);
+    setArtifactCount(0);
+    const streamed: AiFinding[] = [];
+
+    const onEvent = new Channel<AiScanEvent>();
+    onEvent.onmessage = (msg) => {
+      switch (msg.event) {
+        case "artifact":
+          setCurrentFile(msg.data.path);
+          setArtifactCount((n) => n + 1);
+          break;
+        case "finding":
+          streamed.push(msg.data);
+          break;
+        case "complete":
+          setFindings([...streamed]);
+          setSummary({
+            artifactsScanned: msg.data.artifactsScanned,
+            workspacesScanned: msg.data.workspacesScanned,
+            workspacesCapped: msg.data.workspacesCapped,
+            errors: msg.data.errors,
+          });
+          setHasScanned(true);
+          setScanning(false);
+          // Persisted server-side; let other views (Overview count etc.) re-read.
+          bump();
+          break;
+        case "error":
+          setError(msg.data.message);
+          setScanning(false);
+          break;
+      }
+    };
+
+    try {
+      await invoke("ai_scan_start", { onEvent, targets: undefined });
+    } catch (e) {
+      setError(String(e));
+      setScanning(false);
+    }
+  }
+
+  async function redactAll() {
+    if (redactableFiles.length === 0) return;
+    setRedacting(true);
+    setError(null);
+    try {
+      const report = await invoke<RedactionReport>("ai_redact", {
+        paths: redactableFiles,
+        apply: true,
+      });
+      setRedactResult(report);
+      // Re-scan so the now-redacted secrets drop out of the findings list.
+      await runScan();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setRedacting(false);
+    }
+  }
+
+  async function updateSettings(patch: Partial<AiSettings>) {
+    const next = await invoke<AiSettings>("ai_settings_set", {
+      configuredRoots: patch.configured_roots,
+      excludedRoots: patch.excluded_roots,
+      autoScanEnabled: patch.auto_scan_enabled,
+    });
+    setSettings(next);
+  }
+
+  const sorted = useMemo(
+    () =>
+      [...findings].sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity)),
+    [findings],
+  );
+
+  return (
+    <PageShell
+      title="AI Security"
+      description="Scans the AI coding assistants on this machine — Claude Code, Cursor, Copilot, Codex and more — for secrets leaked into context or transcripts and for agent configuration that a prompt injection could turn into code execution."
+      action={
+        <Button onClick={runScan} disabled={scanning}>
+          {scanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanSearch className="h-4 w-4" />}
+          {scanning ? "Scanning…" : hasScanned ? "Re-scan" : "Scan AI artifacts"}
+        </Button>
+      }
+    >
+      <div className="flex flex-col gap-8">
+        <Callout tone="info">
+          Bulwark reads these files but never changes them on its own. Redaction is a separate, explicit step
+          — and when you run it, the original is backed up first (owner-only) and each file's permissions are
+          preserved.
+        </Callout>
+
+        {error && <Callout tone="critical">{error}</Callout>}
+
+        {redactResult && (
+          <Callout tone="success">
+            Redacted {redactResult.total_secrets} secret{redactResult.total_secrets === 1 ? "" : "s"} across{" "}
+            {redactResult.entries.length} file{redactResult.entries.length === 1 ? "" : "s"}. Originals were
+            backed up. Remember to <strong>rotate</strong> the exposed credentials — redaction removes them
+            from disk, it can't un-leak them.
+          </Callout>
+        )}
+
+        {scanning && (
+          <div className="rounded-md border border-border bg-muted/40 px-3 py-2.5">
+            <div className="font-mono text-xs font-medium">
+              {artifactCount} artifact{artifactCount === 1 ? "" : "s"} examined
+            </div>
+            {currentFile && (
+              <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">{currentFile}</div>
+            )}
+          </div>
+        )}
+
+        {summary && !scanning && (
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-1 font-mono text-xs text-muted-foreground">
+            <span>
+              {summary.workspacesScanned} workspace{summary.workspacesScanned === 1 ? "" : "s"}
+            </span>
+            <span>
+              {summary.artifactsScanned} artifact{summary.artifactsScanned === 1 ? "" : "s"} scanned
+            </span>
+            <span>
+              {findings.length} finding{findings.length === 1 ? "" : "s"}
+            </span>
+          </div>
+        )}
+
+        {summary?.workspacesCapped && (
+          <Callout tone="warning">
+            The workspace limit was reached, so some projects weren't scanned. Add specific roots below, or
+            exclude large trees you don't need scanned.
+          </Callout>
+        )}
+
+        {secretCount > 0 && (
+          <Callout
+            tone="warning"
+            action={
+              <Button size="sm" variant="outline" onClick={redactAll} disabled={redacting}>
+                {redacting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Eraser className="h-4 w-4" />}
+                {redacting ? "Redacting…" : `Redact ${secretCount} secret${secretCount === 1 ? "" : "s"}`}
+              </Button>
+            }
+          >
+            <span className="font-medium">
+              {secretCount} exposed secret{secretCount === 1 ? "" : "s"} in {redactableFiles.length} file
+              {redactableFiles.length === 1 ? "" : "s"}
+            </span>{" "}
+            can be redacted in place. Rotate them regardless — a leaked key stays leaked.
+          </Callout>
+        )}
+
+        <section>
+          <SectionLabel>Findings</SectionLabel>
+          {sorted.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-border py-14 text-center">
+              {hasScanned ? (
+                <ShieldCheck className="mx-auto h-7 w-7 text-muted-foreground/40" strokeWidth={1.5} />
+              ) : (
+                <Bot className="mx-auto h-7 w-7 text-muted-foreground/40" strokeWidth={1.5} />
+              )}
+              <p className="mt-3 text-sm font-medium">
+                {hasScanned ? "No AI security issues found." : "No AI scan has run yet."}
+              </p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {hasScanned
+                  ? "No leaked secrets or dangerous agent config across the artifacts scanned."
+                  : "Run a scan to check your assistants' context, memory, MCP configs and transcripts."}
+              </p>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2.5">
+              {sorted.map((f) => (
+                <AiFindingCard key={f.id} f={f} />
+              ))}
+            </div>
+          )}
+        </section>
+
+        <DiscoverySettings settings={settings} onChange={updateSettings} active={active} />
+      </div>
+    </PageShell>
+  );
+}
+
+function AiFindingCard({ f }: { f: AiFinding }) {
+  const loc = f.line ? `${f.file}:${f.line}` : f.file;
+  return (
+    <article
+      className="rail rail-dim rounded-md border border-border bg-card py-3.5 pr-4"
+      style={railStyle(f.severity)}
+    >
+      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+        <span className="font-mono text-xs font-semibold tracking-tight text-muted-foreground">
+          {f.rule_id}
+        </span>
+        <SeverityLabel severity={f.severity} />
+        <span className="rounded-full border border-border bg-muted/50 px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
+          {f.tool}
+        </span>
+        {f.redactable && (
+          <span
+            className="rounded-full px-2 py-0.5 font-mono text-[10px] font-semibold"
+            style={{ background: "var(--sev-critical-tint)", color: "var(--sev-critical-fg)" }}
+          >
+            REDACTABLE
+          </span>
+        )}
+      </div>
+      <h3 className="mt-1.5 text-sm font-semibold">{f.title}</h3>
+      <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground" title={loc}>
+        {loc}
+      </div>
+      <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{f.explanation}</p>
+      {f.evidence && (
+        <div className="mt-2 inline-block rounded bg-muted/60 px-2 py-1 font-mono text-[11px] text-foreground">
+          {f.evidence}
+        </div>
+      )}
+      <CommandBlock command={f.fix_hint} className="mt-2.5" />
+      {f.references.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {f.references.map((r) => (
+            <span key={r} className="font-mono text-[10px] text-muted-foreground/70">
+              {r}
+            </span>
+          ))}
+        </div>
+      )}
+    </article>
+  );
+}
+
+function DiscoverySettings({
+  settings,
+  onChange,
+  active,
+}: {
+  settings: AiSettings | null;
+  onChange: (patch: Partial<AiSettings>) => void;
+  active: boolean;
+}) {
+  if (!settings) return null;
+  return (
+    <section>
+      <SectionLabel>Discovery &amp; automation</SectionLabel>
+      <div className="flex flex-col gap-4 rounded-lg border border-border bg-card p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-medium">Automatic background scans</div>
+            <div className="text-xs text-muted-foreground">
+              Re-scans your workspaces periodically and notifies you when a new secret or risky config
+              appears.
+            </div>
+          </div>
+          <Switch
+            checked={settings.auto_scan_enabled}
+            onCheckedChange={(v) => onChange({ auto_scan_enabled: v })}
+            aria-label="Automatic background scans"
+          />
+        </div>
+
+        <div>
+          <div className="mb-1.5 text-sm font-medium">Extra folders to scan</div>
+          <p className="mb-2 text-xs text-muted-foreground">
+            Bulwark already sweeps the usual code roots (~/Workspaces, ~/Projects, ~/src, …) and every project
+            your assistants have opened. Add a root here if your code lives somewhere unusual.
+          </p>
+          {settings.configured_roots.length > 0 && (
+            <PathChips
+              paths={settings.configured_roots}
+              onRemove={(p) =>
+                onChange({ configured_roots: settings.configured_roots.filter((x) => x !== p) })
+              }
+            />
+          )}
+          <PathDropZone
+            active={active}
+            mode="folders-only"
+            label="Drop a folder here to also scan it"
+            className="mt-2"
+            onPaths={(paths) =>
+              onChange({
+                configured_roots: Array.from(new Set([...settings.configured_roots, ...paths])),
+              })
+            }
+          />
+        </div>
+
+        <div>
+          <div className="mb-1.5 text-sm font-medium">Folders to exclude</div>
+          {settings.excluded_roots.length > 0 && (
+            <PathChips
+              paths={settings.excluded_roots}
+              onRemove={(p) => onChange({ excluded_roots: settings.excluded_roots.filter((x) => x !== p) })}
+            />
+          )}
+          <PathDropZone
+            active={active}
+            mode="folders-only"
+            label="Drop a folder here to skip it"
+            className="mt-2"
+            onPaths={(paths) =>
+              onChange({ excluded_roots: Array.from(new Set([...settings.excluded_roots, ...paths])) })
+            }
+          />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function PathChips({ paths, onRemove }: { paths: string[]; onRemove: (path: string) => void }) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {paths.map((p) => (
+        <span
+          key={p}
+          title={p}
+          className={cn(
+            "flex items-center gap-1 rounded-full border border-border bg-muted/50 py-0.5 pr-1 pl-2.5 text-xs",
+          )}
+        >
+          <span className="max-w-48 truncate font-mono">{p}</span>
+          <button
+            type="button"
+            onClick={() => onRemove(p)}
+            aria-label={`Remove ${p}`}
+            className="rounded-full p-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </span>
+      ))}
+    </div>
+  );
+}

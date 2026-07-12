@@ -1,3 +1,4 @@
+mod ai_security;
 mod monitoring;
 mod realtime_av;
 mod tray;
@@ -465,7 +466,11 @@ pub fn run() {
             // Resumes real-time AV protection if it was left enabled on a previous run —
             // "persists across restarts" should mean protection actually restarts, not just
             // that the toggle remembers where it was left.
-            realtime_av::start_if_enabled(handle);
+            realtime_av::start_if_enabled(handle.clone());
+
+            // Background AI-artifact auto-scan: one sweep shortly after launch, then periodic,
+            // so the AI Security tab shows fresh data without the user clicking Scan first.
+            ai_security::spawn(handle);
 
             if let Err(e) = tray::spawn(app.handle()) {
                 eprintln!("[bulwark] warning: couldn't create tray icon: {e}");
@@ -502,7 +507,12 @@ pub fn run() {
             realtime_av::realtime_av_get_status,
             realtime_av::realtime_av_set_enabled,
             realtime_av::realtime_av_add_folder,
-            realtime_av::realtime_av_remove_folder
+            realtime_av::realtime_av_remove_folder,
+            ai_security::ai_scan_start,
+            ai_security::ai_scan_snapshot,
+            ai_security::ai_redact,
+            ai_security::ai_settings_get,
+            ai_security::ai_settings_set
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

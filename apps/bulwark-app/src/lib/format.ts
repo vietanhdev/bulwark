@@ -4,6 +4,8 @@
    slugs whose casing a naive `\b\w` capitalise gets wrong. */
 const ACRONYMS: Record<string, string> = {
   ssh: "SSH",
+  ai: "AI",
+  mcp: "MCP",
 };
 
 /** `ssh-remote-access` → `SSH Remote Access`. */

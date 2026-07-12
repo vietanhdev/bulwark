@@ -1,3 +1,4 @@
+pub mod ai_scan;
 pub mod av_scan;
 pub mod collectors;
 pub mod condition;
@@ -6,6 +7,10 @@ pub mod logs;
 pub mod models;
 pub mod store;
 
+pub use ai_scan::{
+    redact::redact_paths as ai_redact_paths, scan as run_ai_scan, AiFinding, AiScanOptions,
+    AiScanReport, RedactionReport,
+};
 pub use av_scan::{
     detect_install_command as clamav_install_command, get_version_info as clamav_version_info,
     scan as run_av_scan, AvScanResult, ClamavVersionInfo, ThreatDetection,
@@ -23,4 +28,4 @@ pub use logs::{
     LogScanRun, LogSource, SyslogLinesSource,
 };
 pub use models::{Fact, Finding, FindingStatus, OperatingSystem, Rule, ScanRun, Severity};
-pub use store::{LatestScanMeta, ScanRunSummary, Store};
+pub use store::{AiScanSnapshot, LatestScanMeta, ScanRunSummary, Store};

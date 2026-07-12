@@ -27,6 +27,15 @@ Built with Tauri v2 + Rust + React. One rule engine, one rule pack, two front-do
   hardening, filesystem permissions, privilege escalation, logging/auditing, accounts/services,
   defense evasion, rootkit/malware, file integrity), each carrying a severity, a plain-language
   explanation with live values interpolated in, a one-line fix, and CIS/MITRE ATT&CK references.
+- **AI assistant security** — scans the AI coding assistants on the machine (Claude Code, Cursor,
+  Copilot, Codex, Gemini, Aider, Continue, Windsurf, Cline, Amazon Q) for secrets leaked into
+  context/memory/transcripts and for dangerous agent configuration a prompt injection could turn
+  into code execution: project-supplied Claude Code hooks (CVE-2025-59536), VS Code
+  auto-approve/"YOLO mode" (CVE-2025-53773), MCP servers on unpinned `npx` or vulnerable
+  `mcp-remote` (CVE-2025-6514), hidden-Unicode "Rules File Backdoor" instruction files,
+  base-URL exfil overrides, and world-readable credential stores. Workspaces are auto-discovered;
+  leaked secrets are opt-in redactable (dry-run first, `0600` backup, permissions preserved). A
+  highlighted tab in the GUI and `bulwarkctl ai scan` / `bulwarkctl ai redact` in the CLI.
 - **Antivirus scanning** — shells out to a real ClamAV `clamscan` on demand, plus a fast
   presence/database-freshness check on every routine scan.
 - **Log analysis** — a decode → detect → correlate pipeline over the systemd journal (or any

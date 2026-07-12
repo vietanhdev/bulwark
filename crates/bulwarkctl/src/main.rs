@@ -67,6 +67,48 @@ enum Commands {
         #[command(subcommand)]
         action: LogsAction,
     },
+    /// Scan AI coding-assistant artifacts (.claude, CLAUDE.md, MCP configs, transcripts, ...)
+    /// for leaked secrets and dangerous agent configuration
+    Ai {
+        #[command(subcommand)]
+        action: AiAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum AiAction {
+    /// Discover and scan AI-assistant artifacts across your workspaces and home directory
+    Scan {
+        /// Machine-readable JSON output instead of a table
+        #[arg(long)]
+        json: bool,
+        /// Skip persisting this run to the local findings database
+        #[arg(long)]
+        no_persist: bool,
+        /// Extra directory to sweep for workspaces (repeatable). Adds to the built-in common
+        /// code roots (~/Workspaces, ~/Projects, ~/src, ...).
+        #[arg(long = "root", value_name = "DIR")]
+        roots: Vec<PathBuf>,
+        /// Directory to exclude from discovery (repeatable)
+        #[arg(long = "exclude", value_name = "DIR")]
+        excludes: Vec<PathBuf>,
+        /// Scan exactly this workspace directory instead of auto-discovering (repeatable).
+        /// Suppresses the whole-machine sweep — only the given folders are examined.
+        #[arg(long = "target", value_name = "DIR")]
+        targets: Vec<PathBuf>,
+    },
+    /// Remove leaked secrets from AI context files. Dry-run by default — prints what would
+    /// change and touches nothing; pass --apply to rewrite the files (a 0600 backup of each is
+    /// kept, and file permissions are preserved).
+    Redact {
+        /// Actually rewrite the files. Without this flag, redact only previews.
+        #[arg(long)]
+        apply: bool,
+        /// Restrict redaction to these workspace directories (repeatable). Defaults to the same
+        /// auto-discovered set `ai scan` uses.
+        #[arg(long = "target", value_name = "DIR")]
+        targets: Vec<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -375,9 +417,156 @@ fn main() -> anyhow::Result<()> {
             }
         },
         Commands::Logs { action } => run_logs(action, cli.db_path)?,
+        Commands::Ai { action } => run_ai(action, cli.db_path)?,
     }
 
     Ok(())
+}
+
+/// Resolves the user's home directory for AI-artifact discovery.
+fn resolve_home() -> anyhow::Result<PathBuf> {
+    let home = std::env::var("HOME").context("HOME not set")?;
+    Ok(PathBuf::from(home))
+}
+
+/// Handles the `ai` subcommand group. Like `scan`, the `scan` path exits with a
+/// severity-derived code so cron/CI can gate on it identically.
+fn run_ai(action: AiAction, db_path: Option<PathBuf>) -> anyhow::Result<()> {
+    use bulwark_core::{ai_redact_paths, run_ai_scan, AiScanOptions};
+
+    match action {
+        AiAction::Scan {
+            json,
+            no_persist,
+            roots,
+            excludes,
+            targets,
+        } => {
+            let opts = AiScanOptions {
+                home: resolve_home()?,
+                configured_roots: roots,
+                excluded_roots: excludes,
+                explicit_targets: targets,
+                max_workspaces: bulwark_core::ai_scan::DEFAULT_MAX_WORKSPACES,
+            };
+            let report = run_ai_scan(&opts, |_| {});
+
+            if !no_persist {
+                let db_path = resolve_db_path(db_path)?;
+                let mut store = Store::open(&db_path)?;
+                store.persist_ai_scan(&report)?;
+            }
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print_ai_report(&report);
+            }
+            std::process::exit(exit_code_for(report.worst_severity()));
+        }
+        AiAction::Redact { apply, targets } => {
+            let opts = AiScanOptions {
+                home: resolve_home()?,
+                explicit_targets: targets,
+                ..AiScanOptions::for_home(resolve_home()?)
+            };
+            let report = run_ai_scan(&opts, |_| {});
+            let files = report.redactable_files();
+            if files.is_empty() {
+                println!(
+                    "No redactable secrets found across {} artifact(s).",
+                    report.artifacts_scanned
+                );
+                return Ok(());
+            }
+
+            let backup_dir = resolve_db_path(None)?
+                .parent()
+                .map(|p| p.join("redaction-backups"))
+                .unwrap_or_else(|| PathBuf::from("redaction-backups"));
+            let outcome = ai_redact_paths(&files, apply, &backup_dir);
+            print_redaction_report(&outcome, apply);
+        }
+    }
+    Ok(())
+}
+
+fn print_ai_report(report: &bulwark_core::AiScanReport) {
+    println!(
+        "Bulwark AI-artifact scan — host {} — {} workspace(s), {} artifact(s) examined",
+        report.host_fingerprint,
+        report.workspaces_scanned.len(),
+        report.artifacts_scanned,
+    );
+    if report.workspaces_capped {
+        println!(
+            "⚠ workspace cap reached — some projects weren't scanned. Narrow with --target, or raise the cap."
+        );
+    }
+    if !report.errors.is_empty() {
+        println!("⚠ {} artifact(s) could not be read:", report.errors.len());
+        for e in &report.errors {
+            println!("  {e}");
+        }
+    }
+    println!();
+    if report.findings.is_empty() {
+        println!("No findings.");
+        return;
+    }
+    for f in &report.findings {
+        let loc = match f.line {
+            Some(l) => format!("{}:{}", f.file, l),
+            None => f.file.clone(),
+        };
+        println!(
+            "[{:<8}] {} — {} ({})",
+            severity_label(f.severity),
+            f.rule_id,
+            f.title,
+            f.tool,
+        );
+        println!("           {loc}");
+        println!("           {}", f.explanation.trim());
+        if !f.evidence.is_empty() {
+            println!("           evidence: {}", f.evidence);
+        }
+        println!("           fix: {}", f.fix_hint.trim());
+        if f.redactable {
+            println!("           ↳ redactable: run 'bulwarkctl ai redact --apply'");
+        }
+    }
+    println!("\n{} finding(s) total.", report.findings.len());
+}
+
+fn print_redaction_report(report: &bulwark_core::RedactionReport, apply: bool) {
+    if report.dry_run {
+        println!("Dry run — nothing was changed. Re-run with --apply to redact.\n");
+    }
+    for entry in &report.entries {
+        let verb = if entry.applied {
+            "redacted"
+        } else {
+            "would redact"
+        };
+        println!(
+            "{} {} secret(s) in {}",
+            verb, entry.secrets_redacted, entry.path
+        );
+        if let Some(backup) = &entry.backup_path {
+            println!("  backup: {backup}");
+        }
+    }
+    for e in &report.errors {
+        println!("⚠ {e}");
+    }
+    let verb = if apply { "Redacted" } else { "Found" };
+    println!(
+        "\n{} {} secret(s) across {} file(s).",
+        verb,
+        report.total_secrets,
+        report.entries.len()
+    );
 }
 
 /// Handles the `logs` subcommand group. Kept as its own function so `main`'s top-level match

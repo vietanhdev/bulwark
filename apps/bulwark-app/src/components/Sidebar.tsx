@@ -1,5 +1,6 @@
 import {
   BadgeCheck,
+  Bot,
   FileCheck2,
   History,
   LayoutDashboard,
@@ -10,7 +11,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export type View = "overview" | "antivirus" | "integrity" | "rules" | "compliance" | "history" | "settings";
+export type View =
+  "overview" | "ai-security" | "antivirus" | "integrity" | "rules" | "compliance" | "history" | "settings";
 
 interface SidebarProps {
   view: View;
@@ -23,6 +25,9 @@ interface NavItem {
   id: View;
   label: string;
   icon: LucideIcon;
+  /** Draws the item with a standing accent (not just the on-active rail), marking it as the
+   *  product's newest, most-promoted capability rather than one more reference tab. */
+  highlight?: boolean;
 }
 
 /* Three groups, cut by the question each answers rather than by build order.
@@ -45,6 +50,9 @@ const GROUPS: { label: string | null; items: NavItem[] }[] = [
   {
     label: "Protection",
     items: [
+      // Highlighted: AI-assistant artifact scanning is the product's newest pillar, and the one
+      // most users won't yet know to look for — so it gets a standing accent, not just parity.
+      { id: "ai-security", label: "AI Security", icon: Bot, highlight: true },
       { id: "antivirus", label: "Antivirus", icon: ShieldCheck },
       { id: "integrity", label: "File integrity", icon: FileCheck2 },
     ],
@@ -68,7 +76,7 @@ function NavButton({
   active: boolean;
   onChange: (view: View) => void;
 }) {
-  const { id, label, icon: Icon } = item;
+  const { id, label, icon: Icon, highlight } = item;
   return (
     <button
       onClick={() => onChange(id)}
@@ -82,11 +90,24 @@ function NavButton({
         active
           ? "bg-ink-raised font-medium text-ink-fg"
           : "font-normal text-ink-muted hover:bg-ink-raised/50 hover:text-ink-fg",
+        // A promoted item keeps a faint primary wash even at rest, so the eye lands on it.
+        highlight && !active && "bg-primary/10 text-ink-fg hover:bg-primary/15",
       )}
-      style={{ "--rail-color": active ? "var(--primary)" : "transparent" } as React.CSSProperties}
+      style={
+        {
+          // A highlighted item shows its accent rail even when inactive; a normal item only
+          // paints the rail on the active page.
+          "--rail-color": active || highlight ? "var(--primary)" : "transparent",
+        } as React.CSSProperties
+      }
     >
       <Icon className="h-4 w-4 shrink-0" strokeWidth={active ? 2.25 : 1.75} />
-      {label}
+      <span className="flex-1">{label}</span>
+      {highlight && (
+        <span className="rounded-full bg-primary/20 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-wider text-primary">
+          New
+        </span>
+      )}
     </button>
   );
 }

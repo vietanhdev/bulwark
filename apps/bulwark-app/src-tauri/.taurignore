@@ -1,0 +1,8 @@
+# Paths the `tauri dev` file watcher must NOT watch.
+#
+# `build.rs` stages the freshly-built `bulwarkctl` into `binaries/` as an externalBin sidecar on
+# every build. Without this ignore, that write lands inside the watched `src-tauri/` tree, so the
+# watcher fires, rebuilds, `build.rs` re-copies the sidecar, the watcher fires again — an infinite
+# rebuild loop where the app window never opens. The staged sidecar is a build *output*; nothing
+# about it should ever trigger a rebuild.
+binaries/

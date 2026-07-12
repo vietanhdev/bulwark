@@ -107,6 +107,43 @@ static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
             CREATE INDEX IF NOT EXISTS idx_log_findings_scan ON log_findings(log_scan_run_id);
             "#,
         ),
+        // V4 — the AI-artifact scan's own tables, separate from the config `scan_runs`/`findings`
+        // for the same reasons V3's log tables are: AI findings carry a different shape (a file
+        // path, a line, which assistant, a redactable flag), and their persistence model is
+        // latest-run-wins rather than the config path's cross-run reconciliation — a redacted
+        // secret should simply be *absent* from the next scan, not linger as an "open" row the
+        // config reconciler would never auto-close (see `persist_ai_scan`).
+        M::up(
+            r#"
+            CREATE TABLE IF NOT EXISTS ai_scan_runs (
+                id                 TEXT PRIMARY KEY,
+                started_at         TEXT NOT NULL,
+                finished_at        TEXT,
+                host_fingerprint   TEXT NOT NULL,
+                workspaces_scanned TEXT NOT NULL,
+                artifacts_scanned  INTEGER NOT NULL,
+                total_findings     INTEGER NOT NULL,
+                workspaces_capped  INTEGER NOT NULL,
+                scan_errors        TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS ai_findings (
+                id             TEXT PRIMARY KEY,
+                ai_scan_run_id TEXT NOT NULL REFERENCES ai_scan_runs(id),
+                rule_id        TEXT NOT NULL,
+                severity       TEXT NOT NULL,
+                tool           TEXT NOT NULL,
+                title          TEXT NOT NULL,
+                explanation    TEXT NOT NULL,
+                fix_hint       TEXT NOT NULL,
+                file           TEXT NOT NULL,
+                line           INTEGER,
+                evidence       TEXT NOT NULL,
+                refs           TEXT NOT NULL,
+                redactable     INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_ai_findings_run ON ai_findings(ai_scan_run_id);
+            "#,
+        ),
     ])
 });
 
@@ -429,6 +466,108 @@ impl Store {
             .query_row("SELECT COUNT(*) FROM log_findings", [], |r| r.get(0))?)
     }
 
+    /// Persists one AI-artifact scan. Unlike [`Self::persist_and_reconcile`], this is
+    /// latest-run-wins with no cross-run reconciliation: each scan inserts a fresh
+    /// `ai_scan_runs` row and its findings, and the snapshot always reads the most recent run.
+    /// That's the right model for artifact scanning specifically — a secret the user has since
+    /// redacted (or a config they've fixed) should simply be *gone* from the next scan, whereas
+    /// the config reconciler deliberately never auto-closes an absent finding (a privileged
+    /// collector might merely have been skipped). Two different absence-semantics, two tables.
+    pub fn persist_ai_scan(&mut self, report: &crate::ai_scan::AiScanReport) -> anyhow::Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO ai_scan_runs (id, started_at, finished_at, host_fingerprint, workspaces_scanned, artifacts_scanned, total_findings, workspaces_capped, scan_errors)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                report.id.to_string(),
+                report.started_at.to_rfc3339(),
+                report.finished_at.map(|t| t.to_rfc3339()),
+                report.host_fingerprint,
+                serde_json::to_string(&report.workspaces_scanned)?,
+                report.artifacts_scanned as i64,
+                report.findings.len() as i64,
+                report.workspaces_capped as i64,
+                serde_json::to_string(&report.errors)?,
+            ],
+        )?;
+        for f in &report.findings {
+            tx.execute(
+                "INSERT INTO ai_findings (id, ai_scan_run_id, rule_id, severity, tool, title, explanation, fix_hint, file, line, evidence, refs, redactable)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                params![
+                    f.id.to_string(),
+                    report.id.to_string(),
+                    f.rule_id,
+                    severity_str(f.severity),
+                    f.tool,
+                    f.title,
+                    f.explanation,
+                    f.fix_hint,
+                    f.file,
+                    f.line.map(|l| l as i64),
+                    f.evidence,
+                    serde_json::to_string(&f.references)?,
+                    f.redactable as i64,
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The most recent AI scan's summary + findings, or `None` if no AI scan has run — what a
+    /// freshly-opened AI Security tab shows without forcing a re-scan first, mirroring how
+    /// `dashboard_snapshot` restores the config scan's state.
+    pub fn latest_ai_scan(&self) -> anyhow::Result<Option<AiScanSnapshot>> {
+        let meta = self
+            .conn
+            .query_row(
+                "SELECT id, started_at, host_fingerprint, workspaces_scanned, artifacts_scanned, workspaces_capped
+                 FROM ai_scan_runs ORDER BY started_at DESC LIMIT 1",
+                [],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, i64>(4)?,
+                        r.get::<_, i64>(5)?,
+                    ))
+                },
+            )
+            .optional()?;
+
+        let Some((
+            run_id,
+            started_at,
+            host_fingerprint,
+            workspaces_json,
+            artifacts_scanned,
+            capped,
+        )) = meta
+        else {
+            return Ok(None);
+        };
+
+        let mut stmt = self.conn.prepare(
+            "SELECT id, rule_id, severity, tool, title, explanation, fix_hint, file, line, evidence, refs, redactable
+             FROM ai_findings WHERE ai_scan_run_id = ?1",
+        )?;
+        let findings = stmt
+            .query_map(params![run_id], row_to_ai_finding)?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Some(AiScanSnapshot {
+            started_at: DateTime::parse_from_rfc3339(&started_at)?.with_timezone(&Utc),
+            host_fingerprint,
+            workspaces_scanned: serde_json::from_str(&workspaces_json)?,
+            artifacts_scanned: artifacts_scanned as usize,
+            workspaces_capped: capped != 0,
+            findings,
+        }))
+    }
+
     /// Generic string key-value read, backing small persisted preferences (e.g. real-time
     /// antivirus protection's enabled flag and watched-folder list) that don't warrant a
     /// dedicated table of their own. Callers own their own value encoding (plain strings,
@@ -560,6 +699,40 @@ pub struct LatestScanMeta {
     pub host_fingerprint: String,
     pub started_at: DateTime<Utc>,
     pub privileged_collectors_skipped: Vec<String>,
+}
+
+/// The most recent AI-artifact scan, reconstructed from storage — summary metadata plus its
+/// findings. Backs the AI Security tab's "show last scan on open" the same way [`LatestScanMeta`]
+/// + `open_findings` back the config dashboard.
+#[derive(serde::Serialize)]
+pub struct AiScanSnapshot {
+    pub started_at: DateTime<Utc>,
+    pub host_fingerprint: String,
+    pub workspaces_scanned: Vec<String>,
+    pub artifacts_scanned: usize,
+    pub workspaces_capped: bool,
+    pub findings: Vec<crate::ai_scan::AiFinding>,
+}
+
+fn row_to_ai_finding(r: &rusqlite::Row) -> rusqlite::Result<crate::ai_scan::AiFinding> {
+    let severity_s: String = r.get(2)?;
+    let refs_json: String = r.get(10)?;
+    Ok(crate::ai_scan::AiFinding {
+        id: r.get::<_, String>(0)?.parse().map_err(|_| {
+            rusqlite::Error::InvalidColumnType(0, "id".into(), rusqlite::types::Type::Text)
+        })?,
+        rule_id: r.get(1)?,
+        severity: parse_severity(&severity_s),
+        tool: r.get(3)?,
+        title: r.get(4)?,
+        explanation: r.get(5)?,
+        fix_hint: r.get(6)?,
+        file: r.get(7)?,
+        line: r.get::<_, Option<i64>>(8)?.map(|l| l as usize),
+        evidence: r.get(9)?,
+        references: serde_json::from_str(&refs_json).unwrap_or_default(),
+        redactable: r.get::<_, i64>(11)? != 0,
+    })
 }
 
 fn row_to_finding(r: &rusqlite::Row) -> rusqlite::Result<Finding> {
@@ -1085,6 +1258,60 @@ mod tests {
     }
 
     #[test]
+    fn ai_scan_round_trips_through_the_store() {
+        use crate::ai_scan::{AiFinding, AiScanReport};
+        let tmp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&tmp.path().join("ai.db")).unwrap();
+
+        let report = AiScanReport {
+            id: uuid::Uuid::new_v4(),
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            host_fingerprint: "host/6.8".into(),
+            workspaces_scanned: vec!["/home/u/proj".into()],
+            artifacts_scanned: 5,
+            workspaces_capped: false,
+            errors: vec![],
+            findings: vec![AiFinding {
+                id: uuid::Uuid::new_v4(),
+                rule_id: "BLWK-AI-001".into(),
+                severity: Severity::Critical,
+                tool: "Claude Code".into(),
+                title: "Anthropic API key exposed in AI context".into(),
+                explanation: "e".into(),
+                fix_hint: "f".into(),
+                file: "/home/u/proj/CLAUDE.md".into(),
+                line: Some(12),
+                evidence: "Anthropic API key: sk-a…AA".into(),
+                references: vec!["ATTACK-T1552.001".into()],
+                redactable: true,
+            }],
+        };
+        store.persist_ai_scan(&report).unwrap();
+
+        let snap = store
+            .latest_ai_scan()
+            .unwrap()
+            .expect("a scan was persisted");
+        assert_eq!(snap.artifacts_scanned, 5);
+        assert_eq!(snap.findings.len(), 1);
+        assert_eq!(snap.findings[0].rule_id, "BLWK-AI-001");
+        assert!(snap.findings[0].redactable);
+        assert_eq!(snap.findings[0].line, Some(12));
+
+        // Latest-run-wins: a second, empty scan supersedes the first (a redacted secret is
+        // simply gone, not lingering as an open row).
+        let empty = AiScanReport {
+            id: uuid::Uuid::new_v4(),
+            started_at: Utc::now() + chrono::Duration::seconds(1),
+            findings: vec![],
+            ..report.clone()
+        };
+        store.persist_ai_scan(&empty).unwrap();
+        assert_eq!(store.latest_ai_scan().unwrap().unwrap().findings.len(), 0);
+    }
+
+    #[test]
     fn migrations_are_valid_and_reach_the_expected_version() {
         // Catches a malformed migration (bad SQL, wrong ordering) at test time rather than on
         // a user's machine mid-upgrade.
@@ -1093,7 +1320,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let db_path = tmp.path().join("fresh.db");
         let store = Store::open(&db_path).unwrap();
-        assert_eq!(Store::schema_version(&store.conn).unwrap(), 3);
+        assert_eq!(Store::schema_version(&store.conn).unwrap(), 4);
     }
 
     #[test]
@@ -1107,7 +1334,7 @@ mod tests {
             store.persist_and_reconcile(&sample_scan()).unwrap();
         }
         let store = Store::open(&db_path).unwrap();
-        assert_eq!(Store::schema_version(&store.conn).unwrap(), 3);
+        assert_eq!(Store::schema_version(&store.conn).unwrap(), 4);
         assert_eq!(store.open_findings().unwrap().len(), 1, "data must survive");
     }
 
@@ -1148,7 +1375,7 @@ mod tests {
 
         let store = Store::open(&db_path).unwrap();
 
-        assert_eq!(Store::schema_version(&store.conn).unwrap(), 3);
+        assert_eq!(Store::schema_version(&store.conn).unwrap(), 4);
         assert_eq!(
             store.count_scan_runs().unwrap(),
             1,
