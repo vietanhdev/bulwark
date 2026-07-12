@@ -31,7 +31,7 @@ thiserror = "1"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 aho-corasick = "1"
-toml = "0.8"
+toml = "1.1"
 regex = "1"
 clap = { version = "4", features = ["derive"] }
 walkdir = "2"
