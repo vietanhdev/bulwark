@@ -107,9 +107,13 @@ jobs:
           cp target/generate-rpm/bulwarkctl-${V}-1.x86_64.rpm "dist/bulwarkctl-${V}.x86_64.rpm"
           cp bulwarkctl-${V}-x86_64-linux.tar.gz              "dist/"
 
-          cp target/release/bundle/deb/bulwark_${V}_amd64.deb          "dist/bulwark-desktop_${V}_amd64.deb"
-          cp target/release/bundle/rpm/bulwark-${V}-1.x86_64.rpm       "dist/bulwark-desktop-${V}.x86_64.rpm"
-          cp target/release/bundle/appimage/bulwark_${V}_amd64.AppImage "dist/bulwark-desktop-${V}-x86_64.AppImage"
+          # Match by version+arch, not a hardcoded lowercase name: the GUI's productName is
+          # "Bulwark" (capitalized, for the desktop launcher), so Tauri names the AppImage
+          # `Bulwark_<v>_amd64.AppImage` while lowercasing the deb/rpm package names. Globbing on
+          # the stable version+arch suffix keeps this step working regardless of that casing.
+          cp "$(ls target/release/bundle/deb/*_${V}_amd64.deb)"           "dist/bulwark-desktop_${V}_amd64.deb"
+          cp "$(ls target/release/bundle/rpm/*-${V}-1.x86_64.rpm)"        "dist/bulwark-desktop-${V}.x86_64.rpm"
+          cp "$(ls target/release/bundle/appimage/*_${V}_amd64.AppImage)" "dist/bulwark-desktop-${V}-x86_64.AppImage"
 
           cd dist
           sha256sum * > SHA256SUMS
