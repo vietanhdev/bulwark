@@ -1,4 +1,4 @@
-//! The v1 condition grammar (design-docs/001-bulwark-security-scanner/index.md §5):
+//! The v1 condition grammar (docs/guide/architecture.md §5):
 //! field references, `==` `!=` `in` `contains` `matches` `<` `>` `<=` `>=`, boolean
 //! `and`/`or`/`not`, parens. One rule reads one collector's fact — no cross-collector
 //! joins in v1. The four comparison operators are numeric-only (added for threshold rules

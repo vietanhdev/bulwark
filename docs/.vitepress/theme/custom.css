@@ -1,0 +1,38 @@
+/* Same palette as apps/bulwark-app/src/styles.css — a deliberate blue/green synthesis
+   (oklch hue ~194), not the default VitePress purple/green. Kept in sync by hand since the
+   docs site and the app are separate npm projects with no shared build step. */
+
+:root {
+  --vp-c-brand-1: oklch(0.5 0.09 194);
+  --vp-c-brand-2: oklch(0.44 0.09 194);
+  --vp-c-brand-3: oklch(0.56 0.09 194);
+  --vp-c-brand-soft: oklch(0.94 0.03 194);
+
+  --vp-font-family-base:
+    "Geist Variable", "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --vp-font-family-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+.dark {
+  --vp-c-brand-1: oklch(0.75 0.12 194);
+  --vp-c-brand-2: oklch(0.68 0.12 194);
+  --vp-c-brand-3: oklch(0.8 0.1 194);
+  --vp-c-brand-soft: oklch(0.3 0.04 194 / 0.4);
+}
+
+:root {
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: linear-gradient(
+    120deg,
+    oklch(0.5 0.09 194),
+    oklch(0.55 0.16 149)
+  );
+}
+
+.dark {
+  --vp-home-hero-name-background: linear-gradient(
+    120deg,
+    oklch(0.75 0.12 194),
+    oklch(0.72 0.18 149)
+  );
+}

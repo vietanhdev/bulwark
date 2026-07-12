@@ -33,7 +33,7 @@ impl Collector for SudoersCollector {
     }
 
     /// `/etc/sudoers` is normally `0440 root:root` — unreadable without elevation. This is
-    /// exactly the collector the design doc's privileged path (§4, §8) exists for: skipped
+    /// exactly the collector the architecture doc's privileged path (§4, §8) exists for: skipped
     /// cleanly and reported as "N checks skipped (no privilege)" rather than erroring.
     fn requires_privilege(&self) -> bool {
         true

@@ -1,20 +1,21 @@
 # Bulwark
 
-A Linux host security scanner with a native CLI and desktop GUI. Bulwark checks a machine's
-configuration against a declarative rule pack — SSH hardening, systemd/cron persistence,
-sudoers, kernel/sysctl hardening, file permissions, logging, rootkit indicators — and explains
-every finding in plain language with a concrete fix, alongside real ClamAV virus scanning and
-continuous background monitoring.
+A Linux host security scanner with a native CLI and desktop GUI, built for everyone running
+Linux — desktops and servers alike. Bulwark checks a machine's configuration against a
+declarative rule pack — SSH hardening, systemd/cron persistence, sudoers, kernel/sysctl
+hardening, file permissions, logging, rootkit indicators — and explains every finding in plain
+language with a concrete fix, alongside real ClamAV virus scanning and continuous background
+monitoring.
 
 Built with Tauri v2 + Rust + React. One rule engine, one rule pack, two front-doors: `bulwark`
 (CLI) and the desktop app.
 
 ## Features
 
-- **44 rules** across 11 categories (SSH/remote access, persistence, network egress, kernel
+- **57 rules** across 11 categories (SSH/remote access, persistence, network egress, kernel
   hardening, filesystem permissions, privilege escalation, logging/auditing, accounts/services,
-  defense evasion, rootkit/malware), each carrying a severity, a plain-language explanation with
-  live values interpolated in, a one-line fix, and CIS/MITRE ATT&CK references.
+  defense evasion, rootkit/malware, file integrity), each carrying a severity, a plain-language
+  explanation with live values interpolated in, a one-line fix, and CIS/MITRE ATT&CK references.
 - **Antivirus scanning** — shells out to a real ClamAV `clamscan` on demand, plus a fast
   presence/database-freshness check on every routine scan.
 - **Continuous monitoring** — a periodic re-scan loop (default 15 min) plus a filesystem watcher
@@ -77,8 +78,8 @@ npm install
 cargo tauri dev
 ```
 
-See [`CLAUDE.md`](CLAUDE.md) for the full command reference, and
-[`design-docs/001-bulwark-security-scanner/index.md`](design-docs/001-bulwark-security-scanner/index.md)
+See [`AGENTS.md`](AGENTS.md) for the full command reference, and
+[`docs/guide/architecture.md`](docs/guide/architecture.md)
 for architecture, data model, and the alternatives considered before landing on this design.
 
 ## Adding a rule
@@ -97,7 +98,7 @@ fix: "Set 'X11Forwarding no' in /etc/ssh/sshd_config and run 'systemctl restart 
 references: [CIS-5.2.4]
 ```
 
-See `CLAUDE.md`'s "adding a new check" section for the full workflow, including the condition
+See `AGENTS.md`'s "adding a new check" section for the full workflow, including the condition
 grammar and testing expectations.
 
 ## License

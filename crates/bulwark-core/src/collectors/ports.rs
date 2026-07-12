@@ -9,7 +9,7 @@ const TCP_LISTEN_STATE: &str = "0A";
 
 /// Parses `/proc/net/tcp`-format text (also valid for `/proc/net/tcp6`) into one fact row
 /// per LISTEN-state socket. Doesn't require root, unlike shelling out to `ss -tlnp` for the
-/// owning process name — v1 reports the port, not the process (see design doc §14 for what's
+/// owning process name — v1 reports the port, not the process (see architecture doc §14 for what's
 /// still open).
 pub fn parse_proc_net_tcp(text: &str, protocol: &str) -> Vec<Fact> {
     let mut rows = Vec::new();

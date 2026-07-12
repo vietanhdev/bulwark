@@ -7,7 +7,7 @@ pub struct LoggingCollector;
 
 /// Whether audit logging exists at all, and whether logs leave the box — a purely
 /// local-only log is erasable by the same root-level attacker it's meant to catch
-/// (the exact limitation documented in the design doc §10).
+/// (the exact limitation documented in the architecture doc §10).
 pub fn detect_logging_state(auditd_present: bool, rsyslog_conf: Option<&str>) -> Fact {
     let mut fact = Fact::new();
     fact.insert("auditd_present".to_string(), Value::Bool(auditd_present));

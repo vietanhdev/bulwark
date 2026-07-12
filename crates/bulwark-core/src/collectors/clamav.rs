@@ -6,7 +6,7 @@ use std::time::SystemTime;
 pub struct ClamavStatusCollector;
 
 /// Rootkit/malware detection in Bulwark is deliberately *not* a reimplemented signature
-/// engine (design doc §2 non-goals: "shells out to the system's own ClamAV installation
+/// engine (architecture doc §2 non-goals: "shells out to the system's own ClamAV installation
 /// ... rather than reimplementing it"). This collector reports whether ClamAV is even
 /// installed and how stale its signature database is — the two things that make a
 /// present-but-useless install indistinguishable from a real one to a casual glance.
