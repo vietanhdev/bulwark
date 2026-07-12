@@ -580,6 +580,18 @@ impl Store {
                     .values(AiFindingRow::from_finding(f, &run_id)?)
                     .execute(conn)?;
             }
+
+            // Agent scans are latest-run-wins: only the newest run's findings are ever read (see
+            // `latest_ai_scan`), so every earlier run's *detail* rows are dead weight. A machine
+            // left monitoring accumulates thousands of them (a real DB reached 3,819 rows across ten
+            // runs while only 243 were live), which both bloats the file and makes the stored data
+            // look wildly out of step with what the tabs show. Prune the stale detail here, keeping
+            // this run's rows. The per-run summary rows in `ai_scan_runs` are deliberately retained —
+            // they're tiny and carry `total_findings`, which is what a findings-over-time view needs
+            // — so nothing a user can actually see is lost, only redundant detail.
+            diesel::delete(ai_findings::table.filter(ai_findings::ai_scan_run_id.ne(&run_id)))
+                .execute(conn)?;
+
             Ok::<_, anyhow::Error>(())
         })
     }
@@ -1433,6 +1445,68 @@ mod tests {
         };
         store.persist_ai_scan(&empty).unwrap();
         assert_eq!(store.latest_ai_scan().unwrap().unwrap().findings.len(), 0);
+    }
+
+    #[test]
+    fn agent_scan_prunes_earlier_runs_detail_but_keeps_summaries() {
+        use crate::ai_scan::{AiFinding, AiScanReport};
+        let tmp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&tmp.path().join("ai.db")).unwrap();
+
+        let mk = |n: usize, secs: i64| AiScanReport {
+            id: uuid::Uuid::new_v4(),
+            started_at: Utc::now() + chrono::Duration::seconds(secs),
+            finished_at: Some(Utc::now()),
+            host_fingerprint: "h".into(),
+            workspaces_scanned: vec![],
+            artifacts_scanned: n,
+            workspaces_capped: false,
+            cancelled: false,
+            errors: vec![],
+            findings: (0..n)
+                .map(|i| AiFinding {
+                    id: uuid::Uuid::new_v4(),
+                    rule_id: "BLWK-AI-001".into(),
+                    severity: Severity::Critical,
+                    tool: "t".into(),
+                    title: "x".into(),
+                    explanation: "e".into(),
+                    fix_hint: "f".into(),
+                    file: format!("/p/{i}"),
+                    line: None,
+                    evidence: String::new(),
+                    references: vec![],
+                    redactable: false,
+                })
+                .collect(),
+        };
+
+        store.persist_ai_scan(&mk(5, 0)).unwrap();
+        store.persist_ai_scan(&mk(3, 1)).unwrap();
+
+        // The detail table holds only the latest run's rows (3), never the accumulated sum (8) —
+        // this is the bloat fix that keeps the stored data from drifting away from what the tabs
+        // show (a real machine had thousands of dead rows behind a 243-finding display).
+        let detail_rows: i64 = ai_findings::table
+            .count()
+            .get_result(&mut store.conn)
+            .unwrap();
+        assert_eq!(
+            detail_rows, 3,
+            "only the latest run's findings detail is retained"
+        );
+
+        // Both run summaries survive — they carry total_findings for a findings-over-time view.
+        let run_rows: i64 = ai_scan_runs::table
+            .count()
+            .get_result(&mut store.conn)
+            .unwrap();
+        assert_eq!(
+            run_rows, 2,
+            "per-run summaries are kept for history/analytics"
+        );
+
+        assert_eq!(store.latest_ai_scan().unwrap().unwrap().findings.len(), 3);
     }
 
     #[test]
