@@ -28,16 +28,17 @@ fn is_bridge_port(iface_dir: &Path) -> bool {
 
 /// Parses the hex text a real `/sys/class/net/<iface>/flags` file contains (e.g. `"0x1003\n"`
 /// — verified against this project's own dev machine, which has 20+ real interfaces, none
-/// promiscuous) and checks the `IFF_PROMISC` bit. An unparseable value degrades to "not
-/// promiscuous" rather than erroring the whole collector over one odd interface.
-pub fn is_promiscuous(flags_text: &str) -> bool {
+/// promiscuous) and checks the `IFF_PROMISC` bit. Returns `None` when the value can't be parsed:
+/// per the collector invariant, "couldn't read the flags" is undetermined, not a confident "not
+/// promiscuous" — the latter would let an interface whose flags we couldn't parse read as clean.
+pub fn is_promiscuous(flags_text: &str) -> Option<bool> {
     let trimmed = flags_text
         .trim()
         .trim_start_matches("0x")
         .trim_start_matches("0X");
     u32::from_str_radix(trimmed, 16)
+        .ok()
         .map(|flags| flags & IFF_PROMISC != 0)
-        .unwrap_or(false)
 }
 
 pub struct NetworkInterfacesCollector;
@@ -60,14 +61,22 @@ impl Collector for NetworkInterfacesCollector {
                 // kernels report it with unrelated flag bits that would just be noise here.
                 continue;
             }
-            let Ok(flags_text) = std::fs::read_to_string(entry.path().join("flags")) else {
-                continue;
-            };
+            // Undetermined if the flags file can't be read or parsed — emit the interface with
+            // `promiscuous_known: false` rather than dropping it (a dropped row is never evaluated,
+            // so a sniffing interface whose flags we couldn't read would silently vanish) or
+            // asserting a confident `promiscuous: false` (which would read as a clean interface).
+            let promiscuous = std::fs::read_to_string(entry.path().join("flags"))
+                .ok()
+                .and_then(|t| is_promiscuous(&t));
             let mut fact = Fact::new();
             fact.insert("interface".to_string(), Value::String(name));
             fact.insert(
                 "promiscuous".to_string(),
-                Value::Bool(is_promiscuous(&flags_text)),
+                Value::Bool(promiscuous.unwrap_or(false)),
+            );
+            fact.insert(
+                "promiscuous_known".to_string(),
+                Value::Bool(promiscuous.is_some()),
             );
             fact.insert(
                 "bridge_port".to_string(),
@@ -89,9 +98,10 @@ mod tests {
         // (docker bridges, wifi, tailscale, loopback) — none are promiscuous, and this locks
         // that in as a regression test rather than trusting the bit math by inspection alone.
         for real_flags in ["0x1003\n", "0x1091\n", "0x9\n"] {
-            assert!(
-                !is_promiscuous(real_flags),
-                "{real_flags} should not read as promiscuous"
+            assert_eq!(
+                is_promiscuous(real_flags),
+                Some(false),
+                "{real_flags} should read as known-not-promiscuous"
             );
         }
     }
@@ -100,13 +110,15 @@ mod tests {
     fn detects_the_promiscuous_bit_when_set() {
         // 0x1003 (this machine's normal bridge-interface flags) with IFF_PROMISC (0x100)
         // additionally set.
-        assert!(is_promiscuous("0x1103\n"));
+        assert_eq!(is_promiscuous("0x1103\n"), Some(true));
     }
 
     #[test]
-    fn unparseable_flags_degrade_to_not_promiscuous_rather_than_erroring() {
-        assert!(!is_promiscuous("not-hex-at-all"));
-        assert!(!is_promiscuous(""));
+    fn unparseable_flags_are_undetermined_not_a_confident_not_promiscuous() {
+        // The collector-invariant case: a value we can't parse must come back `None` (undetermined),
+        // never `Some(false)` — otherwise an interface we couldn't read would read as clean.
+        assert_eq!(is_promiscuous("not-hex-at-all"), None);
+        assert_eq!(is_promiscuous(""), None);
     }
 
     #[test]

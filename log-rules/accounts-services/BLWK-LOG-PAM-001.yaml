@@ -3,7 +3,12 @@ title: "Repeated authentication failures for {{ user }}"
 category: accounts-services
 severity: medium
 decoder: pam
-condition: 'tags contains "authentication_failed"'
+# Exclude the interactive desktop login/lock managers: a human mistyping their password at the GDM
+# greeter or a screen-lock prompt produces the same pam_unix auth-failure line as an sshd brute
+# force, and 5 fat-fingered unlocks in two minutes is routine, not an attack. `service` is the PAM
+# stack name (sshd, sudo, login, gdm-password, …). This is a denylist, not an allowlist, so an
+# unrecognized service still fires — the security-safe default (fail toward detecting).
+condition: 'tags contains "authentication_failed" and not service matches "^(gdm-password|gdm3?|lightdm|sddm|lxdm|xdm|gnome-screensaver|light-locker|polkit-1)$"'
 groups: [authentication_failures]
 correlate:
   count: 5

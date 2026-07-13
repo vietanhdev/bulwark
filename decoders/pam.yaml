@@ -3,16 +3,24 @@
 # program name. Program-specific decoders (sshd/sudo/su) are always tried first; this catches the
 # PAM-level auth-failure line they don't parse themselves.
 id: pam
-prematch: 'pam_unix\('
+# `pam_\w+` (not just `pam_unix`) so failures from SSSD/LDAP/winbind stacks — `pam_sss(sshd:auth)`,
+# `pam_ldap(...)` — decode too; on an AD/SSSD-joined host those, not pam_unix, carry the auth
+# failures, and matching only pam_unix left the per-account brute-force rule blind there.
+prematch: 'pam_\w+\('
 patterns:
-  # With a remote host (network logins): capture both the source IP and the target user. The `\b`
-  # word boundaries pin these to the real `rhost=`/`user=` keys — without them, `ruser=` (PAM's
-  # requesting-user field) is misread as `user=`, and an attacker-controlled `user=` value
-  # containing an injected `rhost=`/`user=` token could skew the capture (the same field-position
-  # trust the sshd decoder had). The `\S+` values can't contain spaces, so the injection surface is
-  # narrow, but the boundaries close it.
-  - regex: 'authentication failure;.*\brhost=(?P<srcip>\S+).*\buser=(?P<user>\S+)'
+  # `service` is the PAM stack name from `pam_unix(<service>:auth)` — sshd, sudo, login, cron, or a
+  # display-manager like gdm-password/lightdm/sddm. It's captured neutrally here (the decoder's job
+  # is extraction); rules decide what to do with it — e.g. BLWK-LOG-PAM-001 excludes the interactive
+  # desktop managers so a human mistyping their lock-screen password isn't reported as a brute force.
+  #
+  # With a remote host (network logins): capture the service, source IP and target user. The `\b`
+  # word boundaries pin these to the real `rhost=`/`user=` keys, and the quantifiers are LAZY
+  # (`.*?`) so extraction anchors to the FIRST `rhost=`/`user=` — the genuine PAM-emitted fields
+  # sit before the attacker-controlled username value, so an injected trailing `rhost=`/`user=`
+  # inside a crafted username can't hijack the capture (the opposite anchoring to sshd, where the
+  # real tuple is at end-of-line). The `\S+` values can't contain spaces, narrowing this further.
+  - regex: 'pam_\w+\((?P<service>[^:)]+):[^)]*\):\s*authentication failure;.*?\brhost=(?P<srcip>\S+).*?\buser=(?P<user>\S+)'
     tags: [authentication_failed]
-  # Local logins (no rhost): user only.
-  - regex: 'authentication failure;.*\buser=(?P<user>\S+)'
+  # Local logins (no rhost): service and user only.
+  - regex: 'pam_\w+\((?P<service>[^:)]+):[^)]*\):\s*authentication failure;.*?\buser=(?P<user>\S+)'
     tags: [authentication_failed]

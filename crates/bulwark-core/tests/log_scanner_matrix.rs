@@ -178,6 +178,31 @@ fn pam_001_fires_on_repeated_pam_auth_failures_for_a_user() {
     assert!(fired(&scan(&text), "BLWK-LOG-PAM-001"));
 }
 
+#[test]
+fn pam_001_ignores_desktop_login_mistypes_but_still_catches_a_service() {
+    // A human fat-fingering their GDM lock-screen password 5 times is routine, not a brute force —
+    // the pam_unix line is service `gdm-password`, which PAM-001 excludes. (Real machine FP.)
+    let gdm: String = (0..6)
+        .map(|i| format!("Jul 12 10:00:{:02} host gdm-password][1]: pam_unix(gdm-password:auth): authentication failure; logname= uid=0 euid=0 tty=/dev/tty1 ruser= rhost=  user=alice", i))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !fired(&scan(&gdm), "BLWK-LOG-PAM-001"),
+        "desktop login mistypes must not be reported as a brute force"
+    );
+
+    // The identical volume against a real service (login on a console) still fires — the exclusion
+    // is a narrow denylist of interactive display managers, not a blanket mute.
+    let login: String = (0..5)
+        .map(|i| format!("Jul 12 10:00:{:02} host login[1]: pam_unix(login:auth): authentication failure; logname= uid=0 euid=0 tty=tty2 ruser= rhost=  user=alice", i))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        fired(&scan(&login), "BLWK-LOG-PAM-001"),
+        "a non-desktop PAM service must still trip the brute-force rule"
+    );
+}
+
 // ---- A genuinely benign log produces nothing, with no false-clean warning ------------------
 
 #[test]

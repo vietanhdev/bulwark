@@ -103,6 +103,46 @@ fn ssh_root_login_002_and_empty_passwords_003() {
 }
 
 #[test]
+fn ssh_private_key_012_and_013_three_state() {
+    let key = |enc: Value, known: bool| {
+        vec![fact(&[
+            ("path", Value::String("/home/u/.ssh/id_ed25519".into())),
+            ("key_format", Value::String("openssh".into())),
+            ("encrypted", enc),
+            ("encryption_known", Value::Bool(known)),
+        ])]
+    };
+    // Known plaintext → SSH-012 fires (the real exposure), SSH-013 does not.
+    assert!(fires(
+        "ssh_private_keys",
+        key(Value::Bool(false), true),
+        "BLWK-SSH-012"
+    ));
+    assert!(!fires(
+        "ssh_private_keys",
+        key(Value::Bool(false), true),
+        "BLWK-SSH-013"
+    ));
+    // Known encrypted → neither fires.
+    assert!(!fires(
+        "ssh_private_keys",
+        key(Value::Bool(true), true),
+        "BLWK-SSH-012"
+    ));
+    // Undetermined header → SSH-012 must NOT fire (no false "plaintext"); SSH-013 surfaces it.
+    assert!(!fires(
+        "ssh_private_keys",
+        key(Value::Bool(false), false),
+        "BLWK-SSH-012"
+    ));
+    assert!(fires(
+        "ssh_private_keys",
+        key(Value::Bool(false), false),
+        "BLWK-SSH-013"
+    ));
+}
+
+#[test]
 fn fim_uncovered_003_readable_vs_unreadable() {
     // The other rule the hook named. A present, never-baselined, READABLE file fires FIM-003.
     assert!(fires(

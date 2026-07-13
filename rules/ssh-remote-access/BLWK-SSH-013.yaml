@@ -1,0 +1,23 @@
+id: BLWK-SSH-013
+title: SSH private key passphrase status could not be determined
+category: ssh-remote-access
+severity: low
+collector: ssh_private_keys
+# The undetermined third state: the file is a recognizable OpenSSH private key but its cipher header
+# didn't parse, so Bulwark can't tell whether it's passphrase-protected. This is deliberately NOT
+# folded into BLWK-SSH-012 ("is plaintext") — "couldn't verify" must never masquerade as a confident
+# result in either direction. Low severity: a well-formed key parses fine, so this points at a
+# malformed/truncated key or an unexpected format rather than a confirmed exposure.
+condition: encryption_known == false
+explain: >
+  The file at {{ ssh_private_keys.path }} (format: {{ ssh_private_keys.key_format }}) is a private
+  key, but its encryption header could not be parsed, so Bulwark cannot confirm whether it is
+  passphrase-protected. Rather than guess — and risk reporting a plaintext key as safe — it is
+  surfaced here for you to check by hand. A healthy key does not normally hit this state, so the
+  file may be truncated, corrupted, or in a format this version doesn't fully recognize.
+fix: >
+  Inspect the key directly: 'ssh-keygen -y -f {{ ssh_private_keys.path }}' will prompt for a
+  passphrase if one is set (and error out plainly if the file is malformed). If it is unprotected,
+  add a passphrase with 'ssh-keygen -p -f {{ ssh_private_keys.path }}'. If the file is corrupt or
+  not actually a key you use, remove or restore it.
+references: [CIS-5.2, ATTACK-T1552.004]

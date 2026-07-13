@@ -3,7 +3,9 @@ title: SSH private key is not passphrase-protected
 category: ssh-remote-access
 severity: high
 collector: ssh_private_keys
-condition: encrypted == false
+# Require encryption_known so this fires only on a key we positively read as plaintext, never on one
+# whose header we couldn't parse — that undetermined case is BLWK-SSH-013, not a confident "plaintext".
+condition: encrypted == false and encryption_known == true
 explain: >
   The SSH private key at {{ ssh_private_keys.path }} (format: {{ ssh_private_keys.key_format }})
   has no passphrase, so it is a plaintext credential on disk. Anyone who obtains a copy of that

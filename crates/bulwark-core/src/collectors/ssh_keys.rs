@@ -38,24 +38,30 @@ fn ssh_dir() -> Option<PathBuf> {
 }
 
 /// `Some((format, encrypted))` if `content` is a recognizable SSH private key, else `None`.
-pub fn classify_private_key(content: &str) -> Option<(&'static str, bool)> {
+///
+/// `encrypted` is three-state: `Some(true)` known passphrase-protected, `Some(false)` known
+/// plaintext, `None` **undetermined** — the encryption status could not be read from the header.
+/// Undetermined must never be collapsed to a confident answer: reporting it as encrypted would
+/// hide a plaintext key (a false clean), reporting it as plaintext would cry wolf on a key we
+/// couldn't actually read. The collector surfaces the third state via `encryption_known` so a rule
+/// can flag "couldn't verify" separately from "verified unencrypted".
+pub fn classify_private_key(content: &str) -> Option<(&'static str, Option<bool>)> {
     if content.contains("BEGIN OPENSSH PRIVATE KEY") {
-        // Encrypted unless we can positively read a `none` cipher out of the header. Defaulting an
-        // unparseable header to "encrypted" avoids ever crying wolf on a key we couldn't read.
-        let encrypted = openssh_cipher(content).map(|c| c != "none").unwrap_or(true);
+        // `none` cipher → plaintext; any other cipher → encrypted; unreadable header → undetermined.
+        let encrypted = openssh_cipher(content).map(|c| c != "none");
         return Some(("openssh", encrypted));
     }
     if content.contains("BEGIN ENCRYPTED PRIVATE KEY") {
-        return Some(("pkcs8", true));
+        return Some(("pkcs8", Some(true)));
     }
     if content.contains("BEGIN PRIVATE KEY") {
-        return Some(("pkcs8", false));
+        return Some(("pkcs8", Some(false)));
     }
     if content.contains("PRIVATE KEY-----") && content.contains("BEGIN") {
         // Legacy PEM (RSA/EC/DSA). Encrypted keys carry the classic `Proc-Type: 4,ENCRYPTED` +
         // `DEK-Info:` headers; without them the key body is plaintext.
         let encrypted = content.contains("Proc-Type:") && content.contains("ENCRYPTED");
-        return Some(("pem", encrypted));
+        return Some(("pem", Some(encrypted)));
     }
     None
 }
@@ -157,7 +163,19 @@ impl SshPrivateKeysCollector {
                 Value::String(entry.path().display().to_string()),
             );
             fact.insert("key_format".to_string(), Value::String(format.to_string()));
-            fact.insert("encrypted".to_string(), Value::Bool(encrypted));
+            // Three-state, per the collector invariant: `encryption_known` distinguishes "we read
+            // the header and it's plaintext" (a real finding) from "we couldn't read the header"
+            // (undetermined). On undetermined we emit `encrypted: false` but `encryption_known:
+            // false`, so the passphrase rule (which requires encryption_known) does NOT fire — a
+            // key we couldn't verify is never reported as protected, nor as a confirmed plaintext.
+            fact.insert(
+                "encrypted".to_string(),
+                Value::Bool(encrypted.unwrap_or(false)),
+            );
+            fact.insert(
+                "encryption_known".to_string(),
+                Value::Bool(encrypted.is_some()),
+            );
             facts.push(fact);
         }
         facts
@@ -192,7 +210,18 @@ mod tests {
         let key = "-----BEGIN OPENSSH PRIVATE KEY-----\n\
                    b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gt\n\
                    -----END OPENSSH PRIVATE KEY-----\n";
-        assert_eq!(classify_private_key(key), Some(("openssh", false)));
+        assert_eq!(classify_private_key(key), Some(("openssh", Some(false))));
+    }
+
+    #[test]
+    fn an_openssh_key_with_an_unreadable_header_is_undetermined_not_encrypted() {
+        // Garbage where the cipher header should be: we cannot tell if it's protected. The old code
+        // defaulted this to `encrypted: true`, silently clearing the passphrase rule and hiding a
+        // possibly-plaintext key. It must now come back undetermined (None), never a confident true.
+        let key = "-----BEGIN OPENSSH PRIVATE KEY-----\n\
+                   bm90LXZhbGlkLWhlYWRlcg==\n\
+                   -----END OPENSSH PRIVATE KEY-----\n";
+        assert_eq!(classify_private_key(key), Some(("openssh", None)));
     }
 
     #[test]
@@ -204,28 +233,28 @@ mod tests {
                    b3BlbnNzaC1rZXktdjEAAAAACmFlczI1Ni1jdHI=\n\
                    -----END OPENSSH PRIVATE KEY-----\n";
         assert_eq!(openssh_cipher(key).as_deref(), Some("aes256-ctr"));
-        assert_eq!(classify_private_key(key), Some(("openssh", true)));
+        assert_eq!(classify_private_key(key), Some(("openssh", Some(true))));
     }
 
     #[test]
     fn legacy_pem_encrypted_vs_plain() {
         let plain = "-----BEGIN RSA PRIVATE KEY-----\nMIIEow...\n-----END RSA PRIVATE KEY-----\n";
-        assert_eq!(classify_private_key(plain), Some(("pem", false)));
+        assert_eq!(classify_private_key(plain), Some(("pem", Some(false))));
 
         let enc = "-----BEGIN RSA PRIVATE KEY-----\n\
                    Proc-Type: 4,ENCRYPTED\n\
                    DEK-Info: AES-128-CBC,0123\n\n\
                    MIIEow...\n-----END RSA PRIVATE KEY-----\n";
-        assert_eq!(classify_private_key(enc), Some(("pem", true)));
+        assert_eq!(classify_private_key(enc), Some(("pem", Some(true))));
     }
 
     #[test]
     fn pkcs8_encrypted_vs_plain() {
         let plain = "-----BEGIN PRIVATE KEY-----\nMIIB...\n-----END PRIVATE KEY-----\n";
-        assert_eq!(classify_private_key(plain), Some(("pkcs8", false)));
+        assert_eq!(classify_private_key(plain), Some(("pkcs8", Some(false))));
         let enc =
             "-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIB...\n-----END ENCRYPTED PRIVATE KEY-----\n";
-        assert_eq!(classify_private_key(enc), Some(("pkcs8", true)));
+        assert_eq!(classify_private_key(enc), Some(("pkcs8", Some(true))));
     }
 
     #[test]

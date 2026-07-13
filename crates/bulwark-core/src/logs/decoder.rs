@@ -331,6 +331,63 @@ mod tests {
         assert!(decode(&decoders, &ev("sshd", "Connection closed by 10.0.0.5")).is_none());
     }
 
+    fn pam_decoder() -> Vec<CompiledDecoder> {
+        // The shipped pam decoder's patterns (decoders/pam.yaml), kept in sync here so the
+        // injection-resistance and service-capture behaviour is unit-tested at the decode layer.
+        vec![compile(Decoder {
+            id: "pam".into(),
+            program: None,
+            prematch: Some(r"pam_\w+\(".into()),
+            patterns: vec![
+                DecodePattern {
+                    regex: r"pam_\w+\((?P<service>[^:)]+):[^)]*\):\s*authentication failure;.*?\brhost=(?P<srcip>\S+).*?\buser=(?P<user>\S+)".into(),
+                    tags: vec!["authentication_failed".into()],
+                },
+                DecodePattern {
+                    regex: r"pam_\w+\((?P<service>[^:)]+):[^)]*\):\s*authentication failure;.*?\buser=(?P<user>\S+)".into(),
+                    tags: vec!["authentication_failed".into()],
+                },
+            ],
+        })
+        .unwrap()]
+    }
+
+    #[test]
+    fn pam_captures_the_service_name() {
+        let d = decode(
+            &pam_decoder(),
+            &ev("gdm-password]", "pam_unix(gdm-password:auth): authentication failure; logname= uid=0 rhost=  user=alice"),
+        )
+        .expect("decodes");
+        assert_eq!(d.fact.get("service").unwrap(), "gdm-password");
+        assert_eq!(d.fact.get("user").unwrap(), "alice");
+    }
+
+    #[test]
+    fn pam_lazy_anchoring_resists_a_username_injecting_a_fake_rhost() {
+        // Submitted username `x.rhost=9.9.9.9.user=z` (no spaces, a valid \S+). The genuine
+        // rhost=1.2.3.4 sits BEFORE it; lazy `.*?` must anchor to the first (real) rhost, not the
+        // attacker's injected trailing copy — otherwise an innocent IP is framed.
+        let d = decode(
+            &pam_decoder(),
+            &ev("sshd", "pam_unix(sshd:auth): authentication failure; logname= uid=0 rhost=1.2.3.4 user=x.rhost=9.9.9.9.user=z"),
+        )
+        .expect("decodes");
+        assert_eq!(d.fact.get("srcip").unwrap(), "1.2.3.4");
+    }
+
+    #[test]
+    fn pam_decodes_sssd_stack_not_just_pam_unix() {
+        // On an AD/SSSD-joined host the auth failure is emitted by pam_sss, not pam_unix.
+        let d = decode(
+            &pam_decoder(),
+            &ev("sshd", "pam_sss(sshd:auth): authentication failure; logname= uid=0 rhost=203.0.113.5 user=root"),
+        )
+        .expect("pam_sss must decode too");
+        assert_eq!(d.fact.get("service").unwrap(), "sshd");
+        assert_eq!(d.fact.get("srcip").unwrap(), "203.0.113.5");
+    }
+
     #[test]
     fn program_agnostic_decoder_matches_any_program_via_prematch() {
         let pam = compile(Decoder {
