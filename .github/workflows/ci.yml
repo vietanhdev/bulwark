@@ -38,9 +38,52 @@ jobs:
       - name: Validate the bundled rule pack
         run: cargo run -p bulwarkctl -- rules validate rules/
 
-  # Fails the build on a known-vulnerable or yanked dependency (RustSec advisory DB). Kept as its
-  # own job so an advisory shows up as a distinct red check rather than being buried in `test`.
-  audit:
+  # Source-level compile + test of the non-GUI crates across several Linux distros, so a
+  # glibc / toolchain / libc-behaviour difference is caught on every push — not only when the
+  # release job install-tests the packaged artifacts. Deliberately spread across Debian (stable,
+  # old glibc), Fedora (dnf, newer) and Arch (rolling, newest) rather than three Ubuntu points.
+  #
+  # bulwark-app (Tauri/webkit) is excluded: its cross-distro story is the *packaged* GUI, which
+  # release.yml's verify-install matrix already installs and link-checks on five distros. The CLI
+  # and core need nothing but a C compiler — SQLite is vendored (libsqlite3-sys "bundled") and
+  # there is no OpenSSL — so every image here installs the same tiny toolchain and nothing else.
+  test-distros:
+    strategy:
+      # One red cell should name the distro that broke, not cancel its siblings.
+      fail-fast: false
+      matrix:
+        include:
+          - { image: "debian:12", install: "apt-get update && apt-get install -y --no-install-recommends curl gcc git ca-certificates" }
+          - { image: "fedora:41", install: "dnf install -y -q gcc git which" }
+          - { image: "archlinux:latest", install: "pacman -Sy --noconfirm gcc git curl" }
+    name: test (${{ matrix.image }})
+    runs-on: ubuntu-24.04
+    container:
+      image: ${{ matrix.image }}
+    # A bare container runs `run:` steps under sh (dash), which has no `set -o pipefail`; pin bash.
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Must precede checkout: the checkout action needs git in the container (else it silently
+      # falls back to a metadata-less REST tarball), and running as root over the runner-owned
+      # workspace trips git's "dubious ownership" guard without this safe.directory opt-out.
+      - name: Install toolchain dependencies
+        run: |
+          set -euo pipefail
+          ${{ matrix.install }}
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (rustup, stable, minimal)
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+          echo "${HOME}/.cargo/bin" >> "${GITHUB_PATH}"
+
+      - name: cargo test (workspace minus the GUI)
+        run: cargo test --workspace --exclude bulwark-app
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
