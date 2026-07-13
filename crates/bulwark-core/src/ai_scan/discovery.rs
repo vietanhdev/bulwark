@@ -333,6 +333,20 @@ pub fn workspace_artifacts(ws: &Path) -> Vec<Artifact> {
         Instructions,
         Some(ws),
     );
+    // Subagent definitions, slash commands, and skills are all model-executed instruction surfaces
+    // — a bidi backdoor or injected directive in one of these is read by the agent just like a
+    // CLAUDE.md, but they were never scanned. `.claude/skills/<name>/SKILL.md` is nested, which the
+    // recursive collect_dir handles.
+    for sub in ["agents", "commands", "skills"] {
+        collect_dir(
+            &mut out,
+            &ws.join(".claude").join(sub),
+            "md",
+            ClaudeCode,
+            Instructions,
+            Some(ws),
+        );
+    }
 
     // Agent settings.
     push_if_exists(
@@ -467,6 +481,18 @@ pub fn global_artifacts(home: &Path) -> Vec<Artifact> {
         Transcript,
         None,
     );
+    // User-level subagents / commands / skills — same model-executed instruction surfaces as the
+    // per-project ones, and just as capable of hiding an injected directive.
+    for sub in ["agents", "commands", "skills"] {
+        collect_dir(
+            &mut out,
+            &home.join(".claude").join(sub),
+            "md",
+            ClaudeCode,
+            Instructions,
+            None,
+        );
+    }
 
     // Codex.
     push_if_exists(
@@ -757,6 +783,25 @@ mod tests {
         assert!(arts.iter().any(|a| a.path.ends_with("style.mdc")));
         // A file that doesn't exist must not appear.
         assert!(!arts.iter().any(|a| a.path.ends_with(".cursorrules")));
+    }
+
+    #[test]
+    fn workspace_artifacts_scans_agents_commands_and_nested_skills() {
+        // Subagents, slash commands, and skills are model-executed instruction surfaces — a bidi
+        // backdoor in any of them must be reachable by the scanner.
+        let ws = tempfile::tempdir().unwrap();
+        touch(&ws.path().join(".claude/agents/reviewer.md"));
+        touch(&ws.path().join(".claude/commands/deploy.md"));
+        touch(&ws.path().join(".claude/skills/my-skill/SKILL.md")); // nested
+
+        let arts = workspace_artifacts(ws.path());
+        for name in ["reviewer.md", "deploy.md", "SKILL.md"] {
+            assert!(
+                arts.iter()
+                    .any(|a| a.path.ends_with(name) && a.kind == ArtifactKind::Instructions),
+                "{name} must be discovered as an instruction surface"
+            );
+        }
     }
 
     #[test]

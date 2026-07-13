@@ -162,6 +162,17 @@ export function ComplianceView() {
     }
   }
 
+  /** "Ignore this type of issue" from a finding — suppress the rule (mandatory reason), then bump so
+   *  the finding moves to accepted risk everywhere. */
+  async function ignoreType(ruleId: string, reason: string) {
+    try {
+      await invoke("rule_suppress", { ruleId, reason });
+      bump();
+    } catch (e) {
+      setErrors((prev) => [...prev, String(e)]);
+    }
+  }
+
   async function runPrivilegedScan() {
     setElevating(true);
     setErrors([]);
@@ -264,6 +275,7 @@ export function ComplianceView() {
                 streamed={streamed}
                 collapsed={collapsed.has(category)}
                 onToggle={() => toggle(category)}
+                actions={{ onIgnoreType: ignoreType, onRecheck: runScan }}
               />
             ))}
           </div>

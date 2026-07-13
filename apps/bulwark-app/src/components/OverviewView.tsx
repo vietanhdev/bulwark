@@ -30,6 +30,9 @@ interface LatestScanMeta {
 
 interface DashboardSnapshot {
   findings: Finding[];
+  /** Findings whose rule the user has explicitly suppressed — accepted risk, not resolved. Kept
+   *  separate so the Overview can show "N to fix · M accepted" rather than pretending it's gone. */
+  suppressedFindings: Finding[];
   meta: LatestScanMeta | null;
   agent_scanned: boolean;
 }
@@ -105,6 +108,10 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
   const [scanning, setScanning] = useState(false);
   const [elevating, setElevating] = useState(false);
   const [findings, setFindings] = useState<Finding[]>([]);
+  // Findings whose rule was suppressed: accepted risk, still present. Tracked separately so the
+  // page shows "N to fix · M accepted" and — critically — so a suppressed rule still counts against
+  // the hardening index rather than silently moving into the passing column.
+  const [suppressed, setSuppressed] = useState<Finding[]>([]);
   const [skippedPrivileged, setSkippedPrivileged] = useState<string[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
   const [host, setHost] = useState<string | null>(null);
@@ -144,12 +151,13 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
     if (scanning) return;
     invoke<DashboardSnapshot>("dashboard_snapshot")
       .then((snap) => {
-        // `findings` here spans every engine — the config rule pack and the agent scanner both
-        // (see dashboard_snapshot in lib.rs). This page is the one place that owes you the
-        // complete picture.
+        // `findings` spans every engine's *active* (unsuppressed) issues; `suppressedFindings`
+        // carries the accepted-risk ones. Together they're the complete picture this page owes you —
+        // neither pretends a suppressed issue was fixed.
         setAgentScanned(snap.agent_scanned);
         if (!snap.meta) return;
         setFindings([...snap.findings].sort(bySeverity));
+        setSuppressed([...(snap.suppressedFindings ?? [])].sort(bySeverity));
         setHost(snap.meta.host_fingerprint);
         setSkippedPrivileged(snap.meta.privileged_collectors_skipped);
         setHasScanned(true);
@@ -165,7 +173,13 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
       .catch(() => setRules(null));
   }, []);
 
-  const openRuleIds = useMemo(() => new Set(findings.map((f) => f.rule_id)), [findings]);
+  // Both active and suppressed rules count as "not passing" for the hardening index: a suppressed
+  // finding is accepted risk, not a fixed issue, so suppressing must never move a rule into the
+  // passing numerator (that would let the mute button silently raise the security score).
+  const openRuleIds = useMemo(
+    () => new Set([...findings, ...suppressed].map((f) => f.rule_id)),
+    [findings, suppressed],
+  );
 
   const hardening = useMemo(() => {
     if (!rules || !hasScanned) return null;
@@ -410,6 +424,9 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
     setHasScanned(true);
     setStreamed(true);
     setFindings([]);
+    // Cleared while streaming so the live (unpartitioned) findings aren't double-counted against a
+    // stale suppressed set; the post-scan bump reloads the correctly partitioned snapshot.
+    setSuppressed([]);
     setSkippedPrivileged([]);
     setErrors([]);
     setThreats([]);
@@ -449,6 +466,18 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
       setErrors((prev) => [...prev, String(e)]);
     } finally {
       setElevating(false);
+    }
+  }
+
+  /** Suppress a rule straight from one of its findings ("ignore this type of issue"). The reason is
+   *  mandatory (enforced in core too); the bump re-reads the snapshot so the finding moves from the
+   *  active list to accepted risk everywhere at once. */
+  async function ignoreType(ruleId: string, reason: string) {
+    try {
+      await invoke("rule_suppress", { ruleId, reason });
+      bump();
+    } catch (e) {
+      setErrors((prev) => [...prev, String(e)]);
     }
   }
 
@@ -629,10 +658,25 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
 
         <section>
           <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-            <div className="font-mono text-[11px] font-semibold tracking-widest text-muted-foreground uppercase">
-              {severityFilter || scanFilter
-                ? `${visibleFindings.length} of ${findings.length} findings`
-                : `${findings.length} finding${findings.length === 1 ? "" : "s"}`}
+            <div className="flex items-baseline gap-2">
+              <span className="font-mono text-[11px] font-semibold tracking-widest text-muted-foreground uppercase">
+                {severityFilter || scanFilter
+                  ? `${visibleFindings.length} of ${findings.length} to fix`
+                  : `${findings.length} to fix`}
+              </span>
+              {suppressed.length > 0 && (
+                // Accepted risk is present, not resolved — surface it here (and it still counts
+                // against the hardening index) rather than letting suppression hide it. The audit
+                // and management of these live under Rules › Suppressed.
+                <button
+                  type="button"
+                  onClick={() => onNavigate("rules")}
+                  title="Review accepted risk under Rules › Suppressed"
+                  className="font-mono text-[11px] text-muted-foreground/70 underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                >
+                  · {suppressed.length} accepted
+                </button>
+              )}
             </div>
             {findings.length > 0 && (
               <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Filter findings">
@@ -708,6 +752,7 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
                 streamed={streamed}
                 collapsed={collapsedCategories.has(category)}
                 onToggle={() => toggleCategory(category)}
+                actions={{ onIgnoreType: ignoreType, onRecheck: runScan }}
               />
             ))}
           </div>

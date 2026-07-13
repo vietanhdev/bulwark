@@ -26,6 +26,7 @@ interface RuleSummary {
 
 interface DashboardSnapshot {
   findings: { rule_id: string }[];
+  suppressedFindings: { rule_id: string }[];
   meta: { privileged_collectors_skipped: string[] } | null;
 }
 
@@ -104,7 +105,9 @@ export function RulesView() {
 
   useEffect(() => {
     invoke<DashboardSnapshot>("dashboard_snapshot").then((snap) => {
-      setOpenRuleIds(new Set(snap.findings.map((f) => f.rule_id)));
+      // Suppressed rules count as still-open for the hardening index and framework pass/fail:
+      // accepting a risk is not fixing it, so a suppressed rule must not read as a passing control.
+      setOpenRuleIds(new Set([...snap.findings, ...(snap.suppressedFindings ?? [])].map((f) => f.rule_id)));
       if (snap.meta) {
         setHasScanned(true);
         setSkippedCollectors(new Set(snap.meta.privileged_collectors_skipped));

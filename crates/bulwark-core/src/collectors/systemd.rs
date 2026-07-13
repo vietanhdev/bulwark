@@ -160,7 +160,7 @@ impl Collector for SystemdUnitsCollector {
                 // (PERSIST-001/002 never evaluated), which is the worst possible failure for a
                 // security check — indistinguishable from "clean". A dangling symlink has no
                 // target and so no ExecStart to scan, so continuing past it loses nothing real.
-                if let Ok(text) = std::fs::read_to_string(&path) {
+                if let Ok(text) = super::read_capped(&path) {
                     rows.push(parse_unit_file(&unit_name, &text));
                 }
             }

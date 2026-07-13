@@ -23,7 +23,7 @@
 //! its own finding rather than being conflated into this one.
 
 use crate::models::Severity;
-use aho_corasick::AhoCorasick;
+use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
 use regex::{Regex, RegexBuilder};
 use serde::Deserialize;
 use std::sync::{LazyLock, OnceLock};
@@ -95,9 +95,14 @@ impl Pack {
     /// the more specific keyword's rule never gets considered. That silently lost every Anthropic
     /// key in the text: precisely the class of bug where a scanner reports "clean" while missing
     /// the thing it exists to find.
-    fn candidates(&self, lowered: &str) -> Vec<usize> {
+    ///
+    /// Runs directly on the original `text`: the automaton is built ASCII-case-insensitive, so we
+    /// never allocate a lowercased copy of the haystack. That copy used to be made once per file —
+    /// up to 4 MB each across ~1800 transcript files on a real home directory — and was the reason
+    /// a whole-machine scan could fail to finish.
+    fn candidates(&self, text: &str) -> Vec<usize> {
         let mut hit = vec![false; self.rules.len()];
-        for m in self.keywords.find_overlapping_iter(lowered) {
+        for m in self.keywords.find_overlapping_iter(text) {
             for &r in &self.rules_for_keyword[m.pattern().as_usize()] {
                 hit[r] = true;
             }
@@ -236,7 +241,13 @@ static PACK: LazyLock<Pack> = LazyLock::new(|| {
         });
     }
 
-    let keywords = AhoCorasick::new(&keyword_list).expect("keyword automaton must build");
+    // ASCII-case-insensitive so the scan can match keywords against the raw file text without first
+    // allocating a lowercased copy of it (see `candidates`). Keywords are ASCII provider markers
+    // (`sk-ant`, `AKIA`, `api`), so ASCII folding is exactly right.
+    let keywords = AhoCorasickBuilder::new()
+        .ascii_case_insensitive(true)
+        .build(&keyword_list)
+        .expect("keyword automaton must build");
     Pack {
         rules,
         keywords,
@@ -400,8 +411,7 @@ const MAX_SECRETS_PER_TEXT: usize = 1000;
 /// hardcoded `ANTHROPIC_API_KEY=sk-ant-…` is *one* Anthropic finding, not also a generic one.
 pub fn scan_text(text: &str) -> Vec<SecretMatch> {
     let pack = &*PACK;
-    let lowered = text.to_lowercase();
-    let candidates = pack.candidates(&lowered);
+    let candidates = pack.candidates(text);
 
     let mut spans = SpanSet::default();
     let mut out: Vec<SecretMatch> = Vec::new();
@@ -635,6 +645,19 @@ mod tests {
     fn reports_the_correct_line_number() {
         let hits = scan_text(&format!("line one\nline two\n{}\n", anthropic_key()));
         assert_eq!(hits[0].line, 3);
+    }
+
+    #[test]
+    fn keyword_prefilter_still_matches_case_insensitively_without_lowercasing() {
+        // The perf fix stopped allocating a lowercased copy of each file; the keyword automaton
+        // is ASCII-case-insensitive instead. A provider marker written in a different case (an env
+        // var like AWS_ACCESS_KEY_ID, whose rule keyword is the lowercase "akia") must still gate
+        // its rule in. The 16 chars after the prefix are base32 (`[A-Z2-7]`), per the real rule.
+        let hits = scan_text("AWS_ACCESS_KEY_ID=AKIAQRSTUVWXYZ234567");
+        assert!(
+            hits.iter().any(|m| m.rule_id == "aws-access-token"),
+            "case-insensitive keyword match must still fire the rule, got {hits:?}"
+        );
     }
 
     #[test]

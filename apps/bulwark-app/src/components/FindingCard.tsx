@@ -1,3 +1,4 @@
+import { type ReactNode } from "react";
 import { CommandBlock } from "@/components/ui/copy-button";
 import { SeverityLabel, railStyle, type Severity } from "@/components/Severity";
 import { cn } from "@/lib/utils";
@@ -24,7 +25,16 @@ export interface Finding {
  * Shared by the Overview (every engine's findings) and the Compliance tab (the config engine's
  * findings) so an issue reads identically wherever you meet it.
  */
-export function FindingCard({ finding: f, animate }: { finding: Finding; animate?: boolean }) {
+export function FindingCard({
+  finding: f,
+  animate,
+  action,
+}: {
+  finding: Finding;
+  animate?: boolean;
+  /** Optional top-right slot — used for the per-issue actions menu (ignore this type, recheck). */
+  action?: ReactNode;
+}) {
   return (
     <article
       className={cn(
@@ -33,14 +43,19 @@ export function FindingCard({ finding: f, animate }: { finding: Finding; animate
       )}
       style={railStyle(f.severity)}
     >
-      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-        <span className="font-mono text-xs font-semibold tracking-tight text-muted-foreground">
-          {f.rule_id}
-        </span>
-        <SeverityLabel severity={f.severity} />
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+            <span className="font-mono text-xs font-semibold tracking-tight text-muted-foreground">
+              {f.rule_id}
+            </span>
+            <SeverityLabel severity={f.severity} />
+          </div>
+          <h3 className="mt-1.5 text-sm font-semibold">{f.title}</h3>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{f.explanation}</p>
+        </div>
+        {action}
       </div>
-      <h3 className="mt-1.5 text-sm font-semibold">{f.title}</h3>
-      <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{f.explanation}</p>
       <CommandBlock command={f.fix_hint} className="mt-2.5" />
     </article>
   );

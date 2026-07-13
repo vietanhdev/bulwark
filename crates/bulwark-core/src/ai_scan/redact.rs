@@ -13,10 +13,6 @@
 use super::secrets;
 use std::path::{Path, PathBuf};
 
-/// Files larger than this are skipped by redaction — a multi-hundred-MB transcript rewrite is
-/// not something to do silently, and the same cap the scanner uses keeps behavior consistent.
-const MAX_REDACT_BYTES: u64 = 8 * 1024 * 1024;
-
 /// One file the redaction pass considered. `secrets_redacted` is how many high-confidence
 /// secrets were found (and, if `applied`, replaced). `backup_path` is set only when a backup was
 /// actually written (`apply = true` and at least one secret present).
@@ -83,48 +79,18 @@ fn redact_one(
         return Ok(None);
     }
 
-    // Open once with O_NOFOLLOW and do everything (size check, read, permission capture) against
-    // that single file descriptor. Re-opening the path by name for the read — after the
-    // symlink_metadata check above — would leave a TOCTOU window in which a symlink raced into the
-    // path could redirect the read; O_NOFOLLOW makes the open itself fail if that happens.
-    let mut file = open_no_follow(path)?;
-    let meta = file.metadata()?;
-    if !meta.is_file() {
-        return Ok(None);
-    }
-    if meta.len() > MAX_REDACT_BYTES {
-        anyhow::bail!(
-            "file is larger than the {}MB redaction limit — redact it by hand",
-            MAX_REDACT_BYTES / 1024 / 1024
-        );
-    }
-
-    // A non-UTF-8 file (e.g. a SQLite transcript store) isn't safe to rewrite as text; skip it
-    // rather than risk corrupting a binary. Read is capped by the size check plus the take().
-    let content = {
-        use std::io::Read;
-        let mut bytes = Vec::new();
-        if file
-            .by_ref()
-            .take(MAX_REDACT_BYTES)
-            .read_to_end(&mut bytes)
-            .is_err()
-        {
-            return Ok(None);
-        }
-        match String::from_utf8(bytes) {
-            Ok(c) => c,
-            Err(_) => return Ok(None),
-        }
-    };
-
-    let (redacted, count) = secrets::redact_text(&content);
-    if count == 0 {
+    // Open once with O_NOFOLLOW (the symlink_metadata check above closes the by-name TOCTOU: a
+    // symlink raced into the path makes this open fail rather than redirect it).
+    let file = open_no_follow(path)?;
+    let fmeta = file.metadata()?;
+    if !fmeta.is_file() {
         return Ok(None);
     }
 
+    // Dry-run: stream the file counting redactable secrets, writing nothing.
     if !apply {
-        return Ok(Some(RedactionEntry {
+        let count = count_redactions(std::io::BufReader::new(file))?;
+        return Ok((count > 0).then(|| RedactionEntry {
             path: path.display().to_string(),
             secrets_redacted: count,
             backup_path: None,
@@ -132,8 +98,52 @@ fn redact_one(
         }));
     }
 
-    let backup_path = write_backup(path, &content, backup_dir)?;
-    write_preserving_permissions(path, &redacted, &meta)?;
+    // Apply, streaming. AI session transcripts run to tens of megabytes, so the whole file is never
+    // held in memory: we read one line at a time, write it verbatim to the backup and its redacted
+    // form to a sibling temp file, then swap the temp in atomically. Line-oriented is exactly right
+    // for the `.jsonl` transcripts this targets, and a secret never spans a newline, so nothing is
+    // missed at a boundary. A non-UTF-8 line is passed through unchanged rather than corrupted.
+    std::fs::create_dir_all(backup_dir)?;
+    // The backup holds the ORIGINAL, un-redacted secret — lock its directory to owner-only.
+    set_dir_owner_only(backup_dir);
+    let backup_path = backup_target(path, backup_dir);
+
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("path has no file name"))?
+        .to_string_lossy();
+    let tmp = dir.join(format!(".{file_name}.bulwark-redact.tmp"));
+    let _ = std::fs::remove_file(&tmp);
+
+    let cleanup = || {
+        let _ = std::fs::remove_file(&tmp);
+        let _ = std::fs::remove_file(&backup_path);
+    };
+
+    let count = match stream_to_backup_and_temp(file, &backup_path, &tmp) {
+        Ok(n) => n,
+        Err(e) => {
+            cleanup();
+            return Err(e);
+        }
+    };
+
+    if count == 0 {
+        // Flagged, but nothing high-confidence to rewrite — leave the original untouched.
+        cleanup();
+        return Ok(None);
+    }
+
+    // Preserve the original's permission bits on the redacted copy, then swap it in atomically.
+    if let Err(e) = std::fs::set_permissions(&tmp, fmeta.permissions()) {
+        cleanup();
+        return Err(e.into());
+    }
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        cleanup();
+        return Err(e.into());
+    }
 
     Ok(Some(RedactionEntry {
         path: path.display().to_string(),
@@ -143,16 +153,63 @@ fn redact_one(
     }))
 }
 
-/// Writes the pre-redaction content to `backup_dir` under a filename derived from the source
-/// path (its components joined by `_`), suffixed `.bak`, with `0600` permissions so the backup
-/// of a secret file isn't itself a wider exposure than the original. Collisions get a numeric
-/// suffix rather than overwriting an earlier backup.
-fn write_backup(path: &Path, content: &str, backup_dir: &Path) -> anyhow::Result<PathBuf> {
-    std::fs::create_dir_all(backup_dir)?;
-    // The backup holds the ORIGINAL, un-redacted secret, so its directory is the most sensitive
-    // thing this feature writes. Lock it to owner-only (0700) rather than trust the umask — the
-    // per-file 0600 below already covers each backup, this covers the directory listing too.
-    set_dir_owner_only(backup_dir);
+/// Streams `file` a line at a time: each line goes verbatim to the 0600 backup at `backup_path`,
+/// and its redacted form to `tmp`. Returns how many secrets were replaced. Bounded memory (one
+/// line) regardless of file size. Both destinations are created `O_EXCL | O_NOFOLLOW` so a raced
+/// symlink or pre-existing name can't be written through.
+fn stream_to_backup_and_temp(
+    file: std::fs::File,
+    backup_path: &Path,
+    tmp: &Path,
+) -> anyhow::Result<usize> {
+    use std::io::{BufRead, BufReader, BufWriter, Write};
+    let mut reader = BufReader::new(file);
+    let mut backup = BufWriter::new(create_owner_only(backup_path)?);
+    let mut out = BufWriter::new(create_temp_exclusive(tmp)?);
+
+    let mut count = 0usize;
+    let mut line: Vec<u8> = Vec::new();
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line)? == 0 {
+            break;
+        }
+        backup.write_all(&line)?;
+        match std::str::from_utf8(&line) {
+            Ok(s) => {
+                let (redacted, n) = secrets::redact_text(s);
+                count += n;
+                out.write_all(redacted.as_bytes())?;
+            }
+            // A non-UTF-8 line can't be redacted as text; write it through unchanged so a mixed or
+            // binary file is preserved byte-for-byte rather than corrupted.
+            Err(_) => out.write_all(&line)?,
+        }
+    }
+    backup.flush()?;
+    out.flush()?;
+    Ok(count)
+}
+
+/// Counts (without writing) the redactable secrets in `reader`, streaming a line at a time.
+fn count_redactions<R: std::io::BufRead>(mut reader: R) -> anyhow::Result<usize> {
+    let mut count = 0usize;
+    let mut line: Vec<u8> = Vec::new();
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line)? == 0 {
+            break;
+        }
+        if let Ok(s) = std::str::from_utf8(&line) {
+            count += secrets::redact_text(s).1;
+        }
+    }
+    Ok(count)
+}
+
+/// The backup path for `path` under `backup_dir`: its components joined by `_`, suffixed `.bak`,
+/// with a numeric suffix on collision so an earlier backup is never overwritten.
+fn backup_target(path: &Path, backup_dir: &Path) -> PathBuf {
     let stem = path
         .to_string_lossy()
         .trim_start_matches('/')
@@ -163,32 +220,29 @@ fn write_backup(path: &Path, content: &str, backup_dir: &Path) -> anyhow::Result
         candidate = backup_dir.join(format!("{stem}.{n}.bak"));
         n += 1;
     }
-    write_owner_only(&candidate, content)?;
-    Ok(candidate)
+    candidate
 }
 
-/// Writes `content` to a freshly-created file that is owner-only (0600) from the moment it exists,
-/// rather than creating it under the umask (typically 0644) and tightening afterward — the backup
-/// holds the original, un-redacted secret, so it must never have even a brief world-readable
-/// window. `create_new` also refuses to write through a pre-existing name/symlink.
+/// Creates a fresh file that is owner-only (0600) from the instant it exists (`O_EXCL`, no
+/// pre-existing name / symlink; `O_NOFOLLOW`). Returned open for streaming — the backup of a
+/// secret file must never have even a brief world-readable window.
 #[cfg(unix)]
-fn write_owner_only(path: &Path, content: &str) -> anyhow::Result<()> {
-    use std::io::Write;
+fn create_owner_only(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
-    let mut f = std::fs::OpenOptions::new()
+    std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
-        .open(path)?;
-    f.write_all(content.as_bytes())?;
-    Ok(())
+        .open(path)
 }
 
 #[cfg(not(unix))]
-fn write_owner_only(path: &Path, content: &str) -> anyhow::Result<()> {
-    std::fs::write(path, content)?;
-    Ok(())
+fn create_owner_only(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
 }
 
 /// Best-effort `0700` on the backup directory. Silent on failure (non-Unix, exotic FS) — it's a
@@ -201,50 +255,6 @@ fn set_dir_owner_only(dir: &Path) {
 
 #[cfg(not(unix))]
 fn set_dir_owner_only(_dir: &Path) {}
-
-/// Replaces `path`'s contents with `content` atomically — write a sibling temp file, give it the
-/// original's permission bits, then `rename` it over the target. Atomic because `rename(2)` on the
-/// same directory is: a reader ever sees either the old file or the fully-redacted new one, never a
-/// half-truncated file, and a crash mid-write leaves the original intact (the backup written just
-/// before is a second safety net). Renaming also *replaces* the directory entry rather than writing
-/// through it, so this never follows a symlink even if one raced in after the `symlink_metadata`
-/// check above.
-fn write_preserving_permissions(
-    path: &Path,
-    content: &str,
-    original: &std::fs::Metadata,
-) -> anyhow::Result<()> {
-    let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| anyhow::anyhow!("path has no file name"))?
-        .to_string_lossy();
-    let tmp = dir.join(format!(".{file_name}.bulwark-redact.tmp"));
-
-    // Clean up any leftover temp from a previously interrupted run, then create the new one with
-    // O_EXCL | O_NOFOLLOW: in a group/world-writable scan directory another user could otherwise
-    // race a symlink into this temp name between remove and open and redirect our write through it.
-    // O_EXCL fails if the name already exists (their planted symlink), O_NOFOLLOW fails if it's a
-    // symlink — either way we never write through an attacker's link. Everything is removed on the
-    // error paths so a failure can't leak the temp.
-    let _ = std::fs::remove_file(&tmp);
-    let write_result = (|| -> std::io::Result<()> {
-        use std::io::Write;
-        let mut f = create_temp_exclusive(&tmp)?;
-        f.write_all(content.as_bytes())?;
-        f.set_permissions(original.permissions())?;
-        Ok(())
-    })();
-    if let Err(e) = write_result {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e.into());
-    }
-    if let Err(e) = std::fs::rename(&tmp, path) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e.into());
-    }
-    Ok(())
-}
 
 /// Opens `path` for reading, failing (rather than following) if it is a symlink.
 #[cfg(unix)]
@@ -394,5 +404,50 @@ mod tests {
             second.total_secrets, 0,
             "a redacted file has nothing left to redact"
         );
+    }
+
+    #[test]
+    fn streams_a_large_multiline_file_redacting_only_the_secret_lines() {
+        // Mimics a session transcript: a secret buried deep among many lines, in a file far larger
+        // than the old 8 MB whole-file cap that made redaction refuse these outright. Streaming must
+        // find and redact it, preserve every other line, and back the original up.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("session.jsonl");
+        let key = anthropic_key();
+        let mut content = String::new();
+        for i in 0..200_000 {
+            content.push_str(&format!(
+                "{{\"line\":{i},\"text\":\"ordinary log content here\"}}\n"
+            ));
+        }
+        content.push_str(&format!("{{\"secret\":\"{key}\"}}\n"));
+        for i in 0..200_000 {
+            content.push_str(&format!("{{\"line\":{i},\"more\":\"tail content\"}}\n"));
+        }
+        assert!(
+            content.len() > 12 * 1024 * 1024,
+            "fixture exceeds the old cap"
+        );
+        std::fs::write(&file, &content).unwrap();
+
+        let report = redact_paths(std::slice::from_ref(&file), true, &dir.path().join("b"));
+        assert_eq!(
+            report.total_secrets, 1,
+            "the buried secret is found and redacted"
+        );
+        let after = std::fs::read_to_string(&file).unwrap();
+        assert!(!after.contains(&key), "secret is gone");
+        assert!(after.contains(secrets::REDACTION_PLACEHOLDER));
+        assert!(
+            after.contains("ordinary log content here"),
+            "other lines preserved"
+        );
+        assert!(
+            after.contains("tail content"),
+            "content after the secret preserved"
+        );
+        // The backup holds the original secret.
+        let backup = report.entries[0].backup_path.as_ref().unwrap();
+        assert!(std::fs::read_to_string(backup).unwrap().contains(&key));
     }
 }

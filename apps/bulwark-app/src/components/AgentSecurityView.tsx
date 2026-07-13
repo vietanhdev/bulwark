@@ -197,15 +197,18 @@ export function AgentSecurityView({ active }: { active: boolean }) {
         apply: true,
       });
       setRedactResult(report);
-      // The secrets in these files are now gone — so drop their leak findings from the list
-      // directly, rather than re-running a whole-machine scan just to "refresh". That re-scan
-      // re-walks the entire home directory (minutes on a large one) to rediscover what we already
-      // know we just fixed. The backend has already pruned the same findings from the persisted
-      // snapshot, so this stays correct across a tab switch too.
+      // The secrets in these files are now gone — drop their leak findings from the list right away
+      // for instant feedback, rather than re-running a whole-machine scan (which would re-walk the
+      // entire home directory, minutes on a large one) to rediscover what we just fixed.
       const redactedFiles = new Set(
         report.entries.filter((e) => e.applied && e.secrets_redacted > 0).map((e) => e.path),
       );
       setFindings((prev) => prev.filter((f) => !(f.redactable && redactedFiles.has(f.file))));
+      // Then bump the revision so *every* view — this tab and the Overview's Agent tile/count —
+      // re-reads the persisted snapshot the backend already pruned. Without this the Overview kept
+      // counting the just-redacted secrets until an unrelated refresh, and it also makes the
+      // authoritative pruned snapshot, not the optimistic local filter above, the final word.
+      bump();
     } catch (e) {
       setError(String(e));
     } finally {

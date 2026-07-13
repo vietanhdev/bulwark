@@ -539,6 +539,22 @@ impl Store {
                     .execute(conn)?;
             }
 
+            // Stamp this run's `total_findings` with the reconciled OPEN count, not the raw number
+            // this scan happened to observe. The History view trends open issues over time, and a
+            // narrow tick — unprivileged, or a desktop-profile run that never loads the server
+            // rules — observes fewer findings than are actually open, because reconciliation
+            // correctly carries forward everything it can't disprove. Recording the raw per-scan
+            // count (`scan.findings.len()`, set at insert above) made History underreport and
+            // flat-line at whatever the monitoring tick saw, disagreeing with the Overview's open
+            // count. The reconciled open total is the real posture of the host as of this run.
+            let open_count: i64 = findings::table
+                .filter(findings::status.eq("open"))
+                .count()
+                .get_result(conn)?;
+            diesel::update(scan_runs::table.find(scan.id.to_string()))
+                .set(scan_runs::total_findings.eq(open_count))
+                .execute(conn)?;
+
             Ok::<_, anyhow::Error>(newly_appeared)
         })
     }
@@ -1524,11 +1540,47 @@ mod tests {
         // Newest first.
         assert_eq!(runs[0].id, second_run.id.to_string());
         assert_eq!(runs[1].id, first_run.id.to_string());
-        // Each run's total_findings reflects what that scan actually produced, not the
-        // post-reconciliation live count (which would show 0 for the first run once its
-        // one finding gets reassigned onto the second run).
+        // Each run's total_findings is the number of findings OPEN as of that run — the host's
+        // real posture at that point in time. Here both findings are open at run 2 and the one is
+        // open at run 1, so the counts are 2 and 1.
         assert_eq!(runs[0].total_findings, 2);
         assert_eq!(runs[1].total_findings, 1);
+    }
+
+    #[test]
+    fn total_findings_counts_open_issues_not_what_a_narrow_run_re_observed() {
+        // The History bug: a monitoring tick that evaluates only a subset of rules (unprivileged,
+        // or a desktop-profile run that never loads the server rules) observes fewer findings than
+        // are actually open, because reconciliation carries forward anything it can't disprove.
+        // Recording the raw per-scan count made History flat-line and disagree with the Overview's
+        // open count. total_findings must be the reconciled OPEN total.
+        let mut store = Store::open_in_memory().unwrap();
+
+        // Run 1 (broad): finds a server-profile finding and evaluates its rule.
+        let mut broad = sample_scan();
+        broad.findings[0].rule_id = "BLWK-LOG-002".into();
+        broad.rules_evaluated = vec!["BLWK-LOG-002".into()];
+        store.persist_and_reconcile(&broad).unwrap();
+
+        // Run 2 (narrow): a desktop-profile tick that finds a DIFFERENT issue and does NOT evaluate
+        // BLWK-LOG-002 at all (that rule wasn't loaded), so the LOG-002 finding carries forward.
+        let mut narrow = sample_scan();
+        narrow.id = Uuid::new_v4();
+        narrow.findings[0].id = Uuid::new_v4();
+        narrow.findings[0].rule_id = "BLWK-KERNEL-016".into();
+        narrow.findings[0].scan_run_id = narrow.id;
+        narrow.rules_evaluated = vec!["BLWK-KERNEL-016".into()];
+        store.persist_and_reconcile(&narrow).unwrap();
+
+        let runs = store.list_scan_runs(10).unwrap();
+        assert_eq!(runs[0].id, narrow.id.to_string());
+        // The narrow run's scan.findings.len() is 1, but TWO findings are open (LOG-002 carried
+        // forward + the new KERNEL-016). History must show 2, matching what the Overview would.
+        assert_eq!(
+            runs[0].total_findings, 2,
+            "History must reflect the open-issue count, not what the narrow tick happened to see"
+        );
+        assert_eq!(store.open_findings().unwrap().len(), 2);
     }
 
     #[test]

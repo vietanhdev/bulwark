@@ -67,7 +67,7 @@ impl Collector for CronEntriesCollector {
 
         // The system crontab. Has a user field, and on this host carries the real run-parts
         // entries. It was missed entirely before — a malicious line here was invisible.
-        if let Ok(text) = std::fs::read_to_string("/etc/crontab") {
+        if let Ok(text) = super::read_capped(std::path::Path::new("/etc/crontab")) {
             rows.extend(parse_cron_text(&text, "/etc/crontab", true));
         }
 
@@ -85,7 +85,7 @@ impl Collector for CronEntriesCollector {
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or_default();
-                if let Ok(text) = std::fs::read_to_string(&path) {
+                if let Ok(text) = super::read_capped(&path) {
                     rows.extend(parse_cron_text(
                         &text,
                         &format!("/var/spool/cron/crontabs/{user}"),
@@ -109,7 +109,7 @@ impl Collector for CronEntriesCollector {
                 if name.starts_with('.') || name.eq_ignore_ascii_case("README") {
                     continue;
                 }
-                if let Ok(text) = std::fs::read_to_string(&path) {
+                if let Ok(text) = super::read_capped(&path) {
                     rows.extend(parse_cron_text(&text, &format!("/etc/cron.d/{name}"), true));
                 }
             }
