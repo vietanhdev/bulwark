@@ -338,7 +338,7 @@ jobs:
             # regression cannot be masked by a host copy.
             export LD_LIBRARY_PATH="$(find /tmp/squashfs-root -type d -name lib -o -type d -name "x86_64-linux-gnu" | tr "\n" ":")"
 
-            host_provided="lib(GL|GLX|GLdispatch|GLESv2|OpenGL|EGL|glapi|drm|gbm|X11|X11-xcb|xcb|xcb-[a-z0-9]+|Xext|Xrender|Xfixes|Xi|Xcursor|Xdamage|Xcomposite|Xrandr|Xinerama|Xtst|Xss|xshmfence|wayland-[a-z]+|harfbuzz|fontconfig|freetype)\.so"
+            host_provided="lib(GL|GLX|GLdispatch|GLESv2|OpenGL|EGL|glapi|drm|gbm|X11|X11-xcb|xcb|xcb-[a-z0-9]+|Xext|Xrender|Xfixes|Xi|Xcursor|Xdamage|Xcomposite|Xrandr|Xinerama|Xtst|Xss|xshmfence|wayland-[a-z]+|harfbuzz|fontconfig|freetype|expat|fribidi)\.so"
             missing=$(ldd "${BIN}" | grep "not found" | grep -vE "${host_provided}" || true)
             if [ -n "${missing}" ]; then
               echo "::error::AppImage is missing libraries it should bundle (its webkit/GTK stack) on a stock Ubuntu 26.04:"
