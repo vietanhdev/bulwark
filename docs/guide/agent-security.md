@@ -45,6 +45,9 @@ in this documentation are deliberately generated from fixtures, not from a real 
 | `BLWK-AI-015` | Medium | A plaintext credential file readable by group/other | T1552.001 |
 | `BLWK-AI-016` | High | A secret-bearing file in a git repo with no `.gitignore` rule covering it | T1552.001 |
 | `BLWK-AI-017` | High | Codex `approval_policy = "never"` + `sandbox_mode = "danger-full-access"` | T1059 |
+| `BLWK-AI-018` | High | An MCP server connecting to a **remote endpoint with a plaintext token** in its config | T1552.001, T1071.001 |
+| `BLWK-AI-019` | Critical | An MCP server running a **privileged or host-mounting container** (`--privileged`, `-v /var/run/docker.sock`, `-v /:…`) | T1610, T1611 |
+| `BLWK-AI-020` | High | A **filesystem MCP server granted an over-broad root** (`/` or your whole home directory) | T1083 |
 
 These are native Rust detectors, not YAML rules — the same reason the ClamAV integration isn't a
 collector. Secret detection needs capturing regexes and redaction spans; the config checks parse

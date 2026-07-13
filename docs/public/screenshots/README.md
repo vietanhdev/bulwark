@@ -1,11 +1,13 @@
-- `overview.png` — the Overview: the host's verdict, its hardening index, the protection
-  modules, and the findings list
+- `overview.png` — the Overview: the host's verdict, its hardening index, the four scan-type
+  tiles (Compliance, Antivirus, Agent Security, File integrity), and the findings list grouped
+  by category
 - `agent-security.png` — the Agent Security view: secrets found in AI assistant context, and
   dangerous agent configuration, each with its CVE / ATT&CK reference
-- `antivirus.png` — the Antivirus view after a completed scan, with a detected threat
-- `compliance.png` — the Compliance view: the hardening index and the CIS / MITRE ATT&CK
-  control mapping
-- `rules.png` — the Rules view: the full rule pack, searchable and filterable by severity
+- `antivirus.png` — the Antivirus view: ClamAV signature status and real-time folder watching
+- `compliance.png` — the Compliance view: every configuration finding on the host, grouped by
+  subsystem, each with why it matters and the exact command to fix it
+- `rules.png` — the Rules view: the full rule pack, searchable and filterable by severity, with
+  the CIS / MITRE ATT&CK framework coverage in a second tab
 
 All five are 2560x1600 (a 2x capture of 1280x800), which is exactly the app's default window
 size and aspect ratio — see `apps/bulwark-app/src-tauri/tauri.conf.json`. Keep it that way when

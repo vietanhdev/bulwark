@@ -15,7 +15,7 @@ Bulwark is a Tauri + Rust desktop app that scans a Linux host for security misco
 
 This document was written before implementation and has been revised to describe what actually shipped, not just what was planned. As of v0.1:
 
-- **60 rules across all 11 planned categories** (SSH/remote access, persistence, privilege escalation, defense evasion, credential/secrets exposure via filesystem permissions, network egress, kernel/sysctl hardening, logging/auditing, accounts & services, rootkit/malware indicators, file integrity).
+- **65 rules across all 11 planned categories** (SSH/remote access, persistence, privilege escalation, defense evasion, credential/secrets exposure via filesystem permissions, network egress, kernel/sysctl hardening, logging/auditing, accounts & services, rootkit/malware indicators, file integrity), plus a dedicated 20-rule AI agent-security pass.
 - **Both front-doors work end-to-end**: `bulwarkctl` (scan, rules list/validate, history) and `bulwark-app` (Tauri v2 + React GUI), sharing one `bulwark-core` engine and one local SQLite store, exactly as designed in §4.
 - **Real ClamAV integration** — not a placeholder: live streamed per-file scan progress, real engine/database version and staleness reporting, and a distro-aware install command shown when ClamAV isn't installed at all.
 - **File-integrity monitoring** for a curated set of security-relevant files, plus a background monitoring loop that re-scans on an interval and reconciles findings across runs.
@@ -59,7 +59,7 @@ The research groundwork is already done — a checklist grounded in Lynis's test
 - **Sandboxed untrusted-code execution and autonomous "agents" are explicitly out of v1 scope**, but the architecture (crate boundaries, a generic executor pattern, Channel-based event streaming) is deliberately shaped so adding them later is a new workspace member, not a rewrite. See §4 and §14. Still true as of this update — neither has been started.
 
 ### Success metrics
-- **Rule coverage** — v1 ships rules across all 11 categories in the research checklist. **Met**: 60 rules, 11/11 categories.
+- **Rule coverage** — v1 ships rules across all 11 categories in the research checklist. **Met**: 65 rules, 11/11 categories.
 - **Time-to-first-finding** — an unprivileged baseline scan completes and renders results in under 10 seconds; this explicitly excludes any time spent on a human entering a `pkexec`/`sudo` password, which is outside the app's control (see §10).
 - **Dogfooding** — a fixture set of known attack-pattern indicators (rogue systemd persistence, exposed VNC, re-enabled SSH password auth, browser credential exposure, etc.) is encoded as rule unit tests and run against real machines.
 
@@ -449,7 +449,7 @@ Uninstalling via the package manager removes the binary only. The local SQLite f
 - No animation on content the user is actively reading or scrolling — motion is reserved for state transitions, never decorative idle motion.
 - `prefers-reduced-motion` is respected everywhere — all micro-animations degrade to instant state changes when the OS signals reduced motion.
 
-**As shipped:** shadcn/ui (Radix primitives) + Tailwind v4, styled entirely off the token system above rather than shadcn's default palette. Screens: Dashboard, Rules, Antivirus, Compliance, History, Monitoring, About — a frameless window with a custom title bar, and a system tray icon for background residency (§4). A dedicated animation/motion tuning pass (beyond the principles above being followed ad hoc per component) remains open — see `AGENTS.md`'s current-status notes.
+**As shipped:** shadcn/ui (Radix primitives) + Tailwind v4, styled entirely off the token system above rather than shadcn's default palette. Screens: Overview, Compliance, Antivirus, Agent Security, File integrity, Rules, Analytics, Settings — a frameless window with a custom title bar, and a system tray icon for background residency (§4). A dedicated animation/motion tuning pass (beyond the principles above being followed ad hoc per component) remains open — see `AGENTS.md`'s current-status notes.
 
 ---
 
