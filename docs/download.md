@@ -66,7 +66,7 @@ function size(pred) {
   <template v-else>Looking up the latest release…</template>
 </p>
 
-Linux, x86_64. Built on Ubuntu 22.04 (glibc 2.35), so it runs on **Ubuntu 22.04+, Debian 12+, and Fedora 36+**.
+Linux, x86_64. Built on Ubuntu 22.04 (glibc 2.35), so it runs on **Ubuntu 22.04+, Debian 12+, and Fedora 36+**. Every release is installed and scan-tested in a clean container on Ubuntu 22.04, 24.04 and 26.04, Debian 12, and Fedora 41 before it ships — including the current Ubuntu LTS.
 
 ## Desktop app
 

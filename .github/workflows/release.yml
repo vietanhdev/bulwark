@@ -17,13 +17,43 @@ env:
 
 jobs:
   linux:
-    # Deliberately NOT ubuntu-latest. The oldest glibc the build links against becomes the
-    # oldest distro the artifacts will run on, and `ubuntu-latest` silently moves that floor up
-    # whenever GitHub re-points it. Pinning to 22.04 keeps `.deb`/`.rpm`/AppImage usable on
-    # Ubuntu 22.04+ and Debian 12+; building on 24.04 would produce packages that refuse to
-    # install on a two-year-old distro for no reason the user could act on.
-    runs-on: ubuntu-22.04
+    # The oldest glibc the build links against becomes the oldest distro the artifacts can run
+    # on, so that floor is a release-visible decision — not an incidental property of whichever
+    # image GitHub happens to point a label at. `cargo deb`'s `depends = "$auto"` reads the floor
+    # straight off the BUILD HOST: build on glibc 2.39 and the .deb declares `libc6 (>= 2.39)`,
+    # which apt then refuses to install on Ubuntu 22.04 (2.35) and Debian 12 (2.36). Nothing about
+    # that failure is visible at build time — it is a broken download, discovered by the user.
+    #
+    # Hence the container. `runs-on` is now just "a machine with Docker" and can track whatever
+    # GitHub supports, while the glibc floor lives in an image WE pin. This matters on a clock:
+    # the `ubuntu-22.04` runner label begins deprecation 2026-09-17 and is removed 2027-04-17
+    # (actions/runner-images#14254), and the day it disappears, a `runs-on: ubuntu-22.04` build
+    # would silently start emitting `libc6 (>= 2.39)` packages. Pinning the image instead of the
+    # runner makes that entire class of event a non-issue.
+    runs-on: ubuntu-24.04
+    container:
+      image: ubuntu:22.04
     steps:
+      # Must precede actions/checkout: the checkout action needs git present in the container,
+      # and falls back to a REST tarball (no git metadata) if it is missing. The base image is
+      # bare, so everything the later actions assume — curl for rustup, a C toolchain for cc,
+      # ca-certificates for TLS — has to be installed here first.
+      #
+      # No `sudo` anywhere in this job: a container step already runs as root, and the base image
+      # does not ship sudo at all.
+      - name: Bootstrap the 22.04 build image
+        run: |
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl file git pkg-config build-essential \
+            libssl-dev libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf rpm xz-utils
+          # Checkout runs as root over a workspace owned by the runner uid; without this git
+          # refuses with "detected dubious ownership" and the build fails before it starts.
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+
       - uses: actions/checkout@v4
 
       - name: Resolve version
@@ -53,16 +83,6 @@ jobs:
           node-version: 20
           cache: npm
           cache-dependency-path: apps/bulwark-app/package-lock.json
-
-      # webkit2gtk + friends, needed to compile and bundle the Tauri GUI on Linux. `rpm` is
-      # what `cargo tauri build` shells out to for the .rpm bundle; without it that bundle is
-      # skipped silently rather than failing loudly.
-      - name: Install Linux build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev patchelf rpm
 
       - name: Install packaging tools
         run: cargo install cargo-deb cargo-generate-rpm --locked
@@ -96,6 +116,13 @@ jobs:
       # Produces .deb, .rpm and .AppImage in target/release/bundle/ (bundle.targets = "all").
       - name: Build and bundle GUI
         working-directory: apps/bulwark-app
+        # Tauri's AppImage bundler shells out to `linuxdeploy`, which is itself an AppImage — and
+        # an AppImage mounts itself with FUSE, which does not exist inside a container. Without
+        # this, the bundle step dies on a fuse mount error that reads like a Tauri bug. The flag
+        # tells the AppImage runtime to unpack to a temp dir and exec from there instead of
+        # mounting. It affects only the build-time tooling, not the AppImage we ship.
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
         run: npm run tauri build
 
       - name: Collect artifacts
@@ -158,8 +185,172 @@ jobs:
           path: dist/*
           retention-days: 14
 
+  # Building on 22.04 pins the glibc floor. It proves nothing about whether the packages
+  # actually *install and run* on the distros the download page promises — a `Depends` line that
+  # can't be satisfied, or a binary with an unresolved `.so`, is a broken download that the build
+  # job would happily wave through. So every release now installs its own artifacts into a clean
+  # container per supported distro and runs a real scan. This is the job that gets to say
+  # "supports Ubuntu 24.04 and 26.04"; the build job only gets to say "it compiled".
+  #
+  # Ubuntu 26.04 (resolute, glibc 2.43) still ships libwebkit2gtk-4.1-0, so the GUI's GTK3 WebKit
+  # dependency resolves there today. That is exactly the fact this job exists to keep honest: when
+  # Ubuntu eventually drops the 4.1 (GTK3) packages in favour of libwebkitgtk-6.0 (GTK4), the GUI
+  # .deb becomes uninstallable on that release, and this matrix goes red on the release *before*
+  # users find out. Tauri v2 has no GTK4 backend to migrate to, so the fallback at that point is
+  # the AppImage — which is why it is smoke-tested here too rather than merely uploaded.
+  verify-install:
+    needs: linux
+    runs-on: ubuntu-24.04
+    strategy:
+      # Every distro reports independently. One red cell should name the distro that broke, not
+      # cancel its siblings and leave the blast radius unknown.
+      fail-fast: false
+      matrix:
+        include:
+          - { image: "ubuntu:22.04", pkg: deb, gui: true }
+          - { image: "ubuntu:24.04", pkg: deb, gui: true }
+          - { image: "ubuntu:26.04", pkg: deb, gui: true }
+          - { image: "debian:12", pkg: deb, gui: true }
+          - { image: "fedora:41", pkg: rpm, gui: false }
+    name: verify (${{ matrix.image }})
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: bulwark-linux-x86_64
+          path: dist
+
+      - name: Install and smoke-test on ${{ matrix.image }}
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD/dist:/dist:ro" "${{ matrix.image }}" bash -euo pipefail -c '
+            set -x
+
+            # `scan` exits 1 on medium+ findings and 2 on critical — and every bare container is
+            # full of findings (no ClamAV, default login.defs, ...). A non-zero exit is the tool
+            # WORKING. Only a crash (101), a missing shared library (127), or a usage error (any
+            # other code) is a real failure, so the smoke test asserts the code is one of 0/1/2
+            # rather than the usual `set -e` "must exit 0".
+            smoke() {
+              local code=0
+              bulwarkctl scan --json > /tmp/scan.json || code=$?
+              case "${code}" in
+                0|1|2) echo "OK: scan exited ${code} (a findings-based code, not a crash)" ;;
+                127)   echo "::error::bulwarkctl exited 127 — a shared library it links against is missing on ${{ matrix.image }}"; exit 1 ;;
+                *)     echo "::error::bulwarkctl scan crashed with exit ${code} on ${{ matrix.image }}"; exit 1 ;;
+              esac
+
+              # An empty findings array would mean the rule pack did not ship with the package —
+              # the exact bug the release job already guards against at packaging time. Re-check it
+              # here, against a *really installed* package rather than an archive listing.
+              local n
+              n=$(grep -o "\"rule_id\"" /tmp/scan.json | wc -l)
+              if [ "${n}" -lt 1 ]; then
+                echo "::error::installed package produced 0 findings on ${{ matrix.image }} — the rule pack is not resolving from /usr/share/bulwark/rules"
+                exit 1
+              fi
+              echo "OK: installed CLI produced ${n} findings from the packaged rule pack"
+            }
+
+            if [ "${{ matrix.pkg }}" = "deb" ]; then
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -qq
+              # `apt-get install ./file.deb` (not `dpkg -i`) so that unsatisfiable dependencies
+              # FAIL here instead of leaving a half-configured package the way dpkg would.
+              apt-get install -y -qq /dist/bulwarkctl_*_amd64.deb
+              bulwarkctl --version
+              smoke
+
+              if [ "${{ matrix.gui }}" = "true" ]; then
+                # The GUI cannot be launched in a headless container, but the two things that
+                # actually break across distro versions can both be checked without a display:
+                # whether its Depends resolve, and whether every .so it links against is present.
+                apt-get install -y -qq /dist/bulwark-desktop_*_amd64.deb
+                echo "OK: GUI .deb dependencies resolve on ${{ matrix.image }}"
+
+                # apt resolving the Depends line only proves the packages Tauri *declared* exist.
+                # Tauri's dependency auto-detection is known to be incomplete (tauri#7074), so a
+                # library can be genuinely missing while apt reports success — ldd is what actually
+                # proves the binary can start.
+                if ldd /usr/bin/bulwark-app | grep "not found"; then
+                  echo "::error::bulwark-app has unresolved shared libraries on ${{ matrix.image }}"
+                  exit 1
+                fi
+                echo "OK: GUI binary has every shared library it needs (incl. webkit2gtk-4.1)"
+              fi
+            else
+              dnf install -y -q /dist/bulwarkctl-*.x86_64.rpm
+              bulwarkctl --version
+              smoke
+            fi
+
+            echo "PASSED: ${{ matrix.image }}"
+          '
+
+  # The AppImage is the escape hatch for any distro whose packaged WebKit has moved on (and the
+  # only artifact a non-deb/rpm user gets), so it earns the same treatment: unpacked and linkage-
+  # checked on the NEWEST distro, where a dropped GTK3 WebKit would surface first. Extracted
+  # rather than executed because AppImage's runtime needs FUSE, which a container doesn't have —
+  # --appimage-extract exercises the payload without it.
+  verify-appimage:
+    needs: linux
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: bulwark-linux-x86_64
+          path: dist
+
+      - name: Extract and link-check the AppImage on Ubuntu 26.04
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD/dist:/dist:ro" ubuntu:26.04 bash -euo pipefail -c '
+            set -x
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+
+            cp /dist/*.AppImage /tmp/app.AppImage
+            chmod +x /tmp/app.AppImage
+            cd /tmp && ./app.AppImage --appimage-extract >/dev/null
+
+            BIN=$(find /tmp/squashfs-root -type f -name "bulwark-app" | head -1)
+            [ -n "${BIN}" ] || { echo "::error::AppImage does not contain the bulwark-app binary"; exit 1; }
+
+            # The whole point of the AppImage is that it carries its own webkit2gtk/gtk stack, so
+            # the loader must be pointed at the bundled libs the way AppRun does at launch. A bare
+            # `ldd` here would report every bundled library as "not found" and fail the release for
+            # no reason — this check has to model the real runtime, not a naked binary. What it
+            # genuinely catches is a lib the AppImage neither bundles NOR finds on a stock 26.04:
+            # deliberately NOT apt-installing webkit here, so a bundling regression can't be masked
+            # by a library that only happens to be present because this step installed it.
+            export LD_LIBRARY_PATH="$(find /tmp/squashfs-root -type d -name lib -o -type d -name "x86_64-linux-gnu" | tr "\n" ":")"
+
+            if ldd "${BIN}" | grep "not found"; then
+              echo "::error::AppImage binary has unresolved shared libraries on a stock Ubuntu 26.04 — it is neither bundling them nor finding them on the host"
+              exit 1
+            fi
+            echo "PASSED: AppImage links cleanly against its bundled libs on a stock Ubuntu 26.04"
+          '
+
+  release:
+    needs: [linux, verify-install, verify-appimage]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: bulwark-linux-x86_64
+          path: dist
+
       # Only on a real tag. A workflow_dispatch run stops at the artifact upload above, so the
-      # whole pipeline can be rehearsed without creating a public release.
+      # whole pipeline — including the install matrix — can be rehearsed without creating a
+      # public release.
       - name: Publish GitHub Release
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
@@ -200,4 +391,6 @@ jobs:
             sha256sum -c SHA256SUMS --ignore-missing
             ```
 
-            Built on Ubuntu 22.04 (glibc 2.35) — runs on Ubuntu 22.04+, Debian 12+, Fedora 36+.
+            Built on Ubuntu 22.04 (glibc 2.35), then installed and scan-tested in a clean container
+            on **Ubuntu 22.04, 24.04 and 26.04, Debian 12, and Fedora 41** before this release was
+            cut — every one of those is a gate on the release, not a claim.
