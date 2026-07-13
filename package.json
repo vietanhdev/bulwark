@@ -1,0 +1,15 @@
+{
+  "name": "bulwark",
+  "version": "0.4.0",
+  "private": true,
+  "description": "Bulwark — Linux host security scanner (Rust core + Tauri desktop app). Root convenience scripts that drive the desktop app under apps/bulwark-app.",
+  "scripts": {
+    "dev": "npm --prefix apps/bulwark-app run tauri dev",
+    "build": "npm --prefix apps/bulwark-app run tauri build",
+    "dev:web": "VITE_MOCK_TAURI=true npm --prefix apps/bulwark-app run dev",
+    "install:app": "npm --prefix apps/bulwark-app install",
+    "lint": "npm --prefix apps/bulwark-app run lint",
+    "format": "npm --prefix apps/bulwark-app run format",
+    "test": "cargo test --workspace"
+  }
+}
