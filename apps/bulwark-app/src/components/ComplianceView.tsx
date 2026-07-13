@@ -56,7 +56,10 @@ const isComplianceFinding = (f: Finding) =>
  * tab is the reference catalog and framework mapping). You come here to read and fix.
  */
 export function ComplianceView() {
-  const { revision, bump } = useRevision();
+  const { revision, bump, running } = useRevision();
+  // True when a compliance scan is running here OR was launched from the Overview — either way this
+  // tab shows it live.
+  const complianceRunning = running.has("compliance");
 
   const [rules, setRules] = useState<RuleSummary[] | null>(null);
   const [findings, setFindings] = useState<Finding[]>([]);
@@ -201,6 +204,11 @@ export function ComplianceView() {
             <Square className="h-3.5 w-3.5 fill-current" />
             Stop
           </Button>
+        ) : complianceRunning ? (
+          <Button variant="outline" size="sm" disabled>
+            <RotateCw className="h-3.5 w-3.5 animate-spin" />
+            Scanning…
+          </Button>
         ) : (
           <Button onClick={runScan} size="sm">
             <Radar className="h-4 w-4" />
@@ -210,11 +218,11 @@ export function ComplianceView() {
       }
     >
       <div className="flex flex-col gap-6">
-        {scanning && (
+        {(scanning || complianceRunning) && (
           <div className="flex items-center gap-2.5 rounded-md border border-border bg-muted/40 px-3 py-2.5">
             <RotateCw className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
             <div className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">
-              Scanning configuration…
+              {scanning ? "Scanning configuration…" : "Scanning configuration (started from Overview)…"}
             </div>
           </div>
         )}

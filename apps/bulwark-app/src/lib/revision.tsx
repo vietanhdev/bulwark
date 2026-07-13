@@ -15,18 +15,45 @@ import { createContext, useCallback, useContext, useMemo, useState, type ReactNo
  * counter once, and any view that reads stored state lists `revision` in its effect deps. New
  * views get the behaviour by default instead of having to remember to re-solve it.
  */
+/** The individual scanners the Overview can drive. Each maps to a tab that should reflect the
+ * scan's in-progress status and its results, so a run kicked off from the Overview looks live on
+ * the corresponding tab too — the Overview is only a launcher, not the sole place results appear. */
+export type ScannerId = "compliance" | "antivirus" | "agent" | "fim";
+
 interface Revision {
   /** Bumped whenever a scan, a monitoring tick, or a baseline changes what's on disk. */
   revision: number;
   bump: () => void;
+  /** Scanners currently running (from anywhere — Overview's "run all" or a tab's own button). A tab
+   * reads this so it shows "scanning…" even when the run was triggered from the Overview. */
+  running: ReadonlySet<ScannerId>;
+  /** Marks a scanner as started/finished. Overview brackets each pass with this; tabs may too. */
+  setScannerRunning: (id: ScannerId, isRunning: boolean) => void;
 }
 
-const RevisionContext = createContext<Revision>({ revision: 0, bump: () => {} });
+const RevisionContext = createContext<Revision>({
+  revision: 0,
+  bump: () => {},
+  running: new Set(),
+  setScannerRunning: () => {},
+});
 
 export function RevisionProvider({ children }: { children: ReactNode }) {
   const [revision, setRevision] = useState(0);
   const bump = useCallback(() => setRevision((n) => n + 1), []);
-  const value = useMemo(() => ({ revision, bump }), [revision, bump]);
+  const [running, setRunning] = useState<ReadonlySet<ScannerId>>(new Set());
+  const setScannerRunning = useCallback((id: ScannerId, isRunning: boolean) => {
+    setRunning((prev) => {
+      const next = new Set(prev);
+      if (isRunning) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+  const value = useMemo(
+    () => ({ revision, bump, running, setScannerRunning }),
+    [revision, bump, running, setScannerRunning],
+  );
   return <RevisionContext.Provider value={value}>{children}</RevisionContext.Provider>;
 }
 

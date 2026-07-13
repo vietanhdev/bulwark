@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Bug, Eye, ShieldCheck, ShieldX, Square, X } from "lucide-react";
+import { Bug, Eye, Loader2, ShieldCheck, ShieldX, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Switch } from "@/components/ui/switch";
@@ -57,7 +57,9 @@ type RealtimeAvEvent =
   | { event: "error"; data: { path: string; message: string } };
 
 export function AntivirusView({ active }: { active: boolean }) {
-  const { revision } = useRevision();
+  const { revision, running } = useRevision();
+  // True when an antivirus sweep is running here or was launched from the Overview.
+  const antivirusRunning = running.has("antivirus");
 
   const [scanning, setScanning] = useState(false);
   const [result, setResult] = useState<AvScanResult | null>(null);
@@ -208,6 +210,11 @@ export function AntivirusView({ active }: { active: boolean }) {
           <Button onClick={stopScan} variant="outline">
             <Square className="h-3.5 w-3.5 fill-current" />
             Stop
+          </Button>
+        ) : antivirusRunning ? (
+          <Button variant="outline" disabled>
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Scanning…
           </Button>
         ) : (
           <Button onClick={runScan} disabled={unavailable}>

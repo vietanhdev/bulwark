@@ -73,7 +73,9 @@ interface Complete {
 }
 
 export function AgentSecurityView({ active }: { active: boolean }) {
-  const { revision, bump } = useRevision();
+  const { revision, bump, running } = useRevision();
+  // True when an agent scan is running here or was launched from the Overview.
+  const agentRunning = running.has("agent");
 
   const [findings, setFindings] = useState<AiFinding[]>([]);
   const [summary, setSummary] = useState<Complete | null>(null);
@@ -241,6 +243,11 @@ export function AgentSecurityView({ active }: { active: boolean }) {
             <Square className="h-3.5 w-3.5 fill-current" />
             Stop
           </Button>
+        ) : agentRunning ? (
+          <Button variant="outline" disabled>
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Scanning…
+          </Button>
         ) : (
           <Button onClick={runScan}>
             <ScanSearch className="h-4 w-4" />
@@ -285,7 +292,16 @@ export function AgentSecurityView({ active }: { active: boolean }) {
           </div>
         )}
 
-        {summary && !scanning && (
+        {agentRunning && !scanning && (
+          <div className="flex items-center gap-2.5 rounded-md border border-border bg-muted/40 px-3 py-2.5">
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+            <div className="font-mono text-[11px] text-muted-foreground">
+              Scanning AI artifacts (started from Overview)…
+            </div>
+          </div>
+        )}
+
+        {summary && !scanning && !agentRunning && (
           <div className="flex flex-wrap items-center gap-x-6 gap-y-1 font-mono text-xs text-muted-foreground">
             <span>
               {summary.workspacesScanned} workspace{summary.workspacesScanned === 1 ? "" : "s"}

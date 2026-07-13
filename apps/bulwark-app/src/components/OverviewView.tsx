@@ -103,7 +103,7 @@ const bySeverity = (a: Finding, b: Finding) =>
   SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity);
 
 export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) {
-  const { revision, bump } = useRevision();
+  const { revision, bump, setScannerRunning } = useRevision();
 
   const [scanning, setScanning] = useState(false);
   const [elevating, setElevating] = useState(false);
@@ -437,9 +437,22 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
     // sweep alongside an agent-artifact walk would make both slower while producing an
     // interleaved progress line nobody can read. Stop is honoured between each one, so pressing
     // it during the compliance pass doesn't leave a five-minute antivirus sweep still to come.
-    if (!cancelledRef.current && selectedKinds.has("compliance")) await runComplianceScan();
-    if (!cancelledRef.current && selectedKinds.has("agent")) await runAgentScan();
-    if (!cancelledRef.current && selectedKinds.has("antivirus")) await runAntivirusScan();
+    // Each pass is bracketed with the shared running-flag so its tab (Compliance / Agent Security /
+    // Antivirus) shows "scanning…" live even though the run was launched here, and bump()ed on
+    // completion so that tab reloads its own results the moment its pass finishes — not only at the
+    // very end. The Overview is just the launcher; the tabs are where results live.
+    const pass = async (id: "compliance" | "agent" | "antivirus", run: () => Promise<void>) => {
+      setScannerRunning(id, true);
+      try {
+        await run();
+      } finally {
+        setScannerRunning(id, false);
+        bump();
+      }
+    };
+    if (!cancelledRef.current && selectedKinds.has("compliance")) await pass("compliance", runComplianceScan);
+    if (!cancelledRef.current && selectedKinds.has("agent")) await pass("agent", runAgentScan);
+    if (!cancelledRef.current && selectedKinds.has("antivirus")) await pass("antivirus", runAntivirusScan);
 
     setProgress(null);
     setScanning(false);
