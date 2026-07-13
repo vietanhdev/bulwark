@@ -32,19 +32,23 @@ const CARD_TITLES = {
   "guide/agent-security.md": "AI Agent Security",
   "guide/remediation.md": "Fixing Findings",
   "articles/ai-coding-assistant-security.md": "AI Coding Assistant Security",
+  "articles/ai-context-threats.md": "The Context Is the Threat",
   "articles/ssh-hardening-checklist.md": "SSH Hardening on Linux",
   "articles/linux-persistence-techniques.md": "How Attackers Persist on Linux",
-  "articles/choosing-a-linux-security-scanner.md": "Choosing a Linux Security Scanner",
+  "articles/choosing-a-linux-security-scanner.md":
+    "Choosing a Linux Security Scanner",
   "articles/sysctl-kernel-hardening.md": "sysctl Kernel Hardening",
   "articles/sudoers-hardening-checklist.md": "Sudoers Hardening on Linux",
   "articles/is-my-linux-server-hacked.md": "Is My Linux Server Hacked?",
   "articles/auditd-rules-cheat-sheet.md": "auditd Rules Cheat Sheet",
-  "articles/rkhunter-chkrootkit-false-positives.md": "Reading rkhunter & chkrootkit Output",
+  "articles/rkhunter-chkrootkit-false-positives.md":
+    "Reading rkhunter & chkrootkit Output",
   "articles/does-linux-need-antivirus.md": "Does Linux Need Antivirus?",
   "articles/systemd-service-sandboxing.md": "systemd Service Sandboxing",
   "articles/bulwark-vs-wazuh.md": "Bulwark vs. Wazuh",
   "articles/cis-mitre-mapping.md": "Mapping Rules to CIS & MITRE ATT&CK",
-  "articles/fail2ban-vs-crowdsec-vs-denyhosts.md": "fail2ban vs. CrowdSec vs. denyhosts",
+  "articles/fail2ban-vs-crowdsec-vs-denyhosts.md":
+    "fail2ban vs. CrowdSec vs. denyhosts",
 };
 
 /** Every page that should carry a card: the landing page, the guide, and all articles.
@@ -55,7 +59,12 @@ const CARD_TITLES = {
  * every link to it previews as the generic homepage blurb. `guide/agent-security.md` was added
  * for exactly that reason. */
 function pagesNeedingCards() {
-  const pages = ["index.md", "guide/architecture.md", "guide/agent-security.md", "guide/remediation.md"];
+  const pages = [
+    "index.md",
+    "guide/architecture.md",
+    "guide/agent-security.md",
+    "guide/remediation.md",
+  ];
   for (const f of readdirSync(join(DOCS, "articles")).sort()) {
     if (f.endsWith(".md")) pages.push(`articles/${f}`);
   }
@@ -115,11 +124,19 @@ function readPage(relPath) {
     subtitle = subtitle.slice(0, 172).replace(/\s+\S*$/, "") + "…";
   }
 
-  return { slug: relPath === "index.md" ? "home" : basename(relPath, ".md"), title, subtitle };
+  return {
+    slug: relPath === "index.md" ? "home" : basename(relPath, ".md"),
+    title,
+    subtitle,
+  };
 }
 
 const esc = (s) =>
-  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 
 /** The card template. Mirrors the existing cards: teal shield mark, heavy title, angled wedge. */
 function cardHtml({ title, subtitle }) {
@@ -179,7 +196,9 @@ const checkOnly = args.includes("--check");
 const pages = pagesNeedingCards().map(readPage);
 
 if (checkOnly) {
-  const missing = pages.filter((p) => !existsSync(join(OG_DIR, `${p.slug}.png`)));
+  const missing = pages.filter(
+    (p) => !existsSync(join(OG_DIR, `${p.slug}.png`)),
+  );
   if (missing.length) {
     console.error(`Missing OG cards for ${missing.length} page(s):`);
     for (const p of missing) console.error(`  - ${p.slug}  ("${p.title}")`);
@@ -191,10 +210,14 @@ if (checkOnly) {
 }
 
 mkdirSync(OG_DIR, { recursive: true });
-const todo = renderAll ? pages : pages.filter((p) => !existsSync(join(OG_DIR, `${p.slug}.png`)));
+const todo = renderAll
+  ? pages
+  : pages.filter((p) => !existsSync(join(OG_DIR, `${p.slug}.png`)));
 
 if (!todo.length) {
-  console.log("Every page already has a card. Use --all to re-render after a design change.");
+  console.log(
+    "Every page already has a card. Use --all to re-render after a design change.",
+  );
   process.exit(0);
 }
 

@@ -193,6 +193,10 @@ export default withMermaid({
             link: "/articles/ai-coding-assistant-security",
           },
           {
+            text: "The context is the threat",
+            link: "/articles/ai-context-threats",
+          },
+          {
             text: "SSH hardening checklist",
             link: "/articles/ssh-hardening-checklist",
           },
