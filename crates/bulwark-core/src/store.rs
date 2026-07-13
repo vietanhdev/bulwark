@@ -547,8 +547,16 @@ impl Store {
             // count (`scan.findings.len()`, set at insert above) made History underreport and
             // flat-line at whatever the monitoring tick saw, disagreeing with the Overview's open
             // count. The reconciled open total is the real posture of the host as of this run.
+            //
+            // Suppressed rules are excluded, matching what the Overview counts as "active"
+            // (`open_findings_split`): an accepted risk shouldn't inflate the History trend any more
+            // than it inflates the dashboard's headline number.
+            let suppressed: Vec<String> = rule_suppressions::table
+                .select(rule_suppressions::rule_id)
+                .load(conn)?;
             let open_count: i64 = findings::table
                 .filter(findings::status.eq("open"))
+                .filter(findings::rule_id.ne_all(&suppressed))
                 .count()
                 .get_result(conn)?;
             diesel::update(scan_runs::table.find(scan.id.to_string()))
@@ -2138,6 +2146,7 @@ mod tests {
             rule_load_errors: vec![],
             read_errors: vec![],
             rule_eval_errors: vec![],
+            warnings: vec![],
             findings: vec![crate::logs::LogFinding {
                 id: Uuid::new_v4(),
                 rule_id: "BLWK-LOG-SSH-001".into(),

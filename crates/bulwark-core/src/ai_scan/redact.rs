@@ -98,11 +98,12 @@ fn redact_one(
         }));
     }
 
-    // Apply, streaming. AI session transcripts run to tens of megabytes, so the whole file is never
-    // held in memory: we read one line at a time, write it verbatim to the backup and its redacted
-    // form to a sibling temp file, then swap the temp in atomically. Line-oriented is exactly right
-    // for the `.jsonl` transcripts this targets, and a secret never spans a newline, so nothing is
-    // missed at a boundary. A non-UTF-8 line is passed through unchanged rather than corrupted.
+    // Apply. The scanner reads (and therefore only ever flags) the first `MAX_SCAN_BYTES` of a file,
+    // so redaction buffers that same prefix, redacts it as ONE unit, and streams any tail beyond it
+    // through verbatim. Redacting as one unit is essential: multi-line secrets (a PEM private key, a
+    // Kubernetes YAML secret) span many lines and can never match a line-at-a-time pass — the
+    // previous line-oriented redactor reported those files "redactable" and then left the secret on
+    // disk. The original bytes go to a 0600 backup; the temp is swapped in atomically.
     std::fs::create_dir_all(backup_dir)?;
     // The backup holds the ORIGINAL, un-redacted secret — lock its directory to owner-only.
     set_dir_owner_only(backup_dir);
@@ -153,58 +154,58 @@ fn redact_one(
     }))
 }
 
-/// Streams `file` a line at a time: each line goes verbatim to the 0600 backup at `backup_path`,
-/// and its redacted form to `tmp`. Returns how many secrets were replaced. Bounded memory (one
-/// line) regardless of file size. Both destinations are created `O_EXCL | O_NOFOLLOW` so a raced
-/// symlink or pre-existing name can't be written through.
+/// Buffers the first `MAX_SCAN_BYTES` of `file` (the same window the scanner reads), writes those
+/// bytes verbatim to the 0600 backup, redacts them as one unit to `tmp`, then streams any tail past
+/// the window through to both verbatim. Returns how many secrets were replaced. Redacting the prefix
+/// as a whole — not line-by-line — is what lets a multi-line secret (PEM key, k8s YAML) actually be
+/// removed. Both destinations are created `O_EXCL | O_NOFOLLOW` so a raced symlink or pre-existing
+/// name can't be written through. Memory is bounded by the scan-window cap plus a fixed tail buffer.
 fn stream_to_backup_and_temp(
     file: std::fs::File,
     backup_path: &Path,
     tmp: &Path,
 ) -> anyhow::Result<usize> {
-    use std::io::{BufRead, BufReader, BufWriter, Write};
-    let mut reader = BufReader::new(file);
+    use std::io::{BufWriter, Read, Write};
+    let mut reader = file;
     let mut backup = BufWriter::new(create_owner_only(backup_path)?);
     let mut out = BufWriter::new(create_temp_exclusive(tmp)?);
 
-    let mut count = 0usize;
-    let mut line: Vec<u8> = Vec::new();
+    // The flagged window: read at most the scanner's cap, redact it as one string. Files scan
+    // flagged are valid UTF-8 (its reader rejects otherwise), so a lossy decode here is an identity
+    // — and even if not, redaction of a text secret is what matters.
+    let cap = super::MAX_SCAN_BYTES as u64;
+    let mut head = Vec::new();
+    (&mut reader).take(cap).read_to_end(&mut head)?;
+    backup.write_all(&head)?;
+    let (redacted, count) = secrets::redact_text(&String::from_utf8_lossy(&head));
+    out.write_all(redacted.as_bytes())?;
+
+    // Anything past the scan window was never inspected, so it carries no flagged secret — copy it
+    // through verbatim in bounded chunks (so a tens-of-MB transcript stays memory-safe).
+    let mut buf = [0u8; 64 * 1024];
     loop {
-        line.clear();
-        if reader.read_until(b'\n', &mut line)? == 0 {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
             break;
         }
-        backup.write_all(&line)?;
-        match std::str::from_utf8(&line) {
-            Ok(s) => {
-                let (redacted, n) = secrets::redact_text(s);
-                count += n;
-                out.write_all(redacted.as_bytes())?;
-            }
-            // A non-UTF-8 line can't be redacted as text; write it through unchanged so a mixed or
-            // binary file is preserved byte-for-byte rather than corrupted.
-            Err(_) => out.write_all(&line)?,
-        }
+        backup.write_all(&buf[..n])?;
+        out.write_all(&buf[..n])?;
     }
     backup.flush()?;
     out.flush()?;
     Ok(count)
 }
 
-/// Counts (without writing) the redactable secrets in `reader`, streaming a line at a time.
-fn count_redactions<R: std::io::BufRead>(mut reader: R) -> anyhow::Result<usize> {
-    let mut count = 0usize;
-    let mut line: Vec<u8> = Vec::new();
-    loop {
-        line.clear();
-        if reader.read_until(b'\n', &mut line)? == 0 {
-            break;
-        }
-        if let Ok(s) = std::str::from_utf8(&line) {
-            count += secrets::redact_text(s).1;
-        }
-    }
-    Ok(count)
+/// Counts (without writing) the redactable secrets in the scan window of `reader` — buffered and
+/// counted as one unit, so the dry-run number matches what an actual apply will remove (including
+/// multi-line secrets a line-at-a-time count would miss).
+fn count_redactions<R: std::io::Read>(mut reader: R) -> anyhow::Result<usize> {
+    use std::io::Read;
+    let mut head = Vec::new();
+    (&mut reader)
+        .take(super::MAX_SCAN_BYTES as u64)
+        .read_to_end(&mut head)?;
+    Ok(secrets::redact_text(&String::from_utf8_lossy(&head)).1)
 }
 
 /// The backup path for `path` under `backup_dir`: its components joined by `_`, suffixed `.bak`,
@@ -408,25 +409,27 @@ mod tests {
 
     #[test]
     fn streams_a_large_multiline_file_redacting_only_the_secret_lines() {
-        // Mimics a session transcript: a secret buried deep among many lines, in a file far larger
-        // than the old 8 MB whole-file cap that made redaction refuse these outright. Streaming must
-        // find and redact it, preserve every other line, and back the original up.
+        // Mimics a session transcript: a single-line secret buried among many lines within the scan
+        // window, plus a large tail past the window. Redaction must find and redact the secret,
+        // preserve every other line, stream the tail through, and back the original up.
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("session.jsonl");
         let key = anthropic_key();
         let mut content = String::new();
-        for i in 0..200_000 {
+        // ~1 MB of preamble, then the secret — comfortably inside MAX_SCAN_BYTES (4 MB).
+        for i in 0..20_000 {
             content.push_str(&format!(
                 "{{\"line\":{i},\"text\":\"ordinary log content here\"}}\n"
             ));
         }
         content.push_str(&format!("{{\"secret\":\"{key}\"}}\n"));
+        // A large tail past the 4 MB window — must be preserved verbatim by the streaming copy.
         for i in 0..200_000 {
             content.push_str(&format!("{{\"line\":{i},\"more\":\"tail content\"}}\n"));
         }
         assert!(
-            content.len() > 12 * 1024 * 1024,
-            "fixture exceeds the old cap"
+            content.len() > 6 * 1024 * 1024,
+            "fixture's tail extends well past the 4 MB scan window"
         );
         std::fs::write(&file, &content).unwrap();
 
@@ -449,5 +452,45 @@ mod tests {
         // The backup holds the original secret.
         let backup = report.entries[0].backup_path.as_ref().unwrap();
         assert!(std::fs::read_to_string(backup).unwrap().contains(&key));
+    }
+
+    #[test]
+    fn a_multiline_private_key_is_actually_redacted_not_just_reported() {
+        // The critical bug: a PEM private key spans ~25 lines, so a line-at-a-time redactor never
+        // matched it — the file was reported "redactable" and the key left on disk. Redacting the
+        // window as one unit must actually remove it.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("CLAUDE.md");
+        let body: String = std::iter::repeat_n("QUFBQUFBQUFBQUFBQUFBQQ", 40)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let pem = format!(
+            "-----BEGIN OPENSSH PRIVATE KEY-----\n{body}\n-----END OPENSSH PRIVATE KEY-----"
+        );
+        std::fs::write(
+            &file,
+            format!("# notes\nhere is a key:\n{pem}\ntrailing text\n"),
+        )
+        .unwrap();
+
+        // Dry-run must count it (so the UI's "redactable" claim is honest)...
+        let dry = redact_paths(std::slice::from_ref(&file), false, &dir.path().join("b"));
+        assert!(
+            dry.total_secrets >= 1,
+            "dry-run must see the multi-line key"
+        );
+
+        // ...and apply must actually remove it from disk.
+        let report = redact_paths(std::slice::from_ref(&file), true, &dir.path().join("b"));
+        assert!(report.total_secrets >= 1);
+        let after = std::fs::read_to_string(&file).unwrap();
+        assert!(
+            !after.contains("BEGIN OPENSSH PRIVATE KEY"),
+            "the multi-line key must be gone from the file, not merely reported: {after}"
+        );
+        assert!(
+            after.contains("trailing text"),
+            "surrounding content preserved"
+        );
     }
 }

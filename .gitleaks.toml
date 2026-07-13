@@ -23,6 +23,11 @@ paths = [
   '''crates/bulwark-core/src/ai_scan/secrets\.rs''',
   '''crates/bulwarkctl/tests/ai_cli\.rs''',
 
+  # The redaction tests. Verifying that a *multi-line* secret (a PEM private key) is actually
+  # removed requires a fixture shaped like one — a synthetic `BEGIN OPENSSH PRIVATE KEY` block over
+  # placeholder base64, no key material.
+  '''crates/bulwark-core/src/ai_scan/redact\.rs''',
+
   # The SSH-private-key collector's tests. Classifying "is this key encrypted?" requires test
   # vectors shaped like each on-disk key format (OpenSSH/PEM/PKCS#8). Every one is a synthetic,
   # truncated header — no key material, never a real private key.

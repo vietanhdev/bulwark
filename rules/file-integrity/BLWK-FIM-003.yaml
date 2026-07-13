@@ -3,7 +3,7 @@ title: "Not covered by the file-integrity baseline: {{ file_integrity.path }}"
 category: file-integrity
 severity: info
 collector: file_integrity
-condition: in_baseline == false and currently_present == true
+condition: in_baseline == false and currently_present == true and unreadable == false
 explain: >
   {{ file_integrity.path }} is present but has no recorded baseline hash, so Bulwark can tell
   that it exists but not whether it has been tampered with. This fires per-file, on purpose:

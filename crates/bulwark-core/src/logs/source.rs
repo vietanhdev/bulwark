@@ -12,7 +12,7 @@ use super::event::RawEvent;
 use chrono::{DateTime, TimeZone, Utc};
 use regex::Regex;
 use std::io::{BufRead, BufReader};
-use std::process::{Child, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
 use std::sync::LazyLock;
 
 /// A pull-based stream of raw log events. `None` ends the stream; `Some(Err(_))` is a per-event
@@ -103,6 +103,12 @@ pub struct JournaldSource {
     // into `lines`.
     child: Child,
     lines: CappedLines<BufReader<ChildStdout>>,
+    stderr: Option<ChildStderr>,
+    // Once stdout hits EOF, `journalctl`'s exit status is checked exactly once. A non-zero exit
+    // (permission denied without `systemd-journal` group membership, a corrupt journal, a
+    // mid-stream death) is otherwise indistinguishable from a clean empty journal — the classic
+    // false all-clear. This flips it into a surfaced error instead.
+    exit_checked: bool,
 }
 
 impl JournaldSource {
@@ -124,7 +130,9 @@ impl JournaldSource {
     }
 
     fn spawn(mut cmd: Command) -> anyhow::Result<Self> {
-        cmd.stdout(Stdio::piped()).stderr(Stdio::null());
+        // stderr is captured (not nulled) so a failure's actual reason can be reported rather than
+        // swallowed.
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = cmd
             .spawn()
             .map_err(|e| anyhow::anyhow!("failed to run journalctl ({e}) — not a systemd host? try `logs scan --from-file <path>`"))?;
@@ -132,12 +140,41 @@ impl JournaldSource {
             .stdout
             .take()
             .ok_or_else(|| anyhow::anyhow!("journalctl produced no stdout pipe"))?;
+        let stderr = child.stderr.take();
         Ok(Self {
             child,
             lines: CappedLines {
                 reader: BufReader::new(stdout),
             },
+            stderr,
+            exit_checked: false,
         })
+    }
+
+    /// At end-of-stream, checks `journalctl`'s exit status. Returns `Some(Err(..))` once if it
+    /// failed, then `None` thereafter. Called only after stdout EOF.
+    fn check_exit(&mut self) -> Option<anyhow::Result<RawEvent>> {
+        if self.exit_checked {
+            return None;
+        }
+        self.exit_checked = true;
+        match self.child.wait() {
+            Ok(status) if status.success() => None,
+            Ok(status) => {
+                use std::io::Read;
+                let mut msg = String::new();
+                if let Some(mut err) = self.stderr.take() {
+                    let _ = err.read_to_string(&mut msg);
+                }
+                let detail = msg.lines().next().unwrap_or("").trim();
+                Some(Err(anyhow::anyhow!(
+                    "journalctl exited unsuccessfully ({status}){}{} — the journal was NOT fully read (permission denied? not in the systemd-journal group? corrupt journal?), so an empty result here is not a clean bill of health",
+                    if detail.is_empty() { "" } else { ": " },
+                    detail
+                )))
+            }
+            Err(e) => Some(Err(anyhow::anyhow!("waiting on journalctl: {e}"))),
+        }
     }
 
     /// Maps one journald JSON object to a `RawEvent`. Returns `Ok(None)` for entries with no
@@ -175,7 +212,8 @@ impl LogSource for JournaldSource {
                     Err(e) => return Some(Err(e)),
                 },
                 Some(Err(e)) => return Some(Err(e.into())),
-                None => return None,
+                // stdout drained — but that only means "clean" if journalctl actually succeeded.
+                None => return self.check_exit(),
             }
         }
     }
@@ -230,6 +268,18 @@ static SYSLOG_RE: LazyLock<Regex> = LazyLock::new(|| {
     .expect("static syslog regex is valid")
 });
 
+/// ISO-8601 / RFC5424 header: `2026-07-12T09:15:00[.frac][+00:00|Z] host prog[pid]: message`. This
+/// is what modern rsyslog and `journalctl -o short-iso` emit by default on current distros — the
+/// classic `Mon DD HH:MM:SS` regex above misses them entirely, so those lines were silently dropped
+/// and a genuine brute force in an ISO-timestamped log read as "no findings". The timestamp carries
+/// its own year and zone, so (unlike RFC3164) there's no year to infer.
+static SYSLOG_ISO_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))\s+(?P<host>\S+)\s+(?P<prog>[^:\[\s]+)(?:\[(?P<pid>\d+)\])?:\s?(?P<msg>.*)$",
+    )
+    .expect("static ISO syslog regex is valid")
+});
+
 /// Parses classic RFC3164-style syslog lines from any `BufRead`. syslog headers carry no year,
 /// so `assume_year` is supplied explicitly (the CLI passes the current year; tests pass a fixed
 /// one) — keeping the parser free of any hidden `Utc::now()` and therefore deterministic.
@@ -251,6 +301,21 @@ impl<R: BufRead> SyslogLinesSource<R> {
     }
 
     fn parse_line(&self, line: &str) -> anyhow::Result<Option<RawEvent>> {
+        // ISO-8601 / RFC5424 first — the modern default. Its timestamp is self-contained (year +
+        // zone), so parse it directly and skip the year-inference the classic branch needs.
+        if let Some(caps) = SYSLOG_ISO_RE.captures(line) {
+            let timestamp = chrono::DateTime::parse_from_rfc3339(&caps["ts"])
+                .map_err(|e| anyhow::anyhow!("invalid ISO timestamp in '{line}': {e}"))?
+                .with_timezone(&Utc);
+            return Ok(Some(RawEvent {
+                timestamp,
+                program: Some(caps["prog"].to_string()),
+                unit: None,
+                pid: caps.name("pid").and_then(|m| m.as_str().parse().ok()),
+                host: Some(caps["host"].to_string()),
+                message: caps["msg"].to_string(),
+            }));
+        }
         // Blank lines and anything that doesn't match the syslog header shape are skipped, not
         // errored: real log files interleave multi-line payloads and kernel lines we don't model.
         let Some(caps) = SYSLOG_RE.captures(line) else {
@@ -325,6 +390,24 @@ mod tests {
 
     fn source(text: &str) -> SyslogLinesSource<Cursor<Vec<u8>>> {
         SyslogLinesSource::new(Cursor::new(text.as_bytes().to_vec()), 2026)
+    }
+
+    #[test]
+    fn parses_an_iso_timestamped_line_the_modern_default() {
+        // journalctl -o short-iso / modern rsyslog. These were silently dropped before, turning a
+        // real brute force into "no findings".
+        let mut s = source(
+            "2026-07-12T09:15:00.123456+00:00 myhost sshd[42]: Failed password for root from 1.2.3.4 port 22 ssh2\n",
+        );
+        let ev = s.next_event().unwrap().unwrap();
+        assert_eq!(ev.program.as_deref(), Some("sshd"));
+        assert_eq!(ev.pid, Some(42));
+        assert_eq!(ev.host.as_deref(), Some("myhost"));
+        assert_eq!(
+            ev.timestamp.to_rfc3339(),
+            "2026-07-12T09:15:00.123456+00:00"
+        );
+        assert!(ev.message.contains("Failed password"));
     }
 
     #[test]

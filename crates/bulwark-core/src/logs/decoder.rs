@@ -221,11 +221,11 @@ mod tests {
             prematch: Some("^Failed|^Accepted".into()),
             patterns: vec![
                 DecodePattern {
-                    regex: r"^Failed \S+ for (?:invalid user )?(?P<user>\S+) from (?P<srcip>\S+) port (?P<srcport>\d+)".into(),
+                    regex: r"^Failed \S+ for (?:invalid user )?(?P<user>.+) from (?P<srcip>\S+) port (?P<srcport>\d+)(?: ssh2)?\s*$".into(),
                     tags: vec!["authentication_failed".into()],
                 },
                 DecodePattern {
-                    regex: r"^Accepted \S+ for (?P<user>\S+) from (?P<srcip>\S+) port (?P<srcport>\d+)".into(),
+                    regex: r"^Accepted \S+ for (?P<user>.+) from (?P<srcip>\S+) port (?P<srcport>\d+)(?: ssh2)?\s*$".into(),
                     tags: vec!["authentication_success".into()],
                 },
             ],
@@ -235,6 +235,38 @@ mod tests {
 
     fn ev(program: &str, msg: &str) -> RawEvent {
         RawEvent::new(Utc::now(), msg).with_program(program)
+    }
+
+    #[test]
+    fn a_username_injecting_a_fake_from_ip_does_not_hijack_srcip() {
+        // The attacker chooses username `x from 6.6.6.6 port 1 ssh2`; sshd logs it verbatim before
+        // the genuine trailing `from 7.7.7.7 port 22`. The real source must be captured, not the
+        // injected decoy — otherwise an innocent IP gets framed and the by-srcip correlation is
+        // evaded by varying the fake IP per attempt.
+        let decoders = sshd_decoder();
+        let d = decode(
+            &decoders,
+            &ev(
+                "sshd",
+                "Failed password for invalid user x from 6.6.6.6 port 1 ssh2 from 7.7.7.7 port 22 ssh2",
+            ),
+        )
+        .expect("line decodes");
+        assert_eq!(d.fact.get("srcip").unwrap(), "7.7.7.7");
+    }
+
+    #[test]
+    fn a_username_with_spaces_is_still_decoded_not_dropped() {
+        let decoders = sshd_decoder();
+        let d = decode(
+            &decoders,
+            &ev(
+                "sshd",
+                "Failed password for invalid user admin backdoor from 1.2.3.4 port 22 ssh2",
+            ),
+        )
+        .expect("a spaced username must still decode, not be silently dropped");
+        assert_eq!(d.fact.get("srcip").unwrap(), "1.2.3.4");
     }
 
     #[test]

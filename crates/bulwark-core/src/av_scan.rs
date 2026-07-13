@@ -147,6 +147,13 @@ pub struct AvScanResult {
     /// scan that was cut short has proved nothing about the files it never reached.
     #[serde(default)]
     pub cancelled: bool,
+    /// Set when `clamscan` exited with an error status (exit code 2) — a missing/unloadable virus
+    /// database (a fresh install before `freshclam` ran), an unreadable path, resource exhaustion.
+    /// The scan did NOT actually inspect the files, so an empty `threats` here is meaningless: a
+    /// caller must render this as "scan failed", never as "no threats found". Same discipline as
+    /// `cancelled`.
+    #[serde(default)]
+    pub scan_error: Option<String>,
 }
 
 /// Parses `clamscan --infected --no-summary` output. Each detection line looks like
@@ -214,6 +221,7 @@ pub fn scan(paths: &[PathBuf]) -> anyhow::Result<AvScanResult> {
             threats: Vec::new(),
             clamscan_available: available,
             cancelled: false,
+            scan_error: None,
         });
     }
 
@@ -228,11 +236,26 @@ pub fn scan(paths: &[PathBuf]) -> anyhow::Result<AvScanResult> {
         .args(paths)
         .output()?;
 
-    // clamscan exits 1 when infections are found — that's a normal result, not a failure.
-    // Only a missing-binary-class error (already checked above) or a genuine crash (no
-    // stdout produced at all) should be treated as the scan not having run.
+    // clamscan's exit codes are meaningful: 0 = clean, 1 = infections found (a normal result), and
+    // 2 = a scan error (no virus DB, unreadable path, resource exhaustion). Treating 2 as "clean"
+    // — which ignoring the status does — is a false all-clear: an install whose database never
+    // loaded emits zero FOUND lines and exits 2, and the user would be told the host is clean when
+    // nothing was actually inspected.
     let stdout = String::from_utf8_lossy(&output.stdout);
     let threats = parse_clamscan_output(&stdout);
+    let scan_error = match output.status.code() {
+        Some(0) | Some(1) => None,
+        Some(code) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let detail = stderr.lines().next().unwrap_or("").trim();
+            Some(if detail.is_empty() {
+                format!("clamscan exited with status {code}")
+            } else {
+                format!("clamscan error (status {code}): {detail}")
+            })
+        }
+        None => Some("clamscan was terminated by a signal".to_string()),
+    };
 
     Ok(AvScanResult {
         scanned_paths: paths.iter().map(|p| p.display().to_string()).collect(),
@@ -240,6 +263,7 @@ pub fn scan(paths: &[PathBuf]) -> anyhow::Result<AvScanResult> {
         threats,
         clamscan_available: true,
         cancelled: false,
+        scan_error,
     })
 }
 
@@ -278,6 +302,7 @@ pub fn scan_streaming_cancellable(
             threats: Vec::new(),
             clamscan_available: available,
             cancelled: false,
+            scan_error: None,
         });
     }
 
@@ -299,6 +324,7 @@ pub fn scan_streaming_cancellable(
 
     let mut files_scanned: u64 = 0;
     let mut threats = Vec::new();
+    let mut unscanned = 0u64;
     let mut cancelled = false;
     for line in BufReader::new(stdout).lines() {
         if should_cancel() {
@@ -311,7 +337,12 @@ pub fn scan_streaming_cancellable(
             continue;
         };
         match &parsed {
-            ClamscanLine::Clean(_) | ClamscanLine::Error(_) => files_scanned += 1,
+            ClamscanLine::Clean(_) => files_scanned += 1,
+            // An ERROR line means clamscan *reached* the file but could not scan it (permission
+            // denied, an encrypted/oversized archive). It is NOT a clean verdict, so it must not be
+            // folded into files_scanned as if it were — malware inside a password-protected archive
+            // is exactly this case. Counted separately and surfaced.
+            ClamscanLine::Error(_) => unscanned += 1,
             ClamscanLine::Infected(t) => {
                 files_scanned += 1;
                 threats.push(t.clone());
@@ -319,9 +350,27 @@ pub fn scan_streaming_cancellable(
         }
         on_line(&parsed);
     }
-    // clamscan exits 1 when infections are found — a normal, already-consumed-above result,
-    // not a process failure worth propagating as an Err. Also reaps the child after a kill.
-    let _ = child.wait();
+    // Reap the child and inspect its exit status. clamscan: 0 = clean, 1 = infections found (a
+    // normal, already-consumed result), 2 = scan error (no/broken virus DB, unreadable path). A 2
+    // means the files weren't really inspected, so — like `cancelled` — the caller must not present
+    // an empty threat list as a clean bill of health. A cancelled run is expected to be killed, so
+    // its status isn't treated as an error.
+    let status = child.wait();
+    let scan_error = if cancelled {
+        None
+    } else {
+        match status.ok().and_then(|s| s.code()) {
+            Some(0) | Some(1) => {
+                if unscanned > 0 {
+                    Some(format!("{unscanned} file(s) could not be scanned"))
+                } else {
+                    None
+                }
+            }
+            Some(code) => Some(format!("clamscan exited with error status {code}")),
+            None => Some("clamscan was terminated by a signal".to_string()),
+        }
+    };
 
     Ok(AvScanResult {
         scanned_paths: paths.iter().map(|p| p.display().to_string()).collect(),
@@ -329,6 +378,7 @@ pub fn scan_streaming_cancellable(
         threats,
         clamscan_available: true,
         cancelled,
+        scan_error,
     })
 }
 

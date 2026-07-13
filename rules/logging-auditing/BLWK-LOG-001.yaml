@@ -3,6 +3,7 @@ title: auditd is not installed
 category: logging-auditing
 severity: medium
 collector: logging
+profiles: [server]
 condition: auditd_present == false
 explain: >
   No auditd binary was found. Without it, there's no kernel-level record of privileged

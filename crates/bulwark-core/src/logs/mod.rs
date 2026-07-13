@@ -76,7 +76,48 @@ pub struct LogScanRun {
     /// only fails once it's actually run) — recorded, and the rule treated as non-matching for
     /// that event, never crashing the scan.
     pub rule_eval_errors: Vec<String>,
+    /// Conditions that make an empty finding list *untrustworthy* rather than reassuring: no
+    /// decoders/rules loaded (nothing could match), or lines read but none understood (a format
+    /// this scanner doesn't parse — ISO-timestamped syslog, a compressed or binary file). A caller
+    /// must surface these; "0 findings" with a warning here is "couldn't analyze", not "clean".
+    #[serde(default)]
+    pub warnings: Vec<String>,
     pub findings: Vec<LogFinding>,
+}
+
+impl LogScanRun {
+    /// Builds the `warnings` list from the run's own counters — the health signals that separate a
+    /// genuine clean result from a scan that never actually analyzed anything.
+    fn compute_warnings(&self) -> Vec<String> {
+        let mut w = Vec::new();
+        if self.decoders_loaded == 0 {
+            w.push(
+                "no log decoders were loaded — no line can be parsed, so no intrusion can be found"
+                    .to_string(),
+            );
+        }
+        if self.rules_loaded == 0 {
+            w.push("no log rules were loaded — nothing is being checked for".to_string());
+        }
+        if self.events_read > 0 && self.events_decoded == 0 {
+            w.push(format!(
+                "read {} log line(s) but understood 0 of them — this is likely a format Bulwark \
+                 doesn't parse (ISO-timestamped syslog, or a compressed/binary file), not a clean log",
+                self.events_read
+            ));
+        }
+        // The source failed (e.g. journalctl exited non-zero / permission denied) and produced no
+        // events at all — a total-analysis failure, not a clean journal. The source surfaces its
+        // failure as a read error at end-of-stream (see JournaldSource::check_exit).
+        if self.events_read == 0 && !self.read_errors.is_empty() {
+            w.push(
+                "the log source failed and no events were read — this scan analyzed nothing, so it \
+                 is not a clean result"
+                    .to_string(),
+            );
+        }
+        w
+    }
 }
 
 impl LogScanRun {
@@ -172,7 +213,7 @@ pub fn run_log_scan(
         }
     }
 
-    LogScanRun {
+    let mut run = LogScanRun {
         id,
         started_at,
         finished_at: Some(Utc::now()),
@@ -185,8 +226,11 @@ pub fn run_log_scan(
         rule_load_errors,
         read_errors,
         rule_eval_errors,
+        warnings: Vec::new(),
         findings,
-    }
+    };
+    run.warnings = run.compute_warnings();
+    run
 }
 
 fn build_finding(
@@ -361,7 +405,49 @@ mod tests {
     }
 
     #[test]
-    fn a_bad_matches_regex_is_recorded_at_eval_time_not_fatal() {
+    fn a_scan_that_understood_nothing_is_warned_not_reported_clean() {
+        // Lines read but none decoded (a format Bulwark doesn't parse) must not read as "clean".
+        let dtmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dtmp.path().join("d.yaml"),
+            "id: sshd\nprogram: sshd\npatterns:\n  - regex: '^Failed'\n    tags: [t]\n",
+        )
+        .unwrap();
+        let rtmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            rtmp.path().join("r.yaml"),
+            "id: R\ntitle: t\ncategory: c\nseverity: low\ndecoder: sshd\ncondition: 'x == 1'\nexplain: e\nfix: f\n",
+        )
+        .unwrap();
+        // A line the syslog source parses but the sshd decoder doesn't match.
+        let mut src = syslog_source("Jul 12 09:15:00 h sshd[1]: Connection closed by 1.2.3.4\n");
+        let scan = run_log_scan(dtmp.path(), rtmp.path(), &mut src);
+        assert!(scan.findings.is_empty());
+        assert!(
+            scan.warnings.iter().any(|w| w.contains("understood 0")),
+            "read-but-undecoded must warn, got {:?}",
+            scan.warnings
+        );
+    }
+
+    #[test]
+    fn zero_decoders_is_a_warning_not_a_clean_result() {
+        let dtmp = tempfile::tempdir().unwrap(); // empty — no decoders
+        let rtmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            rtmp.path().join("r.yaml"),
+            "id: R\ntitle: t\ncategory: c\nseverity: low\ndecoder: sshd\ncondition: 'x == 1'\nexplain: e\nfix: f\n",
+        )
+        .unwrap();
+        let mut src = syslog_source(
+            "Jul 12 09:15:00 h sshd[1]: Failed password for root from 1.2.3.4 port 2 ssh2\n",
+        );
+        let scan = run_log_scan(dtmp.path(), rtmp.path(), &mut src);
+        assert!(scan.warnings.iter().any(|w| w.contains("no log decoders")));
+    }
+
+    #[test]
+    fn a_bad_matches_regex_is_rejected_at_load_not_fatal() {
         let dtmp = tempfile::tempdir().unwrap();
         std::fs::write(
             dtmp.path().join("d.yaml"),
@@ -369,7 +455,9 @@ mod tests {
         )
         .unwrap();
         let rtmp = tempfile::tempdir().unwrap();
-        // `matches` compiles its regex at eval time; `[` is an invalid regex.
+        // `matches` now compiles its regex at PARSE time, so an invalid pattern (`[`) makes the
+        // rule fail to load — caught up front (and by `logs rules validate`) rather than lurking as
+        // a per-event eval error. The scan stays non-fatal and records the load failure.
         std::fs::write(
             rtmp.path().join("r.yaml"),
             "id: R\ntitle: t\ncategory: c\nseverity: low\ndecoder: t\ncondition: 'x matches \"[\"'\nexplain: e\nfix: f\n",
@@ -379,9 +467,9 @@ mod tests {
         let scan = run_log_scan(dtmp.path(), rtmp.path(), &mut src);
         assert!(scan.findings.is_empty());
         assert_eq!(
-            scan.rule_eval_errors.len(),
+            scan.rule_load_errors.len(),
             1,
-            "bad regex should be recorded, not panic"
+            "an invalid regex should be a load error, caught before any scan"
         );
     }
 }

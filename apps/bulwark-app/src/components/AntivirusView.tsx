@@ -23,6 +23,9 @@ interface AvScanResult {
   clamscan_available: boolean;
   /** Stopped early — the counts and threat list are partial, so this must not read as "clean". */
   cancelled: boolean;
+  /** clamscan errored (e.g. no virus DB) — the files weren't really inspected, so an empty threat
+   * list here is meaningless and must be shown as a failure, never as "no threats found". */
+  scan_error?: string | null;
 }
 
 interface DashboardSnapshot {
@@ -385,7 +388,15 @@ export function AntivirusView({ active }: { active: boolean }) {
             </Callout>
           )}
 
-          {result?.clamscan_available && !result.cancelled && (
+          {result?.scan_error && !result.cancelled && (
+            <Callout tone="critical" className="mt-4">
+              <span className="font-medium">Scan did not complete: {result.scan_error}.</span> The files were
+              not actually inspected, so this is not a clean result — resolve the error (for a missing virus
+              database, run <span className="font-mono">sudo freshclam</span>) and scan again.
+            </Callout>
+          )}
+
+          {result?.clamscan_available && !result.cancelled && !result.scan_error && (
             <div
               className="rail mt-4 flex items-center gap-3 rounded-md border border-border bg-card py-3.5 pr-4"
               style={railStyle(result.threats.length > 0 ? "critical" : "resolved")}

@@ -729,6 +729,13 @@ fn run_logs(action: LogsAction, db_path: Option<PathBuf>) -> anyhow::Result<()> 
             } else {
                 print_log_scan_table(&scan);
             }
+            // A scan that loaded no decoders or no rules never actually analyzed anything — exit
+            // with an error so a script gating on the exit code can't mistake it for a clean run
+            // (the finding-severity exit code below would otherwise report success).
+            if scan.decoders_loaded == 0 || scan.rules_loaded == 0 {
+                eprintln!("error: log scan could not run — no decoders and/or rules were loaded");
+                std::process::exit(2);
+            }
             std::process::exit(exit_code_for(scan.worst_severity()));
         }
         LogsAction::Rules { action } => match action {
@@ -842,9 +849,18 @@ fn print_log_scan_table(scan: &LogScanRun) {
             println!("  {e}");
         }
     }
+    // Health warnings make an empty result untrustworthy — surface them prominently so "No findings"
+    // is never read as "clean" when the scan couldn't actually analyze the input.
+    for w in &scan.warnings {
+        println!("⚠ {w}");
+    }
     println!();
     if scan.findings.is_empty() {
-        println!("No findings.");
+        if scan.warnings.is_empty() {
+            println!("No findings.");
+        } else {
+            println!("No findings — but see the warnings above: this scan could not reliably analyze the input.");
+        }
         return;
     }
     let mut sorted = scan.findings.clone();

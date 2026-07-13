@@ -211,6 +211,33 @@ pub fn load_rules(dir: &Path) -> (Vec<LoadedRule>, Vec<RuleLoadError>) {
         }
     }
 
+    // Reject duplicate rule IDs. Reconciliation is keyed on `rule_id` (store.rs), and its resolve
+    // pass assumes one rule per ID: if two different rules share an ID and one evaluates cleanly
+    // while the other's collector was skipped, the clean one's ID enters `rules_evaluated` and the
+    // resolve pass wrongly closes the skipped one's carried-forward findings — defeating the
+    // "a skipped check is not a passing one" invariant. So a collision is a load error, and the
+    // duplicates are dropped rather than left to silently corrupt state.
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for r in &loaded {
+        *seen.entry(r.rule.id.clone()).or_insert(0) += 1;
+    }
+    let dupes: std::collections::HashSet<String> = seen
+        .into_iter()
+        .filter(|(_, n)| *n > 1)
+        .map(|(id, _)| id)
+        .collect();
+    if !dupes.is_empty() {
+        for id in &dupes {
+            errors.push(RuleLoadError {
+                path: format!("rule id {id}"),
+                message: format!(
+                    "duplicate rule id '{id}' — ids must be unique (reconciliation keys on them)"
+                ),
+            });
+        }
+        loaded.retain(|r| !dupes.contains(&r.rule.id));
+    }
+
     (loaded, errors)
 }
 
@@ -289,14 +316,30 @@ pub fn run_scan_cancellable(
             privileged_collectors_skipped.push(collector.name().to_string());
             continue;
         }
-        match collector.collect() {
-            Ok(rows) => {
+        // Isolate each collector behind `catch_unwind`: a collector that *panics* on malformed
+        // system input (an unwrap, an out-of-bounds slice) must not take the whole scan — possibly
+        // the root pkexec scan — down with it. A panic is recorded as a collector error, exactly
+        // like a returned `Err`, keeping the fail-soft contract the rest of the engine relies on.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| collector.collect()));
+        match result {
+            Ok(Ok(rows)) => {
                 facts_by_collector.insert(collector.name().to_string(), rows);
             }
-            Err(e) => collector_errors.push(CollectorError {
+            Ok(Err(e)) => collector_errors.push(CollectorError {
                 collector: collector.name().to_string(),
                 message: e.to_string(),
             }),
+            Err(panic) => {
+                let msg = panic
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "collector panicked".to_string());
+                collector_errors.push(CollectorError {
+                    collector: collector.name().to_string(),
+                    message: format!("collector panicked: {msg}"),
+                });
+            }
         }
     }
 

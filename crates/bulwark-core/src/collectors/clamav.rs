@@ -58,16 +58,21 @@ pub fn describe_db_freshness(
     let age_days = db_mtime
         .and_then(|t| now.duration_since(t).ok())
         .map(|d| (d.as_secs() / 86400) as i64);
-    match age_days {
-        Some(days) => {
-            fact.insert("db_age_days".to_string(), Value::from(days));
-        }
-        None => {
-            // No mtime (DB missing entirely, or installed but never updated) is left out
-            // of the fact rather than defaulted to 0 or a huge number — a rule reading
-            // db_age_days then reports MissingField rather than a misleading value.
-        }
-    }
+    // `db_age_days` is ALWAYS emitted, so BLWK-AV-002 (`db_age_days > 14`) never MissingFields —
+    // which it used to do on every scan of a host without ClamAV, producing a recurring
+    // collector_error. The value encodes the three real states:
+    //   * a signature DB with a real mtime → its actual age;
+    //   * ClamAV installed but NO signature DB (never ran freshclam — more dangerous than merely
+    //     stale) → a large sentinel, so AV-002 fires and the gap is reported rather than silent;
+    //   * not installed, or install state undetermined → 0, so AV-002 stays quiet (BLWK-AV-001
+    //     already owns "not installed") and doesn't error.
+    const NO_DATABASE_AGE: i64 = 100_000;
+    let db_age_days = match age_days {
+        Some(days) => days,
+        None if installed == Some(true) => NO_DATABASE_AGE,
+        None => 0,
+    };
+    fact.insert("db_age_days".to_string(), Value::from(db_age_days));
     fact
 }
 
@@ -97,10 +102,22 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn not_installed_has_no_age_field() {
+    fn not_installed_reports_age_zero_so_the_staleness_rule_stays_quiet_and_error_free() {
+        // db_age_days is always emitted now (was omitted, which made BLWK-AV-002 MissingField and
+        // error every scan on a host without ClamAV). Not-installed → 0, so AV-002 (`> 14`) is
+        // quiet; BLWK-AV-001 owns "not installed".
         let fact = describe_db_freshness(Some(false), None, SystemTime::now());
         assert_eq!(fact.get("installed").unwrap(), &Value::Bool(false));
-        assert!(!fact.contains_key("db_age_days"));
+        assert_eq!(fact.get("db_age_days").unwrap(), &Value::from(0));
+    }
+
+    #[test]
+    fn installed_but_no_signature_database_reports_as_very_stale() {
+        // Installed, freshclam never ran (no DB) — more dangerous than merely stale. A large
+        // sentinel makes AV-002 fire and report the gap rather than staying silent.
+        let fact = describe_db_freshness(Some(true), None, SystemTime::now());
+        let age = fact.get("db_age_days").unwrap().as_i64().unwrap();
+        assert!(age > 14, "absent DB must read as stale, got {age}");
     }
 
     #[test]

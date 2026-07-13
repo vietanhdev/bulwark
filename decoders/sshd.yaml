@@ -4,14 +4,20 @@ program: sshd
 # capture regex — connection open/close, key exchange, session lifecycle, etc.
 prematch: '^Failed|^Accepted|^Invalid user'
 patterns:
-  # Invalid-user failures first (more specific than the generic Failed line below), so they get
-  # the extra `invalid_user` tag that the credential-stuffing scan rule keys off.
-  - regex: '^Failed \S+ for invalid user (?P<user>\S+) from (?P<srcip>\S+) port (?P<srcport>\d+)'
+  # The username is captured GREEDILY and the real source is anchored to end-of-line. sshd logs the
+  # attacker-chosen username verbatim, BEFORE the genuine `from <ip> port <n>` tuple — so a
+  # non-greedy `\S+` user lets a username like `x from 6.6.6.6 port 1 ssh2` hijack the srcip capture
+  # (framing an innocent IP, and — by varying the injected IP per attempt — evading the by-srcip
+  # brute-force correlation entirely). Greedy `.+` backtracks to the LAST ` from … port … ` at the
+  # end of the line, which is always the real one; any injected copy is absorbed into `user`. This
+  # also fixes ordinary usernames that contain spaces, which the old `\S+` dropped silently.
+  # Invalid-user failures first (more specific), so they get the `invalid_user` tag.
+  - regex: '^Failed \S+ for invalid user (?P<user>.+) from (?P<srcip>\S+) port (?P<srcport>\d+)(?: ssh2)?\s*$'
     tags: [authentication_failed, invalid_user]
-  - regex: '^Failed \S+ for (?P<user>\S+) from (?P<srcip>\S+) port (?P<srcport>\d+)'
+  - regex: '^Failed \S+ for (?P<user>.+) from (?P<srcip>\S+) port (?P<srcport>\d+)(?: ssh2)?\s*$'
     tags: [authentication_failed]
-  - regex: '^Accepted \S+ for (?P<user>\S+) from (?P<srcip>\S+) port (?P<srcport>\d+)'
+  - regex: '^Accepted \S+ for (?P<user>.+) from (?P<srcip>\S+) port (?P<srcport>\d+)(?: ssh2)?\s*$'
     tags: [authentication_success]
   # Standalone "Invalid user X from Y" line (emitted separately from the Failed line).
-  - regex: '^Invalid user (?P<user>\S+) from (?P<srcip>\S+)'
+  - regex: '^Invalid user (?P<user>.+) from (?P<srcip>\S+)\s*$'
     tags: [invalid_user]

@@ -9,5 +9,9 @@ explain: >
   couldn't possibly have arrived via the interface they came in on, which is exactly the
   condition IP spoofing depends on. (A value of 1 or 2 — strict or loose mode — is fine;
   this only fires when filtering is fully off.)
-fix: "Set 'net.ipv4.conf.all.rp_filter=1' via /etc/sysctl.d/ and run 'sysctl --system'."
+fix: >
+  Set 'net.ipv4.conf.all.rp_filter=2' (loose mode) via /etc/sysctl.d/ and run 'sysctl --system'.
+  Use '1' (strict) only on single-homed hosts — strict reverse-path filtering drops legitimate
+  traffic on multi-homed servers and any asymmetric-routing setup, which is exactly the server
+  class most likely to be affected, so loose is the safe default that still blocks spoofing.
 references: [CIS-3.2.4]

@@ -3,7 +3,7 @@ title: "Credential file not covered by the baseline: {{ file_integrity_privilege
 category: file-integrity
 severity: low
 collector: file_integrity_privileged
-condition: in_baseline == false and currently_present == true
+condition: in_baseline == false and currently_present == true and unreadable == false
 explain: >
   {{ file_integrity_privileged.path }} — one of the two root-only credential/privilege files
   Bulwark tracks (/etc/shadow, /etc/sudoers) — is present but has no baseline hash, so its
