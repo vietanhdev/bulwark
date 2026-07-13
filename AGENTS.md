@@ -43,6 +43,15 @@ CI (`.github/workflows/ci.yml`) runs fmt-check, clippy `-D warnings`, `cargo tes
 
 `.github/workflows/release.yml` builds and publishes every artifact: the GUI (`.deb`, `.rpm`, AppImage, via `cargo tauri build`) and the CLI (`.deb`, `.rpm`, tarball). Cutting a release is `git tag v0.1.0 && git push origin v0.1.0`; the workflow refuses to build if the tag disagrees with the workspace version, and it publishes as a **draft** so the assets can be looked at before anything goes public. `workflow_dispatch` runs the whole pipeline without publishing, which is how you rehearse a release without burning a version number.
 
+**Bumping the version — always use `scripts/bump-version.sh`, never edit by hand.** The version is declared in six files that must never disagree (`Cargo.toml`, the `bulwark-core` path-dep pin in `crates/bulwarkctl/Cargo.toml`, both `package.json`s, `apps/bulwark-app/src-tauri/tauri.conf.json`, and the `getVersion` mock in `apps/bulwark-app/src/mocks/tauri/app.ts`), plus `Cargo.lock`. Miss one and you ship a `0.5.0` package whose `--version` prints `0.4.0`, or a tag CI rejects. The script sets all of them and syncs `Cargo.lock`:
+
+```bash
+scripts/bump-version.sh 0.5.0     # set every declaration + sync Cargo.lock
+scripts/bump-version.sh --check   # verify they already agree (use in CI / before tagging)
+```
+
+Then commit (`chore(release): 0.5.0`) and tag. If a new file starts carrying the version, add it to the script's file list — that list is the single source of truth for what a bump touches.
+
 Built on `ubuntu-22.04`, deliberately not `ubuntu-latest`: the oldest glibc linked against becomes the oldest distro the artifacts run on, and `ubuntu-latest` silently raises that floor whenever GitHub re-points it.
 
 The workflow asserts on package *contents* (≥50 rule files in each of the CLI `.deb`, CLI `.rpm`, and GUI `.deb`), not merely that the packaging command exited 0 — `cargo deb`/`cargo tauri build` succeeding only proves the metadata parsed. The CLI's `.rpm` shipped **zero** rules for a while precisely because nothing checked: its asset list had drifted out of sync with the `.deb`'s, and `bulwarkctl` resolves `/usr/share/bulwark/rules` on an installed system, so every invocation failed with "couldn't find a 'rules' directory."
