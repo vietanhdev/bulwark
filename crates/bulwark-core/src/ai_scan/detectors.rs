@@ -842,14 +842,21 @@ pub fn detect_mcp(content: &str) -> Vec<Detection> {
     out
 }
 
-/// A package spec is "unpinned" if its package token carries no explicit version.
+/// npm dist-tags that float — they resolve to "whatever the registry serves now", so a spec pinned
+/// to one is exactly as unpinned as `pkg` with no version at all. `@playwright/mcp@latest` runs a
+/// different build tomorrow with your granted tool permissions, which is the whole point of the rule.
+const FLOATING_TAGS: &[&str] = &[
+    "latest", "next", "beta", "alpha", "canary", "dev", "nightly", "rc", "edge",
+];
+
+/// A package spec is "unpinned" if its package token carries no *concrete* version.
 ///
-/// `-y`/`--yes` is deliberately NOT treated as evidence of unpinning, which was a bug: that flag
-/// only means "install without prompting" and is the *recommended* way to run an MCP server
-/// non-interactively — it says nothing about the version. `npx -y @scope/pkg@2025.8.21` is fully
-/// pinned, yet the old check flagged it High. A version is recognised in either form: an npm
-/// `@version` (after any `@scope/` prefix) or a PEP440 specifier (`==`, `>=`, `~=`, …) as used by
-/// `uvx`/`pipx` (`mcp-server-git==0.6.2`).
+/// `-y`/`--yes` is deliberately NOT treated as evidence of unpinning: that flag only means "install
+/// without prompting" and is the recommended way to run an MCP server non-interactively — it says
+/// nothing about the version. `npx -y @scope/pkg@2025.8.21` is fully pinned. A concrete version is
+/// recognised as an npm `@version` (after any `@scope/` prefix) or a PEP440 specifier (`==`, `>=`,
+/// `~=`, …). A floating dist-tag (`@latest`, `@next`, …) is NOT a pin — it resolves to a different
+/// build over time — so it counts as unpinned.
 fn is_unpinned(args: &[String]) -> bool {
     // The package token is the first non-flag arg. `mcp-remote` handled separately above.
     let pkg = args.iter().find(|a| !a.starts_with('-'));
@@ -862,9 +869,18 @@ fn is_unpinned(args: &[String]) -> bool {
             } else {
                 p.as_str()
             };
-            // npm `@version` or a PEP440 specifier (all of which contain `=`). A bare package name
-            // contains neither.
-            !(after_scope.contains('@') || after_scope.contains('='))
+            // The version specifier after the package name, if any (`pkg@X` → `X`, `pkg==X` → `=X`).
+            let version = after_scope.split_once('@').map(|(_, v)| v).or_else(|| {
+                after_scope
+                    .split_once('=')
+                    .map(|(_, v)| v.trim_start_matches('='))
+            });
+            match version {
+                // No version at all — unpinned.
+                None => true,
+                // A floating dist-tag is not a real pin.
+                Some(v) => FLOATING_TAGS.contains(&v.to_ascii_lowercase().as_str()),
+            }
         }
     }
 }
@@ -1021,6 +1037,16 @@ mod tests {
         // ...but a genuinely unpinned one still is.
         assert!(is_unpinned(&["-y".into(), "@scope/pkg".into()]));
         assert!(is_unpinned(&["some-server".into()]));
+    }
+
+    #[test]
+    fn a_floating_dist_tag_is_unpinned() {
+        // `@latest`/`@next`/… resolve to a different build over time — as unpinned as no version.
+        assert!(is_unpinned(&["-y".into(), "@playwright/mcp@latest".into()]));
+        assert!(is_unpinned(&["-y".into(), "some-server@next".into()]));
+        assert!(is_unpinned(&["pkg@beta".into()]));
+        // A concrete version is still a real pin.
+        assert!(!is_unpinned(&["-y".into(), "@playwright/mcp@1.2.3".into()]));
     }
 
     #[test]

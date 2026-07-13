@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertTriangle, ShieldAlert } from "lucide-react";
+import { AlertTriangle, Check, ShieldAlert } from "lucide-react";
 import { PageShell } from "@/components/PageShell";
 import { railStyle } from "@/components/Severity";
 import { useRevision } from "@/lib/revision";
@@ -38,8 +38,6 @@ export function HistoryView() {
     invoke<ScanRunSummary[]>("history_list").then(setRuns);
   }, [revision]);
 
-  const maxFindings = useMemo(() => Math.max(1, ...(runs?.map((r) => r.total_findings) ?? [1])), [runs]);
-
   return (
     <PageShell
       title="History"
@@ -58,12 +56,17 @@ export function HistoryView() {
         <div className="overflow-hidden rounded-lg border border-border bg-card">
           {runs.map((run, i) => {
             const clean = run.total_findings === 0;
+            // runs are newest-first, so the next entry is the *previous* (older) scan. The change
+            // between them is what this page is actually for — "did something just appear?" — so it
+            // reads better as a signed delta than as a bar that looked like a progress meter.
+            const older = runs[i + 1];
+            const delta = older ? run.total_findings - older.total_findings : null;
             return (
               <div
                 key={run.id}
                 style={railStyle(clean ? "resolved" : "critical")}
                 className={cn(
-                  "rail rail-dim flex items-center gap-3 py-2.5 pr-3",
+                  "rail rail-dim flex items-center gap-3 py-3 pr-3",
                   i > 0 && "border-t border-border",
                 )}
               >
@@ -71,20 +74,31 @@ export function HistoryView() {
                   {formatWhen(run.started_at)}
                 </span>
 
-                {/* The bar is the point of this page: scanning the column tells you at a glance
-                    whether things have been getting better or worse, without reading a number. */}
-                <span className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
-                  <span
-                    className="block h-full rounded-full"
-                    style={{
-                      width: `${Math.max(4, (run.total_findings / maxFindings) * 100)}%`,
-                      background: `var(--sev-${clean ? "resolved" : "critical"})`,
-                    }}
+                {clean ? (
+                  <Check
+                    className="h-4 w-4 shrink-0"
+                    style={{ color: "var(--sev-resolved-fg)" }}
+                    strokeWidth={2.5}
                   />
-                </span>
+                ) : (
+                  <span
+                    className="h-2 w-2 shrink-0 rounded-full"
+                    style={{ background: "var(--sev-critical)" }}
+                  />
+                )}
 
-                <span className="w-24 shrink-0 text-right font-mono text-xs text-muted-foreground tabular-nums">
-                  {run.total_findings} finding{run.total_findings === 1 ? "" : "s"}
+                <span className="min-w-0 flex-1 text-sm">
+                  <span className="font-mono font-semibold tabular-nums">{run.total_findings}</span>
+                  <span className="text-muted-foreground"> finding{run.total_findings === 1 ? "" : "s"}</span>
+                  {delta !== null && delta !== 0 && (
+                    <span
+                      className="ml-2 font-mono text-[11px] tabular-nums"
+                      style={{ color: `var(--sev-${delta > 0 ? "critical" : "resolved"}-fg)` }}
+                      title="Change from the previous scan"
+                    >
+                      {delta > 0 ? `+${delta}` : delta}
+                    </span>
+                  )}
                 </span>
 
                 <span className="flex w-12 shrink-0 justify-end gap-1">

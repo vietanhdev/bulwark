@@ -193,6 +193,23 @@ pub fn scan_cancellable(
         }
     }
 
+    // Collapse duplicate findings. Discovery can reach the same file by more than one route — the
+    // global `$HOME` sweep and a configured workspace root that lives under `$HOME`, say — and would
+    // otherwise report the identical finding once per route (the user saw `~/.claude/.credentials.json`
+    // line 1 four times). The identity is the file, line, rule, and evidence: two genuinely distinct
+    // secrets on the same line differ in evidence and are kept.
+    {
+        let mut seen = std::collections::HashSet::new();
+        findings.retain(|f| {
+            seen.insert((
+                f.file.clone(),
+                f.line,
+                f.rule_id.clone(),
+                f.evidence.clone(),
+            ))
+        });
+    }
+
     // Stable, useful ordering: worst severity first, then by file, so the UI and CLI don't have
     // to sort and a redact pass processes the scariest files first.
     findings.sort_by(|a, b| {
@@ -252,15 +269,31 @@ fn scan_artifact(artifact: &Artifact) -> anyhow::Result<Vec<AiFinding>> {
         None => return Ok(out), // non-UTF-8 (e.g. a SQLite transcript) — nothing text to scan
     };
 
-    // Secret detection over anything that can hold pasted text.
+    // Secret detection over anything that can hold pasted text — with two deliberate exclusions
+    // that were drowning real findings in non-actionable noise:
+    //
+    //   * The credential store (`~/.claude/.credentials.json`) is SUPPOSED to hold a token — that's
+    //     its whole purpose. Reporting its expected content as a "possible leaked secret" on every
+    //     scan is pure noise; its real risk (being readable by other users) is the separate
+    //     permission check above. So the credential store is not content-scanned for secrets.
+    //   * On transcripts, only HIGH-confidence provider keys are reported. A conversation log is
+    //     full of random-looking strings (hashes, base64, ids), and the low-confidence generic
+    //     heuristic fires on them constantly — findings the user can neither confirm nor act on. A
+    //     real pasted `sk-ant-…`/`AKIA…` key is still caught and is genuinely actionable (redact +
+    //     rotate); the fuzzy guesses are not.
     let mut has_redactable_secret = false;
-    for m in secrets::scan_text(&content) {
-        let severity = secrets::severity_for(&m);
-        let redactable = m.high_conf;
-        has_redactable_secret |= redactable;
-        out.push(finding_from_secret(
-            artifact, &tool, &m, severity, redactable,
-        ));
+    if artifact.kind != Credential {
+        for m in secrets::scan_text(&content) {
+            if artifact.kind == Transcript && !m.high_conf {
+                continue;
+            }
+            let severity = secrets::severity_for(&m);
+            let redactable = m.high_conf;
+            has_redactable_secret |= redactable;
+            out.push(finding_from_secret(
+                artifact, &tool, &m, severity, redactable,
+            ));
+        }
     }
 
     // Config detectors, chosen by artifact kind.
@@ -270,9 +303,14 @@ fn scan_artifact(artifact: &Artifact) -> anyhow::Result<Vec<AiFinding>> {
         Tasks => detectors::detect_tasks(&content),
         CodexConfig => detectors::detect_codex_config(&content),
         Settings => detect_settings(artifact, &content),
-        // Transcripts, dotenvs, credentials still get a base-URL check (an override can live in
-        // any of them), but no structural config parse.
-        DotEnv | Transcript | Credential => detectors::detect_base_url(&content),
+        // A real base-URL override lives in an env file. A base URL merely *mentioned* in a
+        // transcript (a command someone ran, a fixture, a discussion) or appearing in the JSON of a
+        // credential store is not a configured setting — flagging those produced a stream of FPs
+        // against immutable history the user can't change. So the base-URL check runs on env files
+        // only. (Instructions files still get it via detect_instructions, where an override would
+        // be a real directive.)
+        DotEnv => detectors::detect_base_url(&content),
+        Transcript | Credential => Vec::new(),
     };
     for d in detections {
         out.push(finding_from_detection(artifact, &tool, d));
