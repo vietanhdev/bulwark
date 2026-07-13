@@ -29,7 +29,11 @@ interface DashboardSnapshot {
 const FIM_RULE_PREFIX = "BLWK-FIM-";
 
 export function IntegrityView() {
-  const { revision, bump } = useRevision();
+  const { revision, bump, running } = useRevision();
+  // The compliance scan (launched from the Overview) is what recomputes file-integrity findings, and
+  // it marks "fim" running for the duration — so this tab shows a live indicator instead of sitting
+  // silent while that scan populates it.
+  const fimRunning = running.has("fim");
 
   const [baselining, setBaselining] = useState(false);
   const [baselineCount, setBaselineCount] = useState<number | null>(null);
@@ -117,6 +121,14 @@ export function IntegrityView() {
 
         <section>
           <SectionLabel>Integrity findings</SectionLabel>
+          {fimRunning && (
+            <div className="mb-3 flex items-center gap-2.5 rounded-md border border-border bg-muted/40 px-3 py-2.5">
+              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+              <div className="font-mono text-[11px] text-muted-foreground">
+                Checking file integrity (started from Overview)…
+              </div>
+            </div>
+          )}
           {!drift ? (
             <div className="rounded-lg border border-dashed border-border py-14 text-center">
               <FileCheck2 className="mx-auto h-7 w-7 text-muted-foreground/40" strokeWidth={1.5} />

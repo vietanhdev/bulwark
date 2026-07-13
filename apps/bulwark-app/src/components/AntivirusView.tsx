@@ -84,11 +84,17 @@ export function AntivirusView({ active }: { active: boolean }) {
   const [liveDetected, setLiveDetected] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    invoke<ClamavInfoResponse>("clamav_info").then(setClamav);
-    invoke<DashboardSnapshot>("dashboard_snapshot").then((snap) =>
-      setDbStale(snap.findings.some((f) => f.rule_id === "BLWK-AV-002")),
-    );
-    invoke<RealtimeAvStatus>("realtime_av_get_status").then(setRealtime);
+    // Best-effort status loads: a rejection must not become an uncaught promise (every other view's
+    // snapshot effect catches). On failure each simply leaves its state at the safe default.
+    invoke<ClamavInfoResponse>("clamav_info")
+      .then(setClamav)
+      .catch(() => setClamav(null));
+    invoke<DashboardSnapshot>("dashboard_snapshot")
+      .then((snap) => setDbStale(snap.findings.some((f) => f.rule_id === "BLWK-AV-002")))
+      .catch(() => setDbStale(false));
+    invoke<RealtimeAvStatus>("realtime_av_get_status")
+      .then(setRealtime)
+      .catch(() => setRealtime(null));
   }, [revision]);
 
   useEffect(() => {

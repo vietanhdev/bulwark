@@ -114,8 +114,15 @@ export function SettingsView() {
   }
 
   async function setIntervalMinutes(minutes: number) {
-    setStatus(await invoke<MonitoringStatus>("monitoring_set_interval_minutes", { minutes }));
-    bump();
+    setToggleError(null);
+    try {
+      setStatus(await invoke<MonitoringStatus>("monitoring_set_interval_minutes", { minutes }));
+      bump();
+    } catch (e) {
+      // Without this, a failed interval change is an uncaught rejection with no feedback — mirror
+      // the sibling toggle()'s error handling.
+      setToggleError(String(e));
+    }
   }
 
   return (

@@ -10,7 +10,7 @@ import { CategoryFindings, groupFindingsByCategory } from "@/components/Category
 import { SEVERITY_ORDER, SeverityDot, railStyle, type Severity } from "@/components/Severity";
 import { type View } from "@/components/Sidebar";
 import { computeHardeningIndex, type HardeningIndex } from "@/lib/hardening";
-import { useRevision } from "@/lib/revision";
+import { useRevision, type ScannerId } from "@/lib/revision";
 import { cn } from "@/lib/utils";
 
 interface RuleSummary {
@@ -441,18 +441,22 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
     // Antivirus) shows "scanning…" live even though the run was launched here, and bump()ed on
     // completion so that tab reloads its own results the moment its pass finishes — not only at the
     // very end. The Overview is just the launcher; the tabs are where results live.
-    const pass = async (id: "compliance" | "agent" | "antivirus", run: () => Promise<void>) => {
-      setScannerRunning(id, true);
+    const pass = async (ids: ScannerId[], run: () => Promise<void>) => {
+      ids.forEach((id) => setScannerRunning(id, true));
       try {
         await run();
       } finally {
-        setScannerRunning(id, false);
+        ids.forEach((id) => setScannerRunning(id, false));
         bump();
       }
     };
-    if (!cancelledRef.current && selectedKinds.has("compliance")) await pass("compliance", runComplianceScan);
-    if (!cancelledRef.current && selectedKinds.has("agent")) await pass("agent", runAgentScan);
-    if (!cancelledRef.current && selectedKinds.has("antivirus")) await pass("antivirus", runAntivirusScan);
+    // The compliance pass is also what computes the file-integrity (BLWK-FIM-) findings, so it marks
+    // "fim" running too — the File integrity tab then shows the same live "scanning" state as the
+    // other scanner tabs instead of sitting silent while a scan populates it.
+    if (!cancelledRef.current && selectedKinds.has("compliance"))
+      await pass(["compliance", "fim"], runComplianceScan);
+    if (!cancelledRef.current && selectedKinds.has("agent")) await pass(["agent"], runAgentScan);
+    if (!cancelledRef.current && selectedKinds.has("antivirus")) await pass(["antivirus"], runAntivirusScan);
 
     setProgress(null);
     setScanning(false);

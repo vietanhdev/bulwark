@@ -219,12 +219,19 @@ export function AgentSecurityView({ active }: { active: boolean }) {
   }
 
   async function updateSettings(patch: Partial<AiSettings>) {
-    const next = await invoke<AiSettings>("ai_settings_set", {
-      configuredRoots: patch.configured_roots,
-      excludedRoots: patch.excluded_roots,
-      autoScanEnabled: patch.auto_scan_enabled,
-    });
-    setSettings(next);
+    // Callers (the auto-scan Switch, the folder drop zones) are fire-and-forget, so a rejection here
+    // would otherwise be an uncaught promise with no user feedback — surface it in the error callout
+    // like every other action on this tab.
+    try {
+      const next = await invoke<AiSettings>("ai_settings_set", {
+        configuredRoots: patch.configured_roots,
+        excludedRoots: patch.excluded_roots,
+        autoScanEnabled: patch.auto_scan_enabled,
+      });
+      setSettings(next);
+    } catch (e) {
+      setError(String(e));
+    }
   }
 
   const sorted = useMemo(
