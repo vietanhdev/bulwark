@@ -219,22 +219,45 @@ pub fn establish_baseline_at(paths: &[&str], baseline_file: &Path) -> anyhow::Re
     Ok(hashes.len())
 }
 
-/// Writes `content` to `path`, refusing to follow a symlink at the final path component. The
-/// baseline is written by `bulwarkctl fim baseline` which, with `--privileged`, runs as root; if
-/// its resolved path (from `$HOME`/`$BULWARK_FIM_BASELINE`) were a pre-planted symlink, a plain
-/// `fs::write` would let root clobber the symlink's target. `O_NOFOLLOW` makes that `open` fail
-/// (ELOOP) instead. On non-Unix there's no such flag, so it falls back to a plain write.
+/// Writes `content` to `path` *atomically*, refusing to follow a symlink at the final component.
+///
+/// Two properties, both load-bearing:
+///   * `O_NOFOLLOW`: the baseline is written by `bulwarkctl fim baseline` which, with `--privileged`,
+///     runs as root; a pre-planted symlink at the resolved path would otherwise let root clobber the
+///     symlink's target. `O_NOFOLLOW` on the temp `open` makes that fail instead.
+///   * Temp-then-rename: the old truncate-in-place could leave the baseline empty or half-written if
+///     the process died (crash, kill, ENOSPC) mid-write — destroying the previous known-good
+///     baseline. Writing a sibling temp, fsyncing it, and renaming over the target means the
+///     baseline is only ever the complete old file or the complete new one, never a torn one. Same
+///     atomic-swap discipline `ai_scan::redact` already uses.
 #[cfg(unix)]
 fn write_no_follow(path: &Path, content: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "baseline".to_string());
+    let tmp = dir.join(format!(".{file_name}.bulwark-fim.tmp"));
+    let _ = std::fs::remove_file(&tmp);
     let mut f = std::fs::OpenOptions::new()
         .write(true)
-        .create(true)
-        .truncate(true)
+        .create_new(true) // O_EXCL: a raced temp is a failure, not a silent overwrite
         .custom_flags(libc::O_NOFOLLOW)
-        .open(path)?;
-    f.write_all(content)
+        .open(&tmp)?;
+    let write_result = f.write_all(content).and_then(|_| f.sync_all());
+    if let Err(e) = write_result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    match std::fs::rename(&tmp, path) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(e)
+        }
+    }
 }
 
 #[cfg(not(unix))]

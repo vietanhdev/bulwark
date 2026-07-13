@@ -101,13 +101,18 @@ impl CorrelationState {
     ///   `false`.
     /// - Fire when the window reaches `count`; on firing, reset the window for this key (so the
     ///   next burst must again reach `count` from scratch) and arm suppression if configured.
+    ///
+    /// Returns `Some(actual_count)` — the number of events in the window at the moment the threshold
+    /// was crossed — when the rule fires, or `None` otherwise. Callers report that actual count
+    /// rather than the rule's static threshold, so a finding reflects the real volume in the window
+    /// instead of always echoing the trigger number.
     pub fn observe(
         &mut self,
         rule_id: &str,
         spec: &CorrelateSpec,
         group_key: &str,
         now_epoch: i64,
-    ) -> bool {
+    ) -> Option<u32> {
         // Bound memory before inserting a brand-new key: if we're at the cap and this event would
         // add yet another distinct key, garbage-collect first.
         let key = (rule_id.to_string(), group_key.to_string());
@@ -128,19 +133,20 @@ impl CorrelationState {
 
         if let Some(until) = state.suppressed_until {
             if now_epoch < until {
-                return false;
+                return None;
             }
             state.suppressed_until = None;
         }
 
         if state.window.len() as u32 >= spec.count {
+            let actual = state.window.len() as u32;
             state.window.clear();
             if let Some(secs) = spec.suppress_secs {
                 state.suppressed_until = Some(now_epoch + secs);
             }
-            true
+            Some(actual)
         } else {
-            false
+            None
         }
     }
 }
@@ -182,7 +188,7 @@ mod tests {
         let mut fires = 0;
         for i in 0..8 {
             // Eight events one second apart — all inside the 60s window.
-            if state.observe("R", &s, "10.0.0.5", 1000 + i) {
+            if state.observe("R", &s, "10.0.0.5", 1000 + i).is_some() {
                 fires += 1;
                 assert_eq!(i, 7, "should fire on the 8th event, not before");
             }
@@ -197,7 +203,7 @@ mod tests {
         let mut fired = false;
         for i in 0..8 {
             // 30s apart: the window never holds more than 2 at once.
-            fired |= state.observe("R", &s, "10.0.0.5", 1000 + i * 30);
+            fired |= state.observe("R", &s, "10.0.0.5", 1000 + i * 30).is_some();
         }
         assert!(!fired);
     }
@@ -207,12 +213,12 @@ mod tests {
         let mut state = CorrelationState::new();
         let s = spec(3, 60, &["srcip"], None);
         // Interleave two IPs; neither alone reaches 3 until its own 3rd event.
-        assert!(!state.observe("R", &s, "1.1.1.1", 1000));
-        assert!(!state.observe("R", &s, "2.2.2.2", 1001));
-        assert!(!state.observe("R", &s, "1.1.1.1", 1002));
-        assert!(!state.observe("R", &s, "2.2.2.2", 1003));
-        assert!(state.observe("R", &s, "1.1.1.1", 1004)); // 1.1.1.1's 3rd
-        assert!(state.observe("R", &s, "2.2.2.2", 1005)); // 2.2.2.2's 3rd
+        assert!(state.observe("R", &s, "1.1.1.1", 1000).is_none());
+        assert!(state.observe("R", &s, "2.2.2.2", 1001).is_none());
+        assert!(state.observe("R", &s, "1.1.1.1", 1002).is_none());
+        assert!(state.observe("R", &s, "2.2.2.2", 1003).is_none());
+        assert!(state.observe("R", &s, "1.1.1.1", 1004).is_some()); // 1.1.1.1's 3rd
+        assert!(state.observe("R", &s, "2.2.2.2", 1005).is_some()); // 2.2.2.2's 3rd
     }
 
     #[test]
@@ -220,17 +226,17 @@ mod tests {
         let mut state = CorrelationState::new();
         let s = spec(3, 60, &["srcip"], Some(300));
         // First burst fires at t=1002.
-        assert!(!state.observe("R", &s, "1.1.1.1", 1000));
-        assert!(!state.observe("R", &s, "1.1.1.1", 1001));
-        assert!(state.observe("R", &s, "1.1.1.1", 1002));
+        assert!(state.observe("R", &s, "1.1.1.1", 1000).is_none());
+        assert!(state.observe("R", &s, "1.1.1.1", 1001).is_none());
+        assert!(state.observe("R", &s, "1.1.1.1", 1002).is_some());
         // A second burst inside the 300s suppression window does not fire.
-        assert!(!state.observe("R", &s, "1.1.1.1", 1100));
-        assert!(!state.observe("R", &s, "1.1.1.1", 1101));
-        assert!(!state.observe("R", &s, "1.1.1.1", 1102));
+        assert!(state.observe("R", &s, "1.1.1.1", 1100).is_none());
+        assert!(state.observe("R", &s, "1.1.1.1", 1101).is_none());
+        assert!(state.observe("R", &s, "1.1.1.1", 1102).is_none());
         // After suppression lifts, a fresh burst fires again.
-        assert!(!state.observe("R", &s, "1.1.1.1", 1400));
-        assert!(!state.observe("R", &s, "1.1.1.1", 1401));
-        assert!(state.observe("R", &s, "1.1.1.1", 1402));
+        assert!(state.observe("R", &s, "1.1.1.1", 1400).is_none());
+        assert!(state.observe("R", &s, "1.1.1.1", 1401).is_none());
+        assert!(state.observe("R", &s, "1.1.1.1", 1402).is_some());
     }
 
     #[test]

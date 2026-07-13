@@ -195,8 +195,12 @@ pub fn run_log_scan(
             let (should_fire, group_key, match_count) = match &loaded.rule.correlate {
                 Some(spec) => {
                     let key = correlate::group_key(&spec.by, &decoded.fact);
-                    let fired = state.observe(&loaded.rule.id, spec, &key, now_epoch);
-                    (fired, key, spec.count)
+                    // Report the ACTUAL number of events in the window when it fired, not the static
+                    // threshold — a burst of 20 that crossed a threshold of 8 should say so.
+                    match state.observe(&loaded.rule.id, spec, &key, now_epoch) {
+                        Some(actual) => (true, key, actual),
+                        None => (false, key, 0),
+                    }
                 }
                 None => (true, String::new(), 1),
             };
