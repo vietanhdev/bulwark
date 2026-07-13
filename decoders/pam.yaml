@@ -5,9 +5,14 @@
 id: pam
 prematch: 'pam_unix\('
 patterns:
-  # With a remote host (network logins): capture both the source IP and the target user.
-  - regex: 'authentication failure;.*rhost=(?P<srcip>\S+).*user=(?P<user>\S+)'
+  # With a remote host (network logins): capture both the source IP and the target user. The `\b`
+  # word boundaries pin these to the real `rhost=`/`user=` keys — without them, `ruser=` (PAM's
+  # requesting-user field) is misread as `user=`, and an attacker-controlled `user=` value
+  # containing an injected `rhost=`/`user=` token could skew the capture (the same field-position
+  # trust the sshd decoder had). The `\S+` values can't contain spaces, so the injection surface is
+  # narrow, but the boundaries close it.
+  - regex: 'authentication failure;.*\brhost=(?P<srcip>\S+).*\buser=(?P<user>\S+)'
     tags: [authentication_failed]
   # Local logins (no rhost): user only.
-  - regex: 'authentication failure;.*user=(?P<user>\S+)'
+  - regex: 'authentication failure;.*\buser=(?P<user>\S+)'
     tags: [authentication_failed]

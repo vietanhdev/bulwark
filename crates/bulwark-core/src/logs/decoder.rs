@@ -171,7 +171,15 @@ pub fn decode(
             let mut fact = base_fact(event);
             for name in pat.regex.capture_names().flatten() {
                 if let Some(m) = caps.name(name) {
-                    fact.insert(name.to_string(), Value::String(m.as_str().to_string()));
+                    // A purely-numeric capture (e.g. sudo's `attempts`, a port) becomes a JSON
+                    // number so a rule can use the numeric `>`/`>=` thresholds on it — the same
+                    // coercion the sshd/sysctl collectors apply. Everything else stays a string.
+                    let s = m.as_str();
+                    let value = match s.parse::<i64>() {
+                        Ok(n) => Value::from(n),
+                        Err(_) => Value::String(s.to_string()),
+                    };
+                    fact.insert(name.to_string(), value);
                 }
             }
             fact.insert(
@@ -283,7 +291,8 @@ mod tests {
         assert_eq!(d.decoder_id, "sshd");
         assert_eq!(d.fact.get("user").unwrap(), "root");
         assert_eq!(d.fact.get("srcip").unwrap(), "10.0.0.5");
-        assert_eq!(d.fact.get("srcport").unwrap(), "2222");
+        // A purely-numeric capture is coerced to a JSON number so rules can use numeric thresholds.
+        assert_eq!(d.fact.get("srcport").unwrap(), &serde_json::json!(2222));
         // tags serialize to a JSON array; the condition DSL's `contains` substring-matches it.
         assert_eq!(
             d.fact.get("tags").unwrap().to_string(),

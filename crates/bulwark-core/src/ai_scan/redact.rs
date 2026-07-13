@@ -170,14 +170,19 @@ fn stream_to_backup_and_temp(
     let mut backup = BufWriter::new(create_owner_only(backup_path)?);
     let mut out = BufWriter::new(create_temp_exclusive(tmp)?);
 
-    // The flagged window: read at most the scanner's cap, redact it as one string. Files scan
-    // flagged are valid UTF-8 (its reader rejects otherwise), so a lossy decode here is an identity
-    // — and even if not, redaction of a text secret is what matters.
+    // The flagged window: read at most the scanner's cap, redact it as one string. Rewriting a
+    // non-UTF-8 file through a lossy decode would corrupt its bytes (turn each stray byte into a
+    // 3-byte U+FFFD), so a file that isn't valid UTF-8 is REFUSED rather than mangled — the caller
+    // reports it and the user handles it by hand. The scanner reads such files lossily to *find*
+    // secrets, but writing is held to the stricter bar.
     let cap = super::MAX_SCAN_BYTES as u64;
     let mut head = Vec::new();
     (&mut reader).take(cap).read_to_end(&mut head)?;
+    let head_str = std::str::from_utf8(&head).map_err(|_| {
+        anyhow::anyhow!("file is not valid UTF-8; refusing to rewrite it (redact this one by hand)")
+    })?;
     backup.write_all(&head)?;
-    let (redacted, count) = secrets::redact_text(&String::from_utf8_lossy(&head));
+    let (redacted, count) = secrets::redact_text(head_str);
     out.write_all(redacted.as_bytes())?;
 
     // Anything past the scan window was never inspected, so it carries no flagged secret — copy it
@@ -276,9 +281,14 @@ fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
 #[cfg(unix)]
 fn create_temp_exclusive(tmp: &Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
+    // Create the temp `0600`, then widen to the original file's mode only at the final
+    // `set_permissions` before the rename. Otherwise the temp — which holds the file's content,
+    // possibly still carrying report-only (non-redacted) secret material — would briefly sit at the
+    // umask default (typically `0644`), world-readable, in a shared directory.
     std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
+        .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
         .open(tmp)
 }

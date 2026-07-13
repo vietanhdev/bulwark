@@ -1,0 +1,18 @@
+id: BLWK-LOG-SUDO-003
+title: "Multiple sudo password failures in one session by {{ srcuser }}"
+category: privilege-escalation
+severity: medium
+decoder: sudo
+condition: 'attempts >= 3'
+groups: [authentication_failures]
+explain: >
+  {{ srcuser }} got {{ attempts }} sudo passwords wrong in a single invocation. sudo caps a
+  session at three tries by default, so this is someone exhausting the attempt limit at the
+  prompt — the most common shape of a hands-on sudo brute force, which the per-invocation
+  count catches even though it's a single log line (BLWK-LOG-SUDO-001 needs three separate
+  invocations and would miss it).
+fix: >
+  Confirm {{ srcuser }} is supposed to have sudo access (check /etc/sudoers and
+  /etc/sudoers.d). If the account may be compromised, rotate its credentials and review its
+  recent activity.
+references: [ATTACK-T1548.003]

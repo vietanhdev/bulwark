@@ -343,10 +343,14 @@ fn read_capped(path: &std::path::Path) -> anyhow::Result<Option<String>> {
     let file = std::fs::File::open(path)?;
     let mut buf = Vec::with_capacity(MAX_SCAN_BYTES.min(64 * 1024));
     file.take(MAX_SCAN_BYTES as u64).read_to_end(&mut buf)?;
-    match String::from_utf8(buf) {
-        Ok(s) => Ok(Some(s)),
-        Err(_) => Ok(None),
-    }
+    // Lossy, not strict: a single stray non-UTF-8 byte (a Latin-1 char in a .env, a binary blob
+    // spliced into a transcript) previously made the whole file decode to `None` and be skipped,
+    // hiding every secret in it. Decoding lossily lets the scanner see the rest of the file; the one
+    // bad byte becomes U+FFFD, which no secret pattern matches. A genuinely binary file (e.g. a
+    // SQLite transcript) is mostly replacement characters and simply yields no matches. Redaction
+    // separately refuses to rewrite a non-UTF-8 file, so this can't cause byte corruption.
+    let s = String::from_utf8_lossy(&buf).into_owned();
+    Ok(Some(s))
 }
 
 fn finding_from_secret(
