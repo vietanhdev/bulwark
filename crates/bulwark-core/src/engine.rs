@@ -26,15 +26,101 @@ pub struct Profile {
 }
 
 impl Profile {
-    /// The host's actual OS, no opted-in needs — i.e. exactly the rule set that ran before
-    /// profiles existed. Every pre-existing rule defaults to `os: [linux]`, `profiles: []`,
-    /// so this reproduces the old unconditional behavior on a Linux host bit-for-bit.
+    /// The host's actual OS and its auto-detected role(s).
+    ///
+    /// `needs` used to be hardcoded empty here, which quietly made `profiles:` a dead feature for
+    /// every caller that didn't pass needs by hand — including the desktop app's background
+    /// monitor ([`crate::engine::run_scan`] via `Profile::default()`). A rule tagged
+    /// `profiles: [server]` simply never ran. That's the worst kind of bug for a security tool:
+    /// not a false alarm, a silent *gap*, indistinguishable from a clean result.
     pub fn current_host() -> Self {
         Self {
             os: OperatingSystem::current().unwrap_or(OperatingSystem::Linux),
-            needs: Vec::new(),
+            needs: detect_host_roles(&RoleEvidence::from_host()),
         }
     }
+}
+
+/// The host signals used to decide which role(s) a machine plays. Split from the detection logic
+/// so the policy below is testable without a machine that actually has a display manager.
+#[derive(Debug, Clone, Default)]
+pub struct RoleEvidence {
+    /// A display manager or graphical target — the strong, reliable "a human sits at this" signal.
+    pub graphical: bool,
+    /// sshd is active. A box that accepts SSH is serving, whatever its chassis says.
+    pub sshd_active: bool,
+    /// DMI chassis reports server/rack-mount, or we're in a VM/container.
+    pub server_chassis: bool,
+}
+
+impl RoleEvidence {
+    fn from_host() -> Self {
+        // /run/systemd/units/ is the cheapest active-unit oracle that doesn't shell out to
+        // systemctl; the /run/<dm> directories cover non-systemd and pre-login states.
+        //
+        // Note we must name the *concrete* units, not `display-manager.service` — that name is an
+        // alias, and systemd records the invocation under the real unit (`gdm.service` on this
+        // machine), so the alias alone silently detects nothing.
+        let unit_active = |unit: &str| {
+            std::path::Path::new(&format!("/run/systemd/units/invocation:{unit}")).exists()
+        };
+        let any_unit_active = |units: &[&str]| units.iter().any(|u| unit_active(u));
+
+        let graphical = any_unit_active(&[
+            "display-manager.service",
+            "gdm.service",
+            "gdm3.service",
+            "lightdm.service",
+            "sddm.service",
+            "lxdm.service",
+            "xdm.service",
+        ]) || ["/run/gdm3", "/run/gdm", "/run/lightdm", "/run/sddm"]
+            .iter()
+            .any(|p| std::path::Path::new(p).exists())
+            || std::fs::read_link("/etc/systemd/system/default.target")
+                .map(|t| t.to_string_lossy().contains("graphical"))
+                .unwrap_or(false);
+
+        // `.socket` as well as `.service` is load-bearing, not belt-and-braces: Ubuntu now ships
+        // SSH socket-activated, so on an idle box that fully accepts SSH there is no running
+        // `ssh.service` at all — only `ssh.socket` listening. Checking the service alone would
+        // read a live SSH server as "not serving" and skip every server rule on it.
+        let sshd_active =
+            any_unit_active(&["ssh.service", "sshd.service", "ssh.socket", "sshd.socket"]);
+
+        // DMI chassis type, per SMBIOS 3.x §7.4.1: 17 = "Main Server Chassis", 23 = "Rack Mount
+        // Chassis", 28 = "Blade". Absent inside most VMs/containers, which is fine — those fall
+        // through to the no-graphical-session branch below and are treated as servers anyway.
+        let server_chassis = std::fs::read_to_string("/sys/class/dmi/id/chassis_type")
+            .map(|t| matches!(t.trim(), "17" | "23" | "28"))
+            .unwrap_or(false);
+
+        Self {
+            graphical,
+            sshd_active,
+            server_chassis,
+        }
+    }
+}
+
+/// Maps host evidence to opted-in needs.
+///
+/// The asymmetry here is deliberate and is the whole point. Misfiling a server as a desktop
+/// silently *skips* its hardening rules — a false clean, the failure mode the architecture doc
+/// ranks worst (§8). Misfiling a desktop as a server merely adds noise. So "server" is the
+/// default and "desktop" is what has to be affirmatively proven, not the other way round.
+///
+/// The roles are not exclusive: a laptop running sshd gets both, because the moment you accept
+/// SSH the server rules (login banners, remote log shipping) genuinely do apply to you.
+pub fn detect_host_roles(ev: &RoleEvidence) -> Vec<String> {
+    let mut needs = Vec::new();
+    if ev.graphical {
+        needs.push("desktop".to_string());
+    }
+    if ev.sshd_active || ev.server_chassis || !ev.graphical {
+        needs.push("server".to_string());
+    }
+    needs
 }
 
 impl Default for Profile {
@@ -246,7 +332,7 @@ pub fn run_scan_cancellable(
                     // BLWK-KERNEL-020's five (one per module) both had this problem.
                     title: render_template(&loaded.rule.title, row),
                     explanation: render_template(&loaded.rule.explain, row),
-                    fix_hint: loaded.rule.fix.clone(),
+                    fix_hint: render_template(&loaded.rule.fix, row),
                     context: row.clone(),
                     first_seen: now,
                     last_seen: now,
@@ -383,6 +469,121 @@ references: [CIS-5.2.10]
             scan.findings[0].explanation,
             "PasswordAuthentication is 'yes'"
         );
+    }
+
+    /// Drives the *real shipped* BLWK-ROOTKIT-001 against the two interfaces that matter, because
+    /// the bug this guards against shipped: every `docker run` attaches a veth to a bridge, the
+    /// kernel sets IFF_PROMISC on it (that is what a bridge port *is*), and the rule cried
+    /// rootkit on a healthy container host. Reading the rule from `rules/` rather than an inline
+    /// copy is the point — an edit to the condition that reintroduces the false positive fails
+    /// here.
+    #[test]
+    fn rootkit_001_ignores_bridge_ports_but_still_catches_a_promiscuous_nic() {
+        let iface = |name: &str, promiscuous: bool, bridge_port: bool| {
+            let mut fact = crate::models::Fact::new();
+            fact.insert("interface".into(), serde_json::Value::String(name.into()));
+            fact.insert("promiscuous".into(), serde_json::Value::Bool(promiscuous));
+            fact.insert("bridge_port".into(), serde_json::Value::Bool(bridge_port));
+            fact
+        };
+
+        // `FixedCollector` answers to "sshd_config"; this rule binds to "network_interfaces".
+        struct NetIfaceCollector {
+            rows: Vec<crate::models::Fact>,
+        }
+        impl Collector for NetIfaceCollector {
+            fn name(&self) -> &'static str {
+                "network_interfaces"
+            }
+            fn collect(&self) -> anyhow::Result<Vec<crate::models::Fact>> {
+                Ok(self.rows.clone())
+            }
+        }
+
+        let rules_dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../rules/rootkit-malware");
+        let collectors: Vec<Box<dyn Collector>> = vec![Box::new(NetIfaceCollector {
+            rows: vec![
+                // Docker's veth: promiscuous, but only because the bridge enslaved it.
+                iface("veth6dc1556", true, true),
+                // A real NIC someone put a sniffer on. Still a genuine rootkit signal.
+                iface("wlp9s0", true, false),
+                // An ordinary quiet NIC.
+                iface("enx6c1ff7c0d2d9", false, false),
+            ],
+        })];
+
+        let scan = run_scan(&rules_dir, &collectors, false, &Profile::default());
+        let found: Vec<_> = scan
+            .findings
+            .iter()
+            .filter(|f| f.rule_id == "BLWK-ROOTKIT-001")
+            .collect();
+
+        assert_eq!(
+            found.len(),
+            1,
+            "exactly one interface here is a real sniffer signal, got: {:?}",
+            found.iter().map(|f| &f.title).collect::<Vec<_>>()
+        );
+        assert!(
+            found[0].explanation.contains("wlp9s0"),
+            "must flag the NIC, not the container veth: {}",
+            found[0].explanation
+        );
+        // The `fix` line is the one that tells a user what command to run. It used to reach the
+        // UI as the literal string `{{ network_interfaces.interface }}`, because `fix` was the
+        // only field cloned instead of rendered.
+        assert!(
+            found[0].fix_hint.contains("ip -d link show wlp9s0"),
+            "fix must be templated, not raw: {}",
+            found[0].fix_hint
+        );
+    }
+
+    #[test]
+    fn host_role_detection_fails_toward_scanning_more_not_less() {
+        let ev = |graphical, sshd_active, server_chassis| RoleEvidence {
+            graphical,
+            sshd_active,
+            server_chassis,
+        };
+
+        // A headless box is a server even with no other evidence — the absence of a display
+        // manager is enough, because guessing "desktop" here would silently skip its rules.
+        assert_eq!(detect_host_roles(&ev(false, false, false)), ["server"]);
+        assert_eq!(detect_host_roles(&ev(false, true, false)), ["server"]);
+        assert_eq!(detect_host_roles(&ev(false, false, true)), ["server"]);
+
+        // A GNOME laptop with sshd off: desktop only. This is the case that should NOT be told to
+        // blacklist usb-storage or ship its logs to a syslog host it doesn't have.
+        assert_eq!(detect_host_roles(&ev(true, false, false)), ["desktop"]);
+
+        // ...but the moment that same laptop accepts SSH, the server rules genuinely apply to it,
+        // so it gets both rather than being forced into one bucket.
+        assert_eq!(
+            detect_host_roles(&ev(true, true, false)),
+            ["desktop", "server"]
+        );
+
+        // A workstation in a rack-mount chassis: both, same reasoning.
+        assert_eq!(
+            detect_host_roles(&ev(true, false, true)),
+            ["desktop", "server"]
+        );
+
+        // Nothing may ever produce an empty needs list — that would resurrect the original bug,
+        // where every `profiles:`-tagged rule silently vanished from the scan.
+        for g in [true, false] {
+            for s in [true, false] {
+                for c in [true, false] {
+                    assert!(
+                        !detect_host_roles(&ev(g, s, c)).is_empty(),
+                        "no evidence combination may yield zero roles ({g},{s},{c})"
+                    );
+                }
+            }
+        }
     }
 
     struct PrivilegedFixedCollector {

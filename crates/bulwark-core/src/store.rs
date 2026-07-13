@@ -13,14 +13,18 @@
 //! Three engines, three table pairs, three different reconciliation models — see
 //! `migrations/*/up.sql` for why they are deliberately not one table.
 
-use crate::models::{Finding, FindingStatus, ScanRun, Severity};
+use crate::models::{
+    Finding, FindingStatus, ScanRun, Severity, Suppression, SuppressionAction, SuppressionEvent,
+};
 use crate::schema::{
-    ai_findings, ai_scan_runs, findings, log_findings, log_scan_runs, scan_runs, settings,
+    ai_findings, ai_scan_runs, findings, log_findings, log_scan_runs, rule_suppression_events,
+    rule_suppressions, scan_runs, settings,
 };
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel::sqlite::SqliteConnection;
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
+use std::collections::HashSet;
 use std::path::Path;
 
 /// The migrations, compiled into the binary. Nothing at runtime needs the `diesel` CLI or a
@@ -95,6 +99,94 @@ impl ScanRunRow {
             total_findings: scan.findings.len() as i64,
         })
     }
+}
+
+#[derive(Queryable, Selectable)]
+#[diesel(table_name = rule_suppressions)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+struct SuppressionRow {
+    rule_id: String,
+    reason: String,
+    created_at: String,
+    created_by: String,
+}
+
+impl SuppressionRow {
+    fn try_into_model(self) -> anyhow::Result<Suppression> {
+        Ok(Suppression {
+            rule_id: self.rule_id,
+            reason: self.reason,
+            created_at: parse_audit_ts(&self.created_at)?,
+            created_by: self.created_by,
+        })
+    }
+}
+
+/// Strict timestamp parsing, unlike [`parse_ts`], which falls back to `Utc::now()` on a bad value.
+///
+/// That fallback is fine for a scan row — a slightly wrong "last seen" is cosmetic. It is not fine
+/// here. An audit entry whose timestamp silently becomes *now* whenever it fails to parse is an
+/// audit entry that lies, and it lies in the most misleading possible direction: a corrupted or
+/// tampered record would read as having just been written. Refusing to load it is the honest
+/// failure, so this errors instead.
+fn parse_audit_ts(s: &str) -> anyhow::Result<DateTime<Utc>> {
+    Ok(DateTime::parse_from_rfc3339(s)
+        .map_err(|e| anyhow::anyhow!("corrupt timestamp in suppression audit log ({s:?}): {e}"))?
+        .with_timezone(&Utc))
+}
+
+#[derive(Queryable, Selectable)]
+#[diesel(table_name = rule_suppression_events)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+struct SuppressionEventRow {
+    id: String,
+    rule_id: String,
+    action: String,
+    reason: String,
+    actor: String,
+    at: String,
+}
+
+impl SuppressionEventRow {
+    fn try_into_model(self) -> anyhow::Result<SuppressionEvent> {
+        let action = match self.action.as_str() {
+            "suppressed" => SuppressionAction::Suppressed,
+            "unsuppressed" => SuppressionAction::Unsuppressed,
+            other => anyhow::bail!("unknown suppression action in audit log: {other}"),
+        };
+        Ok(SuppressionEvent {
+            id: self.id.parse()?,
+            rule_id: self.rule_id,
+            action,
+            reason: self.reason,
+            actor: self.actor,
+            at: parse_audit_ts(&self.at)?,
+        })
+    }
+}
+
+/// Writes one immutable entry to the audit trail. Shared by suppress and unsuppress so that both
+/// paths are structurally incapable of forgetting to log — the only way to change a suppression is
+/// through a function that also records having changed it.
+fn append_suppression_event(
+    conn: &mut SqliteConnection,
+    rule_id: &str,
+    action: SuppressionAction,
+    reason: &str,
+    actor: &str,
+    at: DateTime<Utc>,
+) -> anyhow::Result<()> {
+    diesel::insert_into(rule_suppression_events::table)
+        .values((
+            rule_suppression_events::id.eq(uuid::Uuid::new_v4().to_string()),
+            rule_suppression_events::rule_id.eq(rule_id),
+            rule_suppression_events::action.eq(action.as_str()),
+            rule_suppression_events::reason.eq(reason),
+            rule_suppression_events::actor.eq(actor),
+            rule_suppression_events::at.eq(at.to_rfc3339()),
+        ))
+        .execute(conn)?;
+    Ok(())
 }
 
 #[derive(Queryable, Selectable, Insertable, AsChangeset)]
@@ -596,6 +688,38 @@ impl Store {
         })
     }
 
+    /// Drops the redactable (secret-leak) findings for the given files from the latest agent scan,
+    /// returning how many rows were removed. Called right after a successful in-place redaction:
+    /// the secrets are gone from disk, so the stored snapshot must stop reporting them — but a full
+    /// re-scan to achieve that would re-walk the entire home directory (minutes on a large one),
+    /// which is exactly the cost the Agent Security tab's redact flow was paying. This surgically
+    /// removes just the findings the redaction resolved, keeping the persisted snapshot honest
+    /// without re-scanning anything.
+    ///
+    /// Only `redactable` rows are touched: a file can also carry non-secret findings (a dangerous
+    /// MCP config, say), and redaction did not address those, so they must remain.
+    pub fn remove_redacted_ai_findings(&mut self, files: &[String]) -> anyhow::Result<usize> {
+        if files.is_empty() {
+            return Ok(0);
+        }
+        let Some(run_id): Option<String> = ai_scan_runs::table
+            .order(ai_scan_runs::started_at.desc())
+            .select(ai_scan_runs::id)
+            .first(&mut self.conn)
+            .optional()?
+        else {
+            return Ok(0);
+        };
+        let removed = diesel::delete(
+            ai_findings::table
+                .filter(ai_findings::ai_scan_run_id.eq(&run_id))
+                .filter(ai_findings::redactable.eq(true))
+                .filter(ai_findings::file.eq_any(files)),
+        )
+        .execute(&mut self.conn)?;
+        Ok(removed)
+    }
+
     /// The most recent agent scan's summary and findings, or `None` if none has run — what a
     /// freshly-opened Agent Security tab shows without forcing a re-scan first.
     pub fn latest_ai_scan(&mut self) -> anyhow::Result<Option<AiScanSnapshot>> {
@@ -647,11 +771,155 @@ impl Store {
         Ok(())
     }
 
+    /// Records a user's decision to accept the risk a rule reports, with their reasoning.
+    ///
+    /// The reason is validated **here**, in core, rather than in the UI form — otherwise
+    /// `bulwarkctl` (or any future caller) could write an unexplained suppression straight past the
+    /// check, and the audit trail would have holes exactly where someone was in a hurry. A blank
+    /// reason is the one thing that makes the whole feature worthless six months later, when the
+    /// person asking "why is this muted?" is the person who muted it.
+    ///
+    /// Re-suppressing an already-suppressed rule is allowed and overwrites the reason: people
+    /// refine their justifications. Every attempt appends to the audit log regardless, so the
+    /// earlier reasoning is never lost, only superseded.
+    pub fn suppress_rule(
+        &mut self,
+        rule_id: &str,
+        reason: &str,
+        actor: &str,
+    ) -> anyhow::Result<Suppression> {
+        let reason = reason.trim();
+        if reason.is_empty() {
+            anyhow::bail!("a suppression needs a reason — an unexplained one is unauditable");
+        }
+        let now = Utc::now();
+        let suppression = Suppression {
+            rule_id: rule_id.to_string(),
+            reason: reason.to_string(),
+            created_at: now,
+            created_by: actor.to_string(),
+        };
+
+        // State and audit entry go in together: an audit log that can disagree with the state it
+        // describes is worse than no audit log, because it is trusted and wrong.
+        self.conn.transaction::<_, anyhow::Error, _>(|conn| {
+            diesel::insert_into(rule_suppressions::table)
+                .values((
+                    rule_suppressions::rule_id.eq(rule_id),
+                    rule_suppressions::reason.eq(reason),
+                    rule_suppressions::created_at.eq(now.to_rfc3339()),
+                    rule_suppressions::created_by.eq(actor),
+                ))
+                .on_conflict(rule_suppressions::rule_id)
+                .do_update()
+                .set((
+                    rule_suppressions::reason.eq(reason),
+                    rule_suppressions::created_at.eq(now.to_rfc3339()),
+                    rule_suppressions::created_by.eq(actor),
+                ))
+                .execute(conn)?;
+            append_suppression_event(
+                conn,
+                rule_id,
+                SuppressionAction::Suppressed,
+                reason,
+                actor,
+                now,
+            )?;
+            Ok(())
+        })?;
+        Ok(suppression)
+    }
+
+    /// Lifts a suppression. Also requires a reason — withdrawing a risk acceptance is every bit as
+    /// much an auditable decision as making one, and "why did this alert come back?" is a question
+    /// someone will eventually ask.
+    ///
+    /// The `rule_suppressions` row is deleted; the audit trail is not. That asymmetry is the design:
+    /// state is current, history is forever.
+    pub fn unsuppress_rule(
+        &mut self,
+        rule_id: &str,
+        reason: &str,
+        actor: &str,
+    ) -> anyhow::Result<()> {
+        let reason = reason.trim();
+        if reason.is_empty() {
+            anyhow::bail!("lifting a suppression needs a reason too — it is an auditable decision");
+        }
+        let now = Utc::now();
+        self.conn.transaction::<_, anyhow::Error, _>(|conn| {
+            let removed = diesel::delete(rule_suppressions::table.find(rule_id)).execute(conn)?;
+            if removed == 0 {
+                anyhow::bail!("rule {rule_id} is not suppressed");
+            }
+            append_suppression_event(
+                conn,
+                rule_id,
+                SuppressionAction::Unsuppressed,
+                reason,
+                actor,
+                now,
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Every currently-active suppression, newest first.
+    pub fn list_suppressions(&mut self) -> anyhow::Result<Vec<Suppression>> {
+        let rows: Vec<SuppressionRow> = rule_suppressions::table
+            .order(rule_suppressions::created_at.desc())
+            .select(SuppressionRow::as_select())
+            .load(&mut self.conn)?;
+        rows.into_iter()
+            .map(SuppressionRow::try_into_model)
+            .collect()
+    }
+
+    /// Just the rule IDs, for the hot path: every findings query needs to know which rules are
+    /// muted so it can partition them out, and it does not need the reasons to do it.
+    pub fn suppressed_rule_ids(&mut self) -> anyhow::Result<HashSet<String>> {
+        Ok(rule_suppressions::table
+            .select(rule_suppressions::rule_id)
+            .load::<String>(&mut self.conn)?
+            .into_iter()
+            .collect())
+    }
+
+    /// The append-only audit trail, newest first. Pass `rule_id` to scope it to one rule's history.
+    ///
+    /// This deliberately reads from the events table and never from `rule_suppressions`, so a rule
+    /// that was suppressed and later un-suppressed still tells its full story — which is the only
+    /// reason to keep two tables in the first place.
+    pub fn suppression_audit_log(
+        &mut self,
+        rule_id: Option<&str>,
+        limit: i64,
+    ) -> anyhow::Result<Vec<SuppressionEvent>> {
+        let mut q = rule_suppression_events::table.into_boxed();
+        if let Some(id) = rule_id {
+            q = q.filter(rule_suppression_events::rule_id.eq(id.to_string()));
+        }
+        let rows: Vec<SuppressionEventRow> = q
+            .order(rule_suppression_events::at.desc())
+            .limit(limit)
+            .select(SuppressionEventRow::as_select())
+            .load(&mut self.conn)?;
+        rows.into_iter()
+            .map(SuppressionEventRow::try_into_model)
+            .collect()
+    }
+
     /// The state a freshly-opened window should show: everything currently open, regardless of
     /// whether it was last touched by a manual scan or a background monitoring tick. Reconciliation
     /// is what makes `status = 'open'` mean "the current picture" rather than "whatever the single
     /// latest run happened to see" — a privileged finding only ever observed by an earlier manual
     /// privileged scan is still legitimately open even if the most recent tick was unprivileged.
+    ///
+    /// Suppressed rules are *not* filtered out here. Callers get the honest, complete list and
+    /// partition it themselves via [`Self::suppressed_rule_ids`] — see [`Self::open_findings_split`],
+    /// which is what the UI actually wants. Hiding accepted risk this far down the stack would make
+    /// it invisible to every caller, including the ones whose job is to report it.
     pub fn open_findings(&mut self) -> anyhow::Result<Vec<Finding>> {
         let rows: Vec<FindingRow> = findings::table
             .filter(findings::status.eq("open"))
@@ -659,6 +927,23 @@ impl Store {
             .select(FindingRow::as_select())
             .load(&mut self.conn)?;
         rows.into_iter().map(FindingRow::try_into_finding).collect()
+    }
+
+    /// Open findings, partitioned into the ones the user still needs to act on and the ones they
+    /// have explicitly accepted the risk of. This is what the UI should call.
+    ///
+    /// Returning both halves rather than silently dropping the suppressed ones is the point. A
+    /// security tool that hides accepted risk is lying by omission: the risk is still there, someone
+    /// just decided to live with it, and the count of what they decided to live with is exactly the
+    /// number a reviewer wants to see. "0 issues" and "0 issues, 14 suppressed" are very different
+    /// sentences, and the UI is entitled to say the second one.
+    pub fn open_findings_split(&mut self) -> anyhow::Result<SplitFindings> {
+        let suppressed_ids = self.suppressed_rule_ids()?;
+        let (suppressed, active) = self
+            .open_findings()?
+            .into_iter()
+            .partition(|f| suppressed_ids.contains(&f.rule_id));
+        Ok(SplitFindings { active, suppressed })
     }
 
     /// Metadata for the most recent scan run — host fingerprint, when it started, and which
@@ -779,6 +1064,15 @@ pub struct ScanRunSummary {
     pub total_findings: i64,
 }
 
+/// Open findings split by whether the user has accepted their risk. `suppressed` is not "hidden" —
+/// it's a number the UI is expected to show, because the honest summary of a scan is "3 to fix, 2
+/// accepted", not "3 to fix".
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SplitFindings {
+    pub active: Vec<Finding>,
+    pub suppressed: Vec<Finding>,
+}
+
 #[derive(serde::Serialize)]
 pub struct LatestScanMeta {
     pub host_fingerprint: String,
@@ -876,6 +1170,125 @@ mod tests {
                 scan_run_id,
             }],
         }
+    }
+
+    #[test]
+    fn a_suppression_without_a_reason_is_refused() {
+        let mut store = Store::open_in_memory().unwrap();
+        // Enforced in core, not in the UI form, so `bulwarkctl` can't route around it. An
+        // unexplained suppression is the one thing that makes the audit trail worthless.
+        for blank in ["", "   ", "\n\t "] {
+            assert!(
+                store
+                    .suppress_rule("BLWK-SSH-001", blank, "vietanh")
+                    .is_err(),
+                "blank reason {blank:?} must be refused"
+            );
+        }
+        assert!(store.list_suppressions().unwrap().is_empty());
+        // ...and a refused suppression must not leave a phantom audit entry behind.
+        assert!(store.suppression_audit_log(None, 100).unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_audit_trail_outlives_the_suppression_it_describes() {
+        let mut store = Store::open_in_memory().unwrap();
+        store
+            .suppress_rule(
+                "BLWK-BANN-001",
+                "no legal requirement on a personal laptop",
+                "vietanh",
+            )
+            .unwrap();
+        store
+            .unsuppress_rule(
+                "BLWK-BANN-001",
+                "moved this host into the office rack",
+                "vietanh",
+            )
+            .unwrap();
+
+        // Current state is empty — the rule is live again.
+        assert!(store.list_suppressions().unwrap().is_empty());
+        assert!(store.suppressed_rule_ids().unwrap().is_empty());
+
+        // But the *history* is intact, and that is the entire reason the two tables are separate.
+        // A reviewer must still be able to ask "was this ever muted, by whom, and why?" and get a
+        // real answer after the fact.
+        let log = store.suppression_audit_log(None, 100).unwrap();
+        assert_eq!(log.len(), 2, "both decisions must survive");
+        assert_eq!(log[0].action, SuppressionAction::Unsuppressed);
+        assert_eq!(log[0].reason, "moved this host into the office rack");
+        assert_eq!(log[1].action, SuppressionAction::Suppressed);
+        assert_eq!(log[1].reason, "no legal requirement on a personal laptop");
+        assert!(log.iter().all(|e| e.actor == "vietanh"));
+    }
+
+    #[test]
+    fn re_suppressing_supersedes_the_reason_without_losing_the_old_one() {
+        let mut store = Store::open_in_memory().unwrap();
+        store
+            .suppress_rule("BLWK-KERNEL-016", "docker sets ip_forward", "a")
+            .unwrap();
+        store
+            .suppress_rule(
+                "BLWK-KERNEL-016",
+                "refined: docker bridge networking needs it",
+                "b",
+            )
+            .unwrap();
+
+        let active = store.list_suppressions().unwrap();
+        assert_eq!(active.len(), 1, "still one suppression, not two");
+        assert_eq!(
+            active[0].reason,
+            "refined: docker bridge networking needs it"
+        );
+        assert_eq!(active[0].created_by, "b");
+
+        // The superseded justification is still on the record — people refine their reasoning, and
+        // the earlier version is exactly what an auditor would want to compare against.
+        let log = store
+            .suppression_audit_log(Some("BLWK-KERNEL-016"), 100)
+            .unwrap();
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[1].reason, "docker sets ip_forward");
+    }
+
+    #[test]
+    fn suppression_partitions_findings_but_never_discards_them() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.persist_and_reconcile(&sample_scan()).unwrap();
+        store
+            .suppress_rule("BLWK-SSH-001", "this box has no sshd installed", "vietanh")
+            .unwrap();
+
+        // The finding is still in the database and still open — suppression is a decision about
+        // *presentation*, not a delete, and definitely not a reason to stop checking.
+        assert_eq!(store.open_findings().unwrap().len(), 1);
+
+        let split = store.open_findings_split().unwrap();
+        assert!(
+            split.active.is_empty(),
+            "nothing left for the user to act on"
+        );
+        assert_eq!(
+            split.suppressed.len(),
+            1,
+            "but the accepted risk is still counted and still shown — '0 issues' and \
+             '0 issues, 1 accepted' are different sentences"
+        );
+        assert_eq!(split.suppressed[0].rule_id, "BLWK-SSH-001");
+    }
+
+    #[test]
+    fn lifting_a_suppression_that_isnt_there_is_an_error_not_a_silent_noop() {
+        let mut store = Store::open_in_memory().unwrap();
+        assert!(store
+            .unsuppress_rule("BLWK-NOPE-999", "cleaning up", "vietanh")
+            .is_err());
+        // And it must not have written an audit entry for something that never happened.
+        assert!(store.suppression_audit_log(None, 100).unwrap().is_empty());
     }
 
     #[test]
@@ -1445,6 +1858,64 @@ mod tests {
         };
         store.persist_ai_scan(&empty).unwrap();
         assert_eq!(store.latest_ai_scan().unwrap().unwrap().findings.len(), 0);
+    }
+
+    #[test]
+    fn removing_redacted_findings_drops_only_secrets_for_those_files() {
+        use crate::ai_scan::{AiFinding, AiScanReport};
+        let tmp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&tmp.path().join("ai.db")).unwrap();
+
+        let mk = |file: &str, rule: &str, redactable: bool| AiFinding {
+            id: uuid::Uuid::new_v4(),
+            rule_id: rule.into(),
+            severity: Severity::Critical,
+            tool: "Claude Code".into(),
+            title: "t".into(),
+            explanation: "e".into(),
+            fix_hint: "f".into(),
+            file: file.into(),
+            line: None,
+            evidence: "x".into(),
+            references: vec![],
+            redactable,
+        };
+        let report = AiScanReport {
+            id: uuid::Uuid::new_v4(),
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            host_fingerprint: "h".into(),
+            workspaces_scanned: vec![],
+            artifacts_scanned: 3,
+            workspaces_capped: false,
+            cancelled: false,
+            errors: vec![],
+            findings: vec![
+                mk("/home/u/a.md", "BLWK-AI-001", true), // secret, will be redacted
+                mk("/home/u/a.md", "BLWK-AI-002", false), // non-secret in the SAME file — must stay
+                mk("/home/u/b.md", "BLWK-AI-001", true), // secret in a DIFFERENT file — must stay
+            ],
+        };
+        store.persist_ai_scan(&report).unwrap();
+
+        let removed = store
+            .remove_redacted_ai_findings(&["/home/u/a.md".to_string()])
+            .unwrap();
+        assert_eq!(
+            removed, 1,
+            "only the one redactable finding in a.md is removed"
+        );
+
+        let remaining = store.latest_ai_scan().unwrap().unwrap().findings;
+        assert_eq!(remaining.len(), 2);
+        // The non-secret finding in the redacted file survives (redaction didn't address it)...
+        assert!(remaining
+            .iter()
+            .any(|f| f.file == "/home/u/a.md" && f.rule_id == "BLWK-AI-002"));
+        // ...and the secret in the untouched file survives (it wasn't redacted).
+        assert!(remaining
+            .iter()
+            .any(|f| f.file == "/home/u/b.md" && f.rule_id == "BLWK-AI-001"));
     }
 
     #[test]

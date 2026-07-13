@@ -240,6 +240,30 @@ pub async fn ai_redact(
 
         let mut report = ai_redact_paths(&files, apply, &backup_dir());
         report.errors.extend(rejected);
+
+        // When we actually rewrote files (not a dry-run preview), the secrets in them are gone, so
+        // the persisted snapshot must stop listing them. Do it surgically here rather than letting
+        // the frontend trigger a whole-machine re-scan to "refresh" — that re-walk of the entire
+        // home directory is minutes of work to remove findings we already know are resolved.
+        if apply {
+            let redacted_files: Vec<String> = report
+                .entries
+                .iter()
+                .filter(|e| e.applied && e.secrets_redacted > 0)
+                .map(|e| e.path.clone())
+                .collect();
+            if !redacted_files.is_empty() {
+                if let Some(mut store) = db_path()
+                    .filter(|p| p.exists())
+                    .and_then(|p| Store::open(&p).ok())
+                {
+                    // Best-effort: the files are already redacted on disk, which is the real work.
+                    // A failure to prune the snapshot is cosmetic (a stale row until the next scan),
+                    // not a reason to fail the redaction the user asked for.
+                    let _ = store.remove_redacted_ai_findings(&redacted_files);
+                }
+            }
+        }
         report
     })
     .await

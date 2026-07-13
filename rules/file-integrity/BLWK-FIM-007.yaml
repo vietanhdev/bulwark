@@ -1,0 +1,16 @@
+id: BLWK-FIM-007
+title: "Could not verify file integrity: {{ file_integrity.path }}"
+category: file-integrity
+severity: medium
+collector: file_integrity
+condition: unreadable == true
+explain: >
+  {{ file_integrity.path }} exists and is on the watch list, but Bulwark could not compute its
+  hash this scan (sha256sum unavailable, or the file could not be read), so it cannot say
+  whether the file matches its baseline. This is reported as its own state rather than being
+  folded into "modified" — treating "I couldn't look" as "it changed" would raise a false
+  critical alarm, and treating it as "unchanged" would hide a real one. Neither is honest.
+fix: >
+  Check that the file is readable by the scanning user and that 'sha256sum' is installed and on
+  PATH. If a privileged scan is needed to read it, run 'sudo bulwarkctl scan --privileged'.
+references: []

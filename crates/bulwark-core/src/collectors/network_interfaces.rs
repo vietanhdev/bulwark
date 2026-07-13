@@ -1,7 +1,14 @@
 //! Detects network interfaces running in promiscuous mode — the classic packet-sniffer
-//! indicator chkrootkit's own `sniffer` test checks for (`ifpromisc`). A normal desktop/server
-//! interface is never promiscuous; enabling it is exactly what lets a packet sniffer capture
-//! traffic that isn't addressed to this host.
+//! indicator chkrootkit's own `sniffer` test checks for (`ifpromisc`). Enabling it is exactly
+//! what lets a packet sniffer capture traffic that isn't addressed to this host.
+//!
+//! The catch chkrootkit's 1997-era heuristic never had to handle: **bridge ports are always
+//! promiscuous, by design**. `br_add_if()` calls `dev_set_promiscuity()` on every interface it
+//! enslaves, because forwarding frames not addressed to you is the entire job of a bridge port.
+//! Docker attaches a fresh `vethXXXX` to a bridge for every container it starts, so a flag-only
+//! check fires HIGH on every container launch on every Docker host, forever. We therefore also
+//! report whether the interface is a bridge port, so the rule can exclude the expected case
+//! without going blind on a real NIC.
 
 use super::Collector;
 use crate::models::Fact;
@@ -10,6 +17,14 @@ use std::path::Path;
 
 /// `IFF_PROMISC`, from `<linux/if.h>` — the flag bit `/sys/class/net/<iface>/flags` reports.
 const IFF_PROMISC: u32 = 0x100;
+
+/// True when the interface is enslaved to a bridge. The kernel materializes a `brport/`
+/// directory under an interface's sysfs node if and only if it is a bridge port, which makes
+/// this a structural test rather than a name test — an attacker who names a tap device `veth0`
+/// to hide in the noise gains nothing, because it still has no `brport/`.
+fn is_bridge_port(iface_dir: &Path) -> bool {
+    iface_dir.join("brport").is_dir()
+}
 
 /// Parses the hex text a real `/sys/class/net/<iface>/flags` file contains (e.g. `"0x1003\n"`
 /// — verified against this project's own dev machine, which has 20+ real interfaces, none
@@ -54,6 +69,10 @@ impl Collector for NetworkInterfacesCollector {
                 "promiscuous".to_string(),
                 Value::Bool(is_promiscuous(&flags_text)),
             );
+            fact.insert(
+                "bridge_port".to_string(),
+                Value::Bool(is_bridge_port(&entry.path())),
+            );
             rows.push(fact);
         }
         Ok(rows)
@@ -91,6 +110,22 @@ mod tests {
     }
 
     #[test]
+    fn bridge_port_is_decided_by_the_kernels_brport_directory_not_the_interface_name() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        // A bridge-enslaved interface: the kernel materializes `brport/` under it.
+        let enslaved = tmp.path().join("veth6dc1556");
+        std::fs::create_dir_all(enslaved.join("brport")).unwrap();
+        assert!(is_bridge_port(&enslaved));
+
+        // A tap device an attacker named to *look* like a container veth has no `brport/`,
+        // so it stays visible to the rule. This is the whole reason the check is structural.
+        let impostor = tmp.path().join("veth0");
+        std::fs::create_dir_all(&impostor).unwrap();
+        assert!(!is_bridge_port(&impostor));
+    }
+
+    #[test]
     fn collects_real_interfaces_from_this_machine_excluding_loopback() {
         let rows = NetworkInterfacesCollector.collect().unwrap();
         assert!(
@@ -101,10 +136,14 @@ mod tests {
             rows.iter().all(|f| f.get("interface").unwrap() != "lo"),
             "loopback must be excluded"
         );
-        assert!(
-            rows.iter()
-                .all(|f| f.get("promiscuous") == Some(&Value::Bool(false))),
-            "no interface on this real machine is actually promiscuous"
-        );
+        // Deliberately asserts the *shape* of every row and not the promiscuous values. The
+        // previous version of this test asserted no interface here was promiscuous, which was
+        // only ever true because no container happened to be running: `docker run` attaches a
+        // veth to a bridge, the kernel sets IFF_PROMISC on it, and the suite went red on a
+        // machine that was behaving perfectly normally. Live host state is not a fixture.
+        for fact in &rows {
+            assert!(fact.get("promiscuous").unwrap().is_boolean());
+            assert!(fact.get("bridge_port").unwrap().is_boolean());
+        }
     }
 }

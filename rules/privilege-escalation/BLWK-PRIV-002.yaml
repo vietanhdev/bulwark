@@ -14,4 +14,10 @@ fix: >
   Set a GRUB password: run 'grub-mkpasswd-pbkdf2' to generate a hash, add
   'set superusers="root"' and 'password_pbkdf2 root <hash>' to /etc/grub.d/40_custom, then
   run 'update-grub'.
+  IMPORTANT: on stock Ubuntu/Debian, 'set superusers' makes GRUB prompt for that password
+  before booting ANY entry — the machine will halt at a password prompt on every reboot,
+  including unattended ones. To keep normal boot automatic and only gate *editing* entries and
+  recovery, append '--unrestricted' to the CLASS list of your default menuentry (edit
+  /etc/grub.d/10_linux, or use a submenu). Test with a reboot you can physically recover from
+  before relying on this on a headless host.
 references: [CIS-1.4.1, ATTACK-T1542]

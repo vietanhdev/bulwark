@@ -5,8 +5,10 @@ severity: medium
 collector: sysctl_kernel
 condition: ptrace_scope == 0
 explain: >
-  kernel.yama.ptrace_scope is 0, meaning any process can attach to (and read the memory
-  of) any other process owned by the same user — including credential-scraping via
-  /proc/<pid>/mem, a documented credential-access technique.
+  ptrace is unrestricted: kernel.yama.ptrace_scope is 0 (or the Yama LSM isn't loaded at all,
+  which the collector reports the same way, since without Yama there is no restriction to
+  begin with). Any process can attach to and read the memory of any other process owned by
+  the same user — including credential-scraping via /proc/<pid>/mem, a documented
+  credential-access technique.
 fix: "Set 'kernel.yama.ptrace_scope=1' via /etc/sysctl.d/ and run 'sysctl --system'."
 references: [ATTACK-T1003.007]

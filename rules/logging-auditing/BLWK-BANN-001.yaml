@@ -3,6 +3,7 @@ title: "No custom legal warning banner is set (/etc/{{ banners.file }})"
 category: logging-auditing
 severity: info
 collector: banners
+profiles: [server]
 condition: is_default == true
 explain: >
   /etc/{{ banners.file }} still contains the distro's default auto-generated content (OS
@@ -11,5 +12,10 @@ explain: >
   connecting without authorization was actually warned — the default OS-identification
   banner doesn't do that, and also unnecessarily advertises the exact OS version to anyone
   who connects.
+  Scoped to the server profile: a login banner's function is legal, not technical — it
+  establishes that access was unauthorized, which matters for a multi-user remote system.
+  On a personal desktop it protects nothing, and /etc/issue.net is read only by sshd, so on
+  a host that doesn't run sshd it is inert text in a file nobody opens.
+
 fix: "Replace the contents of /etc/issue (local login) and /etc/issue.net (remote login) with a warning banner, not OS version info."
 references: [CIS-1.7.1]

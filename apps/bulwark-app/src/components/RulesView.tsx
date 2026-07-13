@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Check, ChevronRight, Search, X } from "lucide-react";
+import { Ban, Check, ChevronRight, History, RotateCcw, Search, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Callout } from "@/components/ui/callout";
 import { CommandBlock } from "@/components/ui/copy-button";
@@ -27,6 +27,22 @@ interface RuleSummary {
 interface DashboardSnapshot {
   findings: { rule_id: string }[];
   meta: { privileged_collectors_skipped: string[] } | null;
+}
+
+interface Suppression {
+  rule_id: string;
+  reason: string;
+  created_at: string;
+  created_by: string;
+}
+
+interface SuppressionEvent {
+  id: string;
+  rule_id: string;
+  action: "suppressed" | "unsuppressed";
+  reason: string;
+  actor: string;
+  at: string;
 }
 
 const categoryLabel = (c: string) => c.replace(/-/g, " ");
@@ -60,12 +76,30 @@ export function RulesView() {
   // does Bulwark check, and how do I fix each thing"), and the framework/hardening view ("how does
   // that line up against CIS/MITRE, and how hardened is this host"). Both were requested as
   // distinct tabbed views rather than one long scroll.
-  const [tab, setTab] = useState<"rules" | "compliance">("rules");
+  const [tab, setTab] = useState<"rules" | "compliance" | "suppressed">("rules");
+  // Rule suppressions: which rules the user has accepted the risk of (keyed by id for O(1) lookup
+  // while rendering the catalog), the append-only audit trail, and the in-progress reason text per
+  // rule. Suppression never stops a rule running — it only changes how its findings are presented —
+  // so this state lives alongside the catalog rather than gating it.
+  const [suppressions, setSuppressions] = useState<Map<string, Suppression>>(new Map());
+  const [auditLog, setAuditLog] = useState<SuppressionEvent[]>([]);
+  const [reasonDrafts, setReasonDrafts] = useState<Record<string, string>>({});
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [busyRule, setBusyRule] = useState<string | null>(null);
 
   useEffect(() => {
     invoke<RuleSummary[]>("rules_list")
       .then(setRules)
       .catch((e) => setError(String(e)));
+  }, []);
+
+  const loadSuppressions = useCallback(() => {
+    invoke<Suppression[]>("suppressions_list")
+      .then((list) => setSuppressions(new Map(list.map((s) => [s.rule_id, s]))))
+      .catch((e) => setActionError(String(e)));
+    invoke<SuppressionEvent[]>("suppression_audit", { ruleId: null })
+      .then(setAuditLog)
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -76,7 +110,50 @@ export function RulesView() {
         setSkippedCollectors(new Set(snap.meta.privileged_collectors_skipped));
       }
     });
-  }, [revision]);
+    loadSuppressions();
+  }, [revision, loadSuppressions]);
+
+  async function suppressRule(ruleId: string) {
+    const reason = (reasonDrafts[ruleId] ?? "").trim();
+    if (!reason) {
+      setActionError(
+        "A reason is required to suppress a rule — it's what makes the decision auditable later.",
+      );
+      return;
+    }
+    setBusyRule(ruleId);
+    setActionError(null);
+    try {
+      await invoke("rule_suppress", { ruleId, reason });
+      setReasonDrafts((d) => ({ ...d, [ruleId]: "" }));
+      loadSuppressions();
+    } catch (e) {
+      setActionError(String(e));
+    } finally {
+      setBusyRule(null);
+    }
+  }
+
+  async function unsuppressRule(ruleId: string) {
+    const reason = (reasonDrafts[ruleId] ?? "").trim();
+    if (!reason) {
+      setActionError(
+        "A reason is required to re-enable a rule too — 'why did this alert come back?' is a question worth answering.",
+      );
+      return;
+    }
+    setBusyRule(ruleId);
+    setActionError(null);
+    try {
+      await invoke("rule_unsuppress", { ruleId, reason });
+      setReasonDrafts((d) => ({ ...d, [ruleId]: "" }));
+      loadSuppressions();
+    } catch (e) {
+      setActionError(String(e));
+    } finally {
+      setBusyRule(null);
+    }
+  }
 
   const hardening = useMemo(() => {
     if (!rules || !hasScanned) return null;
@@ -153,6 +230,7 @@ export function RulesView() {
       }
     >
       {error && <Callout tone="critical">{error}</Callout>}
+      {actionError && <Callout tone="critical">{actionError}</Callout>}
 
       {rules && (
         <>
@@ -162,6 +240,7 @@ export function RulesView() {
               [
                 ["rules", "Rules"],
                 ["compliance", "Framework compliance"],
+                ["suppressed", suppressions.size > 0 ? `Suppressed (${suppressions.size})` : "Suppressed"],
               ] as const
             ).map(([id, label]) => {
               const on = tab === id;
@@ -271,6 +350,19 @@ export function RulesView() {
                 </p>
               )}
             </section>
+          )}
+
+          {tab === "suppressed" && (
+            <SuppressedTab
+              rules={rules}
+              suppressions={suppressions}
+              auditLog={auditLog}
+              busyRule={busyRule}
+              draftFor={(id) => reasonDrafts[id] ?? ""}
+              onDraft={(id, v) => setReasonDrafts((d) => ({ ...d, [id]: v }))}
+              onUnsuppress={unsuppressRule}
+              onGoToRules={() => setTab("rules")}
+            />
           )}
 
           {tab === "rules" && (
@@ -383,6 +475,12 @@ export function RulesView() {
                                           needs:{p}
                                         </span>
                                       ))}
+                                      {suppressions.has(r.id) && (
+                                        <span className="inline-flex items-center gap-1 rounded-sm bg-muted px-1 font-mono text-[10px] text-muted-foreground">
+                                          <Ban className="h-2.5 w-2.5" />
+                                          suppressed
+                                        </span>
+                                      )}
                                     </span>
                                   </span>
                                   <SeverityLabel severity={r.severity} />
@@ -397,6 +495,15 @@ export function RulesView() {
                                     <p className="mt-2 font-mono text-[10px] text-muted-foreground/70">
                                       collector: {r.collector}
                                     </p>
+                                    <SuppressionControl
+                                      ruleId={r.id}
+                                      suppression={suppressions.get(r.id) ?? null}
+                                      draft={reasonDrafts[r.id] ?? ""}
+                                      busy={busyRule === r.id}
+                                      onDraft={(v) => setReasonDrafts((d) => ({ ...d, [r.id]: v }))}
+                                      onSuppress={() => suppressRule(r.id)}
+                                      onUnsuppress={() => unsuppressRule(r.id)}
+                                    />
                                   </div>
                                 )}
                               </div>
@@ -411,5 +518,205 @@ export function RulesView() {
         </>
       )}
     </PageShell>
+  );
+}
+
+/// The suppress / un-suppress control shown inside an expanded rule row. When the rule is live it
+/// offers a reason box and a Suppress button; when it's already suppressed it shows who accepted the
+/// risk and why, with a reasoned Un-suppress. The reason is required either way — the button stays
+/// disabled until there's text — because an unexplained decision is exactly what the audit trail
+/// exists to prevent.
+function SuppressionControl({
+  suppression,
+  draft,
+  busy,
+  onDraft,
+  onSuppress,
+  onUnsuppress,
+}: {
+  ruleId: string;
+  suppression: Suppression | null;
+  draft: string;
+  busy: boolean;
+  onDraft: (v: string) => void;
+  onSuppress: () => void;
+  onUnsuppress: () => void;
+}) {
+  const suppressed = suppression !== null;
+  return (
+    <div className="mt-3 border-t border-border pt-3">
+      {suppressed && (
+        <p className="mb-2 text-[11px] leading-relaxed text-muted-foreground">
+          <span className="font-medium text-foreground">Suppressed</span> by {suppression.created_by} on{" "}
+          {new Date(suppression.created_at).toLocaleDateString()} — “{suppression.reason}”. The rule still
+          runs every scan; its findings just don't count against you until you re-enable it.
+        </p>
+      )}
+      <div className="flex items-start gap-2">
+        <Input
+          value={draft}
+          onChange={(e) => onDraft(e.target.value)}
+          placeholder={suppressed ? "Reason for re-enabling…" : "Reason for accepting this risk…"}
+          className="h-8 flex-1 text-xs"
+          aria-label="Suppression reason"
+        />
+        {suppressed ? (
+          <button
+            type="button"
+            disabled={busy || !draft.trim()}
+            onClick={onUnsuppress}
+            className={cn(
+              "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 text-xs transition-colors",
+              "hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+              "disabled:cursor-not-allowed disabled:opacity-50",
+            )}
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            Re-enable
+          </button>
+        ) : (
+          <button
+            type="button"
+            disabled={busy || !draft.trim()}
+            onClick={onSuppress}
+            className={cn(
+              "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 text-xs transition-colors",
+              "hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+              "disabled:cursor-not-allowed disabled:opacity-50",
+            )}
+          >
+            <Ban className="h-3.5 w-3.5" />
+            Suppress
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/// The "Suppressed" tab: the rules whose risk has been accepted (with a one-click reasoned
+/// re-enable), plus the append-only audit trail of every suppression decision ever made — including
+/// lifted ones, which is the whole reason the history is kept separately from the current state.
+function SuppressedTab({
+  rules,
+  suppressions,
+  auditLog,
+  busyRule,
+  draftFor,
+  onDraft,
+  onUnsuppress,
+  onGoToRules,
+}: {
+  rules: RuleSummary[];
+  suppressions: Map<string, Suppression>;
+  auditLog: SuppressionEvent[];
+  busyRule: string | null;
+  draftFor: (id: string) => string;
+  onDraft: (id: string, v: string) => void;
+  onUnsuppress: (id: string) => void;
+  onGoToRules: () => void;
+}) {
+  const titleOf = (id: string) => rules.find((r) => r.id === id)?.title ?? id;
+  const active = Array.from(suppressions.values());
+
+  return (
+    <section className="flex flex-col gap-8">
+      <div>
+        <SectionLabel>Active suppressions</SectionLabel>
+        {active.length === 0 ? (
+          <Callout tone="info">
+            No rules are suppressed. To accept the risk a rule reports — a finding you've reviewed and decided
+            to live with — open it under the{" "}
+            <button className="underline underline-offset-2" onClick={onGoToRules}>
+              Rules
+            </button>{" "}
+            tab and suppress it with a reason. Suppressing never stops a rule running; it just stops its
+            findings counting against you, and every decision is logged below.
+          </Callout>
+        ) : (
+          <div className="overflow-hidden rounded-lg border border-border bg-card">
+            {active.map((s, i) => (
+              <div key={s.rule_id} className={cn("p-3", i > 0 && "border-t border-border")}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{titleOf(s.rule_id)}</p>
+                    <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">{s.rule_id}</p>
+                    <p className="mt-1.5 text-xs text-muted-foreground">
+                      “{s.reason}” — {s.created_by}, {new Date(s.created_at).toLocaleDateString()}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 flex-col items-end gap-1.5">
+                    <Input
+                      value={draftFor(s.rule_id)}
+                      onChange={(e) => onDraft(s.rule_id, e.target.value)}
+                      placeholder="Reason to re-enable…"
+                      className="h-8 w-52 text-xs"
+                      aria-label={`Reason to re-enable ${s.rule_id}`}
+                    />
+                    <button
+                      type="button"
+                      disabled={busyRule === s.rule_id || !draftFor(s.rule_id).trim()}
+                      onClick={() => onUnsuppress(s.rule_id)}
+                      className={cn(
+                        "inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-2.5 text-xs transition-colors",
+                        "hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+                        "disabled:cursor-not-allowed disabled:opacity-50",
+                      )}
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" />
+                      Re-enable
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <SectionLabel>
+          <span className="inline-flex items-center gap-1.5">
+            <History className="h-3.5 w-3.5" />
+            Audit trail
+          </span>
+        </SectionLabel>
+        {auditLog.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No suppression decisions recorded yet.</p>
+        ) : (
+          <div className="overflow-hidden rounded-lg border border-border bg-card">
+            {auditLog.map((e, i) => (
+              <div
+                key={e.id}
+                className={cn("flex items-start gap-3 p-3 text-xs", i > 0 && "border-t border-border")}
+              >
+                <span
+                  className={cn(
+                    "mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-0.5 font-mono text-[10px]",
+                    e.action === "suppressed"
+                      ? "bg-muted text-muted-foreground"
+                      : "bg-accent text-accent-foreground",
+                  )}
+                >
+                  {e.action === "suppressed" ? (
+                    <Ban className="h-2.5 w-2.5" />
+                  ) : (
+                    <RotateCcw className="h-2.5 w-2.5" />
+                  )}
+                  {e.action === "suppressed" ? "suppressed" : "re-enabled"}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <span className="font-mono text-[11px] text-muted-foreground">{e.rule_id}</span>
+                  <span className="ml-2 text-muted-foreground">“{e.reason}”</span>
+                </div>
+                <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground/70">
+                  {e.actor} · {new Date(e.at).toLocaleString()}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
   );
 }

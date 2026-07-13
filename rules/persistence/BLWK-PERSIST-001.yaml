@@ -1,14 +1,17 @@
 id: BLWK-PERSIST-001
 title: systemd unit runs a tunneling tool
 category: persistence
-severity: critical
+severity: high
 collector: systemd_units
 condition: exec_start matches "ngrok|cloudflared|serveo|localtunnel|ssh -R"
 explain: >
   The systemd unit "{{ systemd_units.unit_name }}" runs a command referencing a tunneling
-  tool ("{{ systemd_units.exec_start }}"). This is a common attacker persistence pattern —
-  a reverse tunnel that reaches back out through a service like ngrok survives reboots and
-  bypasses inbound firewall rules entirely, since it's an outbound connection.
+  tool ("{{ systemd_units.exec_start }}"). A reverse tunnel that reaches back out through a
+  service like ngrok or cloudflared survives reboots and bypasses inbound firewall rules
+  entirely, since it's an outbound connection — which is why it's both a legitimate way to
+  expose a service and a common attacker persistence pattern. The two look identical from
+  here, so this is high rather than critical: if you deliberately installed cloudflared,
+  autossh, or a similar tunnel, this is expected and you can accept the risk for this rule.
 fix: >
   If you didn't set this up yourself: 'systemctl disable --now <unit>' and remove the unit
   file from /etc/systemd/system/, then rotate any credentials the box had access to.

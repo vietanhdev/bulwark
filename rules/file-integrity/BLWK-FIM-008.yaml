@@ -1,0 +1,17 @@
+id: BLWK-FIM-008
+title: "Could not verify credential file: {{ file_integrity_privileged.path }}"
+category: file-integrity
+severity: high
+collector: file_integrity_privileged
+condition: unreadable == true
+explain: >
+  {{ file_integrity_privileged.path }} (/etc/shadow or /etc/sudoers) exists but its hash could
+  not be computed this scan, so its integrity is unverifiable. Rated high because on the two
+  most sensitive files Bulwark tracks, an inability to read them is itself worth attention — it
+  can mean a permissions change that a privileged scan should have handled, or something actively
+  interfering with access. It is deliberately not reported as "modified": a failure to look is
+  not evidence of a change.
+fix: >
+  Re-run under privilege ('sudo bulwarkctl scan --privileged') so the file is readable, and
+  confirm 'sha256sum' is installed. If it still can't be read as root, investigate why.
+references: []

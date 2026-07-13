@@ -3,11 +3,12 @@ title: Magic SysRq key is fully enabled
 category: kernel-hardening
 severity: medium
 collector: sysctl_kernel
-condition: sysrq == 1
+condition: sysrq == 1 or (sysrq > 1 and sysrq_dump_or_signal == true)
 explain: >
-  kernel.sysrq is 1 — every SysRq function is enabled, including immediate reboot and
-  kernel memory dumps, triggerable by anyone with keyboard or console access (physical or
-  via a hijacked serial/BMC console). Most distros ship a restricted bitmask instead of
-  full-on; a plain 1 usually means something intentionally widened it.
+  kernel.sysrq exposes dangerous SysRq functions to anyone with keyboard or console access
+  (physical, or a hijacked serial/BMC console). A value of 1 enables every function; a value
+  above 1 is a bitmask, and this fires when that mask still includes the memory-dump bit
+  (0x08, leaks kernel memory) or the signal bit (0x40, SIGKILL any process) — so a widened
+  mask like 510 is caught, not just a plain 1, which the old exact-match condition missed.
 fix: "Set 'kernel.sysrq=176' (Ubuntu's restricted default) or '0' via /etc/sysctl.d/ and run 'sysctl --system'."
 references: [CIS-1.5.4]

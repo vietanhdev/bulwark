@@ -53,7 +53,7 @@ enum Commands {
     /// Inspect the loaded rule pack
     Rules {
         #[command(subcommand)]
-        action: RulesAction,
+        action: ConfigRulesAction,
     },
     /// List past scan runs
     History,
@@ -175,6 +175,47 @@ enum RulesAction {
     Validate { path: PathBuf },
 }
 
+/// Config-scan rule actions. A superset of [`RulesAction`] — suppression is meaningful for config
+/// rules (a host state you've decided to accept) but not for log rules or decoders, so those keep
+/// the smaller shared enum rather than exposing suppress/unsuppress subcommands that do nothing.
+#[derive(Subcommand)]
+enum ConfigRulesAction {
+    /// List loaded rules, including any that failed to load
+    List,
+    /// Validate a rule file or directory without running a scan
+    Validate { path: PathBuf },
+    /// Accept the risk a rule reports, so its findings stop counting against you.
+    ///
+    /// The rule keeps running on every scan — this only changes how its findings are
+    /// presented. Nothing is deleted and no check is turned off, so lifting the
+    /// suppression shows you the current truth rather than a stale one.
+    Suppress {
+        /// Rule to suppress, e.g. BLWK-BANN-001
+        rule_id: String,
+        /// Why this risk is acceptable. Required — an unexplained suppression is
+        /// unauditable, and the person who will need this is future you.
+        #[arg(long)]
+        reason: String,
+    },
+    /// Withdraw a risk acceptance and let the rule count against you again
+    Unsuppress {
+        rule_id: String,
+        /// Why the acceptance no longer holds. Required: this is an auditable decision
+        /// too, and "why did this alert come back?" is a question someone will ask.
+        #[arg(long)]
+        reason: String,
+    },
+    /// Show active suppressions and the append-only audit trail behind them
+    Suppressions {
+        /// Show the full history (including lifted suppressions), not just what's active
+        #[arg(long)]
+        audit: bool,
+        /// Scope the audit trail to one rule
+        #[arg(long)]
+        rule_id: Option<String>,
+    },
+}
+
 /// Standard installed location — `cargo-deb`'s `assets` entry in `Cargo.toml` puts the
 /// bundled rule pack here. Caught by actually building and inspecting a real `.deb`: a
 /// packaged `bulwarkctl` run from an arbitrary directory (the common case — a real user isn't
@@ -253,6 +294,15 @@ fn resolve_db_path(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
     Ok(Path::new(&home).join(".local/share/bulwark/bulwark.db"))
 }
 
+/// Who to attribute a suppression to in the audit trail. `SUDO_USER` wins over `USER` so a
+/// suppression made under `sudo` is credited to the human who ran it, not to root — the audit log
+/// is about accountability, and "root did it" is exactly the answer it exists to improve on.
+fn current_actor() -> String {
+    std::env::var("SUDO_USER")
+        .or_else(|_| std::env::var("USER"))
+        .unwrap_or_else(|_| "unknown".to_string())
+}
+
 fn severity_label(s: Severity) -> &'static str {
     match s {
         Severity::Critical => "CRITICAL",
@@ -314,7 +364,7 @@ fn main() -> anyhow::Result<()> {
             std::process::exit(exit_code_for(scan.worst_severity()));
         }
         Commands::Rules { action } => match action {
-            RulesAction::List => {
+            ConfigRulesAction::List => {
                 let rules_dir = resolve_rules_dir(cli.rules_dir)?;
                 let (rules, errors) = engine::load_rules(&rules_dir);
                 for r in &rules {
@@ -340,7 +390,7 @@ fn main() -> anyhow::Result<()> {
                     std::process::exit(1);
                 }
             }
-            RulesAction::Validate { path } => {
+            ConfigRulesAction::Validate { path } => {
                 let (rules, mut errors) = engine::load_rules(&path);
                 // Schema/condition validity alone isn't enough: a `collector:` field that
                 // doesn't match any registered collector name loads without error but then
@@ -380,6 +430,67 @@ fn main() -> anyhow::Result<()> {
                         eprintln!("  {}: {}", e.path, e.message);
                     }
                     std::process::exit(1);
+                }
+            }
+            ConfigRulesAction::Suppress { rule_id, reason } => {
+                // Reject a suppression for a rule that doesn't exist — otherwise a typo'd ID
+                // becomes a suppression that silently matches nothing, which is indistinguishable
+                // from a working one until the day the real rule fires anyway and confuses everyone.
+                let rules_dir = resolve_rules_dir(cli.rules_dir)?;
+                let (rules, _) = engine::load_rules(&rules_dir);
+                if !rules.iter().any(|r| r.rule.id == rule_id) {
+                    anyhow::bail!(
+                        "no rule '{rule_id}' in the loaded pack — check the id with: bulwarkctl rules list"
+                    );
+                }
+                let db_path = resolve_db_path(cli.db_path)?;
+                let mut store = Store::open(&db_path)?;
+                let s = store.suppress_rule(&rule_id, &reason, &current_actor())?;
+                println!("suppressed {} — {}", s.rule_id, s.reason);
+                println!("(the rule still runs every scan; lift it with: bulwarkctl rules unsuppress {rule_id} --reason ...)");
+            }
+            ConfigRulesAction::Unsuppress { rule_id, reason } => {
+                let db_path = resolve_db_path(cli.db_path)?;
+                let mut store = Store::open(&db_path)?;
+                store.unsuppress_rule(&rule_id, &reason, &current_actor())?;
+                println!("unsuppressed {rule_id} — it will count against you again");
+            }
+            ConfigRulesAction::Suppressions { audit, rule_id } => {
+                let db_path = resolve_db_path(cli.db_path)?;
+                if !db_path.exists() {
+                    println!("no suppressions — nothing recorded yet");
+                    return Ok(());
+                }
+                let mut store = Store::open(&db_path)?;
+                if audit {
+                    let log = store.suppression_audit_log(rule_id.as_deref(), 500)?;
+                    if log.is_empty() {
+                        println!("no suppression history recorded");
+                    }
+                    for e in &log {
+                        println!(
+                            "{}  {:<12} {:<18} {} — {}",
+                            e.at.format("%Y-%m-%d %H:%M"),
+                            e.action.as_str(),
+                            e.rule_id,
+                            e.actor,
+                            e.reason
+                        );
+                    }
+                } else {
+                    let active = store.list_suppressions()?;
+                    if active.is_empty() {
+                        println!("no active suppressions");
+                    }
+                    for s in &active {
+                        println!(
+                            "{:<18} by {} on {} — {}",
+                            s.rule_id,
+                            s.created_by,
+                            s.created_at.format("%Y-%m-%d"),
+                            s.reason
+                        );
+                    }
                 }
             }
         },

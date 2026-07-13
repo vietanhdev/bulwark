@@ -1,12 +1,14 @@
 id: BLWK-NET-002
-title: ngrok's local API port is listening
+title: A port commonly used by ngrok's local API is listening
 category: network-egress
 severity: medium
 collector: listening_ports
-condition: port == 4040
+condition: port == 4040 and loopback_only == false
 explain: >
-  Port 4040 is listening — this is ngrok's local web-inspector/API port, only present while
-  an ngrok tunnel is active. If you're not deliberately running ngrok right now, something
-  else is.
+  Port 4040 is listening on {{ listening_ports.listen_address }} — most often ngrok's local
+  web-inspector/API port, present while an ngrok tunnel is active. It's also Apache Spark's
+  default UI port and is used by a few other dev tools, so this isn't conclusive on its own:
+  if you're not running ngrok, check what it is. A loopback-only 4040 (the usual case for
+  both ngrok and Spark) is excluded — this fires only when it's exposed on the network.
 fix: "Check 'ps aux | grep ngrok' and 'systemctl list-units | grep -i ngrok' to find what started it."
 references: [ATTACK-T1090]

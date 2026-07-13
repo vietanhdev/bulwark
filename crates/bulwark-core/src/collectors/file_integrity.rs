@@ -124,9 +124,19 @@ fn collect_for(watched: &[&str], baseline_file: &Path) -> Vec<Fact> {
         .map(|path| {
             let present = Path::new(&path).exists();
             let in_baseline = baseline.contains_key(&path);
+            let current_hash = current.get(&path);
+            // "Unreadable" is the state that used to be silently miscategorised as "changed": the
+            // file is present and we needed its hash, but `sha256sum` produced none (the binary is
+            // missing, or it couldn't read this particular file — an EACCES under a partial
+            // privilege set, an I/O error). "I could not compute the hash" is emphatically not
+            // "the hash differs", and reporting it as a CRITICAL "modified since baseline" is a
+            // false alarm of exactly the kind this project keeps finding — absence of evidence
+            // dressed up as evidence. It is surfaced as its own state instead.
+            let unreadable = present && current_hash.is_none();
             let changed = match (in_baseline, present) {
-                (true, false) => true,
-                (true, true) => current.get(&path) != baseline.get(&path),
+                (true, false) => true, // baselined then deleted — a real, knowable change
+                // Only a hash we actually computed and that actually differs counts as changed.
+                (true, true) => current_hash.is_some() && current_hash != baseline.get(&path),
                 (false, _) => false,
             };
             let mut fact = Fact::new();
@@ -135,6 +145,7 @@ fn collect_for(watched: &[&str], baseline_file: &Path) -> Vec<Fact> {
             fact.insert("in_baseline".to_string(), Value::Bool(in_baseline));
             fact.insert("currently_present".to_string(), Value::Bool(present));
             fact.insert("changed".to_string(), Value::Bool(changed));
+            fact.insert("unreadable".to_string(), Value::Bool(unreadable));
             fact
         })
         .collect()
@@ -336,5 +347,89 @@ mod tests {
             &Value::Bool(false),
             "no baseline to compare against must not read as a false positive"
         );
+    }
+
+    #[test]
+    fn a_present_file_absent_from_an_existing_baseline_is_flagged_as_uncovered() {
+        // The false-clean that shipped: once *any* baseline exists, a watched file that was never
+        // recorded (the /etc/shadow-baselined-without-privilege case) used to read as verified. It
+        // must now be visibly "not in baseline", which BLWK-FIM-003/006 turn into a finding.
+        let tmp = tempfile::tempdir().unwrap();
+        let baselined = tmp.path().join("covered.conf");
+        let uncovered = tmp.path().join("never-recorded.conf");
+        std::fs::write(&baselined, "a\n").unwrap();
+        std::fs::write(&uncovered, "b\n").unwrap();
+        let baseline_file = tmp.path().join("baseline.txt");
+
+        // Baseline records ONLY the first file.
+        establish_baseline_at(&[baselined.to_str().unwrap()], &baseline_file).unwrap();
+
+        let rows = collect_for(
+            &[baselined.to_str().unwrap(), uncovered.to_str().unwrap()],
+            &baseline_file,
+        );
+        let uncovered_row = rows
+            .iter()
+            .find(|r| {
+                r.get("path")
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .ends_with("never-recorded.conf")
+            })
+            .unwrap();
+        assert_eq!(
+            uncovered_row.get("baseline_exists").unwrap(),
+            &Value::Bool(true),
+            "a baseline does exist globally — which is exactly why the old rule missed this file"
+        );
+        assert_eq!(
+            uncovered_row.get("in_baseline").unwrap(),
+            &Value::Bool(false),
+            "but THIS file was never recorded, and that must be visible"
+        );
+        assert_eq!(uncovered_row.get("changed").unwrap(), &Value::Bool(false));
+    }
+
+    #[test]
+    fn an_unhashable_present_file_is_unreadable_not_changed() {
+        // A baselined, present file whose hash can't be computed must NOT read as a critical
+        // "modified". We simulate "couldn't hash it" by pointing the baseline at a path we then
+        // make unreadable to the hasher via a bogus PATH — but the deterministic unit-level check
+        // is simpler: build the fact state directly from a baseline that has an entry the current
+        // hash set lacks.
+        let tmp = tempfile::tempdir().unwrap();
+        let watched_file = tmp.path().join("secret.conf");
+        std::fs::write(&watched_file, "content\n").unwrap();
+        let path = watched_file.to_str().unwrap().to_string();
+        let baseline_file = tmp.path().join("baseline.txt");
+        establish_baseline_at(&[path.as_str()], &baseline_file).unwrap();
+
+        // Make the file unreadable to sha256sum (0 permissions). On a system where the test runs
+        // as root this wouldn't block the read, so tolerate either outcome but assert the
+        // invariant: if we couldn't hash it, it's `unreadable` and NOT `changed`.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&watched_file, std::fs::Permissions::from_mode(0o000))
+                .unwrap();
+        }
+        let rows = collect_for(&[path.as_str()], &baseline_file);
+        let row = &rows[0];
+        let unreadable = row.get("unreadable").unwrap().as_bool().unwrap();
+        let changed = row.get("changed").unwrap().as_bool().unwrap();
+        assert!(
+            !(unreadable && changed),
+            "a file we could not hash must never be reported as changed"
+        );
+        if unreadable {
+            assert!(!changed, "unreadable file is not a modification");
+        }
+        // Restore perms so tempdir cleanup works.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&watched_file, std::fs::Permissions::from_mode(0o644));
+        }
     }
 }

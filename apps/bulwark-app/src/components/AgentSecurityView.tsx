@@ -197,8 +197,15 @@ export function AgentSecurityView({ active }: { active: boolean }) {
         apply: true,
       });
       setRedactResult(report);
-      // Re-scan so the now-redacted secrets drop out of the findings list.
-      await runScan();
+      // The secrets in these files are now gone — so drop their leak findings from the list
+      // directly, rather than re-running a whole-machine scan just to "refresh". That re-scan
+      // re-walks the entire home directory (minutes on a large one) to rediscover what we already
+      // know we just fixed. The backend has already pruned the same findings from the persisted
+      // snapshot, so this stays correct across a tab switch too.
+      const redactedFiles = new Set(
+        report.entries.filter((e) => e.applied && e.secrets_redacted > 0).map((e) => e.path),
+      );
+      setFindings((prev) => prev.filter((f) => !(f.redactable && redactedFiles.has(f.file))));
     } catch (e) {
       setError(String(e));
     } finally {

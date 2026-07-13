@@ -220,8 +220,62 @@ async function streamAiScan(channel: Channel<unknown>) {
   });
 }
 
+// In-memory suppression state for the browser-dev harness, mirroring the store's two-table split:
+// current state plus an append-only audit trail that survives un-suppression.
+let mockSuppressions: { rule_id: string; reason: string; created_at: string; created_by: string }[] = [];
+const mockAudit: {
+  id: string;
+  rule_id: string;
+  action: "suppressed" | "unsuppressed";
+  reason: string;
+  actor: string;
+  at: string;
+}[] = [];
+
 const handlers: Record<string, (args: Args) => unknown> = {
   rules_list: () => rulesFixture,
+  suppressions_list: () => mockSuppressions,
+  suppression_audit: (args) => {
+    const ruleId = args?.ruleId as string | null | undefined;
+    const log = ruleId ? mockAudit.filter((e) => e.rule_id === ruleId) : mockAudit;
+    return [...log].reverse();
+  },
+  rule_suppress: (args) => {
+    const rule_id = String(args?.ruleId ?? "");
+    const reason = String(args?.reason ?? "").trim();
+    if (!reason) throw new Error("a suppression needs a reason");
+    const now = new Date().toISOString();
+    mockSuppressions = [
+      ...mockSuppressions.filter((s) => s.rule_id !== rule_id),
+      { rule_id, reason, created_at: now, created_by: "desktop-user" },
+    ];
+    mockAudit.push({
+      id: crypto.randomUUID(),
+      rule_id,
+      action: "suppressed",
+      reason,
+      actor: "desktop-user",
+      at: now,
+    });
+    return null;
+  },
+  rule_unsuppress: (args) => {
+    const rule_id = String(args?.ruleId ?? "");
+    const reason = String(args?.reason ?? "").trim();
+    if (!reason) throw new Error("lifting a suppression needs a reason");
+    if (!mockSuppressions.some((s) => s.rule_id === rule_id))
+      throw new Error(`rule ${rule_id} is not suppressed`);
+    mockSuppressions = mockSuppressions.filter((s) => s.rule_id !== rule_id);
+    mockAudit.push({
+      id: crypto.randomUUID(),
+      rule_id,
+      action: "unsuppressed",
+      reason,
+      actor: "desktop-user",
+      at: new Date().toISOString(),
+    });
+    return null;
+  },
   ai_scan_snapshot: () => aiSnapshot,
   ai_settings_get: () => aiSettings,
   ai_settings_set: (args) => {

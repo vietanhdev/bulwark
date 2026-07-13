@@ -1,13 +1,20 @@
 id: BLWK-KERNEL-008
 title: kexec can load an unsigned, arbitrary kernel image
 category: kernel-hardening
-severity: medium
+severity: low
 collector: sysctl_kernel
-condition: kexec_load_disabled == 0
+condition: kexec_load_disabled == 0 and lockdown == "none"
 explain: >
   kernel.kexec_load_disabled is 0 — a process with sufficient privilege can use kexec to
   load and immediately switch execution to a completely different, unverified kernel
-  image, bypassing secure boot and any measured-boot chain entirely. This is a defense-
-  evasion technique for surviving a reboot with a backdoored kernel.
-fix: "Set 'kernel.kexec_load_disabled=1' via /etc/sysctl.d/ (this is a one-way switch until reboot)."
+  image, bypassing secure boot and any measured-boot chain entirely, to survive a reboot
+  with a backdoored kernel. This fires only when kernel lockdown is off: with Secure Boot
+  enabled the kernel runs in lockdown 'integrity' mode, which already refuses an unsigned
+  kexec image regardless of this flag, so the flag is defense-in-depth there rather than a
+  gap — and the rule stays quiet. Rated low because loading a kexec image already requires
+  CAP_SYS_BOOT (root); this hardens against a post-compromise persistence step.
+fix: >
+  Set 'kernel.kexec_load_disabled=1' via /etc/sysctl.d/ and run 'sysctl --system'. Note this
+  disables kdump/crash-dump capture and 'systemctl kexec'; and once it is set to 1 at runtime it
+  cannot be returned to 0 without a reboot (the sysctl.d drop-in itself re-applies every boot).
 references: [ATTACK-T1601]

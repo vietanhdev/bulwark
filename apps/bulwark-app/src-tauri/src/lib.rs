@@ -488,12 +488,95 @@ async fn rules_list(app: tauri::AppHandle) -> Result<Vec<RuleSummary>, String> {
         .collect())
 }
 
+/// Who a suppression is attributed to in the audit trail. The desktop app has no `sudo` context,
+/// so the logged-in user's name is the honest actor.
+fn suppression_actor() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "desktop-user".to_string())
+}
+
+/// Accepts the risk a rule reports — the "ignore this rule, with a reason" action the Rules view
+/// offers. The rule keeps running every scan; only its presentation changes. The reason is
+/// mandatory (enforced in core), which is the whole point: an unexplained suppression is
+/// unauditable.
+#[tauri::command]
+async fn rule_suppress(rule_id: String, reason: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let db_path = db_path()?;
+        let mut store = Store::open(&db_path).map_err(|e| e.to_string())?;
+        store
+            .suppress_rule(&rule_id, &reason, &suppression_actor())
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Withdraws a risk acceptance — the rule's findings count against you again. Also requires a
+/// reason, because re-enabling a check is an auditable decision too.
+#[tauri::command]
+async fn rule_unsuppress(rule_id: String, reason: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let db_path = db_path()?;
+        let mut store = Store::open(&db_path).map_err(|e| e.to_string())?;
+        store
+            .unsuppress_rule(&rule_id, &reason, &suppression_actor())
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The currently-active suppressions, for the Rules view's "Suppressed" tab.
+#[tauri::command]
+async fn suppressions_list() -> Result<Vec<bulwark_core::models::Suppression>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let db_path = db_path()?;
+        if !db_path.exists() {
+            return Ok(Vec::new());
+        }
+        let mut store = Store::open(&db_path).map_err(|e| e.to_string())?;
+        store.list_suppressions().map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The append-only suppression audit trail (optionally scoped to one rule) — every suppress and
+/// un-suppress ever made, so the Rules view can show who accepted what risk, when, and why, even
+/// after a suppression has been lifted.
+#[tauri::command]
+async fn suppression_audit(
+    rule_id: Option<String>,
+) -> Result<Vec<bulwark_core::models::SuppressionEvent>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let db_path = db_path()?;
+        if !db_path.exists() {
+            return Ok(Vec::new());
+        }
+        let mut store = Store::open(&db_path).map_err(|e| e.to_string())?;
+        store
+            .suppression_audit_log(rule_id.as_deref(), 500)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[derive(Serialize)]
 struct DashboardSnapshot {
     /// Every open issue on this host, from *all* scanners — the config rule engine and the
-    /// agent-artifact scanner alike. The Overview is the one place that answers "what's wrong
-    /// with this machine," so it must not silently omit a whole scanner's findings.
+    /// agent-artifact scanner alike — that the user has NOT accepted the risk of. The Overview is
+    /// the one place that answers "what's wrong with this machine," so it must not silently omit a
+    /// whole scanner's findings.
     findings: Vec<Finding>,
+    /// Findings whose rule the user has explicitly suppressed. Kept separate rather than dropped:
+    /// the honest summary is "3 to fix, 2 accepted", and the UI shows the second number rather than
+    /// pretending the accepted risk isn't there.
+    #[serde(rename = "suppressedFindings")]
+    suppressed_findings: Vec<Finding>,
     meta: Option<LatestScanMeta>,
     /// Whether an agent-security scan has ever run. Without this the Overview can't tell
     /// "no agent issues" from "the agent scanner never ran" — and claiming a clean bill of
@@ -548,6 +631,7 @@ async fn dashboard_snapshot() -> Result<DashboardSnapshot, String> {
     if !db_path.exists() {
         return Ok(DashboardSnapshot {
             findings: Vec::new(),
+            suppressed_findings: Vec::new(),
             meta: None,
             agent_scanned: false,
         });
@@ -569,8 +653,18 @@ async fn dashboard_snapshot() -> Result<DashboardSnapshot, String> {
         );
     }
 
+    // Partition off the findings whose rule the user has accepted the risk of. Done here over the
+    // combined config+agent set (rather than in `open_findings_split`, which only knows about
+    // config findings) so suppression applies uniformly across every scanner — a suppressed
+    // BLWK-AI-* rule is honored the same as a suppressed BLWK-KERNEL-* one.
+    let suppressed_ids = store.suppressed_rule_ids().map_err(|e| e.to_string())?;
+    let (suppressed_findings, findings): (Vec<_>, Vec<_>) = findings
+        .into_iter()
+        .partition(|f| suppressed_ids.contains(&f.rule_id));
+
     Ok(DashboardSnapshot {
         findings,
+        suppressed_findings,
         meta: store.latest_scan_run_meta().map_err(|e| e.to_string())?,
         agent_scanned,
     })
@@ -660,6 +754,10 @@ pub fn run() {
             scan_cancel,
             scan_privileged,
             rules_list,
+            rule_suppress,
+            rule_unsuppress,
+            suppressions_list,
+            suppression_audit,
             history_count,
             history_list,
             dashboard_snapshot,

@@ -123,6 +123,26 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    rule_suppressions (rule_id) {
+        rule_id -> Text,
+        reason -> Text,
+        created_at -> Text,
+        created_by -> Text,
+    }
+}
+
+diesel::table! {
+    rule_suppression_events (id) {
+        id -> Text,
+        rule_id -> Text,
+        action -> Text,
+        reason -> Text,
+        actor -> Text,
+        at -> Text,
+    }
+}
+
 diesel::joinable!(findings -> scan_runs (scan_run_id));
 diesel::joinable!(log_findings -> log_scan_runs (log_scan_run_id));
 diesel::joinable!(ai_findings -> ai_scan_runs (ai_scan_run_id));
@@ -135,4 +155,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     log_findings,
     ai_scan_runs,
     ai_findings,
+    rule_suppressions,
+    rule_suppression_events,
 );

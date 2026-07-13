@@ -21,6 +21,55 @@ pub enum FindingStatus {
     Resolved,
 }
 
+/// A user's explicit, reasoned decision to accept the risk a rule reports.
+///
+/// Note what this is *not*: it is not a switch that stops the rule running. A suppressed rule is
+/// evaluated on every scan exactly as before and its findings are still written to the database —
+/// suppression only changes how they are presented and counted. Two reasons that matters, and both
+/// are the difference between a risk-acceptance workflow and a mute button:
+///
+///   * Lifting a suppression must reveal the *current* truth, not a stale snapshot from whenever
+///     the rule was last allowed to run.
+///   * A suppression must never quietly decay into a blind spot. The check keeps running, so the
+///     answer to "is this still true?" is always one click away.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Suppression {
+    pub rule_id: String,
+    pub reason: String,
+    pub created_at: DateTime<Utc>,
+    pub created_by: String,
+}
+
+/// What happened to a suppression. Recorded append-only, so the history survives the suppression
+/// itself being lifted — that is the entire point of keeping an audit log separate from state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SuppressionAction {
+    Suppressed,
+    Unsuppressed,
+}
+
+impl SuppressionAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Suppressed => "suppressed",
+            Self::Unsuppressed => "unsuppressed",
+        }
+    }
+}
+
+/// One immutable entry in the suppression audit trail: who accepted (or withdrew) a risk, when,
+/// and — crucially — why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SuppressionEvent {
+    pub id: Uuid,
+    pub rule_id: String,
+    pub action: SuppressionAction,
+    pub reason: String,
+    pub actor: String,
+    pub at: DateTime<Utc>,
+}
+
 /// The operating system(s) a rule or collector targets. Everything in this project has been
 /// Linux-only through v0.1 — this exists so that support for another OS is "add a collector
 /// and tag some rules," not "redesign the rule/collector model." See docs/guide/architecture.md.

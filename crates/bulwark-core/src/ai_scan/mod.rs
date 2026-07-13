@@ -293,7 +293,10 @@ fn scan_artifact(artifact: &Artifact) -> anyhow::Result<Vec<AiFinding>> {
 fn detect_settings(artifact: &Artifact, content: &str) -> Vec<detectors::Detection> {
     match artifact.tool {
         Tool::VsCode => detectors::detect_vscode_settings(content),
-        _ => detectors::detect_claude_settings(content),
+        // `workspace.is_some()` = this settings file lives in a project, not the user's own
+        // ~/.claude — which is what distinguishes the CVE-2025-59536 hooks threat from the user's
+        // own trusted global automation.
+        _ => detectors::detect_claude_settings(content, artifact.workspace.is_some()),
     }
 }
 
@@ -440,6 +443,31 @@ fn check_gitignore_leak(artifact: &Artifact, tool: &str) -> Option<AiFinding> {
 /// per-directory ignores); when unsure it treats the file as *not* ignored, which biases toward
 /// warning rather than staying quiet on a real exposure.
 fn is_git_ignored(workspace: &std::path::Path, rel: &std::path::Path) -> bool {
+    // Prefer git's own answer — it's authoritative, and it's the only way to respect the things a
+    // hand-rolled matcher structurally cannot: a global `core.excludesFile` (many developers ignore
+    // `.env` globally), nested per-directory `.gitignore`s, and negation. `check-ignore -q` exits 0
+    // when the path is ignored, 1 when it isn't. Crucially, we only trust a *definitive* 0/1: any
+    // other outcome (git absent, not a repo, an error) falls through to the textual matcher rather
+    // than being read as "not ignored" — treating "couldn't determine" as "exposed" is the
+    // absence-as-evidence mistake, and here it would raise a HIGH on a file git actually ignores.
+    if let Ok(status) = std::process::Command::new("git")
+        .arg("-C")
+        .arg(workspace)
+        .arg("check-ignore")
+        .arg("-q")
+        .arg(rel)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+    {
+        match status.code() {
+            Some(0) => return true,  // git says: ignored
+            Some(1) => return false, // git says: not ignored (definitive)
+            _ => {}                  // 128 / signal / unknown → fall back below
+        }
+    }
+
     let rel_str = rel.to_string_lossy().replace('\\', "/");
     let basename = rel.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
@@ -448,9 +476,20 @@ fn is_git_ignored(workspace: &std::path::Path, rel: &std::path::Path) -> bool {
         workspace.join(".gitignore"),
         workspace.join(".git/info/exclude"),
     ] {
-        if let Ok(text) = std::fs::read_to_string(&src) {
-            patterns.push_str(&text);
-            patterns.push('\n');
+        match std::fs::read_to_string(&src) {
+            Ok(text) => {
+                patterns.push_str(&text);
+                patterns.push('\n');
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                // We were denied the very file that would tell us whether this path is ignored.
+                // Reporting "not ignored" here would be a confident negative built on a failed
+                // read — so treat it as ignored (suppress the leak finding) rather than fabricate
+                // an exposure. A false "you're covered" is the safer error than a false alarm the
+                // user can't act on.
+                return true;
+            }
+            Err(_) => {}
         }
     }
 

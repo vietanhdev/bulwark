@@ -3,10 +3,14 @@ title: No mandatory access control framework is enforcing
 category: kernel-hardening
 severity: medium
 collector: mac_status
-condition: any_mac_enforcing == false
+condition: any_mac_enforcing == false and enforcement_known == true
 explain: >
   Neither AppArmor nor SELinux has any profile in enforcing mode. Without MAC, a
   compromised service runs with the full privileges of its process owner instead of
   being confined to what it actually needs.
+  The 'enforcement_known' guard matters: AppArmor's profile list is readable only with
+  CAP_MAC_ADMIN, so an unprivileged scan on a host where AppArmor is loaded cannot see
+  whether it's enforcing. That is reported as undetermined, not as a finding — claiming
+  "no MAC" because we lack the privilege to look would be alarming and wrong.
 fix: "On Debian/Ubuntu: 'sudo aa-enforce /etc/apparmor.d/*' for the profiles you want enforced, or install apparmor-profiles."
 references: [CIS-1.4]

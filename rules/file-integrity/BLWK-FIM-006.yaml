@@ -1,0 +1,17 @@
+id: BLWK-FIM-006
+title: "Credential file not covered by the baseline: {{ file_integrity_privileged.path }}"
+category: file-integrity
+severity: low
+collector: file_integrity_privileged
+condition: in_baseline == false and currently_present == true
+explain: >
+  {{ file_integrity_privileged.path }} — one of the two root-only credential/privilege files
+  Bulwark tracks (/etc/shadow, /etc/sudoers) — is present but has no baseline hash, so its
+  integrity is unverifiable. This is the specific gap that made the old logic dangerous: a
+  baseline recorded without '--privileged' never contains these two files, so a later privileged
+  scan would hash them, find them "not baselined", and report nothing — the two most
+  security-critical files on the host reading as clean when they had never actually been checked.
+  Rated above info because these two files, unlike an ordinary config, are exactly where
+  credential tampering hides.
+fix: "Run 'sudo bulwarkctl fim baseline --privileged' while you trust this host, to record a known-good hash for /etc/shadow and /etc/sudoers."
+references: [ATTACK-T1098, ATTACK-T1548.003]

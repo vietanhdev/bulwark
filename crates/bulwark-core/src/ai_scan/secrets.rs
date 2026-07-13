@@ -309,6 +309,16 @@ pub fn mask(secret: &str) -> String {
     format!("{head}…{tail}")
 }
 
+/// A documentation-example credential, suppressed even for high-confidence rules. AWS's canonical
+/// docs key (`AKIAIOSFODNN7EXAMPLE`) matches the real `AKIA…` pattern exactly, so without this it
+/// fires CRITICAL on every AWS tutorial and README — gitleaks ships a dedicated `.+EXAMPLE$`
+/// allowlist for precisely this, which this crate's slimmed rule loader had dropped. An `EXAMPLE`
+/// suffix on a would-be key is the near-universal "this is fake" marker.
+fn is_documentation_example(value: &str) -> bool {
+    let v = value.trim_matches(|c: char| !c.is_alphanumeric());
+    v.ends_with("EXAMPLE") || v.ends_with("EXAMPLEKEY")
+}
+
 fn is_placeholder_value(value: &str) -> bool {
     let v = value
         .trim_matches(|c: char| !c.is_alphanumeric())
@@ -343,6 +353,9 @@ fn matches_for<'t>(rule: &Rule, text: &'t str) -> Vec<((usize, usize), &'t str)>
             if shannon_entropy(secret.as_str()) < min {
                 continue;
             }
+        }
+        if is_documentation_example(secret.as_str()) {
+            continue;
         }
         if !rule.high_conf && is_placeholder_value(secret.as_str()) {
             continue;
@@ -678,5 +691,20 @@ mod tests {
         assert_eq!(humanize("anthropic-api-key"), "Anthropic API key");
         assert_eq!(humanize("aws-access-token"), "AWS access token");
         assert_eq!(humanize("private-key"), "Private key");
+    }
+
+    #[test]
+    fn the_canonical_aws_docs_example_key_is_not_flagged() {
+        // AKIAIOSFODNN7EXAMPLE matches the real AKIA pattern but is AWS's published fake — it must
+        // not fire, or every AWS tutorial in a repo trips a CRITICAL secret finding.
+        assert!(is_documentation_example("AKIAIOSFODNN7EXAMPLE"));
+        assert!(is_documentation_example(
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        ));
+        assert!(!scan_text("AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE")
+            .iter()
+            .any(|m| m.rule_id == "aws-access-token"));
+        // ...but a real-shaped AKIA key that is NOT an example still fires.
+        assert!(!is_documentation_example("AKIA2E0A8F3B1C9D4E7F"));
     }
 }

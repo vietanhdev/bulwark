@@ -3,10 +3,15 @@ title: System logs are not forwarded off-box
 category: logging-auditing
 severity: low
 collector: logging
+profiles: [server]
 condition: rsyslog_forwards_remote == false
 explain: >
   rsyslog has no remote forwarding rule configured — logs only exist locally. Anyone with
   root on this machine can edit or delete them, so local-only logging can't be trusted as
   evidence of what a root-level attacker did.
+  A workstation has no central syslog to ship to, so this is scoped to the server profile;
+  the point of off-box logs is that an attacker who roots the machine can't erase the record
+  of how they got in, which only means something where someone is actually doing IR.
+
 fix: "Add a forwarding rule to /etc/rsyslog.conf (e.g. '*.* @@logs.example.com:514') pointing at a log destination this machine doesn't control."
 references: []

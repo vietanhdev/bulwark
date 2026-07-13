@@ -3,11 +3,14 @@ title: A VNC/remote-desktop port is listening
 category: network-egress
 severity: high
 collector: listening_ports
-condition: port in [5900, 5901, 5902, 6080]
+condition: port in [5900, 5901, 5902, 6080] and loopback_only == false
 explain: >
-  Port {{ listening_ports.port }} is listening — this is a standard VNC (5900-range) or
-  noVNC/websockify (6080) port. If this wasn't deliberately set up with a password and
-  restricted access, it's a full remote-desktop backdoor.
+  Port {{ listening_ports.port }} is listening on {{ listening_ports.listen_address }} — a
+  standard VNC (5900-range) or noVNC/websockify (6080) port, reachable from the network. If
+  this wasn't deliberately set up with a password and restricted access, it's a full
+  remote-desktop backdoor. A listener bound only to loopback (127.0.0.1/::1) is deliberately
+  excluded: that's the normal SSH-tunnel / container-published pattern and isn't remotely
+  reachable.
 fix: >
   If this isn't an intentional remote-desktop setup: stop the service (check 'ps aux' for
   x11vnc/vncserver/websockify) and remove any systemd unit or cron entry that restarts it.

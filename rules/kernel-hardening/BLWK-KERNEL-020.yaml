@@ -3,14 +3,16 @@ title: "Kernel module not blacklisted: {{ module_blacklist.module }}"
 category: kernel-hardening
 severity: low
 collector: module_blacklist
-condition: blacklisted == false
+condition: blacklisted == false and loadable == true and module != "usb-storage"
 explain: >
   The '{{ module_blacklist.module }}' kernel module isn't blacklisted in /etc/modprobe.d/,
-  meaning it can still be auto-loaded on demand — for the network protocol modules
-  (dccp, sctp, rds, tipc) simply by an unprivileged process opening a socket of that
-  family. All four have a documented history of local-privilege-escalation
-  vulnerabilities reachable exactly that way; usb-storage is watched for a different
-  reason (physical-media exfiltration/BadUSB), not remote exploitation.
+  meaning it can still be auto-loaded on demand — simply by an unprivileged process opening
+  a socket of that family. All four of these network protocol modules (dccp, sctp, rds,
+  tipc) have a documented history of local-privilege-escalation vulnerabilities reachable
+  exactly that way, and essentially no host actually uses them.
+  usb-storage is deliberately NOT covered here — it's a different threat (physical-media
+  exfiltration/BadUSB, not remote exploitation) and the remediation is destructive on a
+  workstation, so it lives in BLWK-KERNEL-021 behind the server profile.
 fix: >
   If '{{ module_blacklist.module }}' isn't actually needed on this host, add
   'install {{ module_blacklist.module }} /bin/true' to a file under /etc/modprobe.d/

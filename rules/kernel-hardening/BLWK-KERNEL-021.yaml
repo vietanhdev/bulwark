@@ -1,0 +1,23 @@
+id: BLWK-KERNEL-021
+title: "Kernel module not blacklisted: usb-storage"
+category: kernel-hardening
+severity: low
+collector: module_blacklist
+profiles: [server]
+condition: blacklisted == false and loadable == true and module == "usb-storage"
+explain: >
+  The 'usb-storage' module isn't blacklisted, so plugging in a USB mass-storage device on
+  this host will auto-mount it. On a server — especially one in a rack you don't physically
+  control, like a colo or a branch office — that's a data-exfiltration and BadUSB path that
+  needs no credentials and leaves little trace: someone with thirty seconds of physical
+  access walks away with the disk contents.
+  This rule is scoped to the server profile on purpose. The same advice on a laptop or
+  desktop is actively harmful — it breaks every USB stick, external drive, and SD reader
+  the user owns, to defend against an attacker who by definition already has their hands on
+  the machine. Split out of BLWK-KERNEL-020 for exactly that reason.
+fix: >
+  On a server with no legitimate need for USB storage, add
+  'install usb-storage /bin/true' to a file under /etc/modprobe.d/
+  (e.g. /etc/modprobe.d/blacklist-usb-storage.conf) and run 'update-initramfs -u'.
+  Do NOT apply this to a workstation — you will break all removable media on it.
+references: [CIS-1.1.1]

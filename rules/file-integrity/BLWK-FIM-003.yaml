@@ -1,13 +1,15 @@
 id: BLWK-FIM-003
-title: "No file-integrity baseline yet: {{ file_integrity.path }}"
+title: "Not covered by the file-integrity baseline: {{ file_integrity.path }}"
 category: file-integrity
 severity: info
 collector: file_integrity
-condition: baseline_exists == false
+condition: in_baseline == false and currently_present == true
 explain: >
-  Bulwark hasn't recorded a file-integrity baseline yet, so it can't detect tampering with
-  {{ file_integrity.path }} or the other monitored critical files — only that they currently
-  exist. This is the gap Lynis itself flags (test FINT-4350: "install a file integrity tool")
-  when no such tool is present.
-fix: "Run 'bulwarkctl fim baseline' now, while you trust the current state of this host, to establish the known-good snapshot future scans compare against."
+  {{ file_integrity.path }} is present but has no recorded baseline hash, so Bulwark can tell
+  that it exists but not whether it has been tampered with. This fires per-file, on purpose:
+  the previous version keyed on whether a baseline existed *at all*, which meant that once you
+  had baselined anything, a critical file you had never actually recorded — including one added
+  to the watch list later — read as "verified clean" rather than "never checked". A file nobody
+  ever baselined is not a file known to be good.
+fix: "Run 'bulwarkctl fim baseline' now, while you trust this host, to record a known-good hash for this file (add '--privileged' to also cover /etc/shadow and /etc/sudoers)."
 references: []
