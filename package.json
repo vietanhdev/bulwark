@@ -1,6 +1,6 @@
 {
   "name": "bulwark",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "description": "Bulwark — Linux host security scanner (Rust core + Tauri desktop app). Root convenience scripts that drive the desktop app under apps/bulwark-app.",
   "scripts": {
