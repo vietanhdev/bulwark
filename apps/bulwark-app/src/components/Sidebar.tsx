@@ -4,6 +4,7 @@ import {
   FileCheck2,
   History,
   LayoutDashboard,
+  LineChart,
   ListChecks,
   Settings,
   ShieldCheck,
@@ -12,7 +13,15 @@ import {
 import { cn } from "@/lib/utils";
 
 export type View =
-  "overview" | "agent-security" | "antivirus" | "integrity" | "rules" | "compliance" | "history" | "settings";
+  | "overview"
+  | "agent-security"
+  | "antivirus"
+  | "integrity"
+  | "rules"
+  | "compliance"
+  | "analytics"
+  | "history"
+  | "settings";
 
 interface SidebarProps {
   view: View;
@@ -81,6 +90,7 @@ const GROUPS: { label: string | null; items: NavItem[] }[] = [
     label: "Reference",
     items: [
       { id: "rules", label: "Rules", icon: ListChecks },
+      { id: "analytics", label: "Analytics", icon: LineChart },
       { id: "history", label: "History", icon: History },
     ],
   },
