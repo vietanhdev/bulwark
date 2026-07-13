@@ -33,6 +33,12 @@ jobs:
     runs-on: ubuntu-24.04
     container:
       image: ubuntu:22.04
+    # Inside a bare container GitHub runs `run:` steps under `sh` (dash), which has no
+    # `set -o pipefail` — every step below opens with `set -euo pipefail` and would die on
+    # "Illegal option -o pipefail". ubuntu:22.04 ships bash, so pin every run step to it.
+    defaults:
+      run:
+        shell: bash
     steps:
       # Must precede actions/checkout: the checkout action needs git present in the container,
       # and falls back to a REST tarball (no git metadata) if it is missing. The base image is
