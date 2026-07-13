@@ -53,7 +53,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { image: "debian:12", install: "apt-get update && apt-get install -y --no-install-recommends curl gcc git ca-certificates" }
+          # libc6-dev explicitly: with --no-install-recommends, Debian's `gcc` does NOT pull it
+          # (only Recommends), so the C runtime objects (Scrt1.o/crti.o) and -lc go missing and
+          # every link fails. Fedora/Arch pull their libc-dev as a hard dep, hence gcc alone works.
+          - { image: "debian:12", install: "apt-get update && apt-get install -y --no-install-recommends curl gcc libc6-dev git ca-certificates" }
           - { image: "fedora:41", install: "dnf install -y -q gcc git which" }
           - { image: "archlinux:latest", install: "pacman -Sy --noconfirm gcc git curl" }
     name: test (${{ matrix.image }})
