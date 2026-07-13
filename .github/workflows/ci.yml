@@ -84,6 +84,10 @@ jobs:
 
       - name: cargo test (workspace minus the GUI)
         run: cargo test --workspace --exclude bulwark-app
+
+  # Fails the build on a known-vulnerable or yanked dependency (RustSec advisory DB). Kept as its
+  # own job so an advisory shows up as a distinct red check rather than being buried in `test`.
+  audit:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
