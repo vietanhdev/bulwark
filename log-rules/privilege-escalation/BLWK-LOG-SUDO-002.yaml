@@ -5,10 +5,21 @@ severity: high
 decoder: sudo
 condition: 'tags contains "sudo_not_allowed"'
 groups: [privilege_escalation]
+# Require repetition rather than firing on a single event. On a host with a command-restricted
+# sudoers policy, a legitimate user occasionally runs one command outside their allowed set — a
+# one-off that shouldn't raise a HIGH alert. Three denials by the same user in five minutes is not a
+# fumble; it's someone probing what they can escalate. Keyed by srcuser so distinct users' one-offs
+# don't aggregate into a false alarm.
+correlate:
+  count: 3
+  window_secs: 300
+  by: [srcuser]
+  suppress_secs: 600
 explain: >
-  {{ srcuser }} tried to run a command through sudo that they are not permitted to run (not in
-  sudoers, or the command is outside their allowed set). A single such attempt is worth
-  investigating — legitimate users rarely trip this, but an attacker probing for escalation does.
+  {{ srcuser }} repeatedly tried to run commands through sudo that they are not permitted to run
+  (not in sudoers, or the commands are outside their allowed set) — three or more times in a few
+  minutes. Isolated denials happen on command-restricted policies, but a burst like this is what an
+  attacker probing for a way to escalate looks like.
 fix: >
   Verify whether {{ srcuser }} should have been attempting this. If the account is not trusted
   with elevated access, treat it as a possible compromise and review its recent commands and

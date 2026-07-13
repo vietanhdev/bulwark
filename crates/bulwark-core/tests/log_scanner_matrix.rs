@@ -130,9 +130,17 @@ fn ssh_003_fires_on_root_login_but_not_on_a_normal_user() {
 // ---- sudo: not-allowed (SUDO-002), single-session (SUDO-003), multi-session (SUDO-001) -----
 
 #[test]
-fn sudo_002_fires_on_a_not_in_sudoers_line() {
-    let line = "Jul 12 10:00:01 host sudo[1]:   mallory : user NOT in sudoers ; TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/bin/bash";
-    assert!(fired(&scan(line), "BLWK-LOG-SUDO-002"));
+fn sudo_002_fires_on_repeated_denials_but_not_a_single_one() {
+    // A one-off "command not allowed" (routine on a command-restricted sudoers policy) must NOT
+    // raise a HIGH alert — only a burst of denials by the same user does.
+    let one = "Jul 12 10:00:01 host sudo[1]:   mallory : user NOT in sudoers ; TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/bin/bash";
+    assert!(!fired(&scan(one), "BLWK-LOG-SUDO-002"));
+
+    let burst: String = (0..3)
+        .map(|i| format!("Jul 12 10:00:{:02} host sudo[1]:   mallory : user NOT in sudoers ; TTY=pts/0 ; PWD=/ ; USER=root ; COMMAND=/bin/bash{i}", i))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(fired(&scan(&burst), "BLWK-LOG-SUDO-002"));
 }
 
 #[test]
