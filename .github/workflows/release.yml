@@ -64,7 +64,7 @@ jobs:
           # refuses with "detected dubious ownership" and the build fails before it starts.
           git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Resolve version
         id: version
@@ -189,7 +189,7 @@ jobs:
           echo "OK: CLI .deb ships /usr/bin/bulwarkctl"
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bulwark-linux-x86_64
           path: dist/*
@@ -224,7 +224,7 @@ jobs:
           - { image: "fedora:41", pkg: rpm, gui: false }
     name: verify (${{ matrix.image }})
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: bulwark-linux-x86_64
           path: dist
@@ -305,7 +305,7 @@ jobs:
     needs: linux
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: bulwark-linux-x86_64
           path: dist
@@ -352,7 +352,7 @@ jobs:
     needs: [linux, verify-install, verify-appimage]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Resolve version
         id: version
@@ -360,7 +360,7 @@ jobs:
           set -euo pipefail
           echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: bulwark-linux-x86_64
           path: dist
@@ -370,7 +370,7 @@ jobs:
       # public release.
       - name: Publish GitHub Release
         if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
           files: dist/*
           draft: true
