@@ -160,17 +160,27 @@ pub fn run_log_scan(
     let mut events_read: u64 = 0;
     let mut events_decoded: u64 = 0;
 
+    // Drain the source, then correlate in *chronological* order. The sliding-window correlator
+    // assumes each event's timestamp is >= the last; out-of-order input (merged multi-host logs, a
+    // rotated log crossing the year boundary, a crafted `--from-file`) otherwise corrupts the count
+    // — evicting in-window events, or never evicting stale ones, so a real burst is missed or a
+    // spread-out set falsely fires. Sorting the batch by event time makes correlation correct
+    // regardless of source ordering. `run_log_scan` is a bounded one-shot batch, so buffering the
+    // events is fine; a stable sort preserves same-timestamp order.
+    let mut raws: Vec<RawEvent> = Vec::new();
     while let Some(next) = source.next_event() {
-        let raw = match next {
-            Ok(raw) => raw,
-            Err(e) => {
-                read_errors.push(e.to_string());
-                continue;
+        match next {
+            Ok(raw) => {
+                events_read += 1;
+                raws.push(raw);
             }
-        };
-        events_read += 1;
+            Err(e) => read_errors.push(e.to_string()),
+        }
+    }
+    raws.sort_by_key(|r| r.timestamp);
 
-        let Some(decoded) = decoder::decode(&decoders, &raw) else {
+    for raw in &raws {
+        let Some(decoded) = decoder::decode(&decoders, raw) else {
             continue;
         };
         events_decoded += 1;
@@ -206,13 +216,7 @@ pub fn run_log_scan(
             };
 
             if should_fire && loaded.rule.alert {
-                findings.push(build_finding(
-                    loaded,
-                    &decoded,
-                    &raw,
-                    group_key,
-                    match_count,
-                ));
+                findings.push(build_finding(loaded, &decoded, raw, group_key, match_count));
             }
         }
     }
@@ -289,7 +293,10 @@ mod tests {
     }
 
     fn syslog_source(text: &str) -> SyslogLinesSource<Cursor<Vec<u8>>> {
-        SyslogLinesSource::new(Cursor::new(text.as_bytes().to_vec()), 2026)
+        SyslogLinesSource::new(
+            Cursor::new(text.as_bytes().to_vec()),
+            chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 12, 31, 0, 0, 0).unwrap(),
+        )
     }
 
     fn scan_bundled(text: &str) -> LogScanRun {

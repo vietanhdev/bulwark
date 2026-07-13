@@ -280,23 +280,28 @@ static SYSLOG_ISO_RE: LazyLock<Regex> = LazyLock::new(|| {
     .expect("static ISO syslog regex is valid")
 });
 
-/// Parses classic RFC3164-style syslog lines from any `BufRead`. syslog headers carry no year,
-/// so `assume_year` is supplied explicitly (the CLI passes the current year; tests pass a fixed
-/// one) — keeping the parser free of any hidden `Utc::now()` and therefore deterministic.
+/// Parses classic RFC3164-style syslog lines from any `BufRead`. syslog headers carry no year, so a
+/// `reference` instant is supplied explicitly (the CLI passes the log file's mtime, falling back to
+/// now; tests pass a fixed instant) — keeping the parser free of any hidden `Utc::now()` and
+/// therefore deterministic. The year of each line is INFERRED from that reference: a line whose
+/// month is later than the reference's is dated to the previous year, so an `auth.log` read in
+/// January whose entries are from December is stamped in the right year instead of ~11 months in the
+/// future (which also kept the events time-sorted for correlation). The single-fixed-year approach
+/// that preceded this misdated every cross-boundary log.
 ///
 /// Timestamps are interpreted as UTC. syslog local time without a zone is genuinely ambiguous;
 /// UTC is the one interpretation that's reproducible, and it only shifts absolute times, not the
 /// *relative* deltas correlation windows actually depend on.
 pub struct SyslogLinesSource<R: BufRead> {
     lines: CappedLines<R>,
-    assume_year: i32,
+    reference: chrono::DateTime<Utc>,
 }
 
 impl<R: BufRead> SyslogLinesSource<R> {
-    pub fn new(reader: R, assume_year: i32) -> Self {
+    pub fn new(reader: R, reference: chrono::DateTime<Utc>) -> Self {
         Self {
             lines: CappedLines { reader },
-            assume_year,
+            reference,
         }
     }
 
@@ -325,7 +330,15 @@ impl<R: BufRead> SyslogLinesSource<R> {
             .ok_or_else(|| anyhow::anyhow!("unknown month '{}'", &caps["mon"]))?;
         let day: u32 = caps["day"].parse()?;
         let (h, m, s) = parse_hms(&caps["time"])?;
-        let naive = chrono::NaiveDate::from_ymd_opt(self.assume_year, month, day)
+        // Infer the omitted year: a month later than the reference month means the line predates the
+        // reference and so belongs to the previous year (a December line seen from January).
+        use chrono::Datelike;
+        let year = if month > self.reference.month() {
+            self.reference.year() - 1
+        } else {
+            self.reference.year()
+        };
+        let naive = chrono::NaiveDate::from_ymd_opt(year, month, day)
             .and_then(|d| d.and_hms_opt(h, m, s))
             .ok_or_else(|| anyhow::anyhow!("invalid syslog date/time in '{line}'"))?;
         let timestamp = Utc.from_utc_datetime(&naive);
@@ -389,7 +402,26 @@ mod tests {
     use std::io::Cursor;
 
     fn source(text: &str) -> SyslogLinesSource<Cursor<Vec<u8>>> {
-        SyslogLinesSource::new(Cursor::new(text.as_bytes().to_vec()), 2026)
+        SyslogLinesSource::new(
+            Cursor::new(text.as_bytes().to_vec()),
+            chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 12, 31, 0, 0, 0).unwrap(),
+        )
+    }
+
+    #[test]
+    fn a_december_line_read_in_january_is_dated_to_the_previous_year() {
+        // Reference is mid-January 2026 (e.g. the log's mtime). A December entry predates it, so it
+        // belongs to 2025 — not ~11 months in the *future*, which the old fixed-current-year logic
+        // produced, misdating the finding and breaking time-order for correlation.
+        let mut s = SyslogLinesSource::new(
+            Cursor::new(
+                b"Dec 31 23:59:59 h sshd[1]: Failed password for root from 1.2.3.4 port 2 ssh2\n"
+                    .to_vec(),
+            ),
+            chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 1, 15, 0, 0, 0).unwrap(),
+        );
+        let ev = s.next_event().unwrap().unwrap();
+        assert_eq!(ev.timestamp.to_rfc3339(), "2025-12-31T23:59:59+00:00");
     }
 
     #[test]

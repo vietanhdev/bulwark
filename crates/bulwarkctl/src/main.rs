@@ -5,7 +5,6 @@ use bulwark_core::{
     LogSource, Profile, Store, SyslogLinesSource, FIM_PRIVILEGED_WATCHED_PATHS,
     FIM_UNPRIVILEGED_WATCHED_PATHS,
 };
-use chrono::Datelike;
 use clap::{Parser, Subcommand};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -703,9 +702,16 @@ fn run_logs(action: LogsAction, db_path: Option<PathBuf>) -> anyhow::Result<()> 
                 Some(path) => {
                     let file = std::fs::File::open(&path)
                         .with_context(|| format!("opening {}", path.display()))?;
-                    // syslog headers carry no year; use the current one for a live file.
-                    let year = chrono::Utc::now().year();
-                    Box::new(SyslogLinesSource::new(BufReader::new(file), year))
+                    // syslog headers carry no year. Use the file's last-modified time as the
+                    // reference so a rotated log from last year is dated correctly (and a Dec/Jan
+                    // boundary is handled per-line by the source), falling back to now for a file
+                    // whose mtime can't be read.
+                    let reference = file
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .map(chrono::DateTime::<chrono::Utc>::from)
+                        .unwrap_or_else(|_| chrono::Utc::now());
+                    Box::new(SyslogLinesSource::new(BufReader::new(file), reference))
                 }
                 None => {
                     let range = match since {

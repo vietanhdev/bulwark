@@ -21,7 +21,10 @@ pub struct LoadedRule {
 /// `profiles` tag at all is universal and always runs regardless of `needs`).
 #[derive(Debug, Clone)]
 pub struct Profile {
-    pub os: OperatingSystem,
+    /// The host OS, or `None` if the compile target isn't one Bulwark recognises — in which case no
+    /// rule and no collector matches, so the host fails closed instead of silently running the
+    /// Linux ruleset on an unvalidated platform.
+    pub os: Option<OperatingSystem>,
     pub needs: Vec<String>,
 }
 
@@ -35,7 +38,11 @@ impl Profile {
     /// not a false alarm, a silent *gap*, indistinguishable from a clean result.
     pub fn current_host() -> Self {
         Self {
-            os: OperatingSystem::current().unwrap_or(OperatingSystem::Linux),
+            // `None` on a target `std::env::consts::OS` doesn't recognise. Propagated rather than
+            // defaulted to Linux: running the Linux ruleset (and Linux-only fixes) on an
+            // unrecognised OS is the fail-OPEN mistake the OS gate exists to prevent, and
+            // `OperatingSystem::current` returns `None` precisely so this can fail closed.
+            os: OperatingSystem::current(),
             needs: detect_host_roles(&RoleEvidence::from_host()),
         }
     }
@@ -130,7 +137,8 @@ impl Default for Profile {
 }
 
 fn rule_matches_profile(rule: &Rule, profile: &Profile) -> bool {
-    rule.os.contains(&profile.os)
+    // No recognised host OS ⇒ no rule matches (fail closed).
+    profile.os.is_some_and(|os| rule.os.contains(&os))
         && (rule.profiles.is_empty() || rule.profiles.iter().any(|p| profile.needs.contains(p)))
 }
 
@@ -306,7 +314,10 @@ pub fn run_scan_cancellable(
         if !needed.contains_key(collector.name()) {
             continue;
         }
-        if !collector.supported_os().contains(&profile.os) {
+        if !profile
+            .os
+            .is_some_and(|os| collector.supported_os().contains(&os))
+        {
             continue;
         }
         if !collector.is_applicable() {
@@ -457,6 +468,36 @@ pub(crate) fn host_fingerprint() -> String {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn an_unrecognised_os_matches_no_rule_fail_closed() {
+        // With no recognised host OS, no rule matches — the host fails closed rather than running
+        // the Linux ruleset (and Linux-only remediation) on an unvalidated platform.
+        let rule = crate::models::Rule {
+            id: "X".into(),
+            title: "t".into(),
+            category: "c".into(),
+            severity: crate::models::Severity::Low,
+            collector: "c".into(),
+            os: vec![OperatingSystem::Linux],
+            profiles: vec![],
+            references: vec![],
+            explain: "e".into(),
+            fix: "f".into(),
+            condition: "x == 1".into(),
+        };
+        let unknown = Profile {
+            os: None,
+            needs: vec![],
+        };
+        assert!(!rule_matches_profile(&rule, &unknown));
+        // A recognised OS still matches.
+        let linux = Profile {
+            os: Some(OperatingSystem::Linux),
+            needs: vec![],
+        };
+        assert!(rule_matches_profile(&rule, &linux));
+    }
 
     struct FixedCollector {
         rows: Vec<crate::models::Fact>,

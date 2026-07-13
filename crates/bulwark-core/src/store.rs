@@ -476,9 +476,14 @@ impl Store {
                 std::collections::HashSet::new();
 
             for f in &scan.findings {
+                // Ordered oldest-first (then by id to break ties) so that when more than one stored
+                // row is subset-compatible with this finding, reconciliation deterministically picks
+                // the longest-standing one — preserving the earliest `first_seen` — rather than
+                // whatever order SQLite happened to return.
                 let candidates: Vec<(String, String)> = findings::table
                     .filter(findings::rule_id.eq(&f.rule_id))
                     .filter(findings::status.eq("open"))
+                    .order((findings::first_seen.asc(), findings::id.asc()))
                     .select((findings::id, findings::context))
                     .load(conn)?;
 
