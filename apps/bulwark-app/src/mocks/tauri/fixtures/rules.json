@@ -21,7 +21,7 @@
     "explain": "PASS_MAX_DAYS in /etc/login.defs is {{ login_defs.pass_max_days }} \u2014 passwords never expire in any practical sense, so a leaked credential stays valid indefinitely.",
     "fix": "Set 'PASS_MAX_DAYS 90' (or your organization's policy) in /etc/login.defs.",
     "os": ["linux"],
-    "profiles": []
+    "profiles": ["server"]
   },
   {
     "id": "BLWK-ACCT-003",
@@ -33,7 +33,7 @@
     "explain": "PASS_MIN_DAYS in /etc/login.defs is 0 \u2014 a user forced to rotate a leaked password can immediately change it right back to the old (compromised) one, defeating the point of the forced rotation.",
     "fix": "Set 'PASS_MIN_DAYS 1' (or your organization's policy) in /etc/login.defs.",
     "os": ["linux"],
-    "profiles": []
+    "profiles": ["server"]
   },
   {
     "id": "BLWK-ACCT-004",
@@ -42,7 +42,7 @@
     "severity": "low",
     "collector": "login_defs",
     "references": ["CIS-6.2.2"],
-    "explain": "SHA_CRYPT_MIN_ROUNDS isn't set in /etc/login.defs, so new passwords get whatever the system's compiled-in default hashing cost is rather than a deliberately chosen one \u2014 fine until you actually need to raise the cost to keep pace with faster cracking hardware, at which point \"never configured\" means nobody has ever checked.",
+    "explain": "This host hashes passwords with SHA-512/256 (ENCRYPT_METHOD), but SHA_CRYPT_MIN_ROUNDS isn't set in /etc/login.defs, so new passwords get whatever the system's compiled-in default hashing cost is rather than a deliberately chosen one \u2014 fine until you actually need to raise the cost to keep pace with faster cracking hardware, at which point \"never configured\" means nobody has ever checked.",
     "fix": "Set 'SHA_CRYPT_MIN_ROUNDS 5000' (or higher, per current guidance) in /etc/login.defs.",
     "os": ["linux"],
     "profiles": []
@@ -54,8 +54,8 @@
     "severity": "low",
     "collector": "login_defs",
     "references": ["CIS-6.2.3"],
-    "explain": "UMASK isn't set in /etc/login.defs. Without an explicit, deliberate value, new files created by shells that don't set their own umask fall back to whatever the system default happens to be \u2014 commonly 022, which leaves new files group/world-readable by default rather than requiring an explicit opt-in to share them.",
-    "fix": "Set 'UMASK 027' (or your organization's policy) in /etc/login.defs.",
+    "explain": "No default umask is configured \u2014 neither an explicit UMASK line in /etc/login.defs nor a pam_umask entry in /etc/pam.d. Without a deliberate value, new files created by shells that don't set their own umask fall back to whatever the system default happens to be \u2014 commonly 022, which leaves new files group/world-readable by default rather than requiring an explicit opt-in to share them.",
+    "fix": "Set 'UMASK 027' (or your organization's policy) in /etc/login.defs, or add pam_umask to the session stack.",
     "os": ["linux"],
     "profiles": []
   },
@@ -79,7 +79,7 @@
     "collector": "file_integrity",
     "references": ["ATTACK-T1098", "ATTACK-T1556"],
     "explain": "{{ file_integrity.path }} no longer matches its recorded baseline hash. This file is monitored because it directly controls authentication, privilege, or persistence on this host \u2014 an unexpected change here is exactly what credential theft, backdoor account creation, or PAM/sudo tampering looks like.",
-    "fix": "Review the file's current contents against what you expect (version control, package manager, or your own memory of the last legitimate change). If the change wasn't yours, treat this as a likely compromise. If it was legitimate, run 'bulwark fim baseline' to record the new state as the baseline.\n",
+    "fix": "Review the file's current contents against what you expect (version control, package manager, or your own memory of the last legitimate change). If the change wasn't yours, treat this as a likely compromise. If it was legitimate, run 'bulwarkctl fim baseline' to record the new state as the baseline.\n",
     "os": ["linux"],
     "profiles": []
   },
@@ -91,19 +91,19 @@
     "collector": "file_integrity",
     "references": ["ATTACK-T1070"],
     "explain": "{{ file_integrity.path }} was present when the file-integrity baseline was recorded and is now missing. Deleting a security-critical file (rather than modifying it) is also a documented defense-evasion pattern \u2014 removing logs, PAM modules, or cron definitions to cover tracks or disable a control.",
-    "fix": "Confirm whether the deletion was intentional (e.g. deliberate service removal). If not, restore the file from a package manager reinstall or backup, then run 'bulwark fim baseline' once the host is back to a known-good state.\n",
+    "fix": "Confirm whether the deletion was intentional (e.g. deliberate service removal). If not, restore the file from a package manager reinstall or backup, then run 'bulwarkctl fim baseline' once the host is back to a known-good state.\n",
     "os": ["linux"],
     "profiles": []
   },
   {
     "id": "BLWK-FIM-003",
-    "title": "No file-integrity baseline yet: {{ file_integrity.path }}",
+    "title": "Not covered by the file-integrity baseline: {{ file_integrity.path }}",
     "category": "file-integrity",
     "severity": "info",
     "collector": "file_integrity",
     "references": [],
-    "explain": "Bulwark hasn't recorded a file-integrity baseline yet, so it can't detect tampering with {{ file_integrity.path }} or the other monitored critical files \u2014 only that they currently exist. This is the gap Lynis itself flags (test FINT-4350: \"install a file integrity tool\") when no such tool is present.",
-    "fix": "Run 'bulwark fim baseline' now, while you trust the current state of this host, to establish the known-good snapshot future scans compare against.",
+    "explain": "{{ file_integrity.path }} is present but has no recorded baseline hash, so Bulwark can tell that it exists but not whether it has been tampered with. This fires per-file, on purpose: the previous version keyed on whether a baseline existed *at all*, which meant that once you had baselined anything, a critical file you had never actually recorded \u2014 including one added to the watch list later \u2014 read as \"verified clean\" rather than \"never checked\". A file nobody ever baselined is not a file known to be good.",
+    "fix": "Run 'bulwarkctl fim baseline' now, while you trust this host, to record a known-good hash for this file (add '--privileged' to also cover /etc/shadow and /etc/sudoers).",
     "os": ["linux"],
     "profiles": []
   },
@@ -115,7 +115,7 @@
     "collector": "file_integrity_privileged",
     "references": ["ATTACK-T1098", "ATTACK-T1548.003"],
     "explain": "{{ file_integrity_privileged.path }} no longer matches its recorded baseline hash. This is one of the two root-only credential/privilege files Bulwark tracks (/etc/shadow, /etc/sudoers) \u2014 a change here is about as direct a signal of credential tampering or privilege-escalation setup as this host can produce.",
-    "fix": "Review the change immediately. If it wasn't yours (a password reset via 'passwd', or a deliberate 'visudo' edit), treat this as a likely compromise. If legitimate, re-run 'sudo bulwark fim baseline --privileged' to record the new known-good state.\n",
+    "fix": "Review the change immediately. If it wasn't yours (a password reset via 'passwd', or a deliberate 'visudo' edit), treat this as a likely compromise. If legitimate, re-run 'sudo bulwarkctl fim baseline --privileged' to record the new known-good state.\n",
     "os": ["linux"],
     "profiles": []
   },
@@ -127,7 +127,43 @@
     "collector": "file_integrity_privileged",
     "references": ["ATTACK-T1070"],
     "explain": "{{ file_integrity_privileged.path }} was present at the last baseline and is now missing. A missing /etc/shadow or /etc/sudoers is either severe accidental damage or deliberate tampering \u2014 neither leaves this host in a safe state.",
-    "fix": "Restore the file immediately from a package manager reinstall or backup \u2014 do not leave this host running without it. Then re-run 'sudo bulwark fim baseline --privileged'.",
+    "fix": "Restore the file immediately from a package manager reinstall or backup \u2014 do not leave this host running without it. Then re-run 'sudo bulwarkctl fim baseline --privileged'.",
+    "os": ["linux"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-FIM-006",
+    "title": "Credential file not covered by the baseline: {{ file_integrity_privileged.path }}",
+    "category": "file-integrity",
+    "severity": "low",
+    "collector": "file_integrity_privileged",
+    "references": ["ATTACK-T1098", "ATTACK-T1548.003"],
+    "explain": "{{ file_integrity_privileged.path }} \u2014 one of the two root-only credential/privilege files Bulwark tracks (/etc/shadow, /etc/sudoers) \u2014 is present but has no baseline hash, so its integrity is unverifiable. This is the specific gap that made the old logic dangerous: a baseline recorded without '--privileged' never contains these two files, so a later privileged scan would hash them, find them \"not baselined\", and report nothing \u2014 the two most security-critical files on the host reading as clean when they had never actually been checked. Rated above info because these two files, unlike an ordinary config, are exactly where credential tampering hides.",
+    "fix": "Run 'sudo bulwarkctl fim baseline --privileged' while you trust this host, to record a known-good hash for /etc/shadow and /etc/sudoers.",
+    "os": ["linux"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-FIM-007",
+    "title": "Could not verify file integrity: {{ file_integrity.path }}",
+    "category": "file-integrity",
+    "severity": "medium",
+    "collector": "file_integrity",
+    "references": [],
+    "explain": "{{ file_integrity.path }} exists and is on the watch list, but Bulwark could not compute its hash this scan (sha256sum unavailable, or the file could not be read), so it cannot say whether the file matches its baseline. This is reported as its own state rather than being folded into \"modified\" \u2014 treating \"I couldn't look\" as \"it changed\" would raise a false critical alarm, and treating it as \"unchanged\" would hide a real one. Neither is honest.",
+    "fix": "Check that the file is readable by the scanning user and that 'sha256sum' is installed and on PATH. If a privileged scan is needed to read it, run 'sudo bulwarkctl scan --privileged'.\n",
+    "os": ["linux"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-FIM-008",
+    "title": "Could not verify credential file: {{ file_integrity_privileged.path }}",
+    "category": "file-integrity",
+    "severity": "high",
+    "collector": "file_integrity_privileged",
+    "references": [],
+    "explain": "{{ file_integrity_privileged.path }} (/etc/shadow or /etc/sudoers) exists but its hash could not be computed this scan, so its integrity is unverifiable. Rated high because on the two most sensitive files Bulwark tracks, an inability to read them is itself worth attention \u2014 it can mean a permissions change that a privileged scan should have handled, or something actively interfering with access. It is deliberately not reported as \"modified\": a failure to look is not evidence of a change.",
+    "fix": "Re-run under privilege ('sudo bulwarkctl scan --privileged') so the file is readable, and confirm 'sha256sum' is installed. If it still can't be read as root, investigate why.\n",
     "os": ["linux"],
     "profiles": []
   },
@@ -162,7 +198,7 @@
     "severity": "medium",
     "collector": "sysctl_kernel",
     "references": ["ATTACK-T1003.007"],
-    "explain": "kernel.yama.ptrace_scope is 0, meaning any process can attach to (and read the memory of) any other process owned by the same user \u2014 including credential-scraping via /proc/<pid>/mem, a documented credential-access technique.",
+    "explain": "ptrace is unrestricted: kernel.yama.ptrace_scope is 0 (or the Yama LSM isn't loaded at all, which the collector reports the same way, since without Yama there is no restriction to begin with). Any process can attach to and read the memory of any other process owned by the same user \u2014 including credential-scraping via /proc/<pid>/mem, a documented credential-access technique.",
     "fix": "Set 'kernel.yama.ptrace_scope=1' via /etc/sysctl.d/ and run 'sysctl --system'.",
     "os": ["linux"],
     "profiles": []
@@ -186,7 +222,7 @@
     "severity": "medium",
     "collector": "mac_status",
     "references": ["CIS-1.4"],
-    "explain": "Neither AppArmor nor SELinux has any profile in enforcing mode. Without MAC, a compromised service runs with the full privileges of its process owner instead of being confined to what it actually needs.",
+    "explain": "Neither AppArmor nor SELinux has any profile in enforcing mode. Without MAC, a compromised service runs with the full privileges of its process owner instead of being confined to what it actually needs. The 'enforcement_known' guard matters: AppArmor's profile list is readable only with CAP_MAC_ADMIN, so an unprivileged scan on a host where AppArmor is loaded cannot see whether it's enforcing. That is reported as undetermined, not as a finding \u2014 claiming \"no MAC\" because we lack the privilege to look would be alarming and wrong.",
     "fix": "On Debian/Ubuntu: 'sudo aa-enforce /etc/apparmor.d/*' for the profiles you want enforced, or install apparmor-profiles.",
     "os": ["linux"],
     "profiles": []
@@ -210,7 +246,7 @@
     "severity": "medium",
     "collector": "sysctl_kernel",
     "references": ["CIS-1.5.4"],
-    "explain": "kernel.sysrq is 1 \u2014 every SysRq function is enabled, including immediate reboot and kernel memory dumps, triggerable by anyone with keyboard or console access (physical or via a hijacked serial/BMC console). Most distros ship a restricted bitmask instead of full-on; a plain 1 usually means something intentionally widened it.",
+    "explain": "kernel.sysrq exposes dangerous SysRq functions to anyone with keyboard or console access (physical, or a hijacked serial/BMC console). A value of 1 enables every function; a value above 1 is a bitmask, and this fires when that mask still includes the memory-dump bit (0x08, leaks kernel memory) or the signal bit (0x40, SIGKILL any process) \u2014 so a widened mask like 510 is caught, not just a plain 1, which the old exact-match condition missed.",
     "fix": "Set 'kernel.sysrq=176' (Ubuntu's restricted default) or '0' via /etc/sysctl.d/ and run 'sysctl --system'.",
     "os": ["linux"],
     "profiles": []
@@ -243,11 +279,11 @@
     "id": "BLWK-KERNEL-008",
     "title": "kexec can load an unsigned, arbitrary kernel image",
     "category": "kernel-hardening",
-    "severity": "medium",
+    "severity": "low",
     "collector": "sysctl_kernel",
     "references": ["ATTACK-T1601"],
-    "explain": "kernel.kexec_load_disabled is 0 \u2014 a process with sufficient privilege can use kexec to load and immediately switch execution to a completely different, unverified kernel image, bypassing secure boot and any measured-boot chain entirely. This is a defense- evasion technique for surviving a reboot with a backdoored kernel.",
-    "fix": "Set 'kernel.kexec_load_disabled=1' via /etc/sysctl.d/ (this is a one-way switch until reboot).",
+    "explain": "kernel.kexec_load_disabled is 0 \u2014 a process with sufficient privilege can use kexec to load and immediately switch execution to a completely different, unverified kernel image, bypassing secure boot and any measured-boot chain entirely, to survive a reboot with a backdoored kernel. This fires only when kernel lockdown is off: with Secure Boot enabled the kernel runs in lockdown 'integrity' mode, which already refuses an unsigned kexec image regardless of this flag, so the flag is defense-in-depth there rather than a gap \u2014 and the rule stays quiet. Rated low because loading a kexec image already requires CAP_SYS_BOOT (root); this hardens against a post-compromise persistence step.",
+    "fix": "Set 'kernel.kexec_load_disabled=1' via /etc/sysctl.d/ and run 'sysctl --system'. Note this disables kdump/crash-dump capture and 'systemctl kexec'; and once it is set to 1 at runtime it cannot be returned to 0 without a reboot (the sysctl.d drop-in itself re-applies every boot).\n",
     "os": ["linux"],
     "profiles": []
   },
@@ -345,7 +381,7 @@
     "explain": "net.ipv4.conf.all.send_redirects is 1 \u2014 a non-router host has no legitimate reason to send ICMP redirects, and leaving this on is unnecessary route-manipulation surface.",
     "fix": "Set 'net.ipv4.conf.all.send_redirects=0' via /etc/sysctl.d/ and run 'sysctl --system' (skip this if the host is intentionally acting as a router).",
     "os": ["linux"],
-    "profiles": []
+    "profiles": ["server"]
   },
   {
     "id": "BLWK-KERNEL-017",
@@ -357,7 +393,7 @@
     "explain": "net.ipv4.conf.all.log_martians is 0 \u2014 packets with impossible/spoofed source addresses (no route back to the claimed source) are silently dropped instead of logged, losing an early signal of spoofing or scanning activity on the network.",
     "fix": "Set 'net.ipv4.conf.all.log_martians=1' via /etc/sysctl.d/ and run 'sysctl --system'.",
     "os": ["linux"],
-    "profiles": []
+    "profiles": ["server"]
   },
   {
     "id": "BLWK-KERNEL-018",
@@ -367,7 +403,7 @@
     "collector": "sysctl_kernel",
     "references": ["CIS-3.2.4"],
     "explain": "net.ipv4.conf.all.rp_filter is 0 \u2014 the kernel will forward packets whose source address couldn't possibly have arrived via the interface they came in on, which is exactly the condition IP spoofing depends on. (A value of 1 or 2 \u2014 strict or loose mode \u2014 is fine; this only fires when filtering is fully off.)",
-    "fix": "Set 'net.ipv4.conf.all.rp_filter=1' via /etc/sysctl.d/ and run 'sysctl --system'.",
+    "fix": "Set 'net.ipv4.conf.all.rp_filter=2' (loose mode) via /etc/sysctl.d/ and run 'sysctl --system'. Use '1' (strict) only on single-homed hosts \u2014 strict reverse-path filtering drops legitimate traffic on multi-homed servers and any asymmetric-routing setup, which is exactly the server class most likely to be affected, so loose is the safe default that still blocks spoofing.\n",
     "os": ["linux"],
     "profiles": []
   },
@@ -390,10 +426,22 @@
     "severity": "low",
     "collector": "module_blacklist",
     "references": ["CIS-1.1.1"],
-    "explain": "The '{{ module_blacklist.module }}' kernel module isn't blacklisted in /etc/modprobe.d/, meaning it can still be auto-loaded on demand \u2014 for the network protocol modules (dccp, sctp, rds, tipc) simply by an unprivileged process opening a socket of that family. All four have a documented history of local-privilege-escalation vulnerabilities reachable exactly that way; usb-storage is watched for a different reason (physical-media exfiltration/BadUSB), not remote exploitation.",
+    "explain": "The '{{ module_blacklist.module }}' kernel module isn't blacklisted in /etc/modprobe.d/, meaning it can still be auto-loaded on demand \u2014 simply by an unprivileged process opening a socket of that family. All four of these network protocol modules (dccp, sctp, rds, tipc) have a documented history of local-privilege-escalation vulnerabilities reachable exactly that way, and essentially no host actually uses them. usb-storage is deliberately NOT covered here \u2014 it's a different threat (physical-media exfiltration/BadUSB, not remote exploitation) and the remediation is destructive on a workstation, so it lives in BLWK-KERNEL-021 behind the server profile.",
     "fix": "If '{{ module_blacklist.module }}' isn't actually needed on this host, add 'install {{ module_blacklist.module }} /bin/true' to a file under /etc/modprobe.d/ (e.g. /etc/modprobe.d/blacklist-rare.conf) and run 'update-initramfs -u'.\n",
     "os": ["linux"],
     "profiles": []
+  },
+  {
+    "id": "BLWK-KERNEL-021",
+    "title": "Kernel module not blacklisted: usb-storage",
+    "category": "kernel-hardening",
+    "severity": "low",
+    "collector": "module_blacklist",
+    "references": ["CIS-1.1.1"],
+    "explain": "The 'usb-storage' module isn't blacklisted, so plugging in a USB mass-storage device on this host will auto-mount it. On a server \u2014 especially one in a rack you don't physically control, like a colo or a branch office \u2014 that's a data-exfiltration and BadUSB path that needs no credentials and leaves little trace: someone with thirty seconds of physical access walks away with the disk contents. This rule is scoped to the server profile on purpose. The same advice on a laptop or desktop is actively harmful \u2014 it breaks every USB stick, external drive, and SD reader the user owns, to defend against an attacker who by definition already has their hands on the machine. Split out of BLWK-KERNEL-020 for exactly that reason.",
+    "fix": "On a server with no legitimate need for USB storage, add 'install usb-storage /bin/true' to a file under /etc/modprobe.d/ (e.g. /etc/modprobe.d/blacklist-usb-storage.conf) and run 'update-initramfs -u'. Do NOT apply this to a workstation \u2014 you will break all removable media on it.\n",
+    "os": ["linux"],
+    "profiles": ["server"]
   },
   {
     "id": "BLWK-BANN-001",
@@ -402,10 +450,10 @@
     "severity": "info",
     "collector": "banners",
     "references": ["CIS-1.7.1"],
-    "explain": "/etc/{{ banners.file }} still contains the distro's default auto-generated content (OS name and getty templating codes), not a deliberate legal warning. In some jurisdictions, a clear \"unauthorized access is prohibited\" banner is what establishes that someone connecting without authorization was actually warned \u2014 the default OS-identification banner doesn't do that, and also unnecessarily advertises the exact OS version to anyone who connects.",
+    "explain": "/etc/{{ banners.file }} still contains the distro's default auto-generated content (OS name and getty templating codes), not a deliberate legal warning. In some jurisdictions, a clear \"unauthorized access is prohibited\" banner is what establishes that someone connecting without authorization was actually warned \u2014 the default OS-identification banner doesn't do that, and also unnecessarily advertises the exact OS version to anyone who connects. Scoped to the server profile: a login banner's function is legal, not technical \u2014 it establishes that access was unauthorized, which matters for a multi-user remote system. On a personal desktop it protects nothing, and /etc/issue.net is read only by sshd, so on a host that doesn't run sshd it is inert text in a file nobody opens.",
     "fix": "Replace the contents of /etc/issue (local login) and /etc/issue.net (remote login) with a warning banner, not OS version info.",
     "os": ["linux"],
-    "profiles": []
+    "profiles": ["server"]
   },
   {
     "id": "BLWK-LOG-001",
@@ -417,7 +465,7 @@
     "explain": "No auditd binary was found. Without it, there's no kernel-level record of privileged syscalls (file access, exec, permission changes) \u2014 the trail that makes a break-in reviewable after the fact instead of just a guess.",
     "fix": "Install auditd (e.g. 'apt install auditd') and enable it with 'systemctl enable --now auditd'.",
     "os": ["linux"],
-    "profiles": []
+    "profiles": ["server"]
   },
   {
     "id": "BLWK-LOG-002",
@@ -426,10 +474,10 @@
     "severity": "low",
     "collector": "logging",
     "references": [],
-    "explain": "rsyslog has no remote forwarding rule configured \u2014 logs only exist locally. Anyone with root on this machine can edit or delete them, so local-only logging can't be trusted as evidence of what a root-level attacker did.",
+    "explain": "rsyslog has no remote forwarding rule configured \u2014 logs only exist locally. Anyone with root on this machine can edit or delete them, so local-only logging can't be trusted as evidence of what a root-level attacker did. A workstation has no central syslog to ship to, so this is scoped to the server profile; the point of off-box logs is that an attacker who roots the machine can't erase the record of how they got in, which only means something where someone is actually doing IR.",
     "fix": "Add a forwarding rule to /etc/rsyslog.conf (e.g. '*.* @@logs.example.com:514') pointing at a log destination this machine doesn't control.",
     "os": ["linux"],
-    "profiles": []
+    "profiles": ["server"]
   },
   {
     "id": "BLWK-LOG-003",
@@ -450,19 +498,19 @@
     "severity": "high",
     "collector": "listening_ports",
     "references": ["ATTACK-T1219"],
-    "explain": "Port {{ listening_ports.port }} is listening \u2014 this is a standard VNC (5900-range) or noVNC/websockify (6080) port. If this wasn't deliberately set up with a password and restricted access, it's a full remote-desktop backdoor.",
+    "explain": "Port {{ listening_ports.port }} is listening on {{ listening_ports.listen_address }} \u2014 a standard VNC (5900-range) or noVNC/websockify (6080) port, reachable from the network. If this wasn't deliberately set up with a password and restricted access, it's a full remote-desktop backdoor. A listener bound only to loopback (127.0.0.1/::1) is deliberately excluded: that's the normal SSH-tunnel / container-published pattern and isn't remotely reachable.",
     "fix": "If this isn't an intentional remote-desktop setup: stop the service (check 'ps aux' for x11vnc/vncserver/websockify) and remove any systemd unit or cron entry that restarts it.\n",
     "os": ["linux"],
     "profiles": []
   },
   {
     "id": "BLWK-NET-002",
-    "title": "ngrok's local API port is listening",
+    "title": "A port commonly used by ngrok's local API is listening",
     "category": "network-egress",
     "severity": "medium",
     "collector": "listening_ports",
     "references": ["ATTACK-T1090"],
-    "explain": "Port 4040 is listening \u2014 this is ngrok's local web-inspector/API port, only present while an ngrok tunnel is active. If you're not deliberately running ngrok right now, something else is.",
+    "explain": "Port 4040 is listening on {{ listening_ports.listen_address }} \u2014 most often ngrok's local web-inspector/API port, present while an ngrok tunnel is active. It's also Apache Spark's default UI port and is used by a few other dev tools, so this isn't conclusive on its own: if you're not running ngrok, check what it is. A loopback-only 4040 (the usual case for both ngrok and Spark) is excluded \u2014 this fires only when it's exposed on the network.",
     "fix": "Check 'ps aux | grep ngrok' and 'systemctl list-units | grep -i ngrok' to find what started it.",
     "os": ["linux"],
     "profiles": []
@@ -471,10 +519,10 @@
     "id": "BLWK-PERSIST-001",
     "title": "systemd unit runs a tunneling tool",
     "category": "persistence",
-    "severity": "critical",
+    "severity": "high",
     "collector": "systemd_units",
     "references": ["ATTACK-T1543.002", "ATTACK-T1090"],
-    "explain": "The systemd unit \"{{ systemd_units.unit_name }}\" runs a command referencing a tunneling tool (\"{{ systemd_units.exec_start }}\"). This is a common attacker persistence pattern \u2014 a reverse tunnel that reaches back out through a service like ngrok survives reboots and bypasses inbound firewall rules entirely, since it's an outbound connection.",
+    "explain": "The systemd unit \"{{ systemd_units.unit_name }}\" runs a command referencing a tunneling tool (\"{{ systemd_units.exec_start }}\"). A reverse tunnel that reaches back out through a service like ngrok or cloudflared survives reboots and bypasses inbound firewall rules entirely, since it's an outbound connection \u2014 which is why it's both a legitimate way to expose a service and a common attacker persistence pattern. The two look identical from here, so this is high rather than critical: if you deliberately installed cloudflared, autossh, or a similar tunnel, this is expected and you can accept the risk for this rule.",
     "fix": "If you didn't set this up yourself: 'systemctl disable --now <unit>' and remove the unit file from /etc/systemd/system/, then rotate any credentials the box had access to.\n",
     "os": ["linux"],
     "profiles": []
@@ -535,7 +583,7 @@
     "collector": "grub_password",
     "references": ["CIS-1.4.1", "ATTACK-T1542"],
     "explain": "/boot/grub/grub.cfg has no 'password' or 'password_pbkdf2' directive. Anyone with physical or console access to this machine can interrupt the boot menu and edit kernel parameters directly (e.g. appending 'init=/bin/bash' or 'single') to get a root shell without ever needing a valid credential \u2014 no OS-level control can prevent this once someone has unrestricted access to the boot menu itself.",
-    "fix": "Set a GRUB password: run 'grub-mkpasswd-pbkdf2' to generate a hash, add 'set superusers=\"root\"' and 'password_pbkdf2 root <hash>' to /etc/grub.d/40_custom, then run 'update-grub'.\n",
+    "fix": "Set a GRUB password: run 'grub-mkpasswd-pbkdf2' to generate a hash, add 'set superusers=\"root\"' and 'password_pbkdf2 root <hash>' to /etc/grub.d/40_custom, then run 'update-grub'. IMPORTANT: on stock Ubuntu/Debian, 'set superusers' makes GRUB prompt for that password before booting ANY entry \u2014 the machine will halt at a password prompt on every reboot, including unattended ones. To keep normal boot automatic and only gate *editing* entries and recovery, append '--unrestricted' to the CLASS list of your default menuentry (edit /etc/grub.d/10_linux, or use a submenu). Test with a reboot you can physically recover from before relying on this on a headless host.\n",
     "os": ["linux"],
     "profiles": []
   },
@@ -570,8 +618,8 @@
     "severity": "high",
     "collector": "network_interfaces",
     "references": ["ATTACK-T1040"],
-    "explain": "{{ network_interfaces.interface }} is in promiscuous mode \u2014 it's capturing all traffic on its network segment, not just traffic addressed to this host. This is the defining behavior of a packet sniffer, and is exactly what chkrootkit's own \"sniffer\" test checks for.",
-    "fix": "Run 'ip -d link show {{ network_interfaces.interface }}' and check 'ps aux' for a legitimate reason (tcpdump, Wireshark/tshark, a VM bridge). If nothing legitimate explains it, treat this as active traffic interception and investigate immediately.\n",
+    "explain": "{{ network_interfaces.interface }} is in promiscuous mode \u2014 it's capturing all traffic on its network segment, not just traffic addressed to this host. This is the defining behavior of a packet sniffer, and is exactly what chkrootkit's own \"sniffer\" test checks for. Bridge ports are excluded: the kernel makes every bridge-enslaved interface promiscuous by design, so a Docker/VM veth being promiscuous means nothing. This interface is not one of those.",
+    "fix": "Run 'ip -d link show {{ network_interfaces.interface }}' and check 'ps aux' for a legitimate reason (tcpdump, Wireshark/tshark). If nothing legitimate explains it, treat this as active traffic interception and investigate immediately.\n",
     "os": ["linux"],
     "profiles": []
   },
@@ -579,11 +627,11 @@
     "id": "BLWK-SSH-001",
     "title": "SSH password authentication is enabled",
     "category": "ssh-remote-access",
-    "severity": "critical",
+    "severity": "high",
     "collector": "sshd_config",
     "references": ["CIS-5.2.10", "ATTACK-T1110"],
-    "explain": "PasswordAuthentication is set to \"{{ sshd.password_authentication }}\" in sshd_config, which allows an attacker to brute-force their way in with a password guess instead of needing a private key.",
-    "fix": "Set 'PasswordAuthentication no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'.",
+    "explain": "PasswordAuthentication is set to \"{{ sshd.password_authentication }}\" in sshd_config, which allows an attacker to brute-force their way in with a password guess instead of needing a private key. It is the OpenSSH default and a brute-force *exposure* rather than a definite compromise, so it's rated high (aligning with CIS's L1 treatment and with BLWK-SSH-002), not critical.",
+    "fix": "Set 'PasswordAuthentication no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'. IMPORTANT: confirm key-based login works in a SECOND session before you rely on this \u2014 if the only working credential is a password and no key is installed, you will lock yourself out on the next login. Existing sessions survive the restart; a new key-authenticated login must succeed first.\n",
     "os": ["linux"],
     "profiles": []
   },
@@ -704,6 +752,30 @@
     "references": ["CIS-5.2.7", "ATTACK-T1110"],
     "explain": "MaxAuthTries is set to {{ sshd.max_auth_tries }} in sshd_config \u2014 well above the recommended ceiling of 3-6. A high limit gives an online password-guessing attempt many more tries per TCP connection before being cut off.",
     "fix": "Set 'MaxAuthTries 3' (or up to 6) in /etc/ssh/sshd_config and run 'systemctl restart sshd'.",
+    "os": ["linux"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-SSH-012",
+    "title": "SSH private key is not passphrase-protected",
+    "category": "ssh-remote-access",
+    "severity": "high",
+    "collector": "ssh_private_keys",
+    "references": ["CIS-5.2", "ATTACK-T1552.004", "ATTACK-T1078"],
+    "explain": "The SSH private key at {{ ssh_private_keys.path }} (format: {{ ssh_private_keys.key_format }}) has no passphrase, so it is a plaintext credential on disk. Anyone who obtains a copy of that one file \u2014 from a backup, a lost or stolen laptop, a dotfiles repo synced to the cloud, or any process running as you \u2014 can authenticate as you to every server that trusts it, immediately and with nothing else required. A passphrase does not stop a determined attacker forever, but it turns \"copy one file and log in\" into \"also crack a passphrase,\" and it is what lets you notice and rotate the key before it is used.",
+    "fix": "Add a passphrase to the existing key in place (this keeps the same key, so you do not have to re-add it to any server): run 'ssh-keygen -p -f {{ ssh_private_keys.path }}' and enter a strong passphrase when prompted. To avoid typing it on every use, load the key into your agent once per session with 'ssh-add {{ ssh_private_keys.path }}'. If this key is shared, checked into a repo, or you are unsure who has copied it, treat it as compromised: generate a fresh one with 'ssh-keygen -t ed25519 -a 100', deploy the new public key, and remove the old key from every server's authorized_keys.\n",
+    "os": ["linux"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-SSH-013",
+    "title": "SSH private key passphrase status could not be determined",
+    "category": "ssh-remote-access",
+    "severity": "low",
+    "collector": "ssh_private_keys",
+    "references": ["CIS-5.2", "ATTACK-T1552.004"],
+    "explain": "The file at {{ ssh_private_keys.path }} (format: {{ ssh_private_keys.key_format }}) is a private key, but its encryption header could not be parsed, so Bulwark cannot confirm whether it is passphrase-protected. Rather than guess \u2014 and risk reporting a plaintext key as safe \u2014 it is surfaced here for you to check by hand. A healthy key does not normally hit this state, so the file may be truncated, corrupted, or in a format this version doesn't fully recognize.",
+    "fix": "Inspect the key directly: 'ssh-keygen -y -f {{ ssh_private_keys.path }}' will prompt for a passphrase if one is set (and error out plainly if the file is malformed). If it is unprotected, add a passphrase with 'ssh-keygen -p -f {{ ssh_private_keys.path }}'. If the file is corrupt or not actually a key you use, remove or restore it.\n",
     "os": ["linux"],
     "profiles": []
   }

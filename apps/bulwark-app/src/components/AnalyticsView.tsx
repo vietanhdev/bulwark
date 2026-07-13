@@ -112,24 +112,49 @@ export function AnalyticsView() {
             />
           </div>
 
-          {/* Findings over time — one bar per recorded scan, oldest to newest. */}
+          {/* Findings over time — one bar per recorded scan, oldest to newest. Bars are width-capped
+              and the row is centered, so a handful of scans reads as a few slim bars rather than a
+              wall of giant blocks, while a long history still fills the width. Height carries the
+              magnitude; colour stays calm (brand accent for findings, green for a clean scan) so this
+              reads as a trend, not an alarm — severity lives in "Open by severity" below. */}
           <section>
             <SectionLabel>Findings over time</SectionLabel>
-            <div className="rounded-lg border border-border bg-card px-4 py-4">
-              <div className="flex h-36 items-end gap-[3px]">
-                {trend.map((r) => {
+            <div className="rounded-lg border border-border bg-card px-4 pt-5 pb-4">
+              <div className="relative flex h-36 items-end justify-center gap-[3px] border-b border-border">
+                {trend.map((r, i) => {
                   const clean = r.total_findings === 0;
+                  const isLast = i === trend.length - 1;
+                  const showLabels = trend.length <= 16;
                   return (
                     <div
                       key={r.id}
                       title={`${r.total_findings} finding${r.total_findings === 1 ? "" : "s"} · ${shortWhen(r.started_at)}`}
-                      className="min-w-0 flex-1 rounded-sm transition-opacity hover:opacity-80"
-                      style={{
-                        height: `${Math.max(3, (r.total_findings / maxRun) * 100)}%`,
-                        background: clean ? "var(--sev-resolved)" : "var(--sev-critical)",
-                        opacity: clean ? 0.55 : 0.85,
-                      }}
-                    />
+                      className="flex h-full min-w-0 max-w-[52px] flex-1 flex-col justify-end"
+                    >
+                      {showLabels && (
+                        <span
+                          className={cn(
+                            "mb-1 text-center font-mono text-[10px] tabular-nums",
+                            isLast ? "font-semibold" : "text-muted-foreground",
+                          )}
+                          style={
+                            isLast
+                              ? { color: clean ? "var(--sev-resolved-fg)" : "var(--primary)" }
+                              : undefined
+                          }
+                        >
+                          {r.total_findings}
+                        </span>
+                      )}
+                      <div
+                        className="rounded-t-sm transition-opacity hover:opacity-100"
+                        style={{
+                          height: `${Math.max(2, (r.total_findings / maxRun) * 100)}%`,
+                          background: clean ? "var(--sev-resolved)" : "var(--primary)",
+                          opacity: isLast ? 1 : clean ? 0.5 : 0.6,
+                        }}
+                      />
+                    </div>
                   );
                 })}
               </div>
