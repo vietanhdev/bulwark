@@ -278,7 +278,7 @@ jobs:
                 echo "OK: GUI .deb dependencies resolve on ${{ matrix.image }}"
 
                 # apt resolving the Depends line only proves the packages Tauri *declared* exist.
-                # Tauri's dependency auto-detection is known to be incomplete (tauri#7074), so a
+                # Tauri dependency auto-detection is known to be incomplete (tauri#7074), so a
                 # library can be genuinely missing while apt reports success — ldd is what actually
                 # proves the binary can start.
                 if ldd /usr/bin/bulwark-app | grep "not found"; then
@@ -330,7 +330,7 @@ jobs:
             # `ldd` here would report every bundled library as "not found" and fail the release for
             # no reason — this check has to model the real runtime, not a naked binary. What it
             # genuinely catches is a lib the AppImage neither bundles NOR finds on a stock 26.04:
-            # deliberately NOT apt-installing webkit here, so a bundling regression can't be masked
+            # deliberately NOT apt-installing webkit here, so a bundling regression cannot be masked
             # by a library that only happens to be present because this step installed it.
             export LD_LIBRARY_PATH="$(find /tmp/squashfs-root -type d -name lib -o -type d -name "x86_64-linux-gnu" | tr "\n" ":")"
 
