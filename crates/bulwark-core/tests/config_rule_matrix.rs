@@ -304,6 +304,40 @@ fn accounts_pass_max_age_002() {
 }
 
 #[test]
+fn accounts_sha_crypt_rounds_004_only_under_sha_schemes() {
+    // Under a SHA scheme with rounds unset, the rule fires; under yescrypt (rounds ignored by the
+    // hashing scheme) it must NOT — the false positive fixed on the project's own yescrypt machine.
+    assert!(fires(
+        "login_defs",
+        vec![fact(&[
+            ("sha_crypt_applies", Value::Bool(true)),
+            ("sha_crypt_min_rounds_configured", Value::Bool(false)),
+        ])],
+        "BLWK-ACCT-004",
+    ));
+    assert!(!fires(
+        "login_defs",
+        vec![fact(&[
+            ("sha_crypt_applies", Value::Bool(false)),
+            ("sha_crypt_min_rounds_configured", Value::Bool(false)),
+        ])],
+        "BLWK-ACCT-004",
+    ));
+}
+
+#[test]
+fn accounts_umask_005_satisfied_by_pam() {
+    // No umask anywhere → fires. Configured (by an explicit UMASK or by pam_umask, both of which the
+    // collector folds into this one boolean) → quiet.
+    assert_matrix(
+        "login_defs",
+        "BLWK-ACCT-005",
+        &[("umask_configured", Value::Bool(false))],
+        &[("umask_configured", Value::Bool(true))],
+    );
+}
+
+#[test]
 fn cron_downloader_pipe_shell_acct_001() {
     assert_matrix(
         "cron_entries",

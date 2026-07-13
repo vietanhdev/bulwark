@@ -5,9 +5,10 @@ severity: low
 collector: login_defs
 condition: umask_configured == false
 explain: >
-  UMASK isn't set in /etc/login.defs. Without an explicit, deliberate value, new files
-  created by shells that don't set their own umask fall back to whatever the system
-  default happens to be — commonly 022, which leaves new files group/world-readable by
-  default rather than requiring an explicit opt-in to share them.
-fix: "Set 'UMASK 027' (or your organization's policy) in /etc/login.defs."
+  No default umask is configured — neither an explicit UMASK line in /etc/login.defs nor a
+  pam_umask entry in /etc/pam.d. Without a deliberate value, new files created by shells that
+  don't set their own umask fall back to whatever the system default happens to be — commonly
+  022, which leaves new files group/world-readable by default rather than requiring an explicit
+  opt-in to share them.
+fix: "Set 'UMASK 027' (or your organization's policy) in /etc/login.defs, or add pam_umask to the session stack."
 references: [CIS-6.2.3]

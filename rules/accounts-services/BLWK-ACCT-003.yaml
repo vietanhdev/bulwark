@@ -3,6 +3,10 @@ title: Password minimum age is zero
 category: accounts-services
 severity: low
 collector: login_defs
+# Minimum password age defeats password-cycling to escape history — a multi-user / managed-policy
+# control. Irrelevant on a single-user desktop, so gate to the server profile (still fires on
+# servers and any host running sshd or a server chassis).
+profiles: [server]
 condition: pass_min_days == 0
 explain: >
   PASS_MIN_DAYS in /etc/login.defs is 0 — a user forced to rotate a leaked password can

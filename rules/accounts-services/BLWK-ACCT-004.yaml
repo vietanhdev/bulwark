@@ -3,11 +3,15 @@ title: Password hashing rounds are not explicitly configured
 category: accounts-services
 severity: low
 collector: login_defs
-condition: sha_crypt_min_rounds_configured == false
+# Only meaningful when the hashing scheme actually reads SHA_CRYPT_MIN_ROUNDS. Under yescrypt or
+# bcrypt (the modern Debian/Ubuntu default) the setting is ignored entirely, so flagging its
+# absence there is a false positive — gate on the scheme being sha256/sha512.
+condition: sha_crypt_applies == true and sha_crypt_min_rounds_configured == false
 explain: >
-  SHA_CRYPT_MIN_ROUNDS isn't set in /etc/login.defs, so new passwords get whatever the
-  system's compiled-in default hashing cost is rather than a deliberately chosen one —
-  fine until you actually need to raise the cost to keep pace with faster cracking
-  hardware, at which point "never configured" means nobody has ever checked.
+  This host hashes passwords with SHA-512/256 (ENCRYPT_METHOD), but SHA_CRYPT_MIN_ROUNDS isn't
+  set in /etc/login.defs, so new passwords get whatever the system's compiled-in default hashing
+  cost is rather than a deliberately chosen one — fine until you actually need to raise the cost
+  to keep pace with faster cracking hardware, at which point "never configured" means nobody has
+  ever checked.
 fix: "Set 'SHA_CRYPT_MIN_ROUNDS 5000' (or higher, per current guidance) in /etc/login.defs."
 references: [CIS-6.2.2]

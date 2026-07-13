@@ -3,6 +3,11 @@ title: Password maximum age is excessively long
 category: accounts-services
 severity: low
 collector: login_defs
+# Password-expiry policy is a multi-user / managed-fleet control; modern guidance (NIST 800-63B)
+# advises against forced periodic rotation for single-user endpoints. Gate to the server profile
+# so it fires on servers and multi-user hosts (and anything running sshd) but not on a proven
+# single-user desktop, where 99999 is the expected distro default rather than a misconfiguration.
+profiles: [server]
 condition: pass_max_days > 365
 explain: >
   PASS_MAX_DAYS in /etc/login.defs is {{ login_defs.pass_max_days }} — passwords never

@@ -3,6 +3,10 @@ title: Martian packet logging is disabled
 category: kernel-hardening
 severity: low
 collector: sysctl_kernel
+# Martian-packet logging is a network-monitoring control for hosts on untrusted segments — a
+# server concern (CIS scopes it there). Low-value noise on a single-user desktop, so gate it to
+# the server profile (still fires on any host running sshd or a server chassis).
+profiles: [server]
 condition: log_martians == 0
 explain: >
   net.ipv4.conf.all.log_martians is 0 — packets with impossible/spoofed source addresses
