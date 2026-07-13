@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { AlertTriangle, Check, ShieldAlert } from "lucide-react";
 import { PageShell, SectionLabel } from "@/components/PageShell";
 import { SEVERITY_ORDER, SeverityDot, railStyle, type Severity } from "@/components/Severity";
 import { useRevision } from "@/lib/revision";
@@ -9,6 +10,9 @@ interface ScanRunSummary {
   id: string;
   started_at: string;
   total_findings: number;
+  rules_failed: number;
+  collectors_failed: number;
+  privileged_collectors_skipped: string[];
 }
 
 interface Finding {
@@ -56,7 +60,8 @@ export function AnalyticsView() {
 
   // history_list is newest-first; a trend reads left-to-right oldest-to-newest.
   const trend = useMemo(() => (runs ? [...runs].reverse() : []), [runs]);
-  const open = snap?.findings ?? [];
+  // Memoized so the derived useMemos below don't see a new array identity every render.
+  const open = useMemo(() => snap?.findings ?? [], [snap]);
   const accepted = snap?.suppressedFindings ?? [];
 
   const severityCounts = useMemo(
@@ -86,7 +91,7 @@ export function AnalyticsView() {
   return (
     <PageShell
       title="Analytics"
-      description="How this host's security posture is trending over time — findings per scan, what's open now, and how much risk you've accepted — drawn from every scan Bulwark has recorded."
+      description="How this host's security posture is trending over time — findings per scan, what's open now, how much risk you've accepted, and the full scan-by-scan history — drawn from every scan Bulwark has recorded."
     >
       {empty ? (
         <div className="rounded-lg border border-dashed border-border py-14 text-center">
@@ -184,6 +189,80 @@ export function AnalyticsView() {
               </div>
             </section>
           </div>
+
+          {/* The per-scan timeline — every run this host recorded, newest first, with the change
+              from the previous scan so you can tell whether an issue just appeared or has been
+              open for a while. (Folded in from what used to be a separate History tab.) */}
+          <section>
+            <SectionLabel>Scan history</SectionLabel>
+            <div className="overflow-hidden rounded-lg border border-border bg-card">
+              {(runs ?? []).map((run, i) => {
+                const clean = run.total_findings === 0;
+                const older = (runs ?? [])[i + 1];
+                const d = older ? run.total_findings - older.total_findings : null;
+                return (
+                  <div
+                    key={run.id}
+                    style={railStyle(clean ? "resolved" : "critical")}
+                    className={cn(
+                      "rail rail-dim flex items-center gap-3 py-3 pr-3",
+                      i > 0 && "border-t border-border",
+                    )}
+                  >
+                    <span className="w-28 shrink-0 font-mono text-xs text-muted-foreground">
+                      {shortWhen(run.started_at)}
+                    </span>
+                    {clean ? (
+                      <Check
+                        className="h-4 w-4 shrink-0"
+                        style={{ color: "var(--sev-resolved-fg)" }}
+                        strokeWidth={2.5}
+                      />
+                    ) : (
+                      <span
+                        className="h-2 w-2 shrink-0 rounded-full"
+                        style={{ background: "var(--sev-critical)" }}
+                      />
+                    )}
+                    <span className="min-w-0 flex-1 text-sm">
+                      <span className="font-mono font-semibold tabular-nums">{run.total_findings}</span>
+                      <span className="text-muted-foreground">
+                        {" "}
+                        finding{run.total_findings === 1 ? "" : "s"}
+                      </span>
+                      {d !== null && d !== 0 && (
+                        <span
+                          className="ml-2 font-mono text-[11px] tabular-nums"
+                          style={{ color: `var(--sev-${d > 0 ? "critical" : "resolved"}-fg)` }}
+                          title="Change from the previous scan"
+                        >
+                          {d > 0 ? `+${d}` : d}
+                        </span>
+                      )}
+                    </span>
+                    <span className="flex w-12 shrink-0 justify-end gap-1">
+                      {run.privileged_collectors_skipped.length > 0 && (
+                        <span
+                          title={`Privileged checks skipped: ${run.privileged_collectors_skipped.join(", ")}`}
+                          className="text-muted-foreground"
+                        >
+                          <ShieldAlert className="h-3.5 w-3.5" />
+                        </span>
+                      )}
+                      {(run.rules_failed > 0 || run.collectors_failed > 0) && (
+                        <span
+                          title={`${run.rules_failed} rule error(s), ${run.collectors_failed} collector error(s)`}
+                          style={{ color: "var(--sev-medium-fg)" }}
+                        >
+                          <AlertTriangle className="h-3.5 w-3.5" />
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
         </div>
       )}
     </PageShell>

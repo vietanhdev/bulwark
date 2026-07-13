@@ -11,7 +11,6 @@ import { IntegrityView } from "@/components/IntegrityView";
 import { RulesView } from "@/components/RulesView";
 import { ComplianceView } from "@/components/ComplianceView";
 import { AnalyticsView } from "@/components/AnalyticsView";
-import { HistoryView } from "@/components/HistoryView";
 import { SettingsView, type MonitoringStatus } from "@/components/SettingsView";
 import { RevisionProvider, useRevision } from "@/lib/revision";
 import { cn } from "@/lib/utils";
@@ -24,7 +23,6 @@ const VIEWS: { id: View; render: (active: boolean, navigate: (v: View) => void) 
   { id: "rules", render: () => <RulesView /> },
   { id: "compliance", render: () => <ComplianceView /> },
   { id: "analytics", render: () => <AnalyticsView /> },
-  { id: "history", render: () => <HistoryView /> },
   { id: "settings", render: () => <SettingsView /> },
 ];
 
