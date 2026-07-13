@@ -64,7 +64,7 @@ jobs:
           # refuses with "detected dubious ownership" and the build fails before it starts.
           git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Resolve version
         id: version
@@ -345,7 +345,7 @@ jobs:
     needs: [linux, verify-install, verify-appimage]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Resolve version
         id: version
