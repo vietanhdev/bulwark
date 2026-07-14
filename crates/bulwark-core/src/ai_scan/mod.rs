@@ -139,6 +139,44 @@ pub fn scan(opts: &AiScanOptions, on_artifact: impl Fn(&str) + Sync) -> AiScanRe
     scan_cancellable(opts, on_artifact, &|| false)
 }
 
+/// Worker count for the parallel scan/redaction passes. Deliberately **below** the core count so a
+/// background scan leaves the machine responsive instead of pinning every CPU — an unbounded rayon
+/// pool drove load to ~14 of 16 cores on a heavy machine, which makes a desktop stutter while the
+/// scan runs. Defaults to about half the available parallelism (min 1); override with the
+/// `BULWARK_SCAN_THREADS` environment variable (e.g. `1` for a single-threaded scan, or a higher
+/// number to trade responsiveness for speed).
+pub fn scan_worker_count() -> usize {
+    worker_count(
+        std::env::var("BULWARK_SCAN_THREADS").ok().as_deref(),
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1),
+    )
+}
+
+/// Pure worker-count policy, split out so it's testable without touching the process environment:
+/// a valid `BULWARK_SCAN_THREADS` wins; otherwise use about half the cores, at least one.
+fn worker_count(env_override: Option<&str>, cores: usize) -> usize {
+    if let Some(n) = env_override
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&n| n >= 1)
+    {
+        return n;
+    }
+    (cores / 2).max(1)
+}
+
+/// A rayon pool bounded to [`scan_worker_count`] threads for one scan/redaction pass. `None` only
+/// if pool construction fails (effectively never), in which case the caller falls back to the
+/// global pool.
+fn bounded_scan_pool() -> Option<rayon::ThreadPool> {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(scan_worker_count())
+        .thread_name(|i| format!("bulwark-scan-{i}"))
+        .build()
+        .ok()
+}
+
 /// [`scan`] plus the ability to stop. `should_cancel` is polled once per artifact — the natural
 /// unit of work here, and frequent enough that Stop feels immediate even on a machine with
 /// hundreds of workspaces. A cancelled run comes back with `cancelled: true` and whatever it had
@@ -190,21 +228,28 @@ pub fn scan_cancellable(
     // already in flight finish and are counted, exactly as they were "examined" under the old loop.
     let cancel_flag = AtomicBool::new(false);
     let scanned = AtomicUsize::new(0);
-    let per_artifact: Vec<Result<Vec<AiFinding>, String>> = artifacts
-        .par_iter()
-        .map(|artifact| {
-            if cancel_flag.load(Ordering::Relaxed) {
-                return Ok(Vec::new());
-            }
-            if should_cancel() {
-                cancel_flag.store(true, Ordering::Relaxed);
-                return Ok(Vec::new());
-            }
-            on_artifact(&artifact.path.to_string_lossy());
-            scanned.fetch_add(1, Ordering::Relaxed);
-            scan_artifact(artifact).map_err(|e| format!("{}: {e}", artifact.path.display()))
-        })
-        .collect();
+    let run = || -> Vec<Result<Vec<AiFinding>, String>> {
+        artifacts
+            .par_iter()
+            .map(|artifact| {
+                if cancel_flag.load(Ordering::Relaxed) {
+                    return Ok(Vec::new());
+                }
+                if should_cancel() {
+                    cancel_flag.store(true, Ordering::Relaxed);
+                    return Ok(Vec::new());
+                }
+                on_artifact(&artifact.path.to_string_lossy());
+                scanned.fetch_add(1, Ordering::Relaxed);
+                scan_artifact(artifact).map_err(|e| format!("{}: {e}", artifact.path.display()))
+            })
+            .collect()
+    };
+    // Run on a bounded pool so a background scan leaves CPU headroom instead of pinning every core.
+    let per_artifact = match bounded_scan_pool() {
+        Some(pool) => pool.install(run),
+        None => run(),
+    };
 
     let cancelled = cancel_flag.load(Ordering::Relaxed);
     let artifacts_scanned = scanned.load(Ordering::Relaxed);
@@ -611,6 +656,34 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::Path;
+
+    #[test]
+    fn worker_count_defaults_to_half_the_cores_and_honours_the_override() {
+        // Default: about half the cores, never zero.
+        assert_eq!(worker_count(None, 16), 8);
+        assert_eq!(worker_count(None, 8), 4);
+        assert_eq!(
+            worker_count(None, 1),
+            1,
+            "a single-core box still gets one worker"
+        );
+        assert_eq!(
+            worker_count(None, 0),
+            1,
+            "never zero even on a bogus core count"
+        );
+        // A valid override wins outright (lets a user cap it hard, e.g. to 1).
+        assert_eq!(worker_count(Some("1"), 16), 1);
+        assert_eq!(worker_count(Some("4"), 16), 4);
+        assert_eq!(
+            worker_count(Some(" 3 "), 16),
+            3,
+            "surrounding whitespace is tolerated"
+        );
+        // Garbage / zero override falls back to the default.
+        assert_eq!(worker_count(Some("0"), 16), 8);
+        assert_eq!(worker_count(Some("lots"), 16), 8);
+    }
 
     fn write(path: &Path, content: &str) {
         if let Some(p) = path.parent() {

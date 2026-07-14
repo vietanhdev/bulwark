@@ -39,14 +39,21 @@ pub struct RedactionReport {
 /// is read-only-violated: files are read but never written and no backups are made.
 pub fn redact_paths(paths: &[PathBuf], apply: bool, backup_dir: &Path) -> RedactionReport {
     // Each path is redacted independently — its own read, backup, temp, and atomic rename touch
-    // only that one file — so the set runs in parallel. `collect` preserves input order, so the
-    // reported entries stay in the caller's (severity-sorted) order regardless of thread timing.
-    let outcomes: Vec<Result<Option<RedactionEntry>, String>> = paths
-        .par_iter()
-        .map(|path| {
-            redact_one(path, apply, backup_dir).map_err(|e| format!("{}: {e}", path.display()))
-        })
-        .collect();
+    // only that one file — so the set runs in parallel, on the same bounded pool as the scan so it
+    // never pins every core. `collect` preserves input order, so the reported entries stay in the
+    // caller's (severity-sorted) order regardless of thread timing.
+    let run = || -> Vec<Result<Option<RedactionEntry>, String>> {
+        paths
+            .par_iter()
+            .map(|path| {
+                redact_one(path, apply, backup_dir).map_err(|e| format!("{}: {e}", path.display()))
+            })
+            .collect()
+    };
+    let outcomes = match super::bounded_scan_pool() {
+        Some(pool) => pool.install(run),
+        None => run(),
+    };
 
     let mut entries = Vec::new();
     let mut errors = Vec::new();
