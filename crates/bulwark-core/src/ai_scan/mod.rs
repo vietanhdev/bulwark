@@ -394,7 +394,12 @@ fn scan_artifact(artifact: &Artifact) -> anyhow::Result<Vec<AiFinding>> {
         // essentially every line trips it. A real provider key leaked into an assistant's
         // context/memory is still caught here (and is redactable); a `.env`'s actual risks
         // (readable by other users, or not gitignored) are the separate AI-015 / AI-016 checks.
-        for m in secrets::scan_text_high_confidence(&content) {
+        // Pass the artifact's path: a handful of rules are scoped to a specific file
+        // (`nuget-config-password` to `nuget.config`, `freemius-secret-key` to `.php`) and must not
+        // fire anywhere else. Without it they would report a leaked credential for any
+        // `sk_…`-shaped string in a chat transcript.
+        let path = artifact.path.to_string_lossy();
+        for m in secrets::scan_text_high_confidence_in(Some(&path), &content) {
             has_redactable_secret = true;
             out.push(finding_from_secret(
                 artifact,

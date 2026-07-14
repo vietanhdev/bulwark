@@ -393,6 +393,45 @@ shape — a required (`{5,50}`) prefix, an exact count, a rule with no capture g
 *is* the reported secret — is left alone: a rule that stays slow is a bug, a rule that quietly stops
 matching is a vulnerability.
 
+### Validating the rule pack (and what that surfaced)
+
+262 vendored regexes are not self-evidently correct, and until recently nothing checked that any
+individual rule still *worked*. `every_bundled_rule_compiles` proved a pattern parses — it said
+nothing about whether the rule could still catch its own key. Two tests, modelled on gitleaks'
+`Validate(rule, tps, fps)`, close that:
+
+```mermaid
+flowchart LR
+  R[Rule's own regex] -->|rand_regex| TP[Generated secret]
+  TP --> P{The pack}
+  FP[(gitleaks false positives<br/>378 fixtures, 79 rules)] --> P
+  P -->|must fire| OK[Detection coverage]
+  P -->|must stay silent| NO[No false positives]
+```
+
+- **True positives are generated, never written down.** A secret is synthesised *from each rule's own
+  pattern* (`rand_regex`, mirroring gitleaks' `secrets.NewSecret`), dropped into the kind of line it
+  really leaks in, and the pack must report it. Every rule gets a real sample, the corpus re-syncs
+  itself when the pack does, and — because a 40-character high-entropy literal sitting next to the
+  word `aws` is indistinguishable from a live key to every scanner on earth, GitHub's push protection
+  included — nothing secret-shaped is ever committed.
+- **False positives are vendored** (`tests/data/gitleaks_false_positives.toml`): the placeholders,
+  documentation keys, wrong-length tokens and low-entropy dummies gitleaks records for each rule. A
+  scanner that flags everything is as useless as one that flags nothing, and the way a rule usually
+  breaks is by getting *broader* — which every "does it catch the key" test in the world will pass.
+
+The first run of these tests failed, and each failure was a real defect:
+
+| Defect | Consequence | Fix |
+|---|---|---|
+| The pack's **allowlists were never parsed** | Every rule inherited gitleaks' false positives without gitleaks' suppression: `curl -u "${user}:${pass}"` reported as leaked credentials, Google's published `AIzaSy…` doc keys reported as live GCP keys | `Allowlist` — the `regexes`/`stopwords` were shipping in `secret_rules.toml` and read by nobody |
+| One allowlist regex **silently failed to compile** | gitleaks writes RE2, where a literal `{{` is legal; Rust's `regex` rejects it. The one pattern suppressing `${{ env.PASS }}` was dropped by a `filter_map(…ok())` | `literalize_braces`, plus `every_allowlist_regex_compiles` — a dropped allowlist is a *silent false positive*, which is why it's an assertion and not a log line |
+| **`path` conditions were ignored** | `nuget-config-password` means something in a `nuget.config` and nothing anywhere else; applied to every file, any `sk_…`-shaped string in a chat transcript was a "leaked credential" | `Rule::applies_to` — the scan and redaction now both pass the artifact's real path |
+
+On a real home directory the result is ten fewer false positives — every one of them a placeholder or
+a test fixture quoted inside a transcript (`-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIB...`, a dummy
+`ghp_0123…uvwxyz`) — with no true positive lost.
+
 ---
 
 ## 10. Security & privacy

@@ -41,11 +41,200 @@ struct RuleSpec {
     entropy: Option<f64>,
     #[serde(default)]
     keywords: Vec<String>,
+    /// A rule may only apply to certain files — `nuget-config-password` to `nuget.config`,
+    /// `freemius-secret-key` to `.php`. See [`Rule::applies_to`].
+    #[serde(default)]
+    path: Option<String>,
+    /// What this rule is *not* allowed to flag. See [`Allowlist`].
+    #[serde(default)]
+    allowlists: Vec<AllowlistSpec>,
+}
+
+/// A gitleaks allowlist: the suppression half of a rule. Ships in `secret_rules.toml` and, until
+/// now, was parsed by nobody.
+#[derive(Debug, Deserialize)]
+struct AllowlistSpec {
+    #[serde(default)]
+    regexes: Vec<String>,
+    #[serde(default)]
+    stopwords: Vec<String>,
+    /// `"match"`, `"line"`, or absent — absent means the regexes test the secret itself.
+    #[serde(rename = "regexTarget", default)]
+    regex_target: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RuleFile {
     rules: Vec<RuleSpec>,
+    /// The file's `[allowlist]` table: suppressions that apply to every rule.
+    #[serde(default)]
+    allowlist: Option<AllowlistSpec>,
+}
+
+/// Which text an allowlist's regexes are tested against.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum AllowTarget {
+    /// The captured secret. gitleaks' default when `regexTarget` is absent.
+    Secret,
+    /// The rule's whole match, context and all.
+    Match,
+    /// The entire line the match sits on.
+    Line,
+}
+
+/// The suppression half of a rule — **the half we were throwing away.**
+///
+/// A gitleaks rule is a pair: a deliberately broad regex, plus an allowlist that carves the known
+/// non-secrets back out of it. We vendored the regexes and dropped the allowlists on the floor, so
+/// every rule fired on material upstream explicitly suppresses: `curl -u "${username}:${password}"`
+/// reported as leaked credentials, Google's own published `AIzaSy…` documentation keys reported as
+/// live GCP keys, and 1,446 stopwords' worth of `generic-api-key` noise. The data was sitting in
+/// `secret_rules.toml` the whole time; nothing read it. `no_rule_fires_on_its_known_false_positives`
+/// is what finally noticed.
+///
+/// Semantics are gitleaks': `regexes` test whatever [`AllowTarget`] names (the secret unless the
+/// rule says otherwise), while `stopwords` always test the secret itself — a distinction worth
+/// keeping exactly, since a stopword tested against the whole match would suppress a real key that
+/// merely sat on a line mentioning `example`.
+struct Allowlist {
+    target: AllowTarget,
+    regex_src: Vec<String>,
+    /// Compiled on first use, for the same reason rule patterns are: a scan that matches nothing
+    /// should not pay to build regexes it never runs.
+    regexes: OnceLock<Vec<Regex>>,
+    stopwords: Vec<String>,
+    /// `generic-api-key` alone carries 1,446 stopwords — a linear scan per match would undo the
+    /// work of the last commit, so they go in an automaton like the keyword index does.
+    stopword_index: OnceLock<Option<AhoCorasick>>,
+}
+
+impl Allowlist {
+    fn from_spec(spec: AllowlistSpec) -> Self {
+        let target = match spec.regex_target.as_deref() {
+            Some("match") => AllowTarget::Match,
+            Some("line") => AllowTarget::Line,
+            _ => AllowTarget::Secret,
+        };
+        Allowlist {
+            target,
+            regex_src: spec.regexes,
+            regexes: OnceLock::new(),
+            stopwords: spec.stopwords,
+            stopword_index: OnceLock::new(),
+        }
+    }
+
+    fn regexes(&self) -> &[Regex] {
+        self.regexes.get_or_init(|| {
+            self.regex_src
+                .iter()
+                .filter_map(|p| compile(&literalize_braces(p)).ok())
+                .collect()
+        })
+    }
+
+    /// How many of this allowlist's patterns the `regex` crate actually accepted. Equal to
+    /// `regex_src.len()` unless one was dropped — which `every_allowlist_regex_compiles` forbids.
+    #[cfg(test)]
+    fn compiled_count(&self) -> usize {
+        self.regexes().len()
+    }
+
+    fn stopword_index(&self) -> Option<&AhoCorasick> {
+        self.stopword_index
+            .get_or_init(|| {
+                if self.stopwords.is_empty() {
+                    return None;
+                }
+                AhoCorasickBuilder::new()
+                    .ascii_case_insensitive(true)
+                    .build(&self.stopwords)
+                    .ok()
+            })
+            .as_ref()
+    }
+
+    /// Whether this allowlist says the hit is not a secret after all.
+    fn allows(&self, secret: &str, whole: &str, line: &str) -> bool {
+        let haystack = match self.target {
+            AllowTarget::Secret => secret,
+            AllowTarget::Match => whole,
+            AllowTarget::Line => line,
+        };
+        if self.regexes().iter().any(|re| re.is_match(haystack)) {
+            return true;
+        }
+        // Stopwords always test the secret, never the wider match (gitleaks' `StopWords` doc).
+        self.stopword_index()
+            .is_some_and(|index| index.is_match(secret))
+    }
+}
+
+/// Escapes the braces in a Go pattern that Rust's `regex` would reject.
+///
+/// gitleaks' patterns target RE2, which treats `{` as a literal when it can't begin a repetition.
+/// Rust's `regex` is stricter and rejects the pattern outright — so
+/// `['"]?\$?{{[^}]+}}['"]?:['"]?\$?{{[^}]+}}['"]?`, the allowlist that exists precisely to suppress
+/// `${{ github.actions }}` template syntax, failed to compile and was silently dropped. That single
+/// dropped pattern is why `curl -u "${{ env.ID }}:${{ env.PASS }}"` kept being reported as leaked
+/// credentials.
+///
+/// Escaping only the braces that *cannot* be a quantifier makes the pattern legal for Rust while
+/// matching exactly the same text — `{{` was never a quantifier in the first place.
+fn literalize_braces(pattern: &str) -> String {
+    let b = pattern.as_bytes();
+    let (mut out, mut i, mut in_class) = (String::new(), 0, false);
+    while i < b.len() {
+        if b[i] == b'\\' && i + 1 < b.len() {
+            out.push('\\');
+            out.push(b[i + 1] as char);
+            i += 2;
+            continue;
+        }
+        match b[i] {
+            b'[' if !in_class => {
+                in_class = true;
+                out.push('[');
+            }
+            b']' if in_class => {
+                in_class = false;
+                out.push(']');
+            }
+            // Inside a character class a brace is already literal; outside, it's only legal if it
+            // opens a real `{m}` / `{m,}` / `{m,n}`.
+            b'{' if !in_class => match quantifier_len(&pattern[i..]) {
+                Some(len) => {
+                    out.push_str(&pattern[i..i + len]);
+                    i += len;
+                    continue;
+                }
+                None => out.push_str("\\{"),
+            },
+            b'}' if !in_class => out.push_str("\\}"),
+            c => out.push(c as char),
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Byte length of a valid repetition quantifier (`{2}`, `{2,}`, `{2,5}`) at the start of `s`.
+fn quantifier_len(s: &str) -> Option<usize> {
+    let close = s.find('}')?;
+    let body = &s[1..close];
+    let digits = |t: &str| !t.is_empty() && t.bytes().all(|c| c.is_ascii_digit());
+    let valid = match body.split_once(',') {
+        Some((min, max)) => digits(min) && (max.is_empty() || digits(max)),
+        None => digits(body),
+    };
+    valid.then_some(close + 1)
+}
+
+/// The line `offset` falls on — the haystack for an `AllowTarget::Line` allowlist.
+fn line_at(text: &str, offset: usize) -> &str {
+    let start = text[..offset].rfind('\n').map_or(0, |i| i + 1);
+    let end = text[offset..].find('\n').map_or(text.len(), |i| offset + i);
+    &text[start..end]
 }
 
 struct Rule {
@@ -63,11 +252,41 @@ struct Rule {
     /// severity and never auto-redacted — rewriting a value that merely *looked* like a secret
     /// could corrupt a legitimate config.
     high_conf: bool,
+    /// What this rule must *not* flag, straight from the vendored pack.
+    allowlists: Vec<Allowlist>,
+    /// The file this rule applies to, if it is scoped to one. See [`Rule::applies_to`].
+    path_src: Option<String>,
+    path_re: OnceLock<Option<Regex>>,
 }
 
 impl Rule {
     fn regex(&self) -> Option<&Regex> {
         self.re.get_or_init(|| compile(&self.pattern).ok()).as_ref()
+    }
+
+    /// Whether this rule applies to the file being scanned.
+    ///
+    /// Five rules in the pack are scoped to a file: `nuget-config-password` means something in a
+    /// `nuget.config` and nothing anywhere else, `freemius-secret-key` only in `.php`. We ignored
+    /// the constraint and ran every rule against every file, so `<add key="Password" value="…"/>`
+    /// in any XML — or a `sk_…` string in a chat transcript — was reported as a leaked credential.
+    /// gitleaks treats `path` as a *required* condition, and so do we.
+    ///
+    /// When the path is unknown the rule does not apply: the condition it depends on cannot be
+    /// established, and guessing "yes" is what produced the false positives. Every production caller
+    /// knows the file it is scanning (`ai_scan` passes the artifact's path), so this only affects
+    /// callers that scan a bare string.
+    fn applies_to(&self, path: Option<&str>) -> bool {
+        let Some(src) = &self.path_src else {
+            return true; // unscoped: applies everywhere
+        };
+        let Some(path) = path else {
+            return false;
+        };
+        self.path_re
+            .get_or_init(|| compile(src).ok())
+            .as_ref()
+            .is_some_and(|re| re.is_match(path))
     }
 }
 
@@ -85,6 +304,8 @@ struct Pack {
     rules_for_keyword: Vec<Vec<usize>>,
     /// Rules with no keywords at all: always candidates, since nothing can rule them out.
     always: Vec<usize>,
+    /// The file's `[allowlist]` table — suppressions that apply to every rule.
+    global_allowlist: Vec<Allowlist>,
 }
 
 impl Pack {
@@ -204,6 +425,7 @@ fn humanize(id: &str) -> String {
 static PACK: LazyLock<Pack> = LazyLock::new(|| {
     let spec: RuleFile = toml::from_str(include_str!("secret_rules.toml"))
         .expect("the bundled secret rule pack must be valid TOML");
+    let spec_allowlist = spec.allowlist;
 
     let mut rules = Vec::new();
     let mut keyword_list: Vec<String> = Vec::new();
@@ -238,6 +460,9 @@ static PACK: LazyLock<Pack> = LazyLock::new(|| {
             re: OnceLock::new(),
             entropy: r.entropy,
             high_conf,
+            allowlists: r.allowlists.into_iter().map(Allowlist::from_spec).collect(),
+            path_src: r.path,
+            path_re: OnceLock::new(),
         });
     }
 
@@ -253,6 +478,10 @@ static PACK: LazyLock<Pack> = LazyLock::new(|| {
         keywords,
         rules_for_keyword,
         always,
+        global_allowlist: spec_allowlist
+            .into_iter()
+            .map(Allowlist::from_spec)
+            .collect(),
     }
 });
 
@@ -550,7 +779,7 @@ struct RawMatch<'t> {
 
 /// Every hit for one rule against `text`. The caller has already established, via the keyword
 /// index, that this rule is worth running at all.
-fn matches_for<'t>(rule: &Rule, text: &'t str) -> Vec<RawMatch<'t>> {
+fn matches_for<'t>(pack: &Pack, rule: &Rule, text: &'t str) -> Vec<RawMatch<'t>> {
     let Some(re) = rule.regex() else {
         // The pattern didn't compile. Skipped, never fatal — one bad rule must not take the pack
         // down — and `every_bundled_rule_compiles` is what stops that becoming silent lost cover.
@@ -572,6 +801,20 @@ fn matches_for<'t>(rule: &Rule, text: &'t str) -> Vec<RawMatch<'t>> {
             continue;
         }
         if !rule.high_conf && is_placeholder_value(secret.as_str()) {
+            continue;
+        }
+        // The rule's own suppressions, then the file-wide ones. This is the half of each gitleaks
+        // rule that turns a deliberately broad pattern into a usable one — see `Allowlist`.
+        let allowed = |a: &&Allowlist| {
+            a.allows(
+                secret.as_str(),
+                whole.as_str(),
+                line_at(text, whole.start()),
+            )
+        };
+        if rule.allowlists.iter().any(|a| allowed(&a))
+            || pack.global_allowlist.iter().any(|a| allowed(&a))
+        {
             continue;
         }
         out.push(RawMatch {
@@ -633,7 +876,7 @@ struct Hit<'t> {
 /// heuristic regexes entirely — so redaction does strictly *less* work than a scan, never a second
 /// full one. Runs the candidate prefilter directly on `text` (the automaton is case-insensitive),
 /// so no lowercased copy of a multi-MB file is ever allocated.
-fn find_hits<'t>(text: &'t str, passes: &[bool]) -> Vec<Hit<'t>> {
+fn find_hits<'t>(path: Option<&str>, text: &'t str, passes: &[bool]) -> Vec<Hit<'t>> {
     let pack = &*PACK;
     let candidates = pack.candidates(text);
 
@@ -643,10 +886,10 @@ fn find_hits<'t>(text: &'t str, passes: &[bool]) -> Vec<Hit<'t>> {
     'passes: for &high_conf_pass in passes {
         for &ri in &candidates {
             let rule = &pack.rules[ri];
-            if rule.high_conf != high_conf_pass {
+            if rule.high_conf != high_conf_pass || !rule.applies_to(path) {
                 continue;
             }
-            for m in matches_for(rule, text) {
+            for m in matches_for(pack, rule, text) {
                 if spans.overlaps(m.start, m.end) {
                     continue;
                 }
@@ -670,10 +913,15 @@ fn find_hits<'t>(text: &'t str, passes: &[bool]) -> Vec<Hit<'t>> {
 /// overlaps a precise provider rule on the same bytes, only the provider match is kept — a
 /// hardcoded `ANTHROPIC_API_KEY=sk-ant-…` is *one* Anthropic finding, not also a generic one.
 pub fn scan_text(text: &str) -> Vec<SecretMatch> {
+    scan_text_in(None, text)
+}
+
+/// [`scan_text`] for a known file. Path-scoped rules only apply here.
+pub fn scan_text_in(path: Option<&str>, text: &str) -> Vec<SecretMatch> {
     let pack = &*PACK;
     // Precise rules first (the `[true, false]` order), so they claim their spans before the
     // heuristic ones run.
-    let mut out: Vec<SecretMatch> = find_hits(text, &[true, false])
+    let mut out: Vec<SecretMatch> = find_hits(path, text, &[true, false])
         .into_iter()
         .map(|h| {
             let rule = &pack.rules[h.rule];
@@ -696,8 +944,13 @@ pub fn scan_text(text: &str) -> Vec<SecretMatch> {
 /// because it reports high-confidence hits only; running the generic patterns and then discarding
 /// their results was pure wasted CPU over every scanned file. All returned matches are high-conf.
 pub fn scan_text_high_confidence(text: &str) -> Vec<SecretMatch> {
+    scan_text_high_confidence_in(None, text)
+}
+
+/// [`scan_text_high_confidence`] for a known file. Path-scoped rules only apply here.
+pub fn scan_text_high_confidence_in(path: Option<&str>, text: &str) -> Vec<SecretMatch> {
     let pack = &*PACK;
-    let mut out: Vec<SecretMatch> = find_hits(text, &[true])
+    let mut out: Vec<SecretMatch> = find_hits(path, text, &[true])
         .into_iter()
         .map(|h| {
             let rule = &pack.rules[h.rule];
@@ -734,6 +987,11 @@ pub fn severity_for(m: &SecretMatch) -> Severity {
 ///
 /// Replacement walks right-to-left so earlier offsets stay valid as later ones are spliced out.
 pub fn redact_text(text: &str) -> (String, usize) {
+    redact_text_in(None, text)
+}
+
+/// [`redact_text`] for a known file. Path-scoped rules only apply here.
+pub fn redact_text_in(path: Option<&str>, text: &str) -> (String, usize) {
     // Reuse the scanner's exact detection primitive, but run ONLY the high-confidence pass. The
     // heuristic `generic-*` rules are report-only and must never be rewritten (blindly editing a
     // value that merely looked like a secret could corrupt a legitimate config), so skipping them
@@ -743,7 +1001,7 @@ pub fn redact_text(text: &str) -> (String, usize) {
     // own newline (`[\s;]`). Replacing the wide span deleted all of it, so redacting `KEY=secret\n`
     // yielded `[bulwark:redacted-secret]` with the next line welded onto it — a corrupted `.env`
     // whose variable name was gone too. Only the secret's bytes may be rewritten.
-    let mut hits: Vec<(usize, usize)> = find_hits(text, &[true])
+    let mut hits: Vec<(usize, usize)> = find_hits(path, text, &[true])
         .into_iter()
         .map(|h| (h.secret_start, h.secret_end))
         .collect();
@@ -772,6 +1030,12 @@ pub fn redact_text(text: &str) -> (String, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::{Rng, SeedableRng};
+    use std::collections::BTreeSet;
+
+    const ALNUM: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const LOWER: &str = "abcdefghijklmnopqrstuvwxyz0123456789";
+    const HEX: &str = "0123456789abcdef";
 
     fn rule_ids(text: &str) -> Vec<String> {
         scan_text(text).into_iter().map(|m| m.rule_id).collect()
@@ -785,6 +1049,168 @@ mod tests {
             .into_iter()
             .filter_map(|r| r.regex.map(|re| (r.id, re, r.keywords)))
             .collect()
+    }
+
+    /// The `path` condition of each path-scoped rule, by id.
+    fn rule_paths() -> Vec<(String, String)> {
+        let spec: RuleFile = toml::from_str(include_str!("secret_rules.toml")).unwrap();
+        spec.rules
+            .into_iter()
+            .filter_map(|r| r.path.map(|p| (r.id, p)))
+            .collect()
+    }
+
+    /// A file path that satisfies a rule's `path` condition — generated from the condition itself,
+    /// the same way its secret is generated from its regex. A path-scoped rule (`nuget.config`,
+    /// `*.php`) is inert without one, so a coverage test that scanned pathless text would report
+    /// those rules as broken when they are merely not applicable.
+    fn matching_path(id: &str) -> Option<String> {
+        let pattern = rule_paths().into_iter().find(|(r, _)| r == id)?.1;
+        let gen = SampleGen::new(&pattern)?;
+        (0..40).find_map(|seed| gen.sample(seed))
+    }
+
+    /// Rewrites a rule's pattern into one a *generator* can produce a realistic secret from.
+    ///
+    /// Two adjustments, both of which only ever widen or narrow toward realism — and neither of
+    /// which can weaken the test, because `generated_sample` verifies every candidate against the
+    /// real, unmodified rule regex before returning it:
+    ///
+    /// - **Anchors (`\b`, `^`, `$`) are dropped.** They match no text, and `rand_regex` rejects
+    ///   them outright.
+    /// - **A `.` is pinned to what it actually stands for**, decided by whether it is quantified:
+    ///   - a **bare** `.` is a literal dot — `hooks.slack.com`, `gems.contribsys.com`. Left as
+    ///     "any character", the generator renders it `hooks\u{9742d}slack\u{d27e9}com`, which the
+    ///     rule's regex still matches but which contains none of the literal keywords the pack's
+    ///     prefilter needs to even consider the rule. Legal, and worthless.
+    ///   - a **quantified** `.` (`.{8,}`, `.*`, `.+`) is a secret body — the value in
+    ///     `<add key="Password" value="(.{8,})"/>`. Pinning *that* to a literal dot produces
+    ///     `........`, whose Shannon entropy is zero, so the rule's own entropy gate throws it out
+    ///     and the rule looks broken. It becomes `[A-Za-z0-9]` instead: a plausible credential.
+    ///
+    ///   Both substitutions produce text the original `.` still matches, so a generated sample stays
+    ///   valid either way — this only decides whether it looks like the thing it stands for.
+    ///
+    /// Unicode is switched off for the same reason (see `generated_sample`): `\w` is Unicode-aware,
+    /// so an unconstrained generator emits CJK where a real API key has ASCII.
+    fn generatable_pattern(pattern: &str) -> String {
+        let b = pattern.as_bytes();
+        let (mut out, mut i, mut in_class) = (String::new(), 0, false);
+        while i < b.len() {
+            if b[i] == b'\\' && i + 1 < b.len() {
+                if !in_class && matches!(b[i + 1], b'b' | b'A' | b'z') {
+                    i += 2;
+                    continue;
+                }
+                out.push(b[i] as char);
+                out.push(b[i + 1] as char);
+                i += 2;
+                continue;
+            }
+            match b[i] {
+                b'[' if !in_class => {
+                    in_class = true;
+                    out.push('[');
+                }
+                b']' if in_class => {
+                    in_class = false;
+                    out.push(']');
+                }
+                // Zero-width outside a character class; inside one, `^`/`$` are literal members.
+                b'^' | b'$' if !in_class => {}
+                // Quantified → a secret body; bare → a literal dot. See the doc comment.
+                b'.' if !in_class => {
+                    if matches!(b.get(i + 1), Some(b'{' | b'*' | b'+' | b'?')) {
+                        out.push_str("[A-Za-z0-9]");
+                    } else {
+                        out.push_str("\\.");
+                    }
+                }
+                c => out.push(c as char),
+            }
+            i += 1;
+        }
+        out
+    }
+
+    /// A true positive for `pattern`: a random string the rule's own regex actually matches.
+    ///
+    /// This is gitleaks' own methodology (`secrets.NewSecret`, which feeds each rule's pattern to a
+    /// regex-driven string generator). It beats a hand-written corpus on every axis that matters:
+    /// it produces a genuine sample for *every* rule rather than the dozen someone thought to write
+    /// by hand, it stays in sync automatically when the pack is re-synced with upstream, and it
+    /// leaves no secret-shaped literal in the repository for a scanner — GitHub's or Bulwark's own —
+    /// to flag.
+    /// A reusable sampler for one rule: the generators and the verifying regex, built **once**.
+    ///
+    /// Built per-seed instead, this recompiled the rule's regex up to eighty times per rule (forty
+    /// seeds × two Unicode modes) — and these are the pathologically slow patterns whose compilation
+    /// this whole change exists to avoid. It cost two minutes on `cargo test`.
+    struct SampleGen {
+        /// The rule's real regex — the judge of whether a generated string is a true positive.
+        verifier: Regex,
+        /// ASCII first, Unicode as a fallback. With Unicode *off*, `\w`/`\d` mean their ASCII
+        /// selves, so a "40-character alphanumeric API key" comes out looking like one rather than
+        /// like 40 CJK ideographs — but a negated class (`[^"]{3,}`, which the curl and private-key
+        /// rules are built from) may then draw bytes forming no valid UTF-8, and every seed is
+        /// rejected. Unicode-on generation always yields valid UTF-8. Ugly samples beat no samples:
+        /// a rule with no sample is a rule the coverage test cannot vouch for.
+        generators: Vec<rand_regex::Regex>,
+    }
+
+    impl SampleGen {
+        fn new(pattern: &str) -> Option<Self> {
+            let verifier = compile(pattern).ok()?;
+            let source = generatable_pattern(pattern);
+            let generators = [false, true]
+                .into_iter()
+                .filter_map(|unicode| {
+                    let hir = regex_syntax::ParserBuilder::new()
+                        .unicode(unicode)
+                        .utf8(unicode)
+                        .build()
+                        .parse(&source)
+                        .ok()?;
+                    rand_regex::Regex::with_hir(hir, 100).ok()
+                })
+                .collect::<Vec<_>>();
+            (!generators.is_empty()).then_some(SampleGen {
+                verifier,
+                generators,
+            })
+        }
+
+        /// One true positive, or `None` if this seed produced nothing the rule's own regex accepts.
+        fn sample(&self, seed: u64) -> Option<String> {
+            self.generators.iter().find_map(|gen| {
+                // Sample bytes, not a `String`: `rand_regex`'s `String` sampler *panics* on a
+                // non-UTF-8 draw, and with Unicode off that is routine. Bytes plus a `from_utf8`
+                // check turn a crash into "try the next seed".
+                let bytes: Vec<u8> = rand::rngs::StdRng::seed_from_u64(seed).sample(gen);
+                let sample = String::from_utf8(bytes).ok()?;
+                self.verifier.is_match(&sample).then_some(sample)
+            })
+        }
+    }
+
+    /// The generated secret placed in the kind of line it really leaks in, with the rule's keywords
+    /// present — gitleaks' `GenerateSampleSecret`, whose samples look like `airtable_api_token =
+    /// "<secret>"` for exactly this reason.
+    ///
+    /// The context is not decoration. Many rules are keyword-gated: an Airtable PAT is only
+    /// considered when the word `airtable` appears nearby, so a bare token — however valid — is
+    /// something the pack is *designed* to walk past. Testing the token alone would assert a
+    /// behaviour the scanner deliberately doesn't have.
+    fn sample_in_context(id: &str, keywords: &[String], sample: &str) -> String {
+        let hint = if keywords.is_empty() {
+            id.replace('-', "_")
+        } else {
+            keywords.join(" ")
+        };
+        format!(
+            "# {hint}\n{}_token = \"{sample}\"\n",
+            hint.replace(['.', '-'], "_")
+        )
     }
 
     /// A deterministic high-entropy token, **generated rather than written as a literal**.
@@ -825,9 +1251,6 @@ mod tests {
     /// run the *original*, pathologically slow patterns, that waste cost six minutes on `cargo
     /// test`. Same coverage, a few KB per rule instead of a megabyte.
     fn positive_corpus(id: &str, keywords: &[String]) -> String {
-        const ALNUM: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-        const LOWER: &str = "abcdefghijklmnopqrstuvwxyz0123456789";
-        const HEX: &str = "0123456789abcdef";
         // The alphabets and lengths the pack's rules expect of a secret's body.
         let bodies = [
             synthetic_token(1, 40, ALNUM),
@@ -850,6 +1273,248 @@ mod tests {
         corpus
     }
 
+    #[derive(Deserialize)]
+    struct FpRule {
+        id: String,
+        false_positives_b64: Vec<String>,
+    }
+    #[derive(Deserialize)]
+    struct FpFile {
+        rule: Vec<FpRule>,
+    }
+
+    /// Decodes one base64 fixture.
+    ///
+    /// The corpus is stored encoded because a pile of *convincing* non-secrets is, to any pattern
+    /// matcher, indistinguishable from a pile of secrets — which is exactly what makes them useful
+    /// fixtures. In plaintext the file is rejected by this repo's own gitleaks pre-commit hook and
+    /// by GitHub's push protection, both correctly. Rather than blunt either scanner, the 378
+    /// secret-shaped strings simply never land in the tree in a form a scanner can recognise.
+    ///
+    /// Hand-rolled to avoid taking a dependency for six lines of test-only decoding.
+    fn from_base64(s: &str) -> String {
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let (mut bits, mut acc, mut out) = (0u32, 0u32, Vec::new());
+        for c in s.bytes().filter(|&c| c != b'=') {
+            let v = ALPHABET
+                .iter()
+                .position(|&a| a == c)
+                .unwrap_or_else(|| panic!("corpus is not valid base64 (byte {c:?})"));
+            acc = (acc << 6) | v as u32;
+            bits += 6;
+            if bits >= 8 {
+                bits -= 8;
+                out.push((acc >> bits) as u8);
+            }
+        }
+        String::from_utf8(out).expect("every fixture decodes to text")
+    }
+
+    /// A dropped allowlist regex is a **silent false positive**, which is why this is an assertion
+    /// and not a log line: nothing about the scan looks wrong, the rule just starts reporting
+    /// template syntax as leaked credentials. Exactly that happened — gitleaks writes RE2, where a
+    /// literal `{{` is fine, and Rust's `regex` rejects it, so the one allowlist pattern that
+    /// suppresses `${{ env.PASS }}` never compiled and was quietly discarded. Same invariant as
+    /// `every_bundled_rule_compiles`, on the half of the pack that says what *isn't* a secret.
+    #[test]
+    fn every_allowlist_regex_compiles() {
+        let pack = &*PACK;
+        let mut dropped = Vec::new();
+        for rule in &pack.rules {
+            for a in &rule.allowlists {
+                if a.compiled_count() != a.regex_src.len() {
+                    dropped.push(format!(
+                        "{}: {} of {} allowlist regexes compiled",
+                        rule.id,
+                        a.compiled_count(),
+                        a.regex_src.len()
+                    ));
+                }
+            }
+        }
+        for a in &pack.global_allowlist {
+            if a.compiled_count() != a.regex_src.len() {
+                dropped.push(format!(
+                    "[global]: {} of {} allowlist regexes compiled",
+                    a.compiled_count(),
+                    a.regex_src.len()
+                ));
+            }
+        }
+        assert!(
+            dropped.is_empty(),
+            "allowlist regexes silently dropped — the rules they belong to will now report \
+             non-secrets:\n  {}",
+            dropped.join("\n  ")
+        );
+    }
+
+    #[test]
+    fn go_braces_are_made_legal_for_rust_without_changing_what_they_match() {
+        // The real gitleaks allowlist pattern that Rust rejected.
+        let go = r#"['"]?\$?{{[^}]+}}['"]?"#;
+        let fixed = literalize_braces(go);
+        assert!(compile(go).is_err(), "the Go form is what Rust rejects");
+        let re = compile(&fixed).expect("the fixed form must compile");
+        assert!(re.is_match(r#""${{ env.ELK_PASS }}""#));
+        assert!(!re.is_match("plain_value"));
+
+        // A genuine quantifier must survive untouched.
+        assert_eq!(literalize_braces(r"[a-z]{3,8}"), r"[a-z]{3,8}");
+        assert_eq!(literalize_braces(r"\d{16}"), r"\d{16}");
+        // Braces inside a class are already literal.
+        assert_eq!(literalize_braces(r"[{}]+"), r"[{}]+");
+    }
+
+    /// **Detection coverage for the whole pack.** For every rule, generate a secret from that
+    /// rule's own pattern, drop it in the kind of line it really leaks in, and assert the pack
+    /// catches it — through the real keyword prefilter, entropy gate, placeholder filter and
+    /// overlap dedup, not merely "the regex matches in isolation".
+    ///
+    /// This is the invariant the pack never had. `every_bundled_rule_compiles` proves a pattern
+    /// parses; it says nothing about whether the rule can still catch *its own key* once the
+    /// surrounding machinery has had its say. A keyword missing from a rule's `keywords` list, an
+    /// entropy threshold a notch too high, a prefilter regression — each quietly switches a rule
+    /// off while every existing test stays green, and the only symptom is a scanner that reports
+    /// "clean". Modelled on gitleaks' `Validate(rule, tps, fps)`.
+    ///
+    /// The hard assertion is **no silent miss**: every generated secret must be reported by *some*
+    /// rule. Which rule is deliberately softer, because sibling patterns genuinely overlap — a
+    /// GitLab routable PAT is also a GitLab PAT, and whichever claims the span first is the one
+    /// reported. The secret is caught either way, which is the property a user cares about. The
+    /// exact-rule count is still asserted against a floor, so a mass regression can't hide behind
+    /// that tolerance.
+    #[test]
+    fn every_rule_detects_a_secret_generated_from_its_own_pattern() {
+        let mut missed = Vec::new();
+        let mut unsampleable = Vec::new();
+        let mut exact = 0;
+
+        for (id, pattern, keywords) in raw_rules() {
+            let gen = SampleGen::new(&pattern);
+            let mut sampled = false;
+            let mut caught = false;
+            for seed in 0..40 {
+                let Some(sample) = gen.as_ref().and_then(|g| g.sample(seed)) else {
+                    continue;
+                };
+                sampled = true;
+                let path = matching_path(&id);
+                // Two presentations. Most rules match a *value* and need their keyword nearby, so
+                // the assignment-line wrapper is what makes them fire. But a rule whose pattern
+                // already carries its own context — `nuget-config-password` matches a whole
+                // `<add key="Password" value="…"/>` element, the curl rules a whole command — is
+                // damaged by being wrapped in one, so the bare sample is its realistic form. A rule
+                // is covered if it catches its own secret in either.
+                let hits = [sample_in_context(&id, &keywords, &sample), sample.clone()]
+                    .iter()
+                    .map(|text| scan_text_in(path.as_deref(), text))
+                    .find(|hits| !hits.is_empty())
+                    .unwrap_or_default();
+                if !hits.is_empty() {
+                    caught = true;
+                    if hits.iter().any(|m| m.rule_id == id) {
+                        exact += 1;
+                        break;
+                    }
+                }
+            }
+            if !sampled {
+                unsampleable.push(id);
+            } else if !caught {
+                missed.push(id);
+            }
+        }
+
+        assert!(
+            missed.is_empty(),
+            "{} rule(s) did not detect a secret generated from their own pattern — those rules are \
+             switched off in practice: {missed:?}",
+            missed.len()
+        );
+        // A pattern the generator can't build a sample for is a gap in the *test*, not the pack —
+        // tolerated, but bounded, so it can't quietly grow to swallow the pack.
+        assert!(
+            unsampleable.len() <= 3,
+            "the generator handles too few rules to prove anything ({} unsampleable): \
+             {unsampleable:?}",
+            unsampleable.len()
+        );
+        assert!(
+            exact >= 240,
+            "only {exact} rules reported their own id — sibling-rule overlap explains a handful, \
+             not a collapse"
+        );
+    }
+
+    /// **The other half of correctness.** A scanner that flags everything is as useless as one that
+    /// flags nothing, and the way a rule usually breaks is by getting *broader*, not narrower — a
+    /// widened regex still passes every "does it catch the key" test while burying the user in
+    /// noise. So: the placeholders, documentation examples, wrong-length and wrong-prefix tokens
+    /// and low-entropy dummies that gitleaks records as the known false positives of each rule
+    /// (378 of them across 79 rules, vendored in `tests/data/gitleaks_false_positives.toml`) must
+    /// not fire.
+    #[test]
+    fn no_rule_fires_on_its_known_false_positives() {
+        let data: FpFile = toml::from_str(include_str!(
+            "../../tests/data/gitleaks_false_positives.toml"
+        ))
+        .expect("the vendored false-positive corpus must be valid TOML");
+
+        // The one rule whose upstream fixtures we knowingly fail. gitleaks' own allowlist for
+        // `curl-auth-header` is commented out in their source, so they carry the same false
+        // positives; ours additionally predates their current regex. Listed rather than quietly
+        // filtered, and the assertions below cut both ways — a *new* false positive fails, and so
+        // does a gap that has silently been fixed, so this list cannot rot.
+        const KNOWN_GAPS: &[&str] = &["curl-auth-header"];
+
+        let mut checked = 0;
+        let mut violations = Vec::new();
+        let mut gaps_still_open = BTreeSet::new();
+        for rule in &data.rule {
+            for encoded in &rule.false_positives_b64 {
+                let fp = &from_base64(encoded);
+                checked += 1;
+                if KNOWN_GAPS.contains(&rule.id.as_str()) {
+                    if scan_text_high_confidence(fp)
+                        .iter()
+                        .any(|m| m.rule_id == rule.id)
+                    {
+                        gaps_still_open.insert(rule.id.clone());
+                    }
+                    continue;
+                }
+                // `scan_text_high_confidence` is what the AI scan actually reports (see
+                // `ai_scan::scan_artifact`). The deliberately-broad `generic-*` heuristics are
+                // excluded by that, and rightly: gitleaks reports them because it scans whole source
+                // repositories, where `public_key = "…"` in a C++ header is worth a second look.
+                // Bulwark never surfaces them, so holding them to gitleaks' fixtures would be
+                // asserting a behaviour this scanner deliberately doesn't have.
+                if scan_text_high_confidence(fp)
+                    .iter()
+                    .any(|m| m.rule_id == rule.id)
+                {
+                    let shown: String = fp.chars().take(60).collect();
+                    violations.push(format!("{} fired on {shown:?}", rule.id));
+                }
+            }
+        }
+
+        assert!(
+            violations.is_empty(),
+            "{} rule(s) flagged a known non-secret:\n  {}",
+            violations.len(),
+            violations.join("\n  ")
+        );
+        assert_eq!(
+            gaps_still_open.iter().cloned().collect::<Vec<_>>(),
+            KNOWN_GAPS,
+            "KNOWN_GAPS is stale — a rule listed there no longer produces the false positive it was \
+             excused for. Delete it from the list."
+        );
+        assert!(checked >= 300, "the corpus did not load ({checked} cases)");
+    }
+
     /// **The safety net for the whole optimisation.** Dropping a pattern's leading wildcard is only
     /// legitimate if it cannot change a single detection, so assert exactly that, rule by rule, over
     /// a corpus built to make the pack fire: for every vendored rule, the original pattern and the
@@ -862,7 +1527,15 @@ mod tests {
         let mut rules_that_fired = 0;
 
         for (id, original, keywords) in raw_rules() {
-            let corpus = positive_corpus(&id, &keywords);
+            // Real matching inputs, not guesses: samples generated from this very pattern, so the
+            // comparison below happens where it actually counts — on text the rule fires on.
+            let mut corpus = positive_corpus(&id, &keywords);
+            let gen = SampleGen::new(&original);
+            for seed in 0..8 {
+                if let Some(s) = gen.as_ref().and_then(|g| g.sample(seed)) {
+                    corpus.push_str(&sample_in_context(&id, &keywords, &s));
+                }
+            }
             let optimized = drop_leading_wildcard(&original);
             if optimized != original {
                 rewritten += 1;
@@ -1056,7 +1729,14 @@ mod tests {
 
     #[test]
     fn detects_github_pat() {
-        let ids = rule_ids("token: ghp_0123456789abcdefghijklmnopqrstuvwxyz");
+        // The token is *generated*, not written out. It used to be the literal
+        // `ghp_0123456789abcdefghijklmnopqrstuvwxyz`, which contains `abcdefghijklmnopqrstuvwxyz` —
+        // one of the pack's own global stopwords, because a real PAT is never the alphabet. That
+        // fixture only ever passed because the allowlists went unread; once they were honoured it
+        // was correctly suppressed as the dummy it is. A realistic token is the right fixture, and
+        // generating it keeps a live-looking `ghp_…` literal out of the repository.
+        let pat = format!("ghp_{}", synthetic_token(11, 36, ALNUM));
+        let ids = rule_ids(&format!("token: {pat}"));
         assert!(
             ids.iter().any(|id| id.starts_with("github-")),
             "expected a github rule, got {ids:?}"

@@ -106,7 +106,7 @@ fn redact_one(
 
     // Dry-run: stream the file counting redactable secrets, writing nothing.
     if !apply {
-        let count = count_redactions(std::io::BufReader::new(file))?;
+        let count = count_redactions(&path.display().to_string(), std::io::BufReader::new(file))?;
         return Ok((count > 0).then(|| RedactionEntry {
             path: path.display().to_string(),
             secrets_redacted: count,
@@ -139,7 +139,7 @@ fn redact_one(
         let _ = std::fs::remove_file(&backup_path);
     };
 
-    let count = match stream_to_backup_and_temp(file, &backup_path, &tmp) {
+    let count = match stream_to_backup_and_temp(file, path, &backup_path, &tmp) {
         Ok(n) => n,
         Err(e) => {
             cleanup();
@@ -179,6 +179,7 @@ fn redact_one(
 /// name can't be written through. Memory is bounded by the scan-window cap plus a fixed tail buffer.
 fn stream_to_backup_and_temp(
     file: std::fs::File,
+    path: &Path,
     backup_path: &Path,
     tmp: &Path,
 ) -> anyhow::Result<usize> {
@@ -199,7 +200,9 @@ fn stream_to_backup_and_temp(
         anyhow::anyhow!("file is not valid UTF-8; refusing to rewrite it (redact this one by hand)")
     })?;
     backup.write_all(&head)?;
-    let (redacted, count) = secrets::redact_text(head_str);
+    // The same path the scan used, so redaction and detection agree on which path-scoped rules
+    // apply — otherwise a secret the scan reported could be one redaction refuses to remove.
+    let (redacted, count) = secrets::redact_text_in(Some(&path.display().to_string()), head_str);
     out.write_all(redacted.as_bytes())?;
 
     // Anything past the scan window was never inspected, so it carries no flagged secret — copy it
@@ -221,13 +224,13 @@ fn stream_to_backup_and_temp(
 /// Counts (without writing) the redactable secrets in the scan window of `reader` — buffered and
 /// counted as one unit, so the dry-run number matches what an actual apply will remove (including
 /// multi-line secrets a line-at-a-time count would miss).
-fn count_redactions<R: std::io::Read>(mut reader: R) -> anyhow::Result<usize> {
+fn count_redactions<R: std::io::Read>(path: &str, mut reader: R) -> anyhow::Result<usize> {
     use std::io::Read;
     let mut head = Vec::new();
     (&mut reader)
         .take(super::MAX_SCAN_BYTES as u64)
         .read_to_end(&mut head)?;
-    Ok(secrets::redact_text(&String::from_utf8_lossy(&head)).1)
+    Ok(secrets::redact_text_in(Some(path), &String::from_utf8_lossy(&head)).1)
 }
 
 /// The backup path for `path` under `backup_dir`: its components joined by `_`, suffixed `.bak`,

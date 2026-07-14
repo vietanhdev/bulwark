@@ -1,0 +1,24 @@
+# Known false positives, per secret rule — test data, not code.
+#
+# Extracted from the `fps` (false positive) fixtures gitleaks attaches to each of its rule
+# definitions in `cmd/generate/config/rules/*.go` (https://github.com/gitleaks/gitleaks, MIT,
+# Copyright (c) 2019 Zachary Rice). Our rule pack descends from those same rules (see the notice in
+# `secret_rules.toml`), so their false-positive fixtures apply directly to it. Used under the MIT
+# licence, which permits inclusion in this Apache-2.0-licensed project provided this notice is
+# preserved. Do not strip it.
+#
+# Values are **base64-encoded**, and deliberately so. A corpus of convincing non-secrets is, to any
+# pattern matcher, indistinguishable from a corpus of secrets — that is precisely what makes these
+# good fixtures. In plaintext this file is rejected by Bulwark's own gitleaks pre-commit hook and by
+# GitHub's push protection, both of them correctly. Encoding keeps 378 secret-shaped strings out of
+# the repository while the test decodes them back to the exact bytes gitleaks recorded, so nothing
+# about their value as fixtures is lost. Decode one with:  base64 -d <<< '<value>'
+#
+# Each entry is a string that LOOKS like the rule's secret but is not one: a placeholder
+# (`AKIAXXXXXXXXXXXXXXXX`), a documentation example (`AKIAIOSFODNN7EXAMPLE`), a token of the wrong
+# length or prefix, a low-entropy dummy, or ordinary text that happens to share the shape. The rule
+# named by `id` must NOT fire on any of them. This is the half of correctness that a "does it detect
+# the secret" test cannot see: a scanner that flags everything is as useless as one that flags
+# nothing, and the way a rule usually breaks is by getting broader, not narrower.
+#
+# Regenerate against a newer gitleaks with `scripts/extract-gitleaks-fixtures.py`.
