@@ -356,6 +356,43 @@ Reframed as rule-set and scan-performance growth, since there's no multi-tenant 
 - **Breaking point:** naively re-running a collector for every rule that references it duplicates work once dozens of rules share one collector (e.g. many SSH rules all reading `sshd_config`).
 - **Scale-out plan:** not distributed — collectors are memoized per scan run (collect once, evaluate N rules against the cached fact), and independent collectors run concurrently.
 
+The config scan is cheap and bounded (tens of files, ~0.1s). The AI scan is the one that has to
+scale, because its input is the user's whole history: a developer with a year of Claude Code use has
+~1,800 transcripts and ~900 MB of them, and every one gets run through a 261-rule secret pack.
+
+### The leading-wildcard trap (realized, fixed)
+
+Most rules in the vendored gitleaks pack open with an *optional variable-length wildcard*:
+
+```text
+(?i)[\w.-]{0,50}?(?:cohere|CO_API_KEY)(?:[ \t\w.-]{0,20})[\s'"]{0,3}(?:=|:)…([a-zA-Z0-9]{40})
+     ^^^^^^^^^^^^^ matches no useful text — and costs ~6000× the runtime
+```
+
+That prefix exists only to pull neighbouring characters into the reported match, but it is
+catastrophic for the `regex` crate: a pattern that *begins* with a variable-length character class
+has no literal prefix, so the engine cannot build a memchr/Teddy prefilter and must attempt a match
+at every byte offset, while the nested bounded repeats blow out the lazy-DFA cache until it falls
+back to a far slower engine. Measured on one real 4 MB transcript, a single such rule took **2.9 s**;
+with the prefix stripped it took **0.5 ms** and found exactly the same matches. Across ~40 candidate
+rules and ~1,800 transcripts that was the difference between a scan that finishes in seconds and one
+that pegs half the machine's cores for hours — the actual "Bulwark eats my CPU" bug.
+
+`secrets::drop_leading_wildcard` removes that prefix when the pack is built, so the vendored rule
+file stays pristine and re-syncable with upstream gitleaks. The rewrite is sound because the prefix
+is optional and leading: for an unanchored search, `PQ` matches iff `Q` matches, so no detection can
+appear or disappear — only the *start offset* of the whole match moves, and that offset feeds nothing
+but overlap dedup, where a narrower span can suppress strictly fewer findings. The secret itself is
+capture group 1 and is untouched.
+
+The danger of an optimisation like this is a scanner that silently stops finding keys, so it is
+pinned by a differential test (`rewriting_a_pattern_never_changes_what_it_matches`) that compiles
+**both** the original and rewritten form of every rule and asserts they capture identical secrets at
+identical offsets over a corpus built to make the pack fire. Anything not matching the exact expected
+shape — a required (`{5,50}`) prefix, an exact count, a rule with no capture group whose whole match
+*is* the reported secret — is left alone: a rule that stays slow is a bug, a rule that quietly stops
+matching is a vulnerability.
+
 ---
 
 ## 10. Security & privacy

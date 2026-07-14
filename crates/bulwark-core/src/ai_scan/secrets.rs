@@ -234,7 +234,7 @@ static PACK: LazyLock<Pack> = LazyLock::new(|| {
         rules.push(Rule {
             provider: humanize(&r.id),
             id: r.id,
-            pattern,
+            pattern: drop_leading_wildcard(&pattern),
             re: OnceLock::new(),
             entropy: r.entropy,
             high_conf,
@@ -255,6 +255,191 @@ static PACK: LazyLock<Pack> = LazyLock::new(|| {
         always,
     }
 });
+
+/// Strips the leading *optional* wildcard from a gitleaks pattern — the single change that makes a
+/// whole-machine scan finish in seconds instead of hours.
+///
+/// Most of the pack's keyword-context rules are shaped like this:
+///
+/// ```text
+/// [\w.-]{0,50}?(?i:[\w.-]{0,50}?(?:cohere|CO_API_KEY)…)(?:=|:|…)…([a-zA-Z0-9]{40})…
+/// ^^^^^^^^^^^^^     ^^^^^^^^^^^^^
+/// ```
+///
+/// Those two leading `{0,50}?` repeats exist only to pull neighbouring word characters into the
+/// reported match. They are ruinous for the `regex` crate: a pattern that *starts* with a
+/// variable-length character class has no literal prefix, so the engine can't build a
+/// memchr/Teddy prefilter and must attempt a match at every byte offset, and the nested bounded
+/// repeats blow out the lazy-DFA cache until it falls back to a far slower engine. Measured on a
+/// real 4 MB Claude Code transcript, one such rule took **2.9 s**; with the prefix removed, the
+/// same rule over the same input took **0.5 ms** and found exactly the same matches. Multiplied by
+/// ~40 candidate rules across ~1800 transcripts, that difference is the whole reason an AI scan
+/// used to peg a core for hours.
+///
+/// The rewrite is safe because the prefix is *optional* (`{0,…}`) and sits at the very start of an
+/// unanchored search: if `PQ` can match anywhere then so can `Q`, and vice versa, so removing `P`
+/// cannot add or remove a single detection. Only the *start offset* of the whole match moves — it
+/// can no longer reach backwards over adjacent word characters — and that offset is used solely to
+/// dedup overlapping spans, where a narrower span can only ever suppress *fewer* findings. The
+/// secret itself is capture group 1 and is not touched.
+///
+/// Every condition below is a load-bearing guard, and anything not matching the exact expected
+/// shape is returned unchanged — a rule that stays slow is a bug; a rule that silently stops
+/// matching is a vulnerability:
+///
+/// - **the pattern must isolate its secret in a capture group** — for a rule with no group, the
+///   whole match *is* the reported secret ([`matches_for`] falls back to it), so moving the match
+///   start would change the reported and redacted bytes;
+/// - **the repeat's minimum must be 0** — `[\w.-]{5,50}?` *requires* five leading characters, and
+///   dropping it would make the rule match text it previously rejected;
+/// - **the repeat must be lazy and bounded** — the shape gitleaks actually emits.
+fn drop_leading_wildcard(pattern: &str) -> String {
+    if !has_capture_group(pattern) {
+        return pattern.to_string();
+    }
+
+    let mut out = String::new();
+    let mut rest = pattern;
+
+    // A leading inline-flag *directive* — `(?i)`, which most of the pack opens with — sets flags for
+    // the whole pattern and consumes no text, so what follows it is still in leading position. Keep
+    // it and look past it.
+    let flags = inline_flags_len(rest);
+    out.push_str(&rest[..flags]);
+    rest = &rest[flags..];
+
+    // The wildcard itself.
+    rest = &rest[optional_class_repeat_len(rest)..];
+
+    // gitleaks nests a second wildcard just inside a leading *group* opener (`(?i:`). Once the outer
+    // one is gone that group opens the pattern, so the wildcard inside it is still in leading
+    // position and the same reasoning applies.
+    let opener = inline_group_opener_len(rest);
+    if opener > 0 {
+        let n = optional_class_repeat_len(&rest[opener..]);
+        if n > 0 {
+            out.push_str(&rest[..opener]);
+            rest = &rest[opener + n..];
+        }
+    }
+
+    out.push_str(rest);
+    out
+}
+
+/// Byte length of a leading inline-flag directive — `(?i)`, `(?is)` — or 0 if `s` doesn't start with
+/// one. Distinct from [`inline_group_opener_len`]: a directive ends at `)` and matches no text; a
+/// group opener ends at `:` and wraps a subexpression.
+fn inline_flags_len(s: &str) -> usize {
+    let b = s.as_bytes();
+    if !s.starts_with("(?") {
+        return 0;
+    }
+    let mut i = 2;
+    while i < b.len() && matches!(b[i], b'i' | b'm' | b's' | b'u' | b'x' | b'U' | b'R' | b'-') {
+        i += 1;
+    }
+    if i > 2 && b.get(i) == Some(&b')') {
+        i + 1
+    } else {
+        0
+    }
+}
+
+/// Byte length of a leading **optional, lazy, bounded** character-class repeat (`[\w.-]{0,50}?`),
+/// or 0 if `s` does not begin with exactly that shape. See [`drop_leading_wildcard`] for why each
+/// of those three properties has to hold before the repeat can be removed.
+fn optional_class_repeat_len(s: &str) -> usize {
+    let b = s.as_bytes();
+    if b.first() != Some(&b'[') {
+        return 0;
+    }
+
+    // Walk to the class's closing `]`. A `]` immediately after `[` or `[^` is a literal member, not
+    // the terminator, and `\]` is an escape — both would otherwise end the class early.
+    let mut i = 1;
+    if b.get(i) == Some(&b'^') {
+        i += 1;
+    }
+    if b.get(i) == Some(&b']') {
+        i += 1;
+    }
+    while i < b.len() && b[i] != b']' {
+        i += if b[i] == b'\\' { 2 } else { 1 };
+    }
+    if b.get(i) != Some(&b']') {
+        return 0;
+    }
+    i += 1;
+
+    // `{min,max}` — and nothing else. A bare `*`/`+`/`?`, or an open-ended `{0,}`, is a shape we
+    // haven't reasoned about, so leave it alone.
+    if b.get(i) != Some(&b'{') {
+        return 0;
+    }
+    let body_start = i + 1;
+    let Some(close) = b[body_start..].iter().position(|&c| c == b'}') else {
+        return 0;
+    };
+    let Some((min, max)) = s[body_start..body_start + close].split_once(',') else {
+        return 0; // `{40}` — an exact count, which is required, not optional.
+    };
+    // The minimum must be 0, or the repeat is a *requirement* and dropping it widens the rule.
+    if min.trim() != "0" || max.trim().parse::<u32>().is_err() {
+        return 0;
+    }
+    i = body_start + close + 1;
+
+    // Lazy only (`?`). A greedy repeat is a shape gitleaks doesn't emit here.
+    if b.get(i) != Some(&b'?') {
+        return 0;
+    }
+    i + 1
+}
+
+/// Byte length of a leading non-capturing group opener — `(?:`, `(?i:`, `(?is:` — or 0 if `s`
+/// doesn't start with one. A *capturing* `(` returns 0: its group numbering must not shift.
+fn inline_group_opener_len(s: &str) -> usize {
+    let b = s.as_bytes();
+    if !s.starts_with("(?") {
+        return 0;
+    }
+    let mut i = 2;
+    while i < b.len() && matches!(b[i], b'i' | b'm' | b's' | b'u' | b'x' | b'U' | b'R' | b'-') {
+        i += 1;
+    }
+    if b.get(i) == Some(&b':') {
+        i + 1
+    } else {
+        0
+    }
+}
+
+/// Whether `pattern` has a capturing group — i.e. whether it isolates the secret from its
+/// surrounding context. `(?:…)`, `(?i:…)` and lookarounds don't capture; `(…)`, `(?P<n>…)` and
+/// `(?<n>…)` do. A `(` inside a character class or behind a backslash is a literal.
+fn has_capture_group(pattern: &str) -> bool {
+    let b = pattern.as_bytes();
+    let mut i = 0;
+    let mut in_class = false;
+    while i < b.len() {
+        match b[i] {
+            b'\\' => i += 1,
+            b'[' if !in_class => in_class = true,
+            b']' if in_class => in_class = false,
+            // `(` alone captures; `(?…)` generally doesn't, except the named forms `(?P<n>`/`(?<n>`.
+            b'(' if !in_class
+                && (b.get(i + 1) != Some(&b'?')
+                    || matches!(b.get(i + 2), Some(&b'P') | Some(&b'<'))) =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
 
 /// Compiles one rule pattern.
 ///
@@ -590,6 +775,199 @@ mod tests {
 
     fn rule_ids(text: &str) -> Vec<String> {
         scan_text(text).into_iter().map(|m| m.rule_id).collect()
+    }
+
+    /// The rule pack exactly as vendored, before [`drop_leading_wildcard`] touches it — the
+    /// "before" side of the differential test below.
+    fn raw_rules() -> Vec<(String, String, Vec<String>)> {
+        let spec: RuleFile = toml::from_str(include_str!("secret_rules.toml")).unwrap();
+        spec.rules
+            .into_iter()
+            .filter_map(|r| r.regex.map(|re| (r.id, re, r.keywords)))
+            .collect()
+    }
+
+    /// A deterministic high-entropy token, **generated rather than written as a literal**.
+    ///
+    /// This matters more than it looks. A 40-character high-entropy string sitting next to the word
+    /// `aws` in a source file is, to every secret scanner on earth, indistinguishable from a real
+    /// leaked key — there is no way for one to tell "test fixture" from "credential". An earlier
+    /// version of this corpus hardcoded such strings and GitHub's push protection rejected the push,
+    /// correctly. Bulwark's own scanner would flag them too, and a contributor grepping the tree
+    /// would have to stop and check. Deriving the bytes at runtime keeps the corpus exactly as
+    /// strong (the rules only care about alphabet, length, and entropy) while leaving nothing
+    /// secret-shaped in the repository.
+    ///
+    /// xorshift64* rather than a `rand` dependency: this needs to be reproducible and dependency-
+    /// free, not statistically excellent.
+    fn synthetic_token(seed: u64, len: usize, alphabet: &str) -> String {
+        let chars: Vec<char> = alphabet.chars().collect();
+        let mut x = seed | 1;
+        (0..len)
+            .map(|_| {
+                x ^= x >> 12;
+                x ^= x << 25;
+                x ^= x >> 27;
+                let n = x.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 33;
+                chars[n as usize % chars.len()]
+            })
+            .collect()
+    }
+
+    /// A corpus that actually makes the rules fire. Each rule's own keywords are spliced into the
+    /// `KEY = "<token>"` shapes the keyword-context patterns are written for, across the token
+    /// alphabets they expect (40-char alnum, hex, long base64-ish), so a large slice of the pack
+    /// produces genuine matches rather than the corpus trivially matching nothing.
+    ///
+    /// Built **per rule**, from that rule's own keywords, rather than once from the whole pack's.
+    /// A keyword-context rule can only fire near its own keywords, so a shared corpus would make
+    /// every rule scan 260 other rules' text for nothing — and since the point of this test is to
+    /// run the *original*, pathologically slow patterns, that waste cost six minutes on `cargo
+    /// test`. Same coverage, a few KB per rule instead of a megabyte.
+    fn positive_corpus(id: &str, keywords: &[String]) -> String {
+        const ALNUM: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        const LOWER: &str = "abcdefghijklmnopqrstuvwxyz0123456789";
+        const HEX: &str = "0123456789abcdef";
+        // The alphabets and lengths the pack's rules expect of a secret's body.
+        let bodies = [
+            synthetic_token(1, 40, ALNUM),
+            synthetic_token(2, 40, LOWER),
+            synthetic_token(3, 40, HEX),
+            synthetic_token(4, 64, HEX),
+            format!("00{}", synthetic_token(5, 41, ALNUM)), // the `00…` Okta shape
+        ];
+
+        let mut corpus = String::new();
+        // The id doubles as a keyword-ish token: some rules key off the provider name that appears
+        // in their id rather than off a declared keyword.
+        for kw in std::iter::once(id.replace('-', "_")).chain(keywords.iter().cloned()) {
+            for body in &bodies {
+                corpus.push_str(&format!("{kw} = \"{body}\"\n"));
+                corpus.push_str(&format!("{kw}: '{body}'\n"));
+                corpus.push_str(&format!("export UPPER_{kw}={body}\n"));
+            }
+        }
+        corpus
+    }
+
+    /// **The safety net for the whole optimisation.** Dropping a pattern's leading wildcard is only
+    /// legitimate if it cannot change a single detection, so assert exactly that, rule by rule, over
+    /// a corpus built to make the pack fire: for every vendored rule, the original pattern and the
+    /// rewritten one must capture *the same secrets at the same offsets*.
+    ///
+    /// This is what stands between a 100× speedup and a scanner that quietly stops finding keys.
+    #[test]
+    fn rewriting_a_pattern_never_changes_what_it_matches() {
+        let mut rewritten = 0;
+        let mut rules_that_fired = 0;
+
+        for (id, original, keywords) in raw_rules() {
+            let corpus = positive_corpus(&id, &keywords);
+            let optimized = drop_leading_wildcard(&original);
+            if optimized != original {
+                rewritten += 1;
+            }
+            let (Ok(before), Ok(after)) = (compile(&original), compile(&optimized)) else {
+                continue; // a pattern the regex crate rejects is skipped by the pack too
+            };
+
+            // Group 1 is the secret (falling back to the whole match, exactly as `matches_for`
+            // does), which is the only span that reaches a finding or a redaction.
+            let secrets = |re: &Regex| -> Vec<(usize, String)> {
+                re.captures_iter(&corpus)
+                    .filter_map(|c| {
+                        let whole = c.get(0)?;
+                        let s = c.get(1).unwrap_or(whole);
+                        Some((s.start(), s.as_str().to_string()))
+                    })
+                    .collect()
+            };
+
+            let expected = secrets(&before);
+            if !expected.is_empty() {
+                rules_that_fired += 1;
+            }
+            assert_eq!(
+                expected,
+                secrets(&after),
+                "rewriting `{id}` changed what it matches\n  original:  {original}\n  rewritten: {optimized}"
+            );
+        }
+
+        // Guard against the test passing vacuously: the corpus has to actually exercise the pack,
+        // and the optimisation has to actually be applying to most of it (if a future re-sync with
+        // gitleaks changes the pattern shape, the scan silently gets slow again — that's a bug, and
+        // this is where it surfaces).
+        assert!(
+            rules_that_fired >= 20,
+            "corpus is too weak to prove anything: only {rules_that_fired} rules matched it"
+        );
+        assert!(
+            rewritten >= 100,
+            "expected the leading-wildcard rewrite to apply across the pack, but only {rewritten} \
+             rules changed — has the vendored pattern shape drifted?"
+        );
+    }
+
+    /// Every guard in [`drop_leading_wildcard`] exists because removing that repeat would otherwise
+    /// change which text the rule matches. A pattern that doesn't match the exact expected shape has
+    /// to come back byte-for-byte unchanged.
+    #[test]
+    fn a_pattern_is_only_rewritten_when_that_is_provably_safe() {
+        // The real gitleaks shape: both leading wildcards go, the rest is untouched.
+        assert_eq!(
+            drop_leading_wildcard(
+                r#"[\w.-]{0,50}?(?i:[\w.-]{0,50}?(?:cohere)[\s'"]{0,3})(?:=)([a-z0-9]{40})"#
+            ),
+            r#"(?i:(?:cohere)[\s'"]{0,3})(?:=)([a-z0-9]{40})"#
+        );
+
+        // The pack's most common shape: a global `(?i)` directive, which consumes no text, so the
+        // wildcard behind it is still leading. The directive itself must survive.
+        assert_eq!(
+            drop_leading_wildcard(r#"(?i)[\w.-]{0,50}?(?:cohere)=([a-z0-9]{40})"#),
+            r#"(?i)(?:cohere)=([a-z0-9]{40})"#
+        );
+
+        // A *required* prefix (min > 0) is part of what the rule matches — dropping it would make
+        // the rule fire on text it used to reject.
+        let required = r#"[\w.-]{5,50}?(?:key)=([a-z0-9]{40})"#;
+        assert_eq!(drop_leading_wildcard(required), required);
+
+        // An exact count is likewise required, not optional.
+        let exact = r#"[\w.-]{50}(?:key)=([a-z0-9]{40})"#;
+        assert_eq!(drop_leading_wildcard(exact), exact);
+
+        // No capture group: the whole match *is* the reported secret, so its start offset is
+        // load-bearing and must not move.
+        let no_group = r#"[\w.-]{0,50}?AKIA[0-9A-Z]{16}"#;
+        assert_eq!(drop_leading_wildcard(no_group), no_group);
+
+        // Greedy, unbounded, or simply not a character class — all shapes we haven't reasoned
+        // about, so all left alone.
+        for untouched in [
+            r#"[\w.-]{0,50}(?:key)=([a-z0-9]{40})"#,
+            r#"[\w.-]{0,}?(?:key)=([a-z0-9]{40})"#,
+            r#".*?(?:key)=([a-z0-9]{40})"#,
+            r#"(?i)(?:key)=([a-z0-9]{40})"#,
+        ] {
+            assert_eq!(drop_leading_wildcard(untouched), untouched);
+        }
+
+        // A `]` as the first class member is a literal, not the class terminator.
+        assert_eq!(
+            drop_leading_wildcard(r#"[]\w]{0,9}?(?:key)=([a-z]{40})"#),
+            r#"(?:key)=([a-z]{40})"#
+        );
+    }
+
+    #[test]
+    fn capture_groups_are_told_apart_from_the_non_capturing_kind() {
+        assert!(has_capture_group(r#"(?:a)(b)"#));
+        assert!(has_capture_group(r#"(?P<secret>b)"#));
+        assert!(!has_capture_group(r#"(?:a)(?i:b)"#));
+        assert!(!has_capture_group(r#"\(literal\)"#));
+        assert!(!has_capture_group(r#"[(](?:a)"#)); // `(` inside a class is a literal
     }
 
     fn anthropic_key() -> String {
