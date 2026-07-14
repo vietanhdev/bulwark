@@ -12,7 +12,7 @@ members = [
 version = "0.5.1"
 edition = "2021"
 authors = ["Viet Anh Nguyen"]
-license = "AGPL-3.0-or-later"
+license = "Apache-2.0"
 repository = "https://github.com/vietanhdev/bulwark"
 homepage = "https://bulwark.nrl.ai"
 

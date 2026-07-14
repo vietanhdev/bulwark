@@ -2,7 +2,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/bulwark-core.svg)](https://crates.io/crates/bulwark-core)
 [![docs.rs](https://img.shields.io/docsrs/bulwark-core)](https://docs.rs/bulwark-core)
-[![License: AGPL v3](https://img.shields.io/badge/license-AGPLv3-blue.svg)](https://github.com/vietanhdev/bulwark/blob/main/LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/vietanhdev/bulwark/blob/main/LICENSE)
 
 The engine behind [Bulwark](https://github.com/vietanhdev/bulwark), a Linux host security
 scanner. This crate holds everything the two front-doors share: the collectors that read a
@@ -101,4 +101,4 @@ profile/OS gating model, and the collector contract.
 
 ## License
 
-AGPL-3.0-or-later. See [`LICENSE`](https://github.com/vietanhdev/bulwark/blob/main/LICENSE).
+Apache-2.0. See [`LICENSE`](https://github.com/vietanhdev/bulwark/blob/main/LICENSE).

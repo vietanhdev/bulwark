@@ -253,7 +253,7 @@ export default withMermaid({
     ],
     search: { provider: "local" },
     footer: {
-      message: "Released under the AGPL-3.0-or-later License.",
+      message: "Released under the Apache License 2.0.",
       copyright: "Bulwark is an open-source project.",
     },
   },

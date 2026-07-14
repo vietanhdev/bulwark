@@ -6,7 +6,7 @@ description: >-
 
 # Collaborate on Bulwark
 
-Bulwark is open source (AGPL-3.0-or-later) and built in the open. It started as one developer's
+Bulwark is open source (Apache-2.0) and built in the open. It started as one developer's
 tool sharpened into something anyone running Linux can use — and it grows fastest when people who
 hit real problems bring real fixes back. If Linux security is something you care about, there's a
 place for you here, whether or not you write Rust.

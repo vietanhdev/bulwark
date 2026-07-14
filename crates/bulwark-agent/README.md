@@ -1,7 +1,7 @@
 # bulwark-agent
 
 [![crates.io](https://img.shields.io/crates/v/bulwark-agent.svg)](https://crates.io/crates/bulwark-agent)
-[![License: AGPL v3](https://img.shields.io/badge/license-AGPLv3-blue.svg)](https://github.com/vietanhdev/bulwark/blob/main/LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/vietanhdev/bulwark/blob/main/LICENSE)
 
 > **Status: placeholder.** This crate currently contains no functionality — it reserves the
 > `bulwark-agent` name on crates.io while the daemon is being extracted. Don't depend on it yet.
@@ -28,4 +28,4 @@ Continuous monitoring is available now in the
 
 ## License
 
-AGPL-3.0-or-later. See [`LICENSE`](https://github.com/vietanhdev/bulwark/blob/main/LICENSE).
+Apache-2.0. See [`LICENSE`](https://github.com/vietanhdev/bulwark/blob/main/LICENSE).

@@ -1,7 +1,7 @@
 # bulwark-proto
 
 [![crates.io](https://img.shields.io/crates/v/bulwark-proto.svg)](https://crates.io/crates/bulwark-proto)
-[![License: AGPL v3](https://img.shields.io/badge/license-AGPLv3-blue.svg)](https://github.com/vietanhdev/bulwark/blob/main/LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/vietanhdev/bulwark/blob/main/LICENSE)
 
 > **Status: placeholder.** This crate currently contains no types — it reserves the
 > `bulwark-proto` name on crates.io while the agent protocol is being designed. Don't depend on
@@ -27,4 +27,4 @@ The finding, rule, and scan-run types you'd actually want to serialize today alr
 
 ## License
 
-AGPL-3.0-or-later. See [`LICENSE`](https://github.com/vietanhdev/bulwark/blob/main/LICENSE).
+Apache-2.0. See [`LICENSE`](https://github.com/vietanhdev/bulwark/blob/main/LICENSE).

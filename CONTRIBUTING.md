@@ -17,32 +17,25 @@ change, not just this file.
 
 ## License
 
-Bulwark is licensed under [AGPL-3.0-or-later](LICENSE). By contributing, your changes are
+Bulwark is licensed under [Apache-2.0](LICENSE). By contributing, your changes are
 licensed under the same terms.
 
-## Contributor License Agreement (CLA)
+## Contributions (inbound = outbound)
 
-Bulwark may, in the future, offer a commercial or dual-licensed edition (for example, a hosted
-or enterprise tier) alongside the open-source AGPL edition. To keep that possible without having
-to track down every past contributor for permission, we ask for a lightweight grant alongside
-the AGPL license itself.
+Bulwark follows the standard **inbound = outbound** model. Per Section 5 of the Apache License
+2.0, any contribution you intentionally submit for inclusion in the project is licensed under the
+same Apache-2.0 terms as the rest of the codebase — no separate CLA, signature, or bot required.
 
-**By submitting a pull request, you agree that:**
+**By submitting a pull request, you affirm that:**
 
-1. You wrote the contribution yourself, or otherwise have the right to submit it under this
-   agreement.
-2. You license your contribution to the project under `AGPL-3.0-or-later`, the same as the rest
-   of the codebase.
-3. You additionally grant Viet Anh Nguyen (the project maintainer) a perpetual, worldwide,
-   non-exclusive, royalty-free license to relicense your contribution — alone or as part of the
-   combined work — under different terms, including proprietary or commercial licenses, at the
-   maintainer's discretion.
-4. You keep your own copyright and are free to reuse your contribution elsewhere; this grant is
-   non-exclusive.
+1. You wrote the contribution yourself, or otherwise have the right to submit it under the
+   Apache License 2.0.
+2. You license your contribution to the project under `Apache-2.0`, the same as the rest of the
+   codebase — including the patent grant in Section 3 of that license.
+3. You keep your own copyright and are free to reuse your contribution elsewhere; the license you
+   grant here is non-exclusive.
 
-No separate signature or bot is required while the project is early-stage — opening a PR is
-your agreement to the terms above. If external contribution volume grows, a CLA-assistant-style
-bot may be added later to record this per-PR instead of relying on this document alone.
+Opening a PR is your agreement to the terms above.
 
 This isn't a substitute for legal advice; if a contribution is tied to your employer's IP policy
 or you have any doubt about your right to grant the above, check before submitting.

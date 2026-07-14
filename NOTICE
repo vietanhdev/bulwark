@@ -1,0 +1,14 @@
+Bulwark
+Copyright 2026 Viet-Anh Nguyen and Bulwark contributors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+---
+
+Third-party components:
+
+* Secret-detection rule pack (crates/bulwark-core/src/ai_scan/secret_rules.toml)
+  Vendored from chub (https://github.com/nrl-ai/chub), whose ruleset is in turn
+  derived from gitleaks (https://github.com/gitleaks/gitleaks) and betterleaks.
+  Copyright (c) 2026 Chub Contributors. Used under the MIT License; the notice at
+  the top of that file is preserved as required.

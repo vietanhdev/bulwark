@@ -135,7 +135,7 @@ sha256sum -c SHA256SUMS --ignore-missing
 
 ## Build from source
 
-Bulwark is AGPL-3.0-or-later. If you'd rather build it yourself — see the
+Bulwark is Apache-2.0. If you'd rather build it yourself — see the
 [architecture guide](/guide/architecture) and [contributing guide](/guide/contributing):
 
 ```bash

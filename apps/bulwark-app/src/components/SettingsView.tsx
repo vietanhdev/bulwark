@@ -235,7 +235,7 @@ export function SettingsView() {
               </LinkCard>
               <div className="flex items-center gap-2.5 rounded-md border border-border px-3 py-2.5 text-sm">
                 <Scale className="h-4 w-4 shrink-0 text-muted-foreground" />
-                AGPL-3.0
+                Apache-2.0
               </div>
             </div>
           </div>
