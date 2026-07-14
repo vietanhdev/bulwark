@@ -139,31 +139,64 @@ pub fn scan(opts: &AiScanOptions, on_artifact: impl Fn(&str) + Sync) -> AiScanRe
     scan_cancellable(opts, on_artifact, &|| false)
 }
 
-/// Worker count for the parallel scan/redaction passes. Deliberately **below** the core count so a
-/// background scan leaves the machine responsive instead of pinning every CPU — an unbounded rayon
-/// pool drove load to ~14 of 16 cores on a heavy machine, which makes a desktop stutter while the
-/// scan runs. Defaults to about half the available parallelism (min 1); override with the
-/// `BULWARK_SCAN_THREADS` environment variable (e.g. `1` for a single-threaded scan, or a higher
-/// number to trade responsiveness for speed).
+/// Worker count for the parallel scan/redaction passes, chosen automatically from the machine so a
+/// background scan stays responsive on a laptop and still scales on a workstation, without pinning
+/// every CPU. See [`worker_count`] for the exact policy. Override with `BULWARK_SCAN_THREADS`
+/// (e.g. `1` for a fully background scan, or a higher number to trade responsiveness for speed).
 pub fn scan_worker_count() -> usize {
     worker_count(
         std::env::var("BULWARK_SCAN_THREADS").ok().as_deref(),
+        // `available_parallelism` already honours CPU affinity and container cgroup quotas, so this
+        // is the real budget on a constrained host, not just the physical core count.
         std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1),
+        available_memory_bytes(),
     )
 }
 
-/// Pure worker-count policy, split out so it's testable without touching the process environment:
-/// a valid `BULWARK_SCAN_THREADS` wins; otherwise use about half the cores, at least one.
-fn worker_count(env_override: Option<&str>, cores: usize) -> usize {
+/// Pure worker-count policy — machine-aware and testable without touching the environment.
+///
+/// A valid `BULWARK_SCAN_THREADS` override always wins. Otherwise the count is chosen from the
+/// machine, and the result is at least 1:
+///
+/// - **CPU** — about half the available cores, so a background scan leaves real headroom instead of
+///   pinning every CPU, and it scales with the machine. Capped at 16: past that an I/O- and
+///   memory-bandwidth-bound scan gains little from more threads while still consuming RAM.
+/// - **Memory** — each worker may buffer a multi-MB file plus its findings, so the count is also
+///   capped at roughly one worker per 512 MiB of *available* memory. On a low-RAM machine or a
+///   memory-limited container this lowers the count so the scan can't thrash; it never raises it.
+fn worker_count(env_override: Option<&str>, cores: usize, available_memory: Option<u64>) -> usize {
     if let Some(n) = env_override
         .and_then(|v| v.trim().parse::<usize>().ok())
         .filter(|&n| n >= 1)
     {
         return n;
     }
-    (cores / 2).max(1)
+    let by_cpu = (cores / 2).clamp(1, 16);
+    let by_mem = available_memory
+        .map(|bytes| (bytes / (512 * 1024 * 1024)).max(1) as usize)
+        .unwrap_or(usize::MAX);
+    by_cpu.min(by_mem).max(1)
+}
+
+/// Bytes of memory currently available to allocate, from `/proc/meminfo`'s `MemAvailable`. `None`
+/// off Linux or if the field can't be read — the caller then applies no memory cap.
+#[cfg(target_os = "linux")]
+fn available_memory_bytes() -> Option<u64> {
+    let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
+    for line in meminfo.lines() {
+        if let Some(rest) = line.strip_prefix("MemAvailable:") {
+            let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
+            return Some(kb * 1024);
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+fn available_memory_bytes() -> Option<u64> {
+    None
 }
 
 /// A rayon pool bounded to [`scan_worker_count`] threads for one scan/redaction pass. `None` only
@@ -658,31 +691,31 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn worker_count_defaults_to_half_the_cores_and_honours_the_override() {
-        // Default: about half the cores, never zero.
-        assert_eq!(worker_count(None, 16), 8);
-        assert_eq!(worker_count(None, 8), 4);
-        assert_eq!(
-            worker_count(None, 1),
-            1,
-            "a single-core box still gets one worker"
-        );
-        assert_eq!(
-            worker_count(None, 0),
-            1,
-            "never zero even on a bogus core count"
-        );
-        // A valid override wins outright (lets a user cap it hard, e.g. to 1).
-        assert_eq!(worker_count(Some("1"), 16), 1);
-        assert_eq!(worker_count(Some("4"), 16), 4);
-        assert_eq!(
-            worker_count(Some(" 3 "), 16),
-            3,
-            "surrounding whitespace is tolerated"
-        );
-        // Garbage / zero override falls back to the default.
-        assert_eq!(worker_count(Some("0"), 16), 8);
-        assert_eq!(worker_count(Some("lots"), 16), 8);
+    fn worker_count_scales_with_the_machine_and_honours_the_override() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let plenty = Some(64 * GIB); // never the binding constraint below
+
+        // CPU: about half the cores, never zero, scaling with the machine.
+        assert_eq!(worker_count(None, 16, plenty), 8);
+        assert_eq!(worker_count(None, 8, plenty), 4);
+        assert_eq!(worker_count(None, 2, plenty), 1);
+        assert_eq!(worker_count(None, 1, plenty), 1);
+        assert_eq!(worker_count(None, 0, plenty), 1);
+        // Huge machine: capped so an I/O-bound scan doesn't spawn dozens of threads.
+        assert_eq!(worker_count(None, 128, plenty), 16);
+
+        // Memory caps the count on a low-RAM machine (~1 worker per 512 MiB), never raises it.
+        assert_eq!(worker_count(None, 16, Some(2 * GIB)), 4);
+        assert_eq!(worker_count(None, 16, Some(GIB / 4)), 1);
+        assert_eq!(worker_count(None, 16, None), 8);
+
+        // Explicit override always wins outright, bypassing both caps.
+        assert_eq!(worker_count(Some("1"), 16, plenty), 1);
+        assert_eq!(worker_count(Some("32"), 16, Some(GIB)), 32);
+        assert_eq!(worker_count(Some(" 3 "), 16, plenty), 3);
+        // Garbage / zero override falls back to the automatic policy.
+        assert_eq!(worker_count(Some("0"), 16, plenty), 8);
+        assert_eq!(worker_count(Some("lots"), 16, plenty), 8);
     }
 
     fn write(path: &Path, content: &str) {
