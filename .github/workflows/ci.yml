@@ -177,3 +177,25 @@ jobs:
           cache-dependency-path: apps/bulwark-app/package-lock.json
       - run: npm ci
       - run: npx tsc --noEmit
+
+  # Renders every docs mermaid diagram against the exact mermaid version the site ships and fails
+  # if any produces a syntax error. VitePress builds fine with a broken diagram — mermaid only errors
+  # at client render time — so nothing else catches "Syntax error in text" before a human loads the
+  # page. Runs before/independently of the Vercel deploy, on every push and PR.
+  docs-diagrams:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: docs
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+      - run: npm ci
+      # The check renders in a headless browser (mermaid's parser needs a DOM), so it needs the
+      # Chromium Playwright already depends on.
+      - run: npx playwright install --with-deps chromium
+      - run: npm run mermaid:check
