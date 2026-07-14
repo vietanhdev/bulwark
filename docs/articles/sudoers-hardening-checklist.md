@@ -130,12 +130,12 @@ banner](https://nvd.nist.gov/vuln/detail/CVE-2025-32463), and it's searchable in
 
 ```mermaid
 flowchart TD
-    A["Local unprivileged user"] --> B["Creates a writable dir (e.g. /tmp/evil)\nwith a fake nsswitch.conf + malicious libnss_*.so"]
+    A["Local unprivileged user"] --> B["Creates a writable dir (e.g. /tmp/evil)<br/>with a fake nsswitch.conf + malicious libnss_*.so"]
     B --> C["Runs: sudo --chroot /tmp/evil ..."]
-    C --> D["sudo resolves /etc/nsswitch.conf\nfrom INSIDE the user-supplied chroot"]
-    D --> E["...while the sudoers policy is still being evaluated —\nno rule has granted this user anything yet"]
-    E --> F["NSS loads the attacker's shared library\nnamed in the fake nsswitch.conf"]
-    F --> G["Library constructor code executes\ninside the sudo process, running as root"]
+    C --> D["sudo resolves /etc/nsswitch.conf<br/>from INSIDE the user-supplied chroot"]
+    D --> E["...while the sudoers policy is still being evaluated —<br/>no rule has granted this user anything yet"]
+    E --> F["NSS loads the attacker's shared library<br/>named in the fake nsswitch.conf"]
+    F --> G["Library constructor code executes<br/>inside the sudo process, running as root"]
 ```
 
 The fix, in 1.9.17p1, reverted the 1.9.14 change and marked `--chroot` deprecated. A year on,

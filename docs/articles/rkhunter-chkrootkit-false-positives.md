@@ -95,11 +95,11 @@ which checks are heuristic versus confirmed-signature matches. The mistake is tr
 
 ```mermaid
 flowchart TD
-    A["rkhunter/chkrootkit prints a WARNING"] --> B{"Known false-positive pattern\nfor this exact check?"}
-    B -- Yes --> C["Re-baseline / document\nand move on"]
-    B -- No / unsure --> D{"Recent legitimate\nsystem change?"}
-    D -- Yes --> E["rkhunter --propupd\nre-baseline, re-check"]
-    D -- No --> F["Investigate: cross-check\nwith the other tool"]
+    A["rkhunter/chkrootkit prints a WARNING"] --> B{"Known false-positive pattern<br/>for this exact check?"}
+    B -- Yes --> C["Re-baseline / document<br/>and move on"]
+    B -- No / unsure --> D{"Recent legitimate<br/>system change?"}
+    D -- Yes --> E["rkhunter --propupd<br/>re-baseline, re-check"]
+    D -- No --> F["Investigate: cross-check<br/>with the other tool"]
 ```
 
 ## Where a scheduled scan fits alongside these

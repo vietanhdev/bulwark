@@ -104,17 +104,17 @@ is the most likely cause.
 
 ```mermaid
 flowchart TD
-    A["Linux desktop or server"] --> B{"Mail/file server touching\nattachments Windows clients open?"}
+    A["Linux desktop or server"] --> B{"Mail/file server touching<br/>attachments Windows clients open?"}
     B -->|Yes| C["Run ClamAV: genuine chokepoint value"]
-    B -->|No| D{"Web app with file-upload\nor RCE exposure?"}
-    D -->|Yes| E["Run ClamAV: periodic scan catches\nknown web shells / dropped malware"]
-    D -->|No| K{"Desktop that receives files\nfrom other people?"}
-    K -->|Yes| L["Run ClamAV: bounded value on\ndownloads, email, USB, shared drives"]
+    B -->|No| D{"Web app with file-upload<br/>or RCE exposure?"}
+    D -->|Yes| E["Run ClamAV: periodic scan catches<br/>known web shells / dropped malware"]
+    D -->|No| K{"Desktop that receives files<br/>from other people?"}
+    K -->|Yes| L["Run ClamAV: bounded value on<br/>downloads, email, USB, shared drives"]
     K -->|No| F{"In PCI-DSS scope?"}
-    F -->|Yes| G{"Periodic evaluation (5.2.3) concludes\n'not at risk from malware'?"}
+    F -->|Yes| G{"Periodic evaluation (5.2.3) concludes<br/>'not at risk from malware'?"}
     G -->|No| H["Required: deploy + maintain ClamAV"]
-    G -->|Documented & current| I["Exempt — but must be re-evaluated on a\nschedule set by a risk analysis (5.2.3.1)"]
-    F -->|No| J["Optional bounded layer —\nnot a substitute for hardening"]
+    G -->|Documented & current| I["Exempt — but must be re-evaluated on a<br/>schedule set by a risk analysis (5.2.3.1)"]
+    F -->|No| J["Optional bounded layer —<br/>not a substitute for hardening"]
 ```
 
 ## So: does your machine need it?

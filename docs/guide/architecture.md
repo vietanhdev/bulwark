@@ -85,12 +85,12 @@ The research groundwork is already done — a checklist grounded in Lynis's test
 ```mermaid
 flowchart TB
   user(["Linux desktop user"])
-  sys["Bulwark\nscans, evaluates, explains"]
-  os[["Linux host OS\nfiles, processes, config"]]
-  polkit[["polkit / pkexec\nprivileged elevation only"]]
+  sys["Bulwark<br/>scans, evaluates, explains"]
+  os[["Linux host OS<br/>files, processes, config"]]
+  polkit[["polkit / pkexec<br/>privileged elevation only"]]
 
   user -->|"runs scans, reviews findings"| sys
-  sys -->|"reads system state\n(mostly unprivileged)"| os
+  sys -->|"reads system state<br/>(mostly unprivileged)"| os
   sys -->|"requests elevation"| polkit
 ```
 
@@ -98,16 +98,16 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-  ui["React UI (Tauri webview)"] -->|"IPC commands"| shell["Tauri Rust shell\n(bulwark-app)"]
+  ui["React UI (Tauri webview)"] -->|"IPC commands"| shell["Tauri Rust shell<br/>(bulwark-app)"]
   term["Terminal / SSH session"] -->|"args, stdout, exit code"| cli["bulwarkctl"]
   shell -->|"invoke scan"| core["bulwark-core"]
   cli -->|"invoke scan"| core
-  core -->|"loads"| rules["rules/\n(YAML rule pack)"]
-  core -->|"elevated collectors"| pkexec["pkexec (GUI)\nor sudo (CLI, see below)"]
+  core -->|"loads"| rules["rules/<br/>(YAML rule pack)"]
+  core -->|"elevated collectors"| pkexec["pkexec (GUI)<br/>or sudo (CLI, see below)"]
   core -->|"findings stream"| channel["Tauri Channel"]
   channel --> ui
-  cli -->|"findings\n(table or --json)"| term
-  core -->|"persist (Diesel)"| db[("local SQLite\n~/.local/share/bulwark")]
+  cli -->|"findings<br/>(table or --json)"| term
+  core -->|"persist (Diesel)"| db[("local SQLite<br/>~/.local/share/bulwark")]
   db -->|"shared history / diffing"| shell
   db -->|"shared history / diffing"| cli
 ```
@@ -119,10 +119,10 @@ question the others structurally cannot:
 flowchart TD
   subgraph core["bulwark-core"]
     direction LR
-    cfg["Config engine\ncollectors → facts → YAML rules"]
-    agent["Agent scanner\nai_scan/"]
-    av["Antivirus\nav_scan/ (shells out to ClamAV)"]
-    logs["Log pipeline\nlogs/ (decode → detect → correlate)"]
+    cfg["Config engine<br/>collectors → facts → YAML rules"]
+    agent["Agent scanner<br/>ai_scan/"]
+    av["Antivirus<br/>av_scan/ (shells out to ClamAV)"]
+    logs["Log pipeline<br/>logs/ (decode → detect → correlate)"]
   end
   cfg --> store[("Store (Diesel)")]
   agent --> store

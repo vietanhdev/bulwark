@@ -39,11 +39,11 @@ is a different category of bad.
 
 ```mermaid
 flowchart TD
-  untrusted["Untrusted content\n(README, issue, dependency, MCP tool description)"] -->|prompt injection| agent["Coding agent"]
-  agent -->|"reads"| ctx["Context files\nCLAUDE.md, .cursorrules, AGENTS.md"]
-  agent -->|"reads"| secrets["Secrets in context,\n.env, transcripts"]
+  untrusted["Untrusted content<br/>(README, issue, dependency, MCP tool description)"] -->|prompt injection| agent["Coding agent"]
+  agent -->|"reads"| ctx["Context files<br/>CLAUDE.md, .cursorrules, AGENTS.md"]
+  agent -->|"reads"| secrets["Secrets in context,<br/>.env, transcripts"]
   agent -->|"executes"| shell["Shell (hooks, allowlisted commands)"]
-  agent -->|"loads"| mcp["MCP servers\n(npx/uvx, remote)"]
+  agent -->|"loads"| mcp["MCP servers<br/>(npx/uvx, remote)"]
   shell --> host["Your host"]
   mcp --> host
   secrets -.->|"exfiltrated"| attacker["Attacker"]

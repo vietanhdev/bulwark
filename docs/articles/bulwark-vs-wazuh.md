@@ -106,15 +106,15 @@ it, and it's a cost a tool built specifically for one machine at a time doesn't 
 ```mermaid
 flowchart LR
     subgraph BULWARK["Bulwark — one machine"]
-        B[["Bulwark\n(desktop app, or CLI over SSH)"]]
+        B[["Bulwark<br/>(desktop app, or CLI over SSH)"]]
         B -->|"scans directly, no network hop"| H1[("This machine")]
     end
 
     subgraph WAZUH["Wazuh — fleet stack"]
         direction LR
-        WA["Wazuh Agent\n35MB RAM"] --> S["Wazuh Server/Manager"]
-        S --> I["Wazuh Indexer\n(OpenSearch)"]
-        I --> D["Wazuh Dashboard\n(web UI)"]
+        WA["Wazuh Agent<br/>35MB RAM"] --> S["Wazuh Server/Manager"]
+        S --> I["Wazuh Indexer<br/>(OpenSearch)"]
+        I --> D["Wazuh Dashboard<br/>(web UI)"]
     end
 ```
 

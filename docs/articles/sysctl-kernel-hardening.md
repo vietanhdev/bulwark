@@ -231,17 +231,17 @@ flowchart TB
     C --> C2["kernel.kptr_restrict"]
     C --> C3["kernel.perf_event_paranoid"]
 
-    D --> D1["kernel.yama.ptrace_scope\nblocks tracing a non-descendant;\nstrace/gdb break past level 1"]
-    D --> D2["net.ipv4.conf.all.rp_filter\nbreaks asymmetric routing/Cilium NodePort;\n'all' wins by numeric max"]
-    D --> D3["kernel.kexec_load_disabled\nbreaks kdump; one-way until reboot"]
-    D --> D4["user.max_user_namespaces\nbreaks rootless Podman/Flatpak/bubblewrap"]
-    D --> D5["kernel.unprivileged_bpf_disabled\n'1' is one-way; already 2 on many distros"]
+    D --> D1["kernel.yama.ptrace_scope<br/>blocks tracing a non-descendant;<br/>strace/gdb break past level 1"]
+    D --> D2["net.ipv4.conf.all.rp_filter<br/>breaks asymmetric routing/Cilium NodePort;<br/>'all' wins by numeric max"]
+    D --> D3["kernel.kexec_load_disabled<br/>breaks kdump; one-way until reboot"]
+    D --> D4["user.max_user_namespaces<br/>breaks rootless Podman/Flatpak/bubblewrap"]
+    D --> D5["kernel.unprivileged_bpf_disabled<br/>'1' is one-way; already 2 on many distros"]
 
-    E --> E1["net.ipv4.tcp_syncookies\nneeds tcp_timestamps=1"]
+    E --> E1["net.ipv4.tcp_syncookies<br/>needs tcp_timestamps=1"]
     E --> E2["net.ipv4.conf.all.accept_redirects/send_redirects"]
     E --> E3["net.ipv4.conf.all.accept_source_route"]
-    E --> E4["net.ipv4.conf.all.log_martians\nrate-limited, but accumulates"]
-    E --> E5["kernel.sysrq\n176 KEEPS reboot — use 48"]
+    E --> E4["net.ipv4.conf.all.log_martians<br/>rate-limited, but accumulates"]
+    E --> E5["kernel.sysrq<br/>176 KEEPS reboot — use 48"]
 ```
 
 ## Applying and checking what's actually loaded

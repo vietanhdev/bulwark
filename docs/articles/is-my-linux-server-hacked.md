@@ -131,15 +131,15 @@ host you have reason to trust, and treat "no baseline yet" (`BLWK-FIM-003`) as t
 
 ```mermaid
 flowchart TB
-  A["Suspect compromise"] --> B["Don't reboot — isolate network\ninstead if you need to act now"]
-  B --> C["Check processes & listening ports\nss, ps auxf, lsof -i"]
-  C --> D["Check who's logged in\nlast, w, lastlog, journalctl sshd"]
-  D --> E["Check persistence\nsystemd units, cron, authorized_keys"]
-  E --> F["Check evasion signs\nshell history, promiscuous mode"]
+  A["Suspect compromise"] --> B["Don't reboot — isolate network<br/>instead if you need to act now"]
+  B --> C["Check processes & listening ports<br/>ss, ps auxf, lsof -i"]
+  C --> D["Check who's logged in<br/>last, w, lastlog, journalctl sshd"]
+  D --> E["Check persistence<br/>systemd units, cron, authorized_keys"]
+  E --> F["Check evasion signs<br/>shell history, promiscuous mode"]
   F --> G["Check FIM baseline, if you have one"]
   G --> H{"Found something real?"}
-  H -->|"Yes"| I["Isolate, don't clean in place,\nrotate credentials, preserve evidence, rebuild"]
-  H -->|"No"| J["Stand down —\nset up a FIM baseline for next time"]
+  H -->|"Yes"| I["Isolate, don't clean in place,<br/>rotate credentials, preserve evidence, rebuild"]
+  H -->|"No"| J["Stand down —<br/>set up a FIM baseline for next time"]
 ```
 
 Every check above reads static, on-disk or currently-running state — nothing here requires

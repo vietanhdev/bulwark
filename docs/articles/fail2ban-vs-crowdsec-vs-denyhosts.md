@@ -154,16 +154,16 @@ With that said:
 
 ```mermaid
 flowchart TD
-  A{"Key-only SSH auth\nalready enforced?"} -->|"No"| A2["Do that first — it deletes the\npassword brute-force class outright"]
+  A{"Key-only SSH auth<br/>already enforced?"} -->|"No"| A2["Do that first — it deletes the<br/>password brute-force class outright"]
   A -->|"Yes"| B{"Already running denyhosts?"}
   A2 --> B
-  B -->|"Yes"| C["Treat the host as UNPROTECTED —\nhosts.deny is inert on modern sshd"]
+  B -->|"Yes"| C["Treat the host as UNPROTECTED —<br/>hosts.deny is inert on modern sshd"]
   B -->|"No"| D{"Managing more than one host?"}
   C --> D
   D -->|"Just one host"| E{"Pure nftables setup?"}
-  D -->|"Multiple hosts /\nwant shared threat intel"| F["CrowdSec — benefits from\nattacks seen elsewhere"]
-  E -->|"Yes"| H["fail2ban with banaction = nftables\n(the 1.1.0 release still defaults to iptables),\nor SSHGuard for native nftables"]
-  E -->|"No"| I["fail2ban — the default\niptables action works fine"]
+  D -->|"Multiple hosts /<br/>want shared threat intel"| F["CrowdSec — benefits from<br/>attacks seen elsewhere"]
+  E -->|"Yes"| H["fail2ban with banaction = nftables<br/>(the 1.1.0 release still defaults to iptables),<br/>or SSHGuard for native nftables"]
+  E -->|"No"| I["fail2ban — the default<br/>iptables action works fine"]
 ```
 
 - **One host, want the well-documented, battle-tested default:** fail2ban, with `banaction = nftables`

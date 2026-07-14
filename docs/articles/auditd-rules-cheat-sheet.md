@@ -198,10 +198,10 @@ from somewhere else.
 
 ```mermaid
 flowchart LR
-    A["Install & enable\napt install auditd\nsystemctl enable --now auditd"] --> B["Write rules\n/etc/audit/rules.d/*.rules"]
-    B --> C["Load rules\nauditctl -D\naugenrules --load"]
-    C --> D["Kernel generates events\nfile watch / syscall match"]
-    D --> E["Investigate\naureport --key --summary\nausearch -k key --raw / -i"]
+    A["Install & enable<br/>apt install auditd<br/>systemctl enable --now auditd"] --> B["Write rules<br/>/etc/audit/rules.d/*.rules"]
+    B --> C["Load rules<br/>auditctl -D<br/>augenrules --load"]
+    C --> D["Kernel generates events<br/>file watch / syscall match"]
+    D --> E["Investigate<br/>aureport --key --summary<br/>ausearch -k key --raw / -i"]
     E -. tune volume .-> B
 ```
 

