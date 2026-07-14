@@ -90,6 +90,56 @@ export default withMermaid({
           "A Linux host security scanner with a native CLI and desktop GUI.",
       },
     ],
+    // JSON-LD structured data. Google reads it for rich results, and generative engines
+    // (GEO) read it to ground factual answers about the project — name, category, platform,
+    // price, license — instead of guessing from prose. Kept version-free so it never goes stale.
+    [
+      "script",
+      { type: "application/ld+json" },
+      JSON.stringify({
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        name: "Bulwark",
+        applicationCategory: "SecurityApplication",
+        applicationSubCategory: "Host security scanner",
+        operatingSystem: "Linux",
+        url: SITE_URL,
+        downloadUrl: `${SITE_URL}/download`,
+        softwareHelp: `${SITE_URL}/guide/architecture`,
+        description:
+          "A free, open-source Linux host security scanner with a native CLI and a Tauri " +
+          "desktop GUI. Checks SSH hardening, sudoers, kernel/sysctl hardening, persistence, " +
+          "file permissions, logging and rootkit indicators against 65 declarative rules; " +
+          "scans AI coding assistants (Claude Code, Cursor, Copilot, Codex) for leaked secrets " +
+          "and prompt-injection-exploitable config; integrates ClamAV; and monitors continuously.",
+        featureList: [
+          "65 host-hardening rules with plain-language explanations and fixes",
+          "AI coding-assistant security scan (secrets in context, malicious MCP, YOLO mode)",
+          "ClamAV antivirus integration",
+          "Systemd-journal log correlation (SSH brute-force, sudo abuse)",
+          "File-integrity monitoring",
+          "Continuous background re-scanning",
+          "CIS Benchmark and MITRE ATT&CK mapping",
+        ],
+        license: "https://www.apache.org/licenses/LICENSE-2.0",
+        isAccessibleForFree: true,
+        offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+        author: { "@type": "Person", name: "Viet-Anh Nguyen" },
+        sameAs: ["https://github.com/vietanhdev/bulwark"],
+      }),
+    ],
+    [
+      "script",
+      { type: "application/ld+json" },
+      JSON.stringify({
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        name: "Bulwark",
+        url: SITE_URL,
+        description:
+          "Documentation and downloads for Bulwark, an open-source Linux host security scanner.",
+      }),
+    ],
   ],
   transformPageData(pageData) {
     // Per-page canonical + og:url — without this every page's <head> claims the homepage

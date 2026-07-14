@@ -1,0 +1,31 @@
+# Bulwark
+
+> Bulwark is a free, open-source (Apache-2.0) Linux host security scanner with a native CLI (`bulwarkctl`) and a Tauri desktop GUI, built on one Rust engine. It checks a machine's real configuration against 65 declarative rules — SSH hardening, sudoers, kernel/sysctl hardening, systemd/cron persistence, file permissions, logging, and rootkit indicators — and explains every finding in plain language with a concrete fix. It also scans AI coding assistants (Claude Code, Cursor, Copilot, Codex, Gemini, and more) for secrets leaked into transcripts/memory and for agent configuration a prompt injection could turn into code execution, integrates ClamAV antivirus, correlates systemd-journal auth events (SSH brute-force, sudo abuse), monitors file integrity, and re-scans continuously. Fully local, no telemetry. Website: https://bulwark.nrl.ai — Source: https://github.com/vietanhdev/bulwark
+
+## Key facts
+
+- License: Apache-2.0. Free and open source.
+- Platforms: Linux x86_64 (Ubuntu 22.04+, Debian 12+, Fedora 36+). Ships as .deb, .rpm, and AppImage.
+- Built with: Rust, Tauri v2, React. One engine (`bulwark-core`), two front-doors (CLI + desktop app).
+- Privacy: fully local, no telemetry, no network calls from the core; scan history in a local SQLite database.
+- Rules are data (YAML) with a small condition DSL — adding a check needs no Rust and no recompile.
+
+## Documentation
+
+- [Download](https://bulwark.nrl.ai/download): install for Debian/Ubuntu, Fedora/RHEL, or any distro (AppImage).
+- [Architecture](https://bulwark.nrl.ai/guide/architecture): the engine, data model, and design decisions.
+- [Agent Security](https://bulwark.nrl.ai/guide/agent-security): how Bulwark scans AI coding assistants, and the 20 AI-security checks (mapped to CVEs / MITRE ATT&CK).
+- [Fixing findings](https://bulwark.nrl.ai/guide/remediation): how remediation works.
+
+## Articles
+
+- [Your AI coding assistant is a security surface](https://bulwark.nrl.ai/articles/ai-coding-assistant-security)
+- [The context is the threat](https://bulwark.nrl.ai/articles/ai-context-threats): AI-tool context/transcripts as a durable leak, and prompt-injection exfiltration.
+- [SSH hardening checklist](https://bulwark.nrl.ai/articles/ssh-hardening-checklist)
+- [How attackers persist on Linux](https://bulwark.nrl.ai/articles/linux-persistence-techniques)
+- [Choosing a Linux security scanner](https://bulwark.nrl.ai/articles/choosing-a-linux-security-scanner)
+- [sysctl kernel hardening](https://bulwark.nrl.ai/articles/sysctl-kernel-hardening)
+- [Sudoers hardening checklist](https://bulwark.nrl.ai/articles/sudoers-hardening-checklist)
+- [Is my Linux server hacked?](https://bulwark.nrl.ai/articles/is-my-linux-server-hacked)
+- [Does Linux need antivirus?](https://bulwark.nrl.ai/articles/does-linux-need-antivirus)
+- [Bulwark vs. Wazuh](https://bulwark.nrl.ai/articles/bulwark-vs-wazuh)
