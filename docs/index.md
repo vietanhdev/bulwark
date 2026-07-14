@@ -23,6 +23,12 @@ hero:
       link: https://github.com/vietanhdev/bulwark
 
 features:
+  - title: AI coding-assistant security
+    details: >-
+      Scans Claude Code, Cursor, Copilot, Codex, Gemini and more for secrets leaked into
+      transcripts and memory, and for agent config a prompt injection could turn into code
+      execution — malicious MCP servers, auto-approve "YOLO mode", base-URL exfil, the
+      Rules File Backdoor. 20 checks mapped to real CVEs, with opt-in in-place redaction.
   - title: Native CLI and desktop GUI
     details: >-
       One Rust engine (bulwark-core), two thin front-doors. Scan from a terminal over SSH
@@ -60,7 +66,7 @@ features:
 
 ![Antivirus — ClamAV signature scanning and real-time folder watching](/screenshots/antivirus.png)
 
-![Compliance — Bulwark's rules mapped to CIS Benchmarks and MITRE ATT&CK](/screenshots/compliance.png)
+![Compliance — every configuration finding on the host, grouped by subsystem, each with why it matters and the exact command to fix it](/screenshots/compliance.png)
 
 ![Rules — the full rule pack, searchable and filterable by severity](/screenshots/rules.png)
 
