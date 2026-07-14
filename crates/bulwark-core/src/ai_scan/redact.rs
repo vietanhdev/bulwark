@@ -11,6 +11,7 @@
 //! secret could corrupt a legitimate config.
 
 use super::secrets;
+use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 
 /// One file the redaction pass considered. `secrets_redacted` is how many high-confidence
@@ -37,18 +38,27 @@ pub struct RedactionReport {
 /// `0600` permissions before it's overwritten; it's created if absent. In dry-run mode nothing
 /// is read-only-violated: files are read but never written and no backups are made.
 pub fn redact_paths(paths: &[PathBuf], apply: bool, backup_dir: &Path) -> RedactionReport {
+    // Each path is redacted independently — its own read, backup, temp, and atomic rename touch
+    // only that one file — so the set runs in parallel. `collect` preserves input order, so the
+    // reported entries stay in the caller's (severity-sorted) order regardless of thread timing.
+    let outcomes: Vec<Result<Option<RedactionEntry>, String>> = paths
+        .par_iter()
+        .map(|path| {
+            redact_one(path, apply, backup_dir).map_err(|e| format!("{}: {e}", path.display()))
+        })
+        .collect();
+
     let mut entries = Vec::new();
     let mut errors = Vec::new();
     let mut total = 0usize;
-
-    for path in paths {
-        match redact_one(path, apply, backup_dir) {
+    for outcome in outcomes {
+        match outcome {
             Ok(Some(entry)) => {
                 total += entry.secrets_redacted;
                 entries.push(entry);
             }
             Ok(None) => {}
-            Err(e) => errors.push(format!("{}: {e}", path.display())),
+            Err(e) => errors.push(e),
         }
     }
 

@@ -21,9 +21,11 @@ pub mod secrets;
 
 use crate::models::Severity;
 use chrono::{DateTime, Utc};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use uuid::Uuid;
 
 pub use discovery::{Artifact, ArtifactKind, Tool};
@@ -133,7 +135,7 @@ impl AiScanOptions {
 /// Runs a full AI-artifact scan. `on_artifact` is called with each artifact's path just before
 /// it's examined, so a GUI can show live "scanning: <path>" progress; pass a no-op closure for a
 /// non-interactive run.
-pub fn scan(opts: &AiScanOptions, on_artifact: impl FnMut(&str)) -> AiScanReport {
+pub fn scan(opts: &AiScanOptions, on_artifact: impl Fn(&str) + Sync) -> AiScanReport {
     scan_cancellable(opts, on_artifact, &|| false)
 }
 
@@ -143,12 +145,11 @@ pub fn scan(opts: &AiScanOptions, on_artifact: impl FnMut(&str)) -> AiScanReport
 /// found so far; it is *not* a picture of the machine, and callers must not persist it as one.
 pub fn scan_cancellable(
     opts: &AiScanOptions,
-    mut on_artifact: impl FnMut(&str),
-    should_cancel: &dyn Fn() -> bool,
+    on_artifact: impl Fn(&str) + Sync,
+    should_cancel: &(dyn Fn() -> bool + Sync),
 ) -> AiScanReport {
     let started_at = Utc::now();
     let mut errors = Vec::new();
-    let mut cancelled = false;
 
     let (workspaces, capped) = if opts.explicit_targets.is_empty() {
         let ws = discovery::discover_workspaces(
@@ -178,18 +179,42 @@ pub fn scan_cancellable(
     let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
     artifacts.retain(|a| seen.insert(a.path.clone()));
 
+    // Scan artifacts in parallel: each `scan_artifact` is pure and independent (read one file,
+    // run the regex pack over it), and file-bound scanning is exactly what a machine with a year of
+    // transcripts is slow at. `scan_artifact` never mutates shared state, so the only coordination
+    // needed is a cancel flag, a scanned counter, and per-item result collection.
+    //
+    // Cancellation is cooperative: the first worker to see `should_cancel()` sets `cancel_flag`, and
+    // every other worker short-circuits before its (expensive) scan rather than running to
+    // completion — so Stop still feels immediate without an abrupt thread kill mid-write. Items
+    // already in flight finish and are counted, exactly as they were "examined" under the old loop.
+    let cancel_flag = AtomicBool::new(false);
+    let scanned = AtomicUsize::new(0);
+    let per_artifact: Vec<Result<Vec<AiFinding>, String>> = artifacts
+        .par_iter()
+        .map(|artifact| {
+            if cancel_flag.load(Ordering::Relaxed) {
+                return Ok(Vec::new());
+            }
+            if should_cancel() {
+                cancel_flag.store(true, Ordering::Relaxed);
+                return Ok(Vec::new());
+            }
+            on_artifact(&artifact.path.to_string_lossy());
+            scanned.fetch_add(1, Ordering::Relaxed);
+            scan_artifact(artifact).map_err(|e| format!("{}: {e}", artifact.path.display()))
+        })
+        .collect();
+
+    let cancelled = cancel_flag.load(Ordering::Relaxed);
+    let artifacts_scanned = scanned.load(Ordering::Relaxed);
+    // Collect in input order (rayon's `collect` preserves it), so the later dedup keeps a
+    // deterministic representative and the final ordering doesn't depend on thread scheduling.
     let mut findings = Vec::new();
-    let mut artifacts_scanned = 0usize;
-    for artifact in &artifacts {
-        if should_cancel() {
-            cancelled = true;
-            break;
-        }
-        on_artifact(&artifact.path.to_string_lossy());
-        artifacts_scanned += 1;
-        match scan_artifact(artifact) {
+    for r in per_artifact {
+        match r {
             Ok(mut fs) => findings.append(&mut fs),
-            Err(e) => errors.push(format!("{}: {e}", artifact.path.display())),
+            Err(e) => errors.push(e),
         }
     }
 
@@ -284,14 +309,24 @@ fn scan_artifact(artifact: &Artifact) -> anyhow::Result<Vec<AiFinding>> {
     let mut has_redactable_secret = false;
     if artifact.kind != Credential {
         for m in secrets::scan_text(&content) {
-            if artifact.kind == Transcript && !m.high_conf {
+            // Only high-confidence, structurally-identifiable provider keys (sk-ant-…, AKIA…, ghp_…,
+            // a PEM block) are reported. The low-confidence generic `KEY=value` heuristic was the
+            // dominant source of non-actionable noise across the whole AI scan: it fires on hashes,
+            // ids, base64 and ordinary config values, and in a `.env` — the *expected* home for
+            // secrets — essentially every line trips it. A real provider key leaked into an
+            // assistant's context/memory is still caught here (and is redactable); a `.env`'s actual
+            // risks (readable by other users, or not gitignored) are the separate AI-015 / AI-016
+            // checks, which do not need each value re-reported as a "possible leak".
+            if !m.high_conf {
                 continue;
             }
-            let severity = secrets::severity_for(&m);
-            let redactable = m.high_conf;
-            has_redactable_secret |= redactable;
+            has_redactable_secret = true;
             out.push(finding_from_secret(
-                artifact, &tool, &m, severity, redactable,
+                artifact,
+                &tool,
+                &m,
+                secrets::severity_for(&m),
+                true,
             ));
         }
     }
@@ -731,22 +766,27 @@ mod tests {
     #[test]
     fn a_cancelled_scan_stops_early_and_says_so() {
         let home = tempfile::tempdir().unwrap();
-        let proj = home.path().join("Projects/app");
-        // Several artifacts, so there is something left to skip after the first.
-        write(&proj.join("CLAUDE.md"), &format!("{}\n", anthropic_key()));
-        write(
-            &proj.join(".claude/settings.json"),
-            r#"{"hooks":{"x":[1]}}"#,
-        );
-        write(&proj.join(".mcp.json"), r#"{"mcpServers":{}}"#);
-        write(&proj.join("AGENTS.md"), "notes\n");
+        // Many workspaces, so a *parallel* sweep still has plenty of work left to skip after it is
+        // asked to stop. Cancellation under parallelism is cooperative — items already in flight
+        // finish and are counted — so the guarantee is "it does not scan the whole set", not "it
+        // stops within one item". N is chosen well above any realistic core count so that after the
+        // first worker trips the flag, the rest observe it before starting.
+        const N: usize = 150;
+        for i in 0..N {
+            write(
+                &home.path().join(format!("Projects/app{i:03}/CLAUDE.md")),
+                &format!("{}\n", anthropic_key()),
+            );
+        }
 
-        // Cancel as soon as the first artifact has been handed to us.
-        let seen = std::cell::Cell::new(0usize);
+        // Ask to stop the instant the first artifact has been handed to us.
+        let seen = AtomicUsize::new(0);
         let report = scan_cancellable(
             &AiScanOptions::for_home(home.path().to_path_buf()),
-            |_| seen.set(seen.get() + 1),
-            &|| seen.get() >= 1,
+            |_| {
+                seen.fetch_add(1, Ordering::Relaxed);
+            },
+            &|| seen.load(Ordering::Relaxed) >= 1,
         );
 
         assert!(
@@ -754,8 +794,8 @@ mod tests {
             "a stopped scan must report itself as cancelled"
         );
         assert!(
-            report.artifacts_scanned <= 2,
-            "cancelling must actually stop the walk, not merely flag it: scanned {}",
+            report.artifacts_scanned < N,
+            "cancelling must actually stop the sweep, not merely flag it: scanned {} of {N}",
             report.artifacts_scanned
         );
     }

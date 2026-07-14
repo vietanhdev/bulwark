@@ -395,9 +395,6 @@ impl SpanSet {
     fn insert(&mut self, start: usize, end: usize) {
         self.0.insert(start, end);
     }
-    fn len(&self) -> usize {
-        self.0.len()
-    }
 }
 
 /// Upper bound on distinct secret hits recorded for a single file. Real artifacts hold a handful;
@@ -406,41 +403,78 @@ impl SpanSet {
 /// results silently.
 const MAX_SECRETS_PER_TEXT: usize = 1000;
 
-/// Scans `text`, returning one [`SecretMatch`] per distinct hit. Where a broad `generic-*` rule
-/// overlaps a precise provider rule on the same bytes, only the provider match is kept — a
-/// hardcoded `ANTHROPIC_API_KEY=sk-ant-…` is *one* Anthropic finding, not also a generic one.
-pub fn scan_text(text: &str) -> Vec<SecretMatch> {
+/// One deduplicated secret hit in `text`: its byte span, the index of the rule that matched, and
+/// the secret slice itself. This is the single detection primitive behind *both* [`scan_text`]
+/// (which reports every hit) and [`redact_text`] (which rewrites only the high-confidence ones), so
+/// redaction reuses the exact candidate prefilter, regex pass, and overlap resolution rather than
+/// re-deriving them from scratch.
+struct Hit<'t> {
+    start: usize,
+    end: usize,
+    rule: usize,
+    secret: &'t str,
+}
+
+/// Finds every distinct secret hit in `text`, running the rule passes named in `passes` in order
+/// (`true` = precise provider rules, `false` = heuristic `generic-*` rules). Earlier passes claim
+/// their byte spans first, so a provider match always wins over a broad heuristic on the same
+/// bytes. A full scan passes `[true, false]`; redaction passes `[true]` only, which skips the
+/// heuristic regexes entirely — so redaction does strictly *less* work than a scan, never a second
+/// full one. Runs the candidate prefilter directly on `text` (the automaton is case-insensitive),
+/// so no lowercased copy of a multi-MB file is ever allocated.
+fn find_hits<'t>(text: &'t str, passes: &[bool]) -> Vec<Hit<'t>> {
     let pack = &*PACK;
     let candidates = pack.candidates(text);
 
     let mut spans = SpanSet::default();
-    let mut out: Vec<SecretMatch> = Vec::new();
+    let mut hits: Vec<Hit<'t>> = Vec::new();
 
-    // Precise rules first, so they claim their spans before the heuristic ones run.
-    'passes: for high_conf_pass in [true, false] {
-        for rule in candidates
-            .iter()
-            .map(|&i| &pack.rules[i])
-            .filter(|r| r.high_conf == high_conf_pass)
-        {
+    'passes: for &high_conf_pass in passes {
+        for &ri in &candidates {
+            let rule = &pack.rules[ri];
+            if rule.high_conf != high_conf_pass {
+                continue;
+            }
             for ((start, end), secret) in matches_for(rule, text) {
                 if spans.overlaps(start, end) {
                     continue;
                 }
                 spans.insert(start, end);
-                out.push(SecretMatch {
-                    provider: rule.provider.clone(),
-                    rule_id: rule.id.clone(),
-                    line: line_of(text, start),
-                    redacted: mask(secret),
-                    high_conf: rule.high_conf,
+                hits.push(Hit {
+                    start,
+                    end,
+                    rule: ri,
+                    secret,
                 });
-                if out.len() >= MAX_SECRETS_PER_TEXT {
+                if hits.len() >= MAX_SECRETS_PER_TEXT {
                     break 'passes;
                 }
             }
         }
     }
+    hits
+}
+
+/// Scans `text`, returning one [`SecretMatch`] per distinct hit. Where a broad `generic-*` rule
+/// overlaps a precise provider rule on the same bytes, only the provider match is kept — a
+/// hardcoded `ANTHROPIC_API_KEY=sk-ant-…` is *one* Anthropic finding, not also a generic one.
+pub fn scan_text(text: &str) -> Vec<SecretMatch> {
+    let pack = &*PACK;
+    // Precise rules first (the `[true, false]` order), so they claim their spans before the
+    // heuristic ones run.
+    let mut out: Vec<SecretMatch> = find_hits(text, &[true, false])
+        .into_iter()
+        .map(|h| {
+            let rule = &pack.rules[h.rule];
+            SecretMatch {
+                provider: rule.provider.clone(),
+                rule_id: rule.id.clone(),
+                line: line_of(text, h.start),
+                redacted: mask(h.secret),
+                high_conf: rule.high_conf,
+            }
+        })
+        .collect();
 
     out.sort_by_key(|m| m.line);
     out
@@ -465,35 +499,32 @@ pub fn severity_for(m: &SecretMatch) -> Severity {
 ///
 /// Replacement walks right-to-left so earlier offsets stay valid as later ones are spliced out.
 pub fn redact_text(text: &str) -> (String, usize) {
-    let pack = &*PACK;
-    let lowered = text.to_lowercase();
-    let candidates = pack.candidates(&lowered);
-
-    let mut spans = SpanSet::default();
-    'rules: for rule in candidates
-        .iter()
-        .map(|&i| &pack.rules[i])
-        .filter(|r| r.high_conf)
-    {
-        for ((start, end), _) in matches_for(rule, text) {
-            if spans.overlaps(start, end) {
-                continue;
-            }
-            spans.insert(start, end);
-            if spans.len() >= MAX_SECRETS_PER_TEXT {
-                break 'rules;
-            }
-        }
+    // Reuse the scanner's exact detection primitive, but run ONLY the high-confidence pass. The
+    // heuristic `generic-*` rules are report-only and must never be rewritten (blindly editing a
+    // value that merely looked like a secret could corrupt a legitimate config), so skipping them
+    // means redaction runs a strict subset of the scan's regexes — not a second full pass.
+    let mut hits: Vec<(usize, usize)> = find_hits(text, &[true])
+        .into_iter()
+        .map(|h| (h.start, h.end))
+        .collect();
+    if hits.is_empty() {
+        return (text.to_string(), 0);
     }
 
-    // BTreeMap iterates by ascending start; collect and splice right-to-left so earlier offsets
-    // stay valid as later ones are replaced.
-    let hits: Vec<(usize, usize)> = spans.0.into_iter().collect();
+    // Rebuild in a single left-to-right pass: copy each kept segment, then the placeholder. The old
+    // approach spliced the secret out of a full copy once per hit, which reshuffles the whole tail
+    // every time — quadratic in the number of secrets on a large transcript. Spans are
+    // non-overlapping (SpanSet), so sorting by start makes the copy unambiguous.
+    hits.sort_unstable_by_key(|&(start, _)| start);
     let count = hits.len();
-    let mut out = text.to_string();
-    for &(start, end) in hits.iter().rev() {
-        out.replace_range(start..end, REDACTION_PLACEHOLDER);
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0;
+    for (start, end) in hits {
+        out.push_str(&text[cursor..start]);
+        out.push_str(REDACTION_PLACEHOLDER);
+        cursor = end;
     }
+    out.push_str(&text[cursor..]);
     (out, count)
 }
 
