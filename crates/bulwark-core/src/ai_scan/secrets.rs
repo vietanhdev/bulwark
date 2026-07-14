@@ -1679,6 +1679,14 @@ mod tests {
     /// a run that finds nothing. The keyword index plus lazy compilation is what makes a scan fast;
     /// this asserts it stays that way, because the regression would be invisible in a correctness
     /// test and merely make the product feel broken.
+    ///
+    /// Asserts on the *candidate* count, not on how many regexes have been compiled. `PACK` is a
+    /// process-global whose `OnceLock`s accumulate across every test in the binary, so counting
+    /// compiled regexes measures what the rest of the suite happened to touch first — it passed
+    /// locally and failed on CI purely on thread scheduling, once the rule-validation tests (which
+    /// deliberately exercise all 262 rules) started sharing the binary. The candidate count is a
+    /// pure function of the text and the pack, and is the invariant actually worth pinning: the
+    /// prefilter is what decides how many regexes a scan can ever compile or run.
     #[test]
     fn scanning_an_ordinary_file_does_not_compile_the_whole_pack() {
         let prose = "# Project notes\n\nRun the tests before pushing. Keep functions small.\n";
@@ -1692,10 +1700,10 @@ mod tests {
             "scanning a short prose file took {elapsed:?} — the keyword index is not doing its job"
         );
 
-        let compiled = PACK.rules.iter().filter(|r| r.re.get().is_some()).count();
+        let candidates = PACK.candidates(prose).len();
         assert!(
-            compiled < 40,
-            "{compiled} of {} rules were compiled for a file with no secrets in it",
+            candidates < 40,
+            "the keyword index selected {candidates} of {} rules for a file with no secrets in it",
             PACK.rules.len()
         );
     }
