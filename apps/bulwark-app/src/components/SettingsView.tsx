@@ -8,6 +8,7 @@ import { Callout } from "@/components/ui/callout";
 import { Switch } from "@/components/ui/switch";
 import { PageShell, SectionLabel } from "@/components/PageShell";
 import { ShieldMark } from "@/components/ShieldMark";
+import { SshKeyProtect } from "@/components/SshKeyProtect";
 import { useRevision } from "@/lib/revision";
 import { cn } from "@/lib/utils";
 
@@ -202,6 +203,11 @@ export function SettingsView() {
               </Callout>
             </div>
           )}
+        </section>
+
+        <section>
+          <SectionLabel>SSH keys</SectionLabel>
+          <SshKeyProtect />
         </section>
 
         <section>

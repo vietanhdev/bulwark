@@ -342,6 +342,26 @@ const handlers: Record<string, (args: Args) => unknown> = {
     };
     return realtimeAvStatus;
   },
+  ssh_protect_keys: () => ({
+    results: [
+      {
+        path: "/home/user/.ssh/id_ed25519",
+        key_format: "openssh",
+        outcome: { status: "protected" },
+        backup_path: "/home/user/.local/share/bulwark/ssh-key-backups/id_ed25519.bak",
+      },
+      {
+        path: "/home/user/.ssh/id_rsa",
+        key_format: "openssh",
+        outcome: { status: "already_encrypted" },
+        backup_path: null,
+      },
+    ],
+    protected: 1,
+    already_encrypted: 1,
+    undetermined: 0,
+    failed: 0,
+  }),
 };
 
 export async function invoke<T>(cmd: string, args?: Args): Promise<T> {

@@ -1,6 +1,7 @@
 mod ai_security;
 mod monitoring;
 mod realtime_av;
+mod ssh_protect;
 mod tray;
 
 use bulwark_core::av_scan::ClamscanLine;
@@ -775,7 +776,8 @@ pub fn run() {
             ai_security::ai_scan_snapshot,
             ai_security::ai_redact,
             ai_security::ai_settings_get,
-            ai_security::ai_settings_set
+            ai_security::ai_settings_set,
+            ssh_protect::ssh_protect_keys
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
