@@ -72,6 +72,27 @@ enum Commands {
         #[command(subcommand)]
         action: AiAction,
     },
+    /// Protect SSH private keys (e.g. add a passphrase to every unencrypted key at once)
+    Ssh {
+        #[command(subcommand)]
+        action: SshAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum SshAction {
+    /// Add ONE passphrase to every unencrypted private key in ~/.ssh, in a single pass. A single
+    /// password across the set is far better than leaving plaintext keys on disk. Already-encrypted
+    /// keys, and keys whose status can't be read, are left untouched; each modified key is backed
+    /// up (0600) first.
+    Protect {
+        /// Read the passphrase from stdin (for scripting) instead of prompting with no echo.
+        #[arg(long)]
+        stdin: bool,
+        /// Machine-readable JSON output instead of a table
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -528,6 +549,7 @@ fn main() -> anyhow::Result<()> {
         },
         Commands::Logs { action } => run_logs(action, cli.db_path)?,
         Commands::Ai { action } => run_ai(action, cli.db_path)?,
+        Commands::Ssh { action } => run_ssh(action)?,
     }
 
     Ok(())
@@ -537,6 +559,71 @@ fn main() -> anyhow::Result<()> {
 fn resolve_home() -> anyhow::Result<PathBuf> {
     let home = std::env::var("HOME").context("HOME not set")?;
     Ok(PathBuf::from(home))
+}
+
+/// Handles the `ssh` subcommand group. Calls the linked `bulwark-core` remediation directly —
+/// the CLI is just a front-door over the same in-process function the GUI uses.
+fn run_ssh(action: SshAction) -> anyhow::Result<()> {
+    use bulwark_core::{protect_unencrypted_keys, KeyProtectionOutcome};
+    match action {
+        SshAction::Protect { stdin, json } => {
+            let passphrase = if stdin {
+                use std::io::BufRead;
+                let mut line = String::new();
+                std::io::stdin().lock().read_line(&mut line)?;
+                line.trim_end_matches(['\n', '\r']).to_string()
+            } else {
+                // No-echo prompt, entered twice so a typo doesn't silently lock keys with the
+                // wrong passphrase.
+                let p1 =
+                    rpassword::prompt_password("New passphrase for all unencrypted SSH keys: ")?;
+                let p2 = rpassword::prompt_password("Confirm passphrase: ")?;
+                if p1 != p2 {
+                    anyhow::bail!("passphrases did not match");
+                }
+                p1
+            };
+            if passphrase.is_empty() {
+                anyhow::bail!(
+                    "empty passphrase — an empty passphrase would leave the keys unprotected"
+                );
+            }
+
+            let home = std::env::var("HOME").context("HOME not set")?;
+            let backup_dir = PathBuf::from(home).join(".local/share/bulwark/ssh-key-backups");
+            let report = protect_unencrypted_keys(&passphrase, &backup_dir)?;
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+                return Ok(());
+            }
+            if report.results.is_empty() {
+                println!("No SSH private keys found in ~/.ssh.");
+                return Ok(());
+            }
+            for r in &report.results {
+                let status = match &r.outcome {
+                    KeyProtectionOutcome::Protected => "protected".to_string(),
+                    KeyProtectionOutcome::AlreadyEncrypted => "already encrypted".to_string(),
+                    KeyProtectionOutcome::Undetermined => "skipped (status unreadable)".to_string(),
+                    KeyProtectionOutcome::Failed { reason } => format!("FAILED: {reason}"),
+                };
+                println!("  {status:<28}  {}", r.path);
+            }
+            println!(
+                "\n{} protected, {} already encrypted, {} undetermined, {} failed.",
+                report.protected, report.already_encrypted, report.undetermined, report.failed
+            );
+            if report.protected > 0 {
+                println!("Backups of the originals: {}", backup_dir.display());
+                println!(
+                    "Tip: 'ssh-add <key>' loads a key into your agent once per session so you \
+                     don't retype the passphrase."
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Handles the `ai` subcommand group. Like `scan`, the `scan` path exits with a

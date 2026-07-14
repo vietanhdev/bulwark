@@ -21,7 +21,10 @@ pub use collectors::file_integrity::{
     PRIVILEGED_WATCHED_PATHS as FIM_PRIVILEGED_WATCHED_PATHS,
     UNPRIVILEGED_WATCHED_PATHS as FIM_UNPRIVILEGED_WATCHED_PATHS,
 };
-pub use collectors::{all_collectors, Collector};
+pub use collectors::{
+    all_collectors, protect_unencrypted_keys, BulkProtectionReport, Collector,
+    KeyProtectionOutcome, KeyProtectionResult,
+};
 pub use condition::Condition;
 pub use engine::{load_rules, run_scan, Profile};
 pub use logs::{

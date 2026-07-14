@@ -199,6 +199,289 @@ impl Collector for SshPrivateKeysCollector {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Remediation: add one passphrase to every unencrypted key, in one pass.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// What happened to one key when [`protect_unencrypted_keys`] ran.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum KeyProtectionOutcome {
+    /// Was confidently unencrypted; is now passphrase-protected.
+    Protected,
+    /// Already encrypted — left untouched.
+    AlreadyEncrypted,
+    /// Encryption status could not be read from the header — left untouched, never guessed.
+    Undetermined,
+    /// The attempt errored; the key was restored from its backup and is unchanged.
+    Failed { reason: String },
+}
+
+/// Per-key result. `backup_path` is set only when the key was actually modified (or an attempt
+/// was made and then rolled back).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct KeyProtectionResult {
+    pub path: String,
+    pub key_format: String,
+    pub outcome: KeyProtectionOutcome,
+    pub backup_path: Option<String>,
+}
+
+/// Summary of a bulk protect run.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct BulkProtectionReport {
+    pub results: Vec<KeyProtectionResult>,
+    pub protected: usize,
+    pub already_encrypted: usize,
+    pub undetermined: usize,
+    pub failed: usize,
+}
+
+/// Adds a single `passphrase` to every SSH private key in `~/.ssh` that is *confidently*
+/// unencrypted, in one pass — a single password for the whole set, which is far better than
+/// leaving plaintext keys on disk. Keys that are already encrypted, or whose status can't be read
+/// from the header, are left untouched: this never weakens a key and never guesses.
+///
+/// Safety:
+///   * Symlinks are refused (a symlink in `~/.ssh` could otherwise redirect `ssh-keygen` onto an
+///     arbitrary file). Only regular files are touched.
+///   * Every key is copied to a `0600` backup under `backup_dir` before it is modified, and
+///     restored from that backup if the rewrite or the post-check fails — so a key is never left
+///     half-converted.
+///   * The passphrase is handed to `ssh-keygen` through an `SSH_ASKPASS` helper that reads it from
+///     an environment variable, **never** through argv. `/proc/<pid>/cmdline` (where argv lands) is
+///     world-readable; `/proc/<pid>/environ` is readable only by the file's owner, who already
+///     knows the passphrase. The child is also detached from any controlling TTY so `ssh-keygen`
+///     uses askpass rather than prompting on `/dev/tty`.
+///   * After each conversion the key's header is re-read and re-classified; if it did not actually
+///     become encrypted (e.g. a silent askpass fallback), the change is rolled back and reported as
+///     a failure rather than a false success.
+pub fn protect_unencrypted_keys(
+    passphrase: &str,
+    backup_dir: &Path,
+) -> anyhow::Result<BulkProtectionReport> {
+    if passphrase.is_empty() {
+        anyhow::bail!("refusing to set an empty passphrase — that would leave the key unprotected");
+    }
+    let Some(dir) = ssh_dir() else {
+        return Ok(BulkProtectionReport::default());
+    };
+    protect_keys_in_dir(&dir, passphrase, backup_dir)
+}
+
+/// The directory-scoped core of [`protect_unencrypted_keys`], split out so it can be tested against
+/// a temp `.ssh` without racing on the process-global `HOME`.
+fn protect_keys_in_dir(
+    dir: &Path,
+    passphrase: &str,
+    backup_dir: &Path,
+) -> anyhow::Result<BulkProtectionReport> {
+    let mut report = BulkProtectionReport::default();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Ok(report);
+    };
+
+    for entry in entries.flatten() {
+        let Ok(ft) = entry.file_type() else { continue };
+        // Same discipline as the collector: never follow a symlink out of ~/.ssh, only touch
+        // regular files, and skip names that are never private keys (.pub, known_hosts, config).
+        if ft.is_symlink() || !ft.is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if is_never_a_private_key(&name) {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(content) = super::read_capped(&path) else {
+            continue;
+        };
+        let Some((format, encrypted)) = classify_private_key(&content) else {
+            continue; // not a private key
+        };
+
+        let mut result = KeyProtectionResult {
+            path: path.display().to_string(),
+            key_format: format.to_string(),
+            outcome: KeyProtectionOutcome::Protected,
+            backup_path: None,
+        };
+        match encrypted {
+            Some(true) => {
+                result.outcome = KeyProtectionOutcome::AlreadyEncrypted;
+                report.already_encrypted += 1;
+            }
+            None => {
+                result.outcome = KeyProtectionOutcome::Undetermined;
+                report.undetermined += 1;
+            }
+            Some(false) => match add_passphrase_with_backup(&path, passphrase, backup_dir) {
+                Ok(backup) => {
+                    result.backup_path = Some(backup.display().to_string());
+                    report.protected += 1;
+                }
+                Err(e) => {
+                    result.outcome = KeyProtectionOutcome::Failed {
+                        reason: e.to_string(),
+                    };
+                    report.failed += 1;
+                }
+            },
+        }
+        report.results.push(result);
+    }
+    Ok(report)
+}
+
+/// Backs up `key` (0600), adds the passphrase, then verifies the key really became encrypted —
+/// rolling back from the backup on any failure. Returns the backup path on success.
+fn add_passphrase_with_backup(
+    key: &Path,
+    passphrase: &str,
+    backup_dir: &Path,
+) -> anyhow::Result<PathBuf> {
+    std::fs::create_dir_all(backup_dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(backup_dir, std::fs::Permissions::from_mode(0o700));
+    }
+    let original = std::fs::read(key)?;
+    let backup = backup_target(key, backup_dir);
+    write_owner_only(&backup, &original)?;
+
+    let restore = || {
+        // Best-effort rollback: put the original bytes back so a failed attempt never leaves a
+        // half-converted or damaged key on disk.
+        let _ = std::fs::write(key, &original);
+    };
+
+    if let Err(e) = run_ssh_keygen_add_passphrase(key, passphrase) {
+        restore();
+        return Err(e);
+    }
+
+    // Confirm it actually encrypted — re-read the header and re-classify. A silent askpass fallback
+    // could otherwise "succeed" while leaving the key plaintext or empty-passphrased.
+    let now = super::read_capped(key).unwrap_or_default();
+    match classify_private_key(&now) {
+        Some((_, Some(true))) => Ok(backup),
+        _ => {
+            restore();
+            anyhow::bail!("key did not become encrypted after ssh-keygen ran; rolled back")
+        }
+    }
+}
+
+/// Runs `ssh-keygen -p` to set a new passphrase on an already-unencrypted key, feeding the
+/// passphrase through `SSH_ASKPASS` + an environment variable (never argv — see
+/// [`protect_unencrypted_keys`]).
+#[cfg(unix)]
+fn run_ssh_keygen_add_passphrase(key: &Path, passphrase: &str) -> anyhow::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    // A tiny helper that prints the passphrase from the environment. The SCRIPT bytes carry no
+    // secret — only a reference to the env var — so the temp file is inert if read.
+    let helper = std::env::temp_dir().join(format!(
+        ".bulwark-askpass-{}",
+        std::process::id() // one per process; removed right after the run
+    ));
+    {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o700)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&helper)?;
+        f.write_all(b"#!/bin/sh\nexec printf %s \"$BULWARK_SSH_NEW_PP\"\n")?;
+    }
+    // Remove the helper no matter how we exit.
+    struct RemoveOnDrop(PathBuf);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let _guard = RemoveOnDrop(helper.clone());
+
+    let mut cmd = Command::new("ssh-keygen");
+    cmd.arg("-p")
+        .arg("-f")
+        .arg(key)
+        .arg("-P")
+        .arg("") // old passphrase is empty (the key is unencrypted); "" is not sensitive
+        .env("SSH_ASKPASS", &helper)
+        .env("SSH_ASKPASS_REQUIRE", "force")
+        .env("BULWARK_SSH_NEW_PP", passphrase)
+        .env_remove("DISPLAY")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    // New session → no controlling TTY, so ssh-keygen takes the passphrase from askpass rather than
+    // trying to prompt on /dev/tty (which would hang or fall back unpredictably).
+    // SAFETY: `setsid` runs in the forked child before exec and touches no shared state; failure is
+    // non-fatal (`SSH_ASKPASS_REQUIRE=force` still routes to askpass), so the return is ignored.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    let output = cmd.output()?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "ssh-keygen failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn run_ssh_keygen_add_passphrase(_key: &Path, _passphrase: &str) -> anyhow::Result<()> {
+    anyhow::bail!("adding an SSH key passphrase is only supported on Unix")
+}
+
+/// A collision-safe `.bak` path for `key` under `backup_dir`.
+fn backup_target(key: &Path, backup_dir: &Path) -> PathBuf {
+    let stem = key
+        .to_string_lossy()
+        .trim_start_matches('/')
+        .replace(['/', '\\'], "_");
+    let mut candidate = backup_dir.join(format!("{stem}.bak"));
+    let mut n = 1;
+    while candidate.exists() {
+        candidate = backup_dir.join(format!("{stem}.{n}.bak"));
+        n += 1;
+    }
+    candidate
+}
+
+/// Writes `bytes` to a freshly created `0600` file (`O_EXCL | O_NOFOLLOW`) — the backup of a
+/// private key must never have even a brief group/world-readable window.
+#[cfg(unix)]
+fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)?;
+    f.write_all(bytes)
+}
+
+#[cfg(not(unix))]
+fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    std::fs::write(path, bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,5 +555,111 @@ mod tests {
         assert!(is_never_a_private_key("known_hosts"));
         assert!(is_never_a_private_key("config"));
         assert!(!is_never_a_private_key("id_ed25519"));
+    }
+
+    #[test]
+    fn protect_refuses_an_empty_passphrase() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = protect_unencrypted_keys("", dir.path()).unwrap_err();
+        assert!(err.to_string().contains("empty passphrase"));
+    }
+
+    #[cfg(unix)]
+    fn ssh_keygen_available() -> bool {
+        std::process::Command::new("ssh-keygen")
+            .arg("--help")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|_| true) // `--help` exits non-zero but proves the binary runs
+            .unwrap_or(false)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn protects_an_unencrypted_key_and_leaves_an_encrypted_one_alone() {
+        if !ssh_keygen_available() {
+            eprintln!("ssh-keygen not installed; skipping");
+            return;
+        }
+        use std::process::Command;
+        let ssh = tempfile::tempdir().unwrap();
+        let backups = tempfile::tempdir().unwrap();
+
+        // One plaintext key (the target) and one already-protected key (must be left untouched).
+        let plain = ssh.path().join("id_plain");
+        Command::new("ssh-keygen")
+            .args(["-t", "ed25519", "-N", "", "-q", "-f"])
+            .arg(&plain)
+            .status()
+            .unwrap();
+        let already = ssh.path().join("id_locked");
+        Command::new("ssh-keygen")
+            .args(["-t", "ed25519", "-N", "existing-pass", "-q", "-f"])
+            .arg(&already)
+            .status()
+            .unwrap();
+
+        // Both start classified as expected.
+        assert_eq!(
+            classify_private_key(&std::fs::read_to_string(&plain).unwrap()),
+            Some(("openssh", Some(false)))
+        );
+
+        let report = protect_keys_in_dir(ssh.path(), "one-pass-for-all", backups.path()).unwrap();
+        assert_eq!(
+            report.protected, 1,
+            "exactly the plaintext key is protected"
+        );
+        assert_eq!(
+            report.already_encrypted, 1,
+            "the encrypted key is left alone"
+        );
+        assert_eq!(report.failed, 0);
+
+        // The plaintext key is now genuinely encrypted...
+        assert_eq!(
+            classify_private_key(&std::fs::read_to_string(&plain).unwrap()),
+            Some(("openssh", Some(true))),
+            "the target key is now passphrase-protected"
+        );
+        // ...it rejects the wrong passphrase and accepts the one we set...
+        assert!(
+            !Command::new("ssh-keygen")
+                .arg("-y")
+                .arg("-f")
+                .arg(&plain)
+                .args(["-P", "wrong"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success(),
+            "the new passphrase actually took (wrong one is rejected)"
+        );
+        assert!(Command::new("ssh-keygen")
+            .arg("-y")
+            .arg("-f")
+            .arg(&plain)
+            .args(["-P", "one-pass-for-all"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success());
+
+        // ...and a 0600 backup of the original was written.
+        let protected = report
+            .results
+            .iter()
+            .find(|r| r.outcome == KeyProtectionOutcome::Protected)
+            .unwrap();
+        let backup = protected.backup_path.as_ref().unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(backup).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "the key backup must be owner-only"
+        );
     }
 }

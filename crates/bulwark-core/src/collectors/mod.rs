@@ -15,6 +15,9 @@ mod ports;
 mod process_accounting;
 mod shell_history;
 mod ssh_keys;
+pub use ssh_keys::{
+    protect_unencrypted_keys, BulkProtectionReport, KeyProtectionOutcome, KeyProtectionResult,
+};
 pub(crate) mod sshd;
 mod sudoers;
 mod sysctl;

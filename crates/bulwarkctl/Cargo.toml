@@ -21,6 +21,8 @@ clap.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
+# No-echo passphrase prompt for `ssh protect`. Tiny, no transitive bloat.
+rpassword = "7"
 
 [dev-dependencies]
 tempfile = "3"
