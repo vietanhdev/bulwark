@@ -367,13 +367,19 @@ mod tests {
         assert_eq!(report.total_secrets, 1);
         assert!(report.entries[0].applied);
 
+        // Exact content, not `contains`: a `contains("keep this line")` assertion still passed while
+        // redaction was eating the newline the secret's rule had matched as its terminator, welding
+        // the next line onto the placeholder. Only the secret's own bytes may change.
         let after = std::fs::read_to_string(&file).unwrap();
-        assert!(!after.contains(&key), "secret must be gone from the file");
-        assert!(
-            after.contains("keep this line"),
-            "other content is preserved"
+        assert_eq!(
+            after,
+            format!(
+                "token: {}\nkeep this line\n",
+                secrets::REDACTION_PLACEHOLDER
+            ),
+            "everything but the secret survives byte-for-byte"
         );
-        assert!(after.contains(secrets::REDACTION_PLACEHOLDER));
+        assert!(!after.contains(&key), "secret must be gone from the file");
 
         // The backup holds the original secret and is 0600.
         let backup = report.entries[0].backup_path.as_ref().unwrap();
@@ -475,6 +481,20 @@ mod tests {
         assert!(
             after.contains("tail content"),
             "content after the secret preserved"
+        );
+        // Every line ending survives: the rewritten file has exactly as many lines as the original,
+        // and the redacted line is still its own line rather than fused to the one after it.
+        assert_eq!(
+            after.lines().count(),
+            content.lines().count(),
+            "redaction must not change the file's line count"
+        );
+        assert!(
+            after.contains(&format!(
+                "{{\"secret\":\"{}\"}}\n",
+                secrets::REDACTION_PLACEHOLDER
+            )),
+            "the secret's line keeps its structure and its newline"
         );
         // The backup holds the original secret.
         let backup = report.entries[0].backup_path.as_ref().unwrap();

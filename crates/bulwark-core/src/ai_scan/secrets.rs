@@ -345,9 +345,27 @@ fn is_placeholder_value(value: &str) -> bool {
         })
 }
 
-/// Every hit for one rule against `text`, as `(span, secret)` pairs. The caller has already
-/// established, via the keyword index, that this rule is worth running at all.
-fn matches_for<'t>(rule: &Rule, text: &'t str) -> Vec<((usize, usize), &'t str)> {
+/// One raw regex match, before dedup. `start`/`end` bound the **whole** match — which, for most
+/// rules, deliberately reaches past the credential to anchor on the surrounding context: a `KEY =`
+/// prefix before it and a terminator after it (`(?:\\?['"\x60]|[\s;]|\\[nr]|$)` — note that `[\s;]`
+/// matches the line's own newline). `secret_start`/`secret_end` bound the credential alone (capture
+/// group 1, where the pattern isolates one).
+///
+/// Keeping the two spans apart is the whole point: overlap resolution wants the wide span (so a
+/// generic rule can't re-flag bytes a provider rule already claimed), but **redaction must rewrite
+/// only the narrow one**. Replacing the wide span deleted whatever the pattern had consumed as its
+/// terminator — most often the line ending, which silently joined the secret's line to the next.
+struct RawMatch<'t> {
+    start: usize,
+    end: usize,
+    secret_start: usize,
+    secret_end: usize,
+    secret: &'t str,
+}
+
+/// Every hit for one rule against `text`. The caller has already established, via the keyword
+/// index, that this rule is worth running at all.
+fn matches_for<'t>(rule: &Rule, text: &'t str) -> Vec<RawMatch<'t>> {
     let Some(re) = rule.regex() else {
         // The pattern didn't compile. Skipped, never fatal — one bad rule must not take the pack
         // down — and `every_bundled_rule_compiles` is what stops that becoming silent lost cover.
@@ -371,7 +389,13 @@ fn matches_for<'t>(rule: &Rule, text: &'t str) -> Vec<((usize, usize), &'t str)>
         if !rule.high_conf && is_placeholder_value(secret.as_str()) {
             continue;
         }
-        out.push(((whole.start(), whole.end()), secret.as_str()));
+        out.push(RawMatch {
+            start: whole.start(),
+            end: whole.end(),
+            secret_start: secret.start(),
+            secret_end: secret.end(),
+            secret: secret.as_str(),
+        });
     }
     out
 }
@@ -403,14 +427,16 @@ impl SpanSet {
 /// results silently.
 const MAX_SECRETS_PER_TEXT: usize = 1000;
 
-/// One deduplicated secret hit in `text`: its byte span, the index of the rule that matched, and
-/// the secret slice itself. This is the single detection primitive behind *both* [`scan_text`]
-/// (which reports every hit) and [`redact_text`] (which rewrites only the high-confidence ones), so
-/// redaction reuses the exact candidate prefilter, regex pass, and overlap resolution rather than
-/// re-deriving them from scratch.
+/// One deduplicated secret hit in `text`: the byte span **of the credential itself** (not of the
+/// wider [`RawMatch`], whose context bytes belong to the surrounding file and must survive), the
+/// index of the rule that matched, and the secret slice. This is the single detection primitive
+/// behind *both* [`scan_text`] (which reports every hit) and [`redact_text`] (which rewrites only
+/// the high-confidence ones), so redaction reuses the exact candidate prefilter, regex pass, and
+/// overlap resolution rather than re-deriving them from scratch. The wide match span exists only
+/// inside [`find_hits`], where dedup needs it; nothing downstream may see it.
 struct Hit<'t> {
-    start: usize,
-    end: usize,
+    secret_start: usize,
+    secret_end: usize,
     rule: usize,
     secret: &'t str,
 }
@@ -435,16 +461,16 @@ fn find_hits<'t>(text: &'t str, passes: &[bool]) -> Vec<Hit<'t>> {
             if rule.high_conf != high_conf_pass {
                 continue;
             }
-            for ((start, end), secret) in matches_for(rule, text) {
-                if spans.overlaps(start, end) {
+            for m in matches_for(rule, text) {
+                if spans.overlaps(m.start, m.end) {
                     continue;
                 }
-                spans.insert(start, end);
+                spans.insert(m.start, m.end);
                 hits.push(Hit {
-                    start,
-                    end,
+                    secret_start: m.secret_start,
+                    secret_end: m.secret_end,
                     rule: ri,
-                    secret,
+                    secret: m.secret,
                 });
                 if hits.len() >= MAX_SECRETS_PER_TEXT {
                     break 'passes;
@@ -469,7 +495,7 @@ pub fn scan_text(text: &str) -> Vec<SecretMatch> {
             SecretMatch {
                 provider: rule.provider.clone(),
                 rule_id: rule.id.clone(),
-                line: line_of(text, h.start),
+                line: line_of(text, h.secret_start),
                 redacted: mask(h.secret),
                 high_conf: rule.high_conf,
             }
@@ -493,7 +519,7 @@ pub fn scan_text_high_confidence(text: &str) -> Vec<SecretMatch> {
             SecretMatch {
                 provider: rule.provider.clone(),
                 rule_id: rule.id.clone(),
-                line: line_of(text, h.start),
+                line: line_of(text, h.secret_start),
                 redacted: mask(h.secret),
                 high_conf: true,
             }
@@ -527,9 +553,14 @@ pub fn redact_text(text: &str) -> (String, usize) {
     // heuristic `generic-*` rules are report-only and must never be rewritten (blindly editing a
     // value that merely looked like a secret could corrupt a legitimate config), so skipping them
     // means redaction runs a strict subset of the scan's regexes — not a second full pass.
+    // The credential's own span, NOT the wider regex match: most rules anchor on context they must
+    // not consume — a `KEY =` prefix, a closing quote, and a terminator that is usually the line's
+    // own newline (`[\s;]`). Replacing the wide span deleted all of it, so redacting `KEY=secret\n`
+    // yielded `[bulwark:redacted-secret]` with the next line welded onto it — a corrupted `.env`
+    // whose variable name was gone too. Only the secret's bytes may be rewritten.
     let mut hits: Vec<(usize, usize)> = find_hits(text, &[true])
         .into_iter()
-        .map(|h| (h.start, h.end))
+        .map(|h| (h.secret_start, h.secret_end))
         .collect();
     if hits.is_empty() {
         return (text.to_string(), 0);
@@ -537,8 +568,9 @@ pub fn redact_text(text: &str) -> (String, usize) {
 
     // Rebuild in a single left-to-right pass: copy each kept segment, then the placeholder. The old
     // approach spliced the secret out of a full copy once per hit, which reshuffles the whole tail
-    // every time — quadratic in the number of secrets on a large transcript. Spans are
-    // non-overlapping (SpanSet), so sorting by start makes the copy unambiguous.
+    // every time — quadratic in the number of secrets on a large transcript. Secret spans nest
+    // inside the non-overlapping match spans (SpanSet), so they are themselves non-overlapping and
+    // sorting by start makes the copy unambiguous.
     hits.sort_unstable_by_key(|&(start, _)| start);
     let count = hits.len();
     let mut out = String::with_capacity(text.len());
@@ -729,6 +761,54 @@ mod tests {
         let (again, count2) = redact_text(&redacted);
         assert_eq!(count2, 0, "the placeholder must be inert");
         assert_eq!(again, redacted);
+    }
+
+    #[test]
+    fn redaction_preserves_the_line_ending_after_the_secret() {
+        let key = anthropic_key();
+        let text = format!("key: {key}\nother line\n");
+        let (redacted, _) = redact_text(&text);
+        assert_eq!(
+            redacted,
+            format!("key: {REDACTION_PLACEHOLDER}\nother line\n"),
+            "only the secret's own bytes may be replaced"
+        );
+    }
+
+    #[test]
+    fn redaction_keeps_the_key_name_and_quotes_around_the_value() {
+        // The worst shape of the whole-span bug. Most rules in the pack anchor on a `KEY =` prefix
+        // *and* a closing delimiter, so the wide match ran from `ADAFRUIT` through the closing quote
+        // and the newline. Redacting that span left `[bulwark:redacted-secret]NEXT=1` — the variable
+        // name destroyed, the quoting unbalanced, and two lines welded into one. A `.env` rewritten
+        // that way no longer parses.
+        let text = "ADAFRUIT_API_KEY=\"a8fk2lm9qp3rn7zx1wc4vb6yh0jd5sg2\"\nNEXT=1\n";
+        let (redacted, count) = redact_text(text);
+        assert_eq!(count, 1);
+        assert_eq!(
+            redacted,
+            format!("ADAFRUIT_API_KEY=\"{REDACTION_PLACEHOLDER}\"\nNEXT=1\n")
+        );
+    }
+
+    #[test]
+    fn redaction_never_changes_a_file_s_line_count() {
+        // The invariant, stated directly: redaction replaces credentials in place. Whatever else it
+        // does, it must not add or remove a single line ending anywhere in the file.
+        let key = anthropic_key();
+        let text = format!("# header\nA={key}\nB={key}\n\ntrailing\n");
+        let (redacted, count) = redact_text(&text);
+        assert_eq!(count, 2);
+        assert!(!redacted.contains(&key));
+        assert_eq!(
+            redacted.lines().count(),
+            text.lines().count(),
+            "line count must be identical: {redacted:?}"
+        );
+        assert!(
+            redacted.ends_with('\n'),
+            "a trailing newline must survive: {redacted:?}"
+        );
     }
 
     #[test]

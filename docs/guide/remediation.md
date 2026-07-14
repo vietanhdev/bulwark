@@ -29,6 +29,13 @@ bulwarkctl ai redact --apply
 
 In the desktop app this is the **Redact** button on the Agent Security tab.
 
+**Only the credential's own bytes are replaced.** Everything around it — the `KEY=` name, the quotes
+around the value, the line ending that ends it — survives byte-for-byte, so a redacted `.env` still
+parses and a redacted file has exactly as many lines as it started with. This matters more than it
+sounds: the detection patterns match a *terminator* after the secret (usually the newline itself),
+and a redactor that rewrote the whole matched span would delete it, welding the next line onto the
+placeholder.
+
 Two things it deliberately will *not* do:
 
 - **It won't rotate the key for you.** Redaction removes the secret from disk; it cannot un-leak it.
