@@ -260,6 +260,59 @@ fn scan_persists_and_the_findings_survive_into_the_database() {
     );
 }
 
+/// Regression guard for the false-positive fix: the low-confidence generic `KEY=value` heuristic
+/// must NOT be reported (it fired on every `.env` line, hashes, and ids), while a real,
+/// structurally-identifiable provider key still is. Every `BLWK-AI-001` finding must be critical.
+#[test]
+fn generic_env_values_are_not_reported_but_a_real_provider_key_is() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = home.path().join("Projects/svc");
+    // A real provider key in a memory file — must be found (high-confidence, critical).
+    write(
+        &proj.join("CLAUDE.md"),
+        &format!("project notes — key {}\n", fake_anthropic_key()),
+    );
+    // Generic KEY=value lines in a .env with high-entropy but structureless values. The old generic
+    // heuristic flagged these; they must produce no findings now (a .env is the expected home for
+    // secrets, and these match no provider pattern).
+    write(
+        &proj.join(".env"),
+        "SESSION_SECRET=8f3a9c2b7e1d4a6f0b5e2c8d1a4f7b3e\n\
+         SERVICE_TOKEN=Zx9Qp3Rn7a8Fk2Lm9vB6yH0jD5sGmxQ\n",
+    );
+
+    let out = ai(home.path(), &["scan", "--json", "--no-persist"]);
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+        panic!(
+            "ai scan --json must emit parseable JSON: {e}\nstderr={}",
+            String::from_utf8_lossy(&out.stderr)
+        )
+    });
+    let findings = report["findings"].as_array().expect("findings array");
+
+    assert!(
+        findings
+            .iter()
+            .any(|f| f["rule_id"] == "BLWK-AI-001"
+                && f["file"].as_str().unwrap().ends_with("CLAUDE.md")),
+        "the real Anthropic key in CLAUDE.md must be found"
+    );
+    for f in findings {
+        if f["rule_id"] == "BLWK-AI-001" {
+            assert_eq!(
+                f["severity"], "critical",
+                "no low-confidence generic AI-001 findings may remain: {f}"
+            );
+        }
+    }
+    assert!(
+        !findings
+            .iter()
+            .any(|f| f["file"].as_str().unwrap_or("").ends_with(".env")),
+        "generic KEY=value in a .env must not be reported: {findings:?}"
+    );
+}
+
 /// End-to-end for `bulwarkctl ssh protect`: a real unencrypted key under a synthetic `$HOME/.ssh`
 /// becomes passphrase-protected, an already-encrypted one is left alone, and the passphrase is fed
 /// over stdin (never argv). Gated on `ssh-keygen` being present so it's a no-op where it isn't.

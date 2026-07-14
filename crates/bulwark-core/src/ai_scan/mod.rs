@@ -308,18 +308,15 @@ fn scan_artifact(artifact: &Artifact) -> anyhow::Result<Vec<AiFinding>> {
     //     rotate); the fuzzy guesses are not.
     let mut has_redactable_secret = false;
     if artifact.kind != Credential {
-        for m in secrets::scan_text(&content) {
-            // Only high-confidence, structurally-identifiable provider keys (sk-ant-…, AKIA…, ghp_…,
-            // a PEM block) are reported. The low-confidence generic `KEY=value` heuristic was the
-            // dominant source of non-actionable noise across the whole AI scan: it fires on hashes,
-            // ids, base64 and ordinary config values, and in a `.env` — the *expected* home for
-            // secrets — essentially every line trips it. A real provider key leaked into an
-            // assistant's context/memory is still caught here (and is redactable); a `.env`'s actual
-            // risks (readable by other users, or not gitignored) are the separate AI-015 / AI-016
-            // checks, which do not need each value re-reported as a "possible leak".
-            if !m.high_conf {
-                continue;
-            }
+        // Only high-confidence, structurally-identifiable provider keys (sk-ant-…, AKIA…, ghp_…,
+        // a PEM block) are reported — and `scan_text_high_confidence` runs *only* those rules, so
+        // the broad generic `KEY=value` heuristic (the slowest patterns in the pack) never runs.
+        // That heuristic was the dominant false-positive source anyway: it fires on hashes, ids,
+        // base64 and ordinary config values, and in a `.env` — the *expected* home for secrets —
+        // essentially every line trips it. A real provider key leaked into an assistant's
+        // context/memory is still caught here (and is redactable); a `.env`'s actual risks
+        // (readable by other users, or not gitignored) are the separate AI-015 / AI-016 checks.
+        for m in secrets::scan_text_high_confidence(&content) {
             has_redactable_secret = true;
             out.push(finding_from_secret(
                 artifact,

@@ -357,7 +357,9 @@ fn add_passphrase_with_backup(
         let _ = std::fs::write(key, &original);
     };
 
-    if let Err(e) = run_ssh_keygen_add_passphrase(key, passphrase) {
+    // The askpass helper is written into `backup_dir` (0700, owner-only) rather than a
+    // world-writable /tmp, so no other user can pre-plant a file at its path to disrupt the run.
+    if let Err(e) = run_ssh_keygen_add_passphrase(key, passphrase, backup_dir) {
         restore();
         return Err(e);
     }
@@ -378,17 +380,26 @@ fn add_passphrase_with_backup(
 /// passphrase through `SSH_ASKPASS` + an environment variable (never argv — see
 /// [`protect_unencrypted_keys`]).
 #[cfg(unix)]
-fn run_ssh_keygen_add_passphrase(key: &Path, passphrase: &str) -> anyhow::Result<()> {
+fn run_ssh_keygen_add_passphrase(
+    key: &Path,
+    passphrase: &str,
+    helper_dir: &Path,
+) -> anyhow::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     // A tiny helper that prints the passphrase from the environment. The SCRIPT bytes carry no
-    // secret — only a reference to the env var — so the temp file is inert if read.
-    let helper = std::env::temp_dir().join(format!(
-        ".bulwark-askpass-{}",
-        std::process::id() // one per process; removed right after the run
+    // secret — only a reference to the env var — so the file is inert even if read. It lives in the
+    // owner-only `helper_dir` (not /tmp), and its name is process- and counter-unique so it can
+    // never collide with a stale file from a crashed run or another concurrent call.
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let helper = helper_dir.join(format!(
+        ".bulwark-askpass-{}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
     ));
     {
         let mut f = std::fs::OpenOptions::new()
@@ -443,7 +454,11 @@ fn run_ssh_keygen_add_passphrase(key: &Path, passphrase: &str) -> anyhow::Result
 }
 
 #[cfg(not(unix))]
-fn run_ssh_keygen_add_passphrase(_key: &Path, _passphrase: &str) -> anyhow::Result<()> {
+fn run_ssh_keygen_add_passphrase(
+    _key: &Path,
+    _passphrase: &str,
+    _helper_dir: &Path,
+) -> anyhow::Result<()> {
     anyhow::bail!("adding an SSH key passphrase is only supported on Unix")
 }
 

@@ -480,6 +480,30 @@ pub fn scan_text(text: &str) -> Vec<SecretMatch> {
     out
 }
 
+/// Like [`scan_text`] but runs ONLY the high-confidence provider rules — the heuristic `generic-*`
+/// regexes (the broadest and slowest in the pack) are skipped entirely. The AI scan uses this
+/// because it reports high-confidence hits only; running the generic patterns and then discarding
+/// their results was pure wasted CPU over every scanned file. All returned matches are high-conf.
+pub fn scan_text_high_confidence(text: &str) -> Vec<SecretMatch> {
+    let pack = &*PACK;
+    let mut out: Vec<SecretMatch> = find_hits(text, &[true])
+        .into_iter()
+        .map(|h| {
+            let rule = &pack.rules[h.rule];
+            SecretMatch {
+                provider: rule.provider.clone(),
+                rule_id: rule.id.clone(),
+                line: line_of(text, h.start),
+                redacted: mask(h.secret),
+                high_conf: true,
+            }
+        })
+        .collect();
+
+    out.sort_by_key(|m| m.line);
+    out
+}
+
 /// Severity for a secret hit: a structurally-identifiable provider key is Critical (a live
 /// credential, one paste away from account takeover); a heuristic `generic-*` hit is Medium.
 pub fn severity_for(m: &SecretMatch) -> Severity {
