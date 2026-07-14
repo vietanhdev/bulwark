@@ -244,11 +244,22 @@ enum ConfigRulesAction {
 const INSTALLED_RULES_DIR: &str = "/usr/share/bulwark/rules";
 
 fn resolve_rules_dir(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
+    // An explicitly-named directory that isn't there is a typo, not a reason to fall back to the
+    // auto-detected pack: silently scanning a *different* rule set than the one asked for is its own
+    // kind of lie. Both of these used to be returned unchecked, and a path that didn't exist then
+    // produced a scan that loaded zero rules and reported "no findings" — see `run_scan` below.
     if let Some(p) = explicit {
+        if !p.is_dir() {
+            anyhow::bail!("--rules-dir {} is not a directory", p.display());
+        }
         return Ok(p);
     }
     if let Ok(p) = std::env::var("BULWARK_RULES_DIR") {
-        return Ok(PathBuf::from(p));
+        let p = PathBuf::from(p);
+        if !p.is_dir() {
+            anyhow::bail!("BULWARK_RULES_DIR {} is not a directory", p.display());
+        }
+        return Ok(p);
     }
     // Dev-mode heuristic: running from inside the workspace (cargo run / cargo test).
     let mut candidate = std::env::current_dir()?;
@@ -265,9 +276,38 @@ fn resolve_rules_dir(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
     if installed.is_dir() {
         return Ok(installed);
     }
+    // Last resort: the rule pack shipped beside this executable. The GUI bundles this same binary
+    // as the `bulwark-cli` Tauri sidecar and installs the rules into the app's resource directory
+    // (`/usr/bin/bulwark-cli` + `/usr/lib/Bulwark/rules`), so on a GUI-only install none of the
+    // paths above exist. The GUI itself always passes `--rules-dir`, so this changes nothing for
+    // it — but the sidecar also lands on `PATH`, and a user who ran it got
+    // "couldn't find a 'rules' directory" on a machine that plainly had them.
+    //
+    // Deliberately the *last* candidate, so it can never shadow an explicit flag, the env var, a
+    // workspace checkout, or the packaged `/usr/share` pack: it only speaks up when the answer
+    // would otherwise be an error.
+    if let Some(dir) = exe_relative_dir("rules") {
+        return Ok(dir);
+    }
     anyhow::bail!(
         "couldn't find a 'rules' directory — pass --rules-dir explicitly or set BULWARK_RULES_DIR"
     )
+}
+
+/// A content directory shipped alongside this executable, for the Tauri-sidecar layout
+/// (`<prefix>/bin/bulwark-cli` with its content under `<prefix>/lib/Bulwark/<subdir>`). Also
+/// accepts `<exe dir>/<subdir>`, which is what the extracted release tarball looks like.
+fn exe_relative_dir(subdir: &str) -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let bin_dir = exe.parent()?;
+    let candidates = [
+        bin_dir.join(subdir),
+        bin_dir.join("../lib/Bulwark").join(subdir),
+    ];
+    candidates
+        .into_iter()
+        .find(|c| c.is_dir())
+        .and_then(|c| c.canonicalize().ok())
 }
 
 /// Shared resolution for the log pipeline's content dirs (`decoders`, `log-rules`), following
@@ -297,6 +337,11 @@ fn resolve_content_dir(
     let installed = PathBuf::from("/usr/share/bulwark").join(subdir);
     if installed.is_dir() {
         return Ok(installed);
+    }
+    // Same last-resort as `resolve_rules_dir`: the GUI bundles this binary as a sidecar and ships
+    // `decoders`/`log-rules` in its resource dir, where none of the paths above exist.
+    if let Some(dir) = exe_relative_dir(subdir) {
+        return Ok(dir);
     }
     anyhow::bail!(
         "couldn't find a '{subdir}' directory — pass the corresponding --*-dir flag or set {env_var}"
@@ -363,6 +408,25 @@ fn main() -> anyhow::Result<()> {
                 ..Profile::current_host()
             };
             let scan = engine::run_scan(&rules_dir, &collectors, privileged, &profile);
+
+            // A scan that loaded no rules examined nothing, and "0 findings" from it is not a clean
+            // bill of health — it is the absence of an opinion. Reported as success (exit 0, empty
+            // findings list) it is indistinguishable from a genuinely healthy host, which is the
+            // single most dangerous thing a security scanner can say. Refuse, before persisting:
+            // writing that run to the history would also mark every previously-open finding as
+            // resolved, because `persist_and_reconcile` closes anything a scan didn't re-observe.
+            //
+            // The log scan has always had this guard (`logs scan`, below); the config scan did not,
+            // so a rules directory that had been emptied, mispackaged, or simply mistyped produced a
+            // confident, silent all-clear. Same invariant, same treatment: a failure must be
+            // visible, never a silent drop (architecture doc §8).
+            if scan.rules_loaded == 0 {
+                anyhow::bail!(
+                    "scan loaded 0 rules from {} — refusing to report a clean result from a scan \
+                     that examined nothing (check the path, or pass --rules-dir)",
+                    rules_dir.display()
+                );
+            }
 
             if !no_persist {
                 let db_path = resolve_db_path(cli.db_path)?;

@@ -344,6 +344,14 @@ The CLI path is identical minus the Tauri/React layer: `bulwarkctl` calls `bulwa
 | A collector hangs (e.g. a spawned process never returns) | Low | Whole scan stalls | Per-collector timeout (5s default) | Collector reported as timed-out; scan continues without it |
 | Host has an unusual layout (non-systemd init, non-Debian distro) | Medium (v1 targets Debian/Ubuntu) | Irrelevant checks or false negatives | Each collector declares its own applicability precondition (e.g. "requires systemd") | Collector skips gracefully, excluded from coverage stats — never reported as false "clean" |
 | A collector's fact shape changes (new fields added) | Realized once, fixed | Would silently duplicate existing findings on the next scan | Reconciliation tests (`reconcile_tolerates_a_collector_gaining_new_context_fields`) | Subset-match reconciliation (§5), not exact-string context equality |
+| **The rule pack can't be found** — mistyped `--rules-dir`, emptied directory, mispackaged build | Realized, fixed | A scan of *nothing* reported as a clean host: exit 0, empty findings, no error — and persisting it resolved every open finding, wiping the dashboard | `rules_loaded == 0` is now a hard error in both front-doors (`rules_dir_guard.rs`) | An explicit `--rules-dir`/`BULWARK_RULES_DIR` that isn't a directory fails outright rather than falling back to the auto-detected pack |
+
+That last row is the invariant of §8 in its purest form. "0 findings" from a scan that evaluated
+nothing is not a clean bill of health — it is the *absence of an opinion*, and it is
+indistinguishable from a genuinely healthy host, which makes it the most dangerous thing this tool
+can say. The log pipeline had guarded against it since it shipped; the config scan did not, and a
+rules directory that simply wasn't there produced a confident, silent, green result. Both front-doors
+now refuse.
 
 ---
 

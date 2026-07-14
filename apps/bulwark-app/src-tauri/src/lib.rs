@@ -250,6 +250,24 @@ async fn scan_start(
             &control.is_cancelled(),
         );
 
+        // A scan that loaded no rules examined nothing, and "0 findings" from it is not a clean bill
+        // of health — it is the absence of an opinion. Surfaced as a normal empty result it would be
+        // indistinguishable from a healthy host, which is the most dangerous thing a security tool
+        // can say; it would also be persisted, and `persist_and_reconcile` closes every open finding
+        // a scan didn't re-observe, so an empty rule pack would silently mark the whole dashboard
+        // resolved. Report it as the error it is (architecture doc §8: a failure is visible, never a
+        // silent drop). Mirrors the same guard in `bulwarkctl scan`.
+        if scan.rules_loaded == 0 {
+            let _ = on_event.send(ScanEvent::Error {
+                message: format!(
+                    "Loaded 0 rules from {} — refusing to report a clean result from a scan that \
+                     examined nothing.",
+                    rules_dir.display()
+                ),
+            });
+            return;
+        }
+
         for e in &scan.collector_errors {
             let _ = on_event.send(ScanEvent::CollectorError {
                 collector: e.collector.clone(),
