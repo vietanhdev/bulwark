@@ -259,3 +259,81 @@ fn scan_persists_and_the_findings_survive_into_the_database() {
         "a persisted ai scan must create the findings database"
     );
 }
+
+/// End-to-end for `bulwarkctl ssh protect`: a real unencrypted key under a synthetic `$HOME/.ssh`
+/// becomes passphrase-protected, an already-encrypted one is left alone, and the passphrase is fed
+/// over stdin (never argv). Gated on `ssh-keygen` being present so it's a no-op where it isn't.
+#[test]
+fn ssh_protect_encrypts_an_unencrypted_key_over_the_cli() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let keygen_ok = Command::new("ssh-keygen")
+        .arg("--help")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok();
+    if !keygen_ok {
+        eprintln!("ssh-keygen not installed; skipping ssh_protect e2e");
+        return;
+    }
+
+    let home = tempfile::tempdir().unwrap();
+    let ssh = home.path().join(".ssh");
+    std::fs::create_dir_all(&ssh).unwrap();
+    let plain = ssh.join("id_plain");
+    Command::new("ssh-keygen")
+        .args(["-t", "ed25519", "-N", "", "-q", "-f"])
+        .arg(&plain)
+        .status()
+        .unwrap();
+
+    // Pipe the passphrase over stdin (the --stdin path), so it never appears in argv.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_bulwarkctl"))
+        .args(["ssh", "protect", "--stdin", "--json"])
+        .env("HOME", home.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn bulwarkctl");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"cli-e2e-passphrase\n")
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "ssh protect must exit 0: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["protected"], 1, "the plaintext key is protected");
+
+    // The key now rejects the wrong passphrase and accepts the one we set.
+    let rejects_wrong = !Command::new("ssh-keygen")
+        .arg("-y")
+        .arg("-f")
+        .arg(&plain)
+        .args(["-P", "wrong"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap()
+        .success();
+    assert!(rejects_wrong, "the key must actually be encrypted now");
+    assert!(Command::new("ssh-keygen")
+        .arg("-y")
+        .arg("-f")
+        .arg(&plain)
+        .args(["-P", "cli-e2e-passphrase"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap()
+        .success());
+}
