@@ -304,7 +304,7 @@ jobs:
                 echo "OK: rules install under lowercase /usr/lib/bulwark"
 
                 # 2. The bundled CLI sidecar resolves its own rule pack with no --rules-dir. A
-                #    GUI-only install used to fail here ("couldn't find a rules directory").
+                #    GUI-only install used to fail here (could not find a rules directory).
                 sc=0; /usr/bin/bulwark scan --json > /tmp/side.json 2>/tmp/side.err || sc=$?
                 case "${sc}" in 0|1|2) : ;; *) echo "::error::bundled bulwark crashed standalone (exit ${sc}) on ${{ matrix.image }}"; cat /tmp/side.err; exit 1 ;; esac
                 sn=$(grep -o "\"rule_id\"" /tmp/side.json | wc -l)
@@ -320,7 +320,7 @@ jobs:
 
                 # 4. The launcher is shown as "Bulwark" (capitalized) in the app menu, even though
                 #    the package/paths are lowercase.
-                grep -qx "Name=Bulwark" /usr/share/applications/bulwark.desktop || { echo "::error::desktop launcher Name is not 'Bulwark' on ${{ matrix.image }}"; exit 1; }
+                grep -qx "Name=Bulwark" /usr/share/applications/bulwark.desktop || { echo "::error::desktop launcher Name is not Bulwark on ${{ matrix.image }}"; exit 1; }
                 echo "OK: desktop launcher displays as Bulwark"
               fi
             else
