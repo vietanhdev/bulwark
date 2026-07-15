@@ -217,7 +217,7 @@ fix: "Set 'PasswordAuthentication no' in /etc/ssh/sshd_config and restart sshd."
 references: [CIS-5.2.10, ATTACK-T1110]
 ```
 
-A collector's output is a flat map of fields (`{password_authentication: "yes", permit_root_login: "yes", ...}`), so writing a new rule against an existing collector never touches collector code, only YAML. Collectors that produce lists (listening ports, cron entries) expose them the same way, evaluated one row at a time. `{{ }}` interpolation applies to both `explain` and `title` — templating `title` too (not just `explain`) was added after list-shaped rules sharing one static title read as duplicates in the UI even though each row was a genuinely distinct finding.
+A collector's output is a flat map of fields (`{password_authentication: "yes", permit_root_login: "yes", ...}`), so writing a new rule against an existing collector never touches collector code, only YAML. Collectors that produce lists (listening ports, cron entries) expose them the same way, evaluated one row at a time. <code v-pre>{{ }}</code> interpolation applies to both `explain` and `title` — templating `title` too (not just `explain`) was added after list-shaped rules sharing one static title read as duplicates in the UI even though each row was a genuinely distinct finding.
 
 ### Reconciliation (implemented)
 
@@ -433,7 +433,7 @@ The first run of these tests failed, and each failure was a real defect:
 | Defect | Consequence | Fix |
 |---|---|---|
 | The pack's **allowlists were never parsed** | Every rule inherited gitleaks' false positives without gitleaks' suppression: `curl -u "${user}:${pass}"` reported as leaked credentials, Google's published `AIzaSy…` doc keys reported as live GCP keys | `Allowlist` — the `regexes`/`stopwords` were shipping in `secret_rules.toml` and read by nobody |
-| One allowlist regex **silently failed to compile** | gitleaks writes RE2, where a literal `{{` is legal; Rust's `regex` rejects it. The one pattern suppressing `${{ env.PASS }}` was dropped by a `filter_map(…ok())` | `literalize_braces`, plus `every_allowlist_regex_compiles` — a dropped allowlist is a *silent false positive*, which is why it's an assertion and not a log line |
+| One allowlist regex **silently failed to compile** | gitleaks writes RE2, where a literal <code v-pre>{{</code> is legal; Rust's `regex` rejects it. The one pattern suppressing <code v-pre>${{ env.PASS }}</code> was dropped by a `filter_map(…ok())` | `literalize_braces`, plus `every_allowlist_regex_compiles` — a dropped allowlist is a *silent false positive*, which is why it's an assertion and not a log line |
 | **`path` conditions were ignored** | `nuget-config-password` means something in a `nuget.config` and nothing anywhere else; applied to every file, any `sk_…`-shaped string in a chat transcript was a "leaked credential" | `Rule::applies_to` — the scan and redaction now both pass the artifact's real path |
 
 On a real home directory the result is ten fewer false positives — every one of them a placeholder or

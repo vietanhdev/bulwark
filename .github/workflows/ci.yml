@@ -195,6 +195,12 @@ jobs:
           cache: npm
           cache-dependency-path: docs/package-lock.json
       - run: npm ci
+      # A full VitePress build, not just a syntax check. VitePress compiles every page as a Vue
+      # SFC, so a literal `{{ … }}` in prose is parsed as an interpolation and a non-JS expression
+      # (e.g. an empty `{{ }}` describing the rule templating syntax) fails the build. Only the
+      # production build catches this — it shipped to the Vercel deploy once because CI ran only the
+      # mermaid check below. Escape such braces with a `v-pre` span.
+      - run: npm run build
       # The check renders in a headless browser (mermaid's parser needs a DOM), so it needs the
       # Chromium Playwright already depends on.
       - run: npx playwright install --with-deps chromium
