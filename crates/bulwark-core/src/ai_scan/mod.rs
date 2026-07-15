@@ -384,13 +384,24 @@ fn scan_artifact(artifact: &Artifact) -> anyhow::Result<Vec<AiFinding>> {
     //     heuristic fires on them constantly — findings the user can neither confirm nor act on. A
     //     real pasted `sk-ant-…`/`AKIA…` key is still caught and is genuinely actionable (redact +
     //     rotate); the fuzzy guesses are not.
-    // Whether a secret found here may be *rewritten* by redaction. This is load-bearing, not
-    // cosmetic: redaction is destructive. TWO conditions, both required — the kind must be a leak
-    // surface (never a functional config), AND the file must live inside a recognized agent
-    // directory. A bare `CLAUDE.md`/`.cursorrules` at a project root is an assistant artifact too,
-    // but it sits among the user's own files, so it is reported and never rewritten.
-    let redactable = kind_allows_redaction(artifact.kind) && path_in_agent_dir(&artifact.path);
+    // Whether a secret found here may be *rewritten* by redaction — load-bearing, since redaction is
+    // destructive. THREE conditions, all required:
+    //   * the kind is a genuine leak surface, never a functional config (`kind_allows_redaction`);
+    //   * the file lives inside a recognized agent directory (`path_in_agent_dir`) — a bare
+    //     `CLAUDE.md`/`.cursorrules` at a project root is an assistant artifact too, but it sits
+    //     among the user's own tracked files, so it is reported and never rewritten;
+    //   * git is NOT ignoring the file — a gitignored file is one the developer deliberately keeps
+    //     local and out of version control, so we leave it alone (checked below, only when a secret
+    //     is actually present, so a clean scan pays no `git` cost).
+    let leak_surface_in_agent_dir =
+        kind_allows_redaction(artifact.kind) && path_in_agent_dir(&artifact.path);
+
     let mut has_secret = false;
+    // Git's view of this file, resolved at most once and only when it matters (a secret is present).
+    // Reused by both the redaction gate and the gitignore-leak check, so `git check-ignore` runs no
+    // more often than it did before this feature.
+    let mut gitignored = false;
+
     if artifact.kind != Credential {
         // Only high-confidence, structurally-identifiable provider keys (sk-ant-…, AKIA…, ghp_…,
         // a PEM block) are reported — and `scan_text_high_confidence` runs *only* those rules, so
@@ -401,17 +412,22 @@ fn scan_artifact(artifact: &Artifact) -> anyhow::Result<Vec<AiFinding>> {
         // context/memory is still caught here; a `.env`'s actual risks (readable by other users, or
         // not gitignored) are the separate AI-015 / AI-016 checks.
         //
-        // The secret is reported for every kind, but only *redactable* on a genuine leak surface —
-        // see `kind_allows_redaction`. Reporting a live key in a `.env` is useful; rewriting that
-        // `.env` in place destroys the user's working config, which was a real data-loss bug.
+        // The secret is reported for every kind, but only *redactable* under the gate above.
+        // Reporting a live key in a `.env` is useful; rewriting that `.env` in place destroys the
+        // user's working config, which was a real data-loss bug.
         //
         // Pass the artifact's path: a handful of rules are scoped to a specific file
         // (`nuget-config-password` to `nuget.config`, `freemius-secret-key` to `.php`) and must not
         // fire anywhere else. Without it they would report a leaked credential for any
         // `sk_…`-shaped string in a chat transcript.
         let path = artifact.path.to_string_lossy();
-        for m in secrets::scan_text_high_confidence_in(Some(&path), &content) {
+        let matches = secrets::scan_text_high_confidence_in(Some(&path), &content);
+        if !matches.is_empty() {
             has_secret = true;
+            gitignored = is_artifact_gitignored(artifact);
+        }
+        let redactable = leak_surface_in_agent_dir && !gitignored;
+        for m in matches {
             out.push(finding_from_secret(
                 artifact,
                 &tool,
@@ -444,9 +460,10 @@ fn scan_artifact(artifact: &Artifact) -> anyhow::Result<Vec<AiFinding>> {
 
     // Leak-surface: a secret-bearing project file that git isn't ignoring. This fires on *any*
     // secret-bearing file, redactable or not — a `.env` with a live key that git isn't ignoring is
-    // exactly the case worth flagging, and it is precisely the kind we refuse to redact.
+    // exactly the case worth flagging, and it is precisely the kind we refuse to redact. Reuses the
+    // `gitignored` value computed above so git is consulted once, not twice.
     if has_secret {
-        if let Some(f) = check_gitignore_leak(artifact, &tool) {
+        if let Some(f) = check_gitignore_leak(artifact, &tool, gitignored) {
             out.push(f);
         }
     }
@@ -634,13 +651,13 @@ fn check_credential_permissions(artifact: &Artifact, tool: &str) -> Option<AiFin
 /// workspace actually has a `.git` directory and no ignore rule (root `.gitignore` or
 /// `.git/info/exclude`) covers the file, so it points at genuine exposure rather than crying
 /// wolf over files that are already safely ignored.
-fn check_gitignore_leak(artifact: &Artifact, tool: &str) -> Option<AiFinding> {
+fn check_gitignore_leak(artifact: &Artifact, tool: &str, gitignored: bool) -> Option<AiFinding> {
     let ws = artifact.workspace.as_ref()?;
     if !ws.join(".git").exists() {
         return None;
     }
     let rel = artifact.path.strip_prefix(ws).ok()?;
-    if is_git_ignored(ws, rel) {
+    if gitignored {
         return None;
     }
     let rule = detectors::meta("BLWK-AI-016");
@@ -661,6 +678,27 @@ fn check_gitignore_leak(artifact: &Artifact, tool: &str) -> Option<AiFinding> {
         references: rule.references.iter().map(|s| s.to_string()).collect(),
         redactable: false,
     })
+}
+
+/// Whether git ignores this artifact — the third leg of the redaction gate (see the detection
+/// block) and the value the gitignore-leak check consumes.
+///
+/// Returns `true` only when the file is inside a workspace that is a git repo AND git would ignore
+/// it. A file with no workspace (global `~/.claude` transcripts), or in a directory that isn't a
+/// repo, is not "ignored" — so those stay redactable. A gitignored file is one the developer
+/// deliberately keeps local; per "don't redact keys in gitignored files", redaction skips it, while
+/// the leak check separately declines to warn about it (a file git ignores won't be committed).
+fn is_artifact_gitignored(artifact: &Artifact) -> bool {
+    let Some(ws) = artifact.workspace.as_ref() else {
+        return false;
+    };
+    if !ws.join(".git").exists() {
+        return false;
+    }
+    match artifact.path.strip_prefix(ws) {
+        Ok(rel) => is_git_ignored(ws, rel),
+        Err(_) => false,
+    }
 }
 
 /// A small, honest gitignore check: reads the repo-root `.gitignore` and `.git/info/exclude` and
@@ -886,6 +924,46 @@ mod tests {
         assert!(!path_in_agent_dir(Path::new(
             "/p/app/.github/copilot-instructions.md"
         )));
+    }
+
+    /// A secret in an agent-folder file that git *ignores* is reported but must never be rewritten:
+    /// a gitignored file is one the developer deliberately keeps local, and the secret in it is not
+    /// heading for a commit. A tracked (non-ignored) agent-folder leak surface stays redactable.
+    #[test]
+    fn a_gitignored_agent_file_is_reported_but_not_redactable() {
+        let home = tempfile::tempdir().unwrap();
+        let proj = home.path().join("Projects/app");
+        fs::create_dir_all(proj.join(".git")).unwrap(); // a repo (drives the textual matcher)
+        write(&proj.join(".gitignore"), ".claude/\n"); // the whole .claude dir is ignored
+        write(&proj.join("CLAUDE.md"), "marker\n");
+        // A leak surface inside the *ignored* agent folder.
+        write(
+            &proj.join(".claude/commands/ignored.md"),
+            &format!("key {}\n", anthropic_key()),
+        );
+        // A leak surface inside a *tracked* agent folder (control).
+        write(
+            &proj.join(".cursor/rules/tracked.mdc"),
+            &format!("key {}\n", anthropic_key()),
+        );
+
+        let report = scan(&AiScanOptions::for_home(home.path().to_path_buf()), |_| {});
+        let redactable_of = |suffix: &str| -> bool {
+            report
+                .findings
+                .iter()
+                .find(|f| f.rule_id == "BLWK-AI-001" && f.file.ends_with(suffix))
+                .unwrap_or_else(|| panic!("the key in {suffix} must be reported"))
+                .redactable
+        };
+        assert!(
+            !redactable_of(".claude/commands/ignored.md"),
+            "a gitignored agent file must be reported but never rewritten"
+        );
+        assert!(
+            redactable_of(".cursor/rules/tracked.mdc"),
+            "a tracked agent-folder leak surface stays redactable"
+        );
     }
 
     #[test]
