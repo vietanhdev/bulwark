@@ -7,14 +7,19 @@
 //! deliberate, explicit action (tray menu → Quit), not an accidental side effect of an
 //! ordinary window-manager close click.
 
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager};
 
 pub fn spawn(app: &AppHandle) -> tauri::Result<()> {
+    // No separator between the items on purpose: a `PredefinedMenuItem::separator` is a common
+    // trouble spot for the GNOME/ayatana AppIndicator dbusmenu, where it can render the whole menu
+    // empty or truncated. Two plain, always-enabled items are the most portable shape, and both are
+    // load-bearing on Linux — the tray icon emits no click event there (Tauri's docs), so this menu
+    // (right-click on GNOME) is the only in-tray way to reopen the window or quit.
     let show = MenuItem::with_id(app, "show", "Show Bulwark", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &PredefinedMenuItem::separator(app)?, &quit])?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Bulwark", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
 
     let icon = app
         .default_window_icon()
@@ -49,7 +54,7 @@ pub fn spawn(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-fn show_main_window(app: &AppHandle) {
+pub fn show_main_window(app: &AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };

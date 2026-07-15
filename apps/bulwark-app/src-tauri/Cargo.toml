@@ -20,6 +20,11 @@ tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
+# Relaunching the app focuses the existing window instead of starting a second copy — the reliable
+# way back to the window on Linux, where the tray icon emits no click event (Tauri's own docs) and
+# the GNOME tray menu can be flaky. A tray-resident app that hides on close must never be able to
+# trap the user with the window gone and no way to summon it.
+tauri-plugin-single-instance = "2"
 tokio = { version = "1", features = ["time", "sync"] }
 notify = "8"
 serde.workspace = true

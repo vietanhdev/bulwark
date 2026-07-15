@@ -287,14 +287,47 @@ async fn scan_start(
         // actively harmful, not merely incomplete: reconciliation would treat the collectors it
         // never reached as "ran and found nothing" for the rules it did evaluate, and the run
         // would overwrite a complete picture with a half-finished one.
+        let mut new_findings = Vec::new();
         if !scan.cancelled {
             if let Ok(db_path) = db_path() {
                 if let Ok(mut store) = Store::open(&db_path) {
                     // Reconciled, same as the periodic monitoring loop — a manual scan and a
-                    // background tick finding the same issue must not produce two rows for it.
-                    let _ = store.persist_and_reconcile(&scan);
+                    // background tick finding the same issue must not produce two rows for it. The
+                    // return value is the set of findings that *newly appeared* this run, which is
+                    // exactly what a "new issue" notification should announce.
+                    new_findings = store.persist_and_reconcile(&scan).unwrap_or_default();
                 }
             }
+        }
+
+        // Desktop notification on completion — the user asked to be told when a scan finishes and,
+        // especially, when a new issue turns up. A cancelled (partial) run says nothing, since its
+        // picture is incomplete. New issues lead the message; a clean finish still confirms the scan
+        // ran, so a manual "Scan" click always gets an acknowledgement.
+        if !scan.cancelled {
+            use tauri_plugin_notification::NotificationExt;
+            let (title, body) = if new_findings.is_empty() {
+                let body = if scan.findings.is_empty() {
+                    "No issues found.".to_string()
+                } else {
+                    format!("No new issues — {} still open.", scan.findings.len())
+                };
+                ("Bulwark scan complete".to_string(), body)
+            } else {
+                let title = if new_findings.len() == 1 {
+                    "Bulwark found a new issue".to_string()
+                } else {
+                    format!("Bulwark found {} new issues", new_findings.len())
+                };
+                let body = new_findings
+                    .iter()
+                    .take(3)
+                    .map(|f| f.title.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                (title, body)
+            };
+            let _ = app.notification().builder().title(title).body(body).show();
         }
 
         let _ = on_event.send(ScanEvent::Complete {
@@ -718,6 +751,13 @@ async fn history_list() -> Result<Vec<ScanRunSummary>, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Must be the FIRST plugin registered (plugin requirement). When a second `bulwark-app` is
+        // launched — the natural thing a user does when the window is hidden and the tray menu isn't
+        // cooperating — this fires in the already-running instance and brings its window back,
+        // instead of starting a duplicate. It is the guaranteed escape hatch from "closed to tray".
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            tray::show_main_window(app);
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
