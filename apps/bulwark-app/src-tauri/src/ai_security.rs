@@ -180,13 +180,20 @@ pub async fn ai_scan_snapshot() -> Result<AiSnapshotResponse, String> {
     })
 }
 
-/// Set of files the most recent persisted AI scan actually flagged. `ai_redact` uses this as an
-/// allowlist: redaction may only touch a file the user already saw reported, never an arbitrary
-/// path the caller supplies. Each flagged file contributes BOTH its raw stored string and its
-/// canonicalized form to the set, and a request matches if *either* form matches — so a scan that
-/// stored a display path and a frontend that sends the same string still line up even when
+/// Set of files the most recent persisted AI scan flagged with a **redactable** secret. `ai_redact`
+/// uses this as an allowlist: redaction may only touch a file the user already saw reported *and*
+/// which the scan marked safe to rewrite — never an arbitrary path the caller supplies, and never a
+/// file whose secret is functional. Each qualifying file contributes BOTH its raw stored string and
+/// its canonicalized form to the set, and a request matches if *either* form matches — so a scan
+/// that stored a display path and a frontend that sends the same string still line up even when
 /// `canonicalize` would resolve them differently (or fail), without ever widening the allowlist
 /// beyond the exact files the scan reported.
+///
+/// The `f.redactable` filter is load-bearing, not an optimization: a scan reports a live key sitting
+/// in a project `.env` (so the user knows to rotate it), but marks that finding non-redactable
+/// because rewriting a `.env` in place destroys the working config. Without this filter the allowlist
+/// would contain that `.env` and the IPC command would rewrite it — the exact data-loss bug this
+/// guards against. It is the server-side twin of the core's `kind_allows_redaction`.
 fn redactable_files() -> BTreeSet<PathBuf> {
     db_path()
         .filter(|p| p.exists())
@@ -194,7 +201,7 @@ fn redactable_files() -> BTreeSet<PathBuf> {
         .and_then(|mut s| s.latest_ai_scan().ok().flatten())
         .map(|snap| {
             let mut set = BTreeSet::new();
-            for f in &snap.findings {
+            for f in snap.findings.iter().filter(|f| f.redactable) {
                 set.insert(PathBuf::from(&f.file));
                 if let Ok(canon) = std::fs::canonicalize(&f.file) {
                     set.insert(canon);

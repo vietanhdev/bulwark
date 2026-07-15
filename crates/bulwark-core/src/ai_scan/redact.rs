@@ -77,6 +77,15 @@ pub fn redact_paths(paths: &[PathBuf], apply: bool, backup_dir: &Path) -> Redact
     }
 }
 
+/// Whether `path` is a dotenv-family file (`.env`, `.env.local`, `.env.production`, …) — a file
+/// whose entire purpose is to hold working secrets, and which must therefore never be rewritten.
+fn is_dotenv_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n == ".env" || n.starts_with(".env."))
+        .unwrap_or(false)
+}
+
 fn redact_one(
     path: &Path,
     apply: bool,
@@ -94,6 +103,20 @@ fn redact_one(
     }
     if !meta.is_file() {
         return Ok(None);
+    }
+
+    // Defense-in-depth against the functional-config data-loss bug: never rewrite a dotenv file.
+    // A `.env` / `.env.local` / `.env.production` exists precisely to hold live secrets that a
+    // running app reads back, so redacting it in place breaks the project *and* destroys the only
+    // copy of the key in that file. The scan already marks these non-redactable
+    // (`kind_allows_redaction`), so a `.env` should never reach this function — but redaction
+    // rewrites real user files and a single wrong one is irreversible, so this is the last,
+    // kind-agnostic gate. Refused loudly (an error entry the user sees), never a silent skip.
+    if is_dotenv_path(path) {
+        anyhow::bail!(
+            "refusing to rewrite a dotenv file — its secrets are functional and rewriting them \
+             would break the project; rotate the key instead"
+        );
     }
 
     // Open once with O_NOFOLLOW (the symlink_metadata check above closes the by-name TOCTOU: a
@@ -416,6 +439,46 @@ mod tests {
         assert!(report.entries.is_empty());
         assert!(report.errors.iter().any(|e| e.contains("symlink")));
         assert_eq!(std::fs::read_to_string(&target).unwrap(), original);
+    }
+
+    /// Backstop for the functional-config data-loss bug: even if a `.env` is passed to redaction
+    /// directly (bypassing the scan's `kind_allows_redaction` gate), it must be refused and left
+    /// **byte-for-byte unchanged** — no rewrite, no backup, an error the caller can see.
+    #[test]
+    fn a_dotenv_is_refused_and_left_untouched_even_if_passed_directly() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in [".env", ".env.local", ".env.production"] {
+            let file = dir.path().join(name);
+            let original = format!("ANTHROPIC_API_KEY={}\n", anthropic_key());
+            std::fs::write(&file, &original).unwrap();
+
+            let report = redact_paths(std::slice::from_ref(&file), true, &dir.path().join("b"));
+
+            assert!(
+                report.entries.is_empty() && report.total_secrets == 0,
+                "{name}: nothing may be redacted"
+            );
+            assert!(
+                report.errors.iter().any(|e| e.contains("dotenv")),
+                "{name}: the refusal must be surfaced as an error"
+            );
+            assert_eq!(
+                std::fs::read_to_string(&file).unwrap(),
+                original,
+                "{name}: the file must be byte-for-byte unchanged"
+            );
+        }
+    }
+
+    #[test]
+    fn dotenv_detection_is_precise() {
+        assert!(is_dotenv_path(Path::new("/p/.env")));
+        assert!(is_dotenv_path(Path::new("/p/.env.local")));
+        assert!(is_dotenv_path(Path::new("/p/.env.production")));
+        // Not dotenv files — these stay redactable if their kind allows.
+        assert!(!is_dotenv_path(Path::new("/p/CLAUDE.md")));
+        assert!(!is_dotenv_path(Path::new("/p/environment.md")));
+        assert!(!is_dotenv_path(Path::new("/p/session.jsonl")));
     }
 
     #[test]

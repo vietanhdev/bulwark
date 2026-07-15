@@ -150,7 +150,12 @@ fn an_unpinned_mcp_launcher_fires_003_but_a_pinned_one_does_not() {
 }
 
 #[test]
-fn a_real_secret_in_a_dotenv_is_caught_and_redactable() {
+fn a_real_secret_in_a_dotenv_is_caught_but_not_redactable() {
+    // This test previously asserted the *opposite* — that a `.env` secret is redactable — and that
+    // assertion was the data-loss bug written down as intent. A `.env` is a functional secrets file:
+    // redaction rewrites it in place, which breaks the project and destroys the key. The secret is
+    // still caught and reported (so the user rotates it); it just must never be offered for the
+    // destructive rewrite. See `kind_allows_redaction`.
     let home = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
     // A live-shaped AWS access key id with real token entropy (not the AWS doc EXAMPLE value, which
@@ -162,11 +167,11 @@ fn a_real_secret_in_a_dotenv_is_caught_and_redactable() {
         .find(|f| f.rule_id == "BLWK-AI-001" && f.file.contains(".env"));
     assert!(
         secret.is_some(),
-        "a real AWS key in .env must fire AI-001: {findings:?}"
+        "a real AWS key in .env must still fire AI-001: {findings:?}"
     );
     assert!(
-        secret.unwrap().redactable,
-        "a high-confidence secret must be offered for redaction"
+        !secret.unwrap().redactable,
+        "a secret in a .env must NOT be redactable — rewriting it destroys the working config"
     );
 }
 

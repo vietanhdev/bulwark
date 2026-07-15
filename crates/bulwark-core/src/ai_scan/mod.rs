@@ -384,7 +384,10 @@ fn scan_artifact(artifact: &Artifact) -> anyhow::Result<Vec<AiFinding>> {
     //     heuristic fires on them constantly — findings the user can neither confirm nor act on. A
     //     real pasted `sk-ant-…`/`AKIA…` key is still caught and is genuinely actionable (redact +
     //     rotate); the fuzzy guesses are not.
-    let mut has_redactable_secret = false;
+    // Whether a secret found here may be *rewritten* by redaction. This is load-bearing, not
+    // cosmetic: redaction is destructive.
+    let redactable = kind_allows_redaction(artifact.kind);
+    let mut has_secret = false;
     if artifact.kind != Credential {
         // Only high-confidence, structurally-identifiable provider keys (sk-ant-…, AKIA…, ghp_…,
         // a PEM block) are reported — and `scan_text_high_confidence` runs *only* those rules, so
@@ -392,21 +395,26 @@ fn scan_artifact(artifact: &Artifact) -> anyhow::Result<Vec<AiFinding>> {
         // That heuristic was the dominant false-positive source anyway: it fires on hashes, ids,
         // base64 and ordinary config values, and in a `.env` — the *expected* home for secrets —
         // essentially every line trips it. A real provider key leaked into an assistant's
-        // context/memory is still caught here (and is redactable); a `.env`'s actual risks
-        // (readable by other users, or not gitignored) are the separate AI-015 / AI-016 checks.
+        // context/memory is still caught here; a `.env`'s actual risks (readable by other users, or
+        // not gitignored) are the separate AI-015 / AI-016 checks.
+        //
+        // The secret is reported for every kind, but only *redactable* on a genuine leak surface —
+        // see `kind_allows_redaction`. Reporting a live key in a `.env` is useful; rewriting that
+        // `.env` in place destroys the user's working config, which was a real data-loss bug.
+        //
         // Pass the artifact's path: a handful of rules are scoped to a specific file
         // (`nuget-config-password` to `nuget.config`, `freemius-secret-key` to `.php`) and must not
         // fire anywhere else. Without it they would report a leaked credential for any
         // `sk_…`-shaped string in a chat transcript.
         let path = artifact.path.to_string_lossy();
         for m in secrets::scan_text_high_confidence_in(Some(&path), &content) {
-            has_redactable_secret = true;
+            has_secret = true;
             out.push(finding_from_secret(
                 artifact,
                 &tool,
                 &m,
                 secrets::severity_for(&m),
-                true,
+                redactable,
             ));
         }
     }
@@ -431,14 +439,43 @@ fn scan_artifact(artifact: &Artifact) -> anyhow::Result<Vec<AiFinding>> {
         out.push(finding_from_detection(artifact, &tool, d));
     }
 
-    // Leak-surface: a secret-bearing project file that git isn't ignoring.
-    if has_redactable_secret {
+    // Leak-surface: a secret-bearing project file that git isn't ignoring. This fires on *any*
+    // secret-bearing file, redactable or not — a `.env` with a live key that git isn't ignoring is
+    // exactly the case worth flagging, and it is precisely the kind we refuse to redact.
+    if has_secret {
         if let Some(f) = check_gitignore_leak(artifact, &tool) {
             out.push(f);
         }
     }
 
     Ok(out)
+}
+
+/// Whether a secret found in this kind of artifact may be **rewritten** by redaction.
+///
+/// Redaction replaces a secret's bytes in place with `[bulwark:redacted-secret]`. That is safe only
+/// where the file is a *record* of a secret — a chat transcript, a free-text instruction/context
+/// file — which no tool reads the secret back from. It is **catastrophic** on a *functional* config:
+/// a `.env`, an MCP manifest, a Codex `config.toml`, an editor `settings.json` each holds a secret
+/// that something loads and uses, and rewriting the value silently breaks the user's project while
+/// destroying the only copy of the key in that file. A `.env` is the textbook example — its entire
+/// purpose is to hold secrets — and redacting it in place was a real, reported data-loss bug.
+///
+/// So redaction is allowed ONLY on genuine leak surfaces, never on a file whose job is to carry a
+/// working credential. Detection still reports a secret in every kind; only the destructive
+/// *rewrite* is gated here. When in doubt a kind is treated as non-redactable: failing to offer a
+/// redact the user could have done by hand is a nuisance, whereas rewriting a file we shouldn't have
+/// is irreversible damage.
+fn kind_allows_redaction(kind: ArtifactKind) -> bool {
+    use ArtifactKind::*;
+    match kind {
+        // Records of a secret — rewriting removes the leaked copy without breaking anything.
+        Transcript | Instructions => true,
+        // Functional configs / credential stores — something reads the secret from these, so a
+        // rewrite is data loss. Enumerated explicitly (no wildcard) so a newly-added kind must make
+        // a deliberate decision here rather than defaulting into "safe to rewrite".
+        DotEnv | McpConfig | Settings | Tasks | CodexConfig | Credential => false,
+    }
 }
 
 /// Settings files split by tool: VS Code's `settings.json` has its own risky keys (YOLO mode,
@@ -732,6 +769,75 @@ mod tests {
 
     fn anthropic_key() -> String {
         format!("sk-ant-api03-{}AA", "a".repeat(93))
+    }
+
+    /// **The data-loss regression.** A live key in a project `.env` must be *reported* (so the user
+    /// knows to rotate it) but never marked *redactable* — because redaction rewrites the file in
+    /// place, and a `.env` is the working config a running app reads its secrets back from. Rewriting
+    /// it destroys the project's configuration and the only copy of the key in that file. The same
+    /// key in a `CLAUDE.md` (a context file, not read for its value) *is* redactable — removing the
+    /// leaked copy there breaks nothing.
+    #[test]
+    fn a_secret_in_a_dotenv_is_reported_but_never_redactable() {
+        let home = tempfile::tempdir().unwrap();
+        let proj = home.path().join("Projects/app");
+        // CLAUDE.md makes this a discovered workspace, and is itself a redactable leak surface.
+        write(
+            &proj.join("CLAUDE.md"),
+            &format!("pasted key {}\n", anthropic_key()),
+        );
+        // The same key in the project's .env — a functional secrets file.
+        write(
+            &proj.join(".env"),
+            &format!("ANTHROPIC_API_KEY={}\n", anthropic_key()),
+        );
+
+        let opts = AiScanOptions::for_home(home.path().to_path_buf());
+        let report = scan(&opts, |_| {});
+
+        let dotenv_secret = report
+            .findings
+            .iter()
+            .find(|f| f.rule_id == "BLWK-AI-001" && f.file.ends_with(".env"))
+            .expect("the key in .env must still be reported");
+        assert!(
+            !dotenv_secret.redactable,
+            "a secret in a .env must NOT be redactable — rewriting it destroys the working config"
+        );
+
+        let md_secret = report
+            .findings
+            .iter()
+            .find(|f| f.rule_id == "BLWK-AI-001" && f.file.ends_with("CLAUDE.md"))
+            .expect("the key in CLAUDE.md must be reported");
+        assert!(
+            md_secret.redactable,
+            "a secret in an instruction/context file is a genuine leak and stays redactable"
+        );
+
+        // The .env must never appear in the redactable set the redact command consumes.
+        assert!(
+            !report
+                .redactable_files()
+                .iter()
+                .any(|p| p.ends_with(".env")),
+            "redactable_files() must not include a .env"
+        );
+    }
+
+    #[test]
+    fn only_leak_surfaces_are_redactable() {
+        use ArtifactKind::*;
+        // Records of a secret — safe to rewrite.
+        assert!(kind_allows_redaction(Transcript));
+        assert!(kind_allows_redaction(Instructions));
+        // Functional configs / credential stores — rewriting is data loss.
+        for kind in [DotEnv, McpConfig, Settings, Tasks, CodexConfig, Credential] {
+            assert!(
+                !kind_allows_redaction(kind),
+                "{kind:?} holds a functional secret and must never be redactable"
+            );
+        }
     }
 
     #[test]
