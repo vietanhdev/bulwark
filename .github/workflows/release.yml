@@ -146,10 +146,12 @@ jobs:
           cp target/generate-rpm/bulwarkctl-${V}-1.x86_64.rpm "dist/bulwarkctl-${V}.x86_64.rpm"
           cp bulwarkctl-${V}-x86_64-linux.tar.gz              "dist/"
 
-          # Match by version+arch, not a hardcoded lowercase name: the GUI's productName is
-          # "Bulwark" (capitalized, for the desktop launcher), so Tauri names the AppImage
-          # `Bulwark_<v>_amd64.AppImage` while lowercasing the deb/rpm package names. Globbing on
-          # the stable version+arch suffix keeps this step working regardless of that casing.
+          # Match by version+arch, not a hardcoded name. The GUI's productName is lowercase
+          # `bulwark` (so install paths are FHS-conventional: /usr/lib/bulwark, bulwark.desktop),
+          # while the desktop launcher shows "Bulwark" via a desktopTemplate. Tauri names the raw
+          # bundles after productName; globbing on the stable version+arch suffix keeps this step
+          # working regardless of that name, and the copies below give every asset the public
+          # `bulwark-desktop-*` name the download page links to.
           cp "$(ls target/release/bundle/deb/*_${V}_amd64.deb)"           "dist/bulwark-desktop_${V}_amd64.deb"
           cp "$(ls target/release/bundle/rpm/*-${V}-1.x86_64.rpm)"        "dist/bulwark-desktop-${V}.x86_64.rpm"
           cp "$(ls target/release/bundle/appimage/*_${V}_amd64.AppImage)" "dist/bulwark-desktop-${V}-x86_64.AppImage"
@@ -259,6 +261,14 @@ jobs:
                 exit 1
               fi
               echo "OK: installed CLI produced ${n} findings from the packaged rule pack"
+
+              # The zero-rule guard: a scan that loads no rules must FAIL, not silently report a
+              # clean host. Point it at a directory that does not exist and require a non-zero exit.
+              if bulwarkctl scan --rules-dir /nonexistent/rules --json > /dev/null 2>&1; then
+                echo "::error::a scan with a missing rules dir exited 0 on ${{ matrix.image }} — the zero-rule guard is gone; an unconfigured install would report a false all-clear"
+                exit 1
+              fi
+              echo "OK: a scan that loads no rules fails instead of reporting a false all-clear"
             }
 
             if [ "${{ matrix.pkg }}" = "deb" ]; then
@@ -286,6 +296,32 @@ jobs:
                   exit 1
                 fi
                 echo "OK: GUI binary has every shared library it needs (incl. webkit2gtk-4.1)"
+
+                # Layout invariants the GUI package must satisfy on a real install:
+
+                # 1. FHS-conventional lowercase resource dir (productName is "bulwark", not "Bulwark").
+                test -d /usr/lib/bulwark/rules || { echo "::error::/usr/lib/bulwark/rules missing on ${{ matrix.image }} — resource dir casing regressed"; exit 1; }
+                echo "OK: rules install under lowercase /usr/lib/bulwark"
+
+                # 2. The bundled CLI sidecar resolves its own rule pack with no --rules-dir. A
+                #    GUI-only install used to fail here ("couldn't find a rules directory").
+                sc=0; /usr/bin/bulwark scan --json > /tmp/side.json 2>/tmp/side.err || sc=$?
+                case "${sc}" in 0|1|2) : ;; *) echo "::error::bundled bulwark crashed standalone (exit ${sc}) on ${{ matrix.image }}"; cat /tmp/side.err; exit 1 ;; esac
+                sn=$(grep -o "\"rule_id\"" /tmp/side.json | wc -l)
+                test "${sn}" -ge 1 || { echo "::error::bundled bulwark found 0 rules standalone on ${{ matrix.image }}"; exit 1; }
+                echo "OK: bundled bulwark resolves its rule pack standalone (${sn} findings)"
+
+                # 3. Polkit policy installed and well-formed. A double hyphen in its XML comment once
+                #    made a strict parser reject the whole file, so it never loaded.
+                test -f /usr/share/polkit-1/actions/com.bulwark.policy || { echo "::error::polkit policy not installed by the GUI package on ${{ matrix.image }}"; exit 1; }
+                apt-get install -y -qq libxml2-utils
+                xmllint --noout /usr/share/polkit-1/actions/com.bulwark.policy || { echo "::error::polkit policy is not valid XML on ${{ matrix.image }}"; exit 1; }
+                echo "OK: polkit policy installed and valid XML"
+
+                # 4. The launcher is shown as "Bulwark" (capitalized) in the app menu, even though
+                #    the package/paths are lowercase.
+                grep -qx "Name=Bulwark" /usr/share/applications/bulwark.desktop || { echo "::error::desktop launcher Name is not 'Bulwark' on ${{ matrix.image }}"; exit 1; }
+                echo "OK: desktop launcher displays as Bulwark"
               fi
             else
               dnf install -y -q /dist/bulwarkctl-*.x86_64.rpm

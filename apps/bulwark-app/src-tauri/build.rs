@@ -5,17 +5,23 @@ fn main() {
     tauri_build::build()
 }
 
-/// Stages the `bulwarkctl` CLI as a Tauri `externalBin` sidecar, under the name `bulwark-cli`.
+/// Stages the `bulwarkctl` CLI as a Tauri `externalBin` sidecar, under the name `bulwark`.
 ///
-/// The rename is load-bearing, not cosmetic. Tauri copies a staged sidecar back out next to the
-/// app binary — i.e. into `target/<profile>/`. When the sidecar was called `bulwarkctl` that
-/// landed *exactly on top of* the CLI crate's own build output, `target/debug/bulwarkctl`. Since
-/// nothing orders this build script against the `bulwarkctl` crate's build, which file won the
-/// race varied between runs, and `cargo test --workspace` intermittently executed a stale binary
-/// (the failure that `crates/bulwarkctl/tests/ai_cli.rs` kept tripping over). A sidecar that
-/// doesn't share a filename with a workspace binary cannot clobber one.
+/// The rename is load-bearing, not cosmetic — for two independent reasons, and any replacement name
+/// must satisfy both: it must not be `bulwarkctl`, and it must not be `bulwark-app`.
 ///
-/// Tauri expects the sidecar at `binaries/bulwarkctl-<target-triple>`, and its own build step
+/// 1. Tauri copies a staged sidecar back out next to the app binary — i.e. into `target/<profile>/`.
+///    When the sidecar was called `bulwarkctl` that landed *exactly on top of* the CLI crate's own
+///    build output, `target/debug/bulwarkctl`. Since nothing orders this build script against the
+///    `bulwarkctl` crate's build, which file won the race varied between runs, and `cargo test
+///    --workspace` intermittently executed a stale binary (the failure that
+///    `crates/bulwarkctl/tests/ai_cli.rs` kept tripping over). `bulwark` shares a filename with no
+///    workspace binary, so it cannot clobber one.
+/// 2. The installed GUI package puts this binary at `/usr/bin/bulwark`. `bulwarkctl` there would
+///    file-conflict with the standalone CLI package (which owns `/usr/bin/bulwarkctl`) when both are
+///    installed; `bulwark` lets the two packages coexist.
+///
+/// Tauri expects the sidecar at `binaries/bulwark-<target-triple>`, and its own build step
 /// hard-errors if that file is missing — which would break a plain `cargo build`/`cargo test` of
 /// this crate (and CI) even when nobody is bundling. So on every build we copy the
 /// already-built `bulwarkctl` from the workspace target dir into place; if it hasn't been built
@@ -33,7 +39,7 @@ fn stage_cli_sidecar() {
     }
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let binaries_dir = manifest_dir.join("binaries");
-    let dest = binaries_dir.join(format!("bulwark-cli-{triple}"));
+    let dest = binaries_dir.join(format!("bulwark-{triple}"));
     let _ = std::fs::create_dir_all(&binaries_dir);
 
     // The workspace target dir is `<workspace>/target`; from `apps/bulwark-app/src-tauri` that's
@@ -77,7 +83,7 @@ fn stage_cli_sidecar() {
     if !dest.exists() {
         let _ = std::fs::write(&dest, b"");
         println!(
-            "cargo:warning=bulwark-cli sidecar not found — staged an empty placeholder at {}. \
+            "cargo:warning=bulwark sidecar not found — staged an empty placeholder at {}. \
              Run `cargo build -p bulwarkctl --release` before bundling so a real CLI ships.",
             dest.display()
         );

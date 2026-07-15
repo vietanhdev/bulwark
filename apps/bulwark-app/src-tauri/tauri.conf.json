@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Bulwark",
+  "productName": "bulwark",
   "mainBinaryName": "bulwark-app",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "identifier": "com.vietanhnv.bulwark",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -43,6 +43,20 @@
       "../../../decoders": "decoders",
       "../../../log-rules": "log-rules"
     },
-    "externalBin": ["binaries/bulwark-cli"]
+    "externalBin": ["binaries/bulwark"],
+    "linux": {
+      "deb": {
+        "desktopTemplate": "bulwark.desktop",
+        "files": {
+          "/usr/share/polkit-1/actions/com.bulwark.policy": "../../../polkit/com.bulwark.policy"
+        }
+      },
+      "rpm": {
+        "desktopTemplate": "bulwark.desktop",
+        "files": {
+          "/usr/share/polkit-1/actions/com.bulwark.policy": "../../../polkit/com.bulwark.policy"
+        }
+      }
+    }
   }
 }

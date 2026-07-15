@@ -7,9 +7,14 @@
   <vendor_url>https://github.com/vietanhdev/bulwark</vendor_url>
 
   <!--
-    Bulwark's GUI elevates one thing: `bulwarkctl scan --privileged`, to read root-only files
-    (e.g. /etc/sudoers, /etc/shadow) for a full audit. It does this with `pkexec`, which uses the
-    generic `org.freedesktop.policykit.exec` action below.
+    Bulwark's GUI elevates one thing: the privileged pass of `bulwarkctl scan`, to read root-only
+    files (e.g. /etc/sudoers, /etc/shadow) for a full audit. It does this with `pkexec`, which uses
+    the generic `org.freedesktop.policykit.exec` action below.
+
+    (Note for editors: XML comments may not contain a double hyphen, so flag names like the one
+    this pass is invoked with are written out in prose here rather than with their literal dashes.
+    A double hyphen in this comment makes a strict XML parser reject the whole policy, which then
+    silently never loads.)
 
     Two deliberate security choices:
 

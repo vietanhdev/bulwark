@@ -165,7 +165,7 @@ fn resolve_privileged_rules_dir(app: &tauri::AppHandle) -> Result<PathBuf, Strin
 ///   * (release builds) the dev workspace `target/` walk — a planted `target/debug/bulwarkctl`
 ///     under an attacker-chosen CWD would otherwise be run as root.
 ///
-/// The only trusted location is **next to the running executable**, canonicalized: `bulwark-cli`
+/// The only trusted location is **next to the running executable**, canonicalized: `bulwark`
 /// is bundled as a Tauri `externalBin` sidecar, so it lands beside `bulwark-app` in every package
 /// format (the desktop `.deb`/`.rpm` and the single-file AppImage alike). The `target/` walk
 /// survives *only* under `debug_assertions`, purely so `cargo tauri dev` can find the freshly
@@ -175,9 +175,9 @@ fn resolve_cli_binary() -> Result<PathBuf, String> {
         // Canonicalize the executable's own directory so a symlinked launcher can't point the
         // sidecar lookup at an attacker-controlled directory.
         if let Some(dir) = exe.parent().and_then(|d| std::fs::canonicalize(d).ok()) {
-            // `bulwark-cli` is the bundled sidecar (see build.rs for why it is not called
-            // `bulwarkctl`); `bulwarkctl` covers an install where the CLI package sits alongside.
-            for name in ["bulwark-cli", "bulwarkctl"] {
+            // `bulwark` is the bundled sidecar (see build.rs for why it is not called `bulwarkctl`
+            // or `bulwark-app`); `bulwarkctl` covers an install where the CLI package sits alongside.
+            for name in ["bulwark", "bulwarkctl"] {
                 let sidecar = dir.join(name);
                 if sidecar.is_file() {
                     return Ok(sidecar);

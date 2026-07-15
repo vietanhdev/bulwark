@@ -1,3 +1,5 @@
 # Sidecar binaries are staged at build time by build.rs (copied from the workspace target dir),
-# never committed. See build.rs `stage_cli_sidecar`.
+# never committed. See build.rs `stage_cli_sidecar`. The sidecar is named `bulwark-<triple>`
+# (`bulwarkctl-*` kept for any stragglers from before the rename).
+bulwark-*
 bulwarkctl-*

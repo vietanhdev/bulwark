@@ -277,8 +277,8 @@ fn resolve_rules_dir(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
         return Ok(installed);
     }
     // Last resort: the rule pack shipped beside this executable. The GUI bundles this same binary
-    // as the `bulwark-cli` Tauri sidecar and installs the rules into the app's resource directory
-    // (`/usr/bin/bulwark-cli` + `/usr/lib/Bulwark/rules`), so on a GUI-only install none of the
+    // as the `bulwark` Tauri sidecar and installs the rules into the app's resource directory
+    // (`/usr/bin/bulwark` + `/usr/lib/bulwark/rules`), so on a GUI-only install none of the
     // paths above exist. The GUI itself always passes `--rules-dir`, so this changes nothing for
     // it — but the sidecar also lands on `PATH`, and a user who ran it got
     // "couldn't find a 'rules' directory" on a machine that plainly had them.
@@ -295,14 +295,20 @@ fn resolve_rules_dir(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
 }
 
 /// A content directory shipped alongside this executable, for the Tauri-sidecar layout
-/// (`<prefix>/bin/bulwark-cli` with its content under `<prefix>/lib/Bulwark/<subdir>`). Also
+/// (`<prefix>/bin/bulwark` with its content under `<prefix>/lib/bulwark/<subdir>`). Also
 /// accepts `<exe dir>/<subdir>`, which is what the extracted release tarball looks like.
+///
+/// The `lib/bulwark` segment is the GUI's Tauri resource directory, named after `productName` in
+/// `tauri.conf.json`. That name is lowercase `bulwark` — kept in sync with this path — while the
+/// app's *display* name stays "Bulwark" via a `desktopTemplate`. If `productName` ever changes,
+/// this must follow; a mismatch would only cost the sidecar its standalone fallback (the GUI passes
+/// `--rules-dir` explicitly regardless), never correctness of a scan.
 fn exe_relative_dir(subdir: &str) -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let bin_dir = exe.parent()?;
     let candidates = [
         bin_dir.join(subdir),
-        bin_dir.join("../lib/Bulwark").join(subdir),
+        bin_dir.join("../lib/bulwark").join(subdir),
     ];
     candidates
         .into_iter()
