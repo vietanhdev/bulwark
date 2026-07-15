@@ -16,7 +16,7 @@ name = "bulwarkctl"
 path = "src/main.rs"
 
 [dependencies]
-bulwark-core = { path = "../bulwark-core", version = "0.6.6" }
+bulwark-core = { path = "../bulwark-core", version = "0.6.7" }
 clap.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
