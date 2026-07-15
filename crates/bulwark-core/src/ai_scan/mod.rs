@@ -250,6 +250,14 @@ pub fn scan_cancellable(
     let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
     artifacts.retain(|a| seen.insert(a.path.clone()));
 
+    // Skip files git is ignoring — entirely, for both scanning and redaction. A gitignored file is
+    // one the developer deliberately keeps out of version control (a local `.env`, a scratch note,
+    // a local override); Bulwark leaves it alone rather than reporting or rewriting it. Global
+    // `$HOME` state has no workspace repo and is never ignored, so the transcripts worth scanning
+    // are untouched. Batched one `git check-ignore` per repo (see `drop_gitignored`), so this stays
+    // cheap even on a machine full of projects.
+    artifacts = drop_gitignored(artifacts);
+
     // Scan artifacts in parallel: each `scan_artifact` is pure and independent (read one file,
     // run the regex pack over it), and file-bound scanning is exactly what a machine with a year of
     // transcripts is slow at. `scan_artifact` never mutates shared state, so the only coordination
@@ -680,6 +688,91 @@ fn check_gitignore_leak(artifact: &Artifact, tool: &str, gitignored: bool) -> Op
     })
 }
 
+/// Removes every artifact git is ignoring, so a gitignored file is neither scanned, reported, nor
+/// (therefore) redacted — the user's request to skip gitignored files entirely.
+///
+/// A file with no workspace (global `~/.claude` transcripts and other `$HOME` state) is never in a
+/// project repo and is always kept. For workspace files, artifacts are grouped by their repo root
+/// and each repo is consulted **once** via `git check-ignore` — so a machine with dozens of projects
+/// pays dozens of git calls, not one per artifact. When git can't answer (absent, or an unusable
+/// `.git`), the per-path textual matcher (`is_git_ignored`) stands in.
+fn drop_gitignored(artifacts: Vec<Artifact>) -> Vec<Artifact> {
+    use std::collections::HashMap;
+
+    let mut by_repo: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+    for a in &artifacts {
+        if let Some(ws) = a.workspace.as_ref() {
+            if ws.join(".git").exists() {
+                by_repo.entry(ws.clone()).or_default().push(a.path.clone());
+            }
+        }
+    }
+    if by_repo.is_empty() {
+        return artifacts; // nothing lives in a repo (e.g. a pure whole-machine transcript sweep)
+    }
+
+    let mut ignored: BTreeSet<PathBuf> = BTreeSet::new();
+    for (ws, paths) in &by_repo {
+        collect_gitignored(ws, paths, &mut ignored);
+    }
+    artifacts
+        .into_iter()
+        .filter(|a| !ignored.contains(&a.path))
+        .collect()
+}
+
+/// Inserts into `out` the members of `abs_paths` (all under `ws`) that git ignores, using one
+/// batched `git check-ignore` for the whole set with a per-path textual fallback.
+fn collect_gitignored(ws: &Path, abs_paths: &[PathBuf], out: &mut BTreeSet<PathBuf>) {
+    // Pair each absolute path with its repo-relative, forward-slash form — the string git echoes
+    // back for an ignored path, and the input the textual matcher expects.
+    let rels: Vec<(&PathBuf, String)> = abs_paths
+        .iter()
+        .filter_map(|p| {
+            p.strip_prefix(ws)
+                .ok()
+                .map(|r| (p, r.to_string_lossy().replace('\\', "/")))
+        })
+        .collect();
+    if rels.is_empty() {
+        return;
+    }
+
+    // `git check-ignore -- <paths>` prints, one per line, exactly the passed paths it ignores. Exit
+    // 0 = at least one ignored, 1 = none, anything else (128 on a broken/absent repo) = no usable
+    // answer, in which case we fall through to the textual matcher rather than trust silence.
+    if let Ok(output) = std::process::Command::new("git")
+        .arg("-C")
+        .arg(ws)
+        .arg("check-ignore")
+        .arg("--")
+        .args(rels.iter().map(|(_, r)| r.as_str()))
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+    {
+        if matches!(output.status.code(), Some(0) | Some(1)) {
+            let ignored_lines: BTreeSet<&str> = std::str::from_utf8(&output.stdout)
+                .unwrap_or("")
+                .lines()
+                .collect();
+            for (abs, rel) in &rels {
+                if ignored_lines.contains(rel.as_str()) {
+                    out.insert((*abs).clone());
+                }
+            }
+            return;
+        }
+    }
+
+    // Fallback: git unavailable or the repo unusable — match each path textually.
+    for (abs, rel) in &rels {
+        if is_git_ignored(ws, Path::new(rel)) {
+            out.insert((*abs).clone());
+        }
+    }
+}
+
 /// Whether git ignores this artifact — the third leg of the redaction gate (see the detection
 /// block) and the value the gitignore-leak check consumes.
 ///
@@ -926,17 +1019,17 @@ mod tests {
         )));
     }
 
-    /// A secret in an agent-folder file that git *ignores* is reported but must never be rewritten:
-    /// a gitignored file is one the developer deliberately keeps local, and the secret in it is not
-    /// heading for a commit. A tracked (non-ignored) agent-folder leak surface stays redactable.
+    /// A gitignored file is skipped **entirely** — not scanned, not reported, and therefore never
+    /// redacted. A tracked (non-ignored) agent-folder leak surface is still scanned, reported, and
+    /// redactable. This is the "skip gitignored files for both scanning and redacting" rule.
     #[test]
-    fn a_gitignored_agent_file_is_reported_but_not_redactable() {
+    fn a_gitignored_file_is_skipped_entirely() {
         let home = tempfile::tempdir().unwrap();
         let proj = home.path().join("Projects/app");
         fs::create_dir_all(proj.join(".git")).unwrap(); // a repo (drives the textual matcher)
         write(&proj.join(".gitignore"), ".claude/\n"); // the whole .claude dir is ignored
         write(&proj.join("CLAUDE.md"), "marker\n");
-        // A leak surface inside the *ignored* agent folder.
+        // A leak surface inside the *ignored* agent folder — must not be scanned at all.
         write(
             &proj.join(".claude/commands/ignored.md"),
             &format!("key {}\n", anthropic_key()),
@@ -948,20 +1041,20 @@ mod tests {
         );
 
         let report = scan(&AiScanOptions::for_home(home.path().to_path_buf()), |_| {});
-        let redactable_of = |suffix: &str| -> bool {
-            report
+        assert!(
+            !report
                 .findings
                 .iter()
-                .find(|f| f.rule_id == "BLWK-AI-001" && f.file.ends_with(suffix))
-                .unwrap_or_else(|| panic!("the key in {suffix} must be reported"))
-                .redactable
-        };
-        assert!(
-            !redactable_of(".claude/commands/ignored.md"),
-            "a gitignored agent file must be reported but never rewritten"
+                .any(|f| f.file.ends_with("ignored.md")),
+            "a gitignored file must be skipped entirely — no finding of any kind"
         );
+        let tracked = report
+            .findings
+            .iter()
+            .find(|f| f.rule_id == "BLWK-AI-001" && f.file.ends_with("tracked.mdc"))
+            .expect("a tracked agent-folder secret must still be reported");
         assert!(
-            redactable_of(".cursor/rules/tracked.mdc"),
+            tracked.redactable,
             "a tracked agent-folder leak surface stays redactable"
         );
     }
