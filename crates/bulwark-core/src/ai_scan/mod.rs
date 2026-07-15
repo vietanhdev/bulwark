@@ -24,7 +24,7 @@ use chrono::{DateTime, Utc};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use uuid::Uuid;
 
@@ -385,8 +385,11 @@ fn scan_artifact(artifact: &Artifact) -> anyhow::Result<Vec<AiFinding>> {
     //     real pasted `sk-ant-…`/`AKIA…` key is still caught and is genuinely actionable (redact +
     //     rotate); the fuzzy guesses are not.
     // Whether a secret found here may be *rewritten* by redaction. This is load-bearing, not
-    // cosmetic: redaction is destructive.
-    let redactable = kind_allows_redaction(artifact.kind);
+    // cosmetic: redaction is destructive. TWO conditions, both required — the kind must be a leak
+    // surface (never a functional config), AND the file must live inside a recognized agent
+    // directory. A bare `CLAUDE.md`/`.cursorrules` at a project root is an assistant artifact too,
+    // but it sits among the user's own files, so it is reported and never rewritten.
+    let redactable = kind_allows_redaction(artifact.kind) && path_in_agent_dir(&artifact.path);
     let mut has_secret = false;
     if artifact.kind != Credential {
         // Only high-confidence, structurally-identifiable provider keys (sk-ant-…, AKIA…, ghp_…,
@@ -476,6 +479,36 @@ fn kind_allows_redaction(kind: ArtifactKind) -> bool {
         // a deliberate decision here rather than defaulting into "safe to rewrite".
         DotEnv | McpConfig | Settings | Tasks | CodexConfig | Credential => false,
     }
+}
+
+/// Recognized AI-agent directories. A file *inside* one of these is agent-owned state; a file at a
+/// project root — even a `CLAUDE.md` or `.cursorrules` — sits among the user's own tracked files.
+const AGENT_DIRS: &[&str] = &[
+    ".claude",
+    ".codex",
+    ".cursor",
+    ".gemini",
+    ".continue",
+    ".roo",
+    ".windsurf",
+    ".amazonq",
+];
+
+/// Whether `path` lives inside a recognized agent directory (see [`AGENT_DIRS`]).
+///
+/// The second half of the redaction gate, and a deliberate policy choice: redaction may rewrite a
+/// file only when it is *inside* an agent folder (`~/.claude/projects/…`, `.cursor/rules/…`,
+/// `.claude/skills/…`). A leak surface sitting at a project *root* — a bare `CLAUDE.md`, `AGENTS.md`,
+/// `.cursorrules`, `.aider.chat.history.md` — is reported but never rewritten: it lives among the
+/// files the developer edits and commits, and silently rewriting one of those is the kind of
+/// surprise that the `.env` data-loss bug taught us to refuse. Transcripts, the main thing worth
+/// redacting, live under `~/.claude/` and are unaffected.
+fn path_in_agent_dir(path: &Path) -> bool {
+    path.components().any(|c| {
+        c.as_os_str()
+            .to_str()
+            .is_some_and(|s| AGENT_DIRS.contains(&s))
+    })
 }
 
 /// Settings files split by tool: VS Code's `settings.json` has its own risky keys (YOLO mode,
@@ -771,17 +804,19 @@ mod tests {
         format!("sk-ant-api03-{}AA", "a".repeat(93))
     }
 
-    /// **The data-loss regression.** A live key in a project `.env` must be *reported* (so the user
-    /// knows to rotate it) but never marked *redactable* — because redaction rewrites the file in
-    /// place, and a `.env` is the working config a running app reads its secrets back from. Rewriting
-    /// it destroys the project's configuration and the only copy of the key in that file. The same
-    /// key in a `CLAUDE.md` (a context file, not read for its value) *is* redactable — removing the
-    /// leaked copy there breaks nothing.
+    /// **The redaction-scope regression.** Every secret is *reported* (so the user can rotate it),
+    /// but redaction rewrites a file only when it is BOTH a leak surface AND inside an agent folder.
+    /// Three cases, one scan:
+    ///   * `.env` — functional config: reported, never redactable (rewriting destroys the working
+    ///     key). This is the original data-loss bug.
+    ///   * project-root `CLAUDE.md` — a leak surface, but it sits among the developer's own tracked
+    ///     files, so it is reported and NOT redactable (the "agent folders only" rule).
+    ///   * `.claude/commands/notes.md` — a leak surface *inside* an agent folder: redactable.
     #[test]
-    fn a_secret_in_a_dotenv_is_reported_but_never_redactable() {
+    fn redaction_is_confined_to_leak_surfaces_inside_agent_folders() {
         let home = tempfile::tempdir().unwrap();
         let proj = home.path().join("Projects/app");
-        // CLAUDE.md makes this a discovered workspace, and is itself a redactable leak surface.
+        // CLAUDE.md makes this a discovered workspace; it is a leak surface but lives at the root.
         write(
             &proj.join("CLAUDE.md"),
             &format!("pasted key {}\n", anthropic_key()),
@@ -791,38 +826,66 @@ mod tests {
             &proj.join(".env"),
             &format!("ANTHROPIC_API_KEY={}\n", anthropic_key()),
         );
+        // And inside the agent folder — an assistant-owned instruction file.
+        write(
+            &proj.join(".claude/commands/notes.md"),
+            &format!("remember this key {}\n", anthropic_key()),
+        );
 
         let opts = AiScanOptions::for_home(home.path().to_path_buf());
         let report = scan(&opts, |_| {});
 
-        let dotenv_secret = report
-            .findings
-            .iter()
-            .find(|f| f.rule_id == "BLWK-AI-001" && f.file.ends_with(".env"))
-            .expect("the key in .env must still be reported");
-        assert!(
-            !dotenv_secret.redactable,
-            "a secret in a .env must NOT be redactable — rewriting it destroys the working config"
-        );
-
-        let md_secret = report
-            .findings
-            .iter()
-            .find(|f| f.rule_id == "BLWK-AI-001" && f.file.ends_with("CLAUDE.md"))
-            .expect("the key in CLAUDE.md must be reported");
-        assert!(
-            md_secret.redactable,
-            "a secret in an instruction/context file is a genuine leak and stays redactable"
-        );
-
-        // The .env must never appear in the redactable set the redact command consumes.
-        assert!(
-            !report
-                .redactable_files()
+        let redactable_of = |suffix: &str| -> bool {
+            report
+                .findings
                 .iter()
-                .any(|p| p.ends_with(".env")),
+                .find(|f| f.rule_id == "BLWK-AI-001" && f.file.ends_with(suffix))
+                .unwrap_or_else(|| panic!("the key in {suffix} must be reported"))
+                .redactable
+        };
+
+        assert!(
+            !redactable_of(".env"),
+            "a .env secret must NOT be redactable — rewriting it destroys the working config"
+        );
+        assert!(
+            !redactable_of("CLAUDE.md"),
+            "a project-root CLAUDE.md is reported but not rewritten (agent folders only)"
+        );
+        assert!(
+            redactable_of(".claude/commands/notes.md"),
+            "a leak inside an agent folder is redactable"
+        );
+
+        // Neither the .env nor the root CLAUDE.md may reach the redact command's file set.
+        let redactable_files = report.redactable_files();
+        assert!(
+            !redactable_files.iter().any(|p| p.ends_with(".env")),
             "redactable_files() must not include a .env"
         );
+        assert!(
+            !redactable_files.iter().any(|p| p.ends_with("CLAUDE.md")),
+            "redactable_files() must not include a project-root CLAUDE.md"
+        );
+    }
+
+    #[test]
+    fn agent_dir_detection_is_precise() {
+        assert!(path_in_agent_dir(Path::new(
+            "/home/u/.claude/projects/x.jsonl"
+        )));
+        assert!(path_in_agent_dir(Path::new("/p/app/.cursor/rules/x.mdc")));
+        assert!(path_in_agent_dir(Path::new("/p/app/.claude/commands/x.md")));
+        // Root-level agent files are NOT inside an agent folder.
+        assert!(!path_in_agent_dir(Path::new("/p/app/CLAUDE.md")));
+        assert!(!path_in_agent_dir(Path::new("/p/app/.cursorrules")));
+        assert!(!path_in_agent_dir(Path::new(
+            "/p/app/.aider.chat.history.md"
+        )));
+        // `.github` is not an agent folder even though copilot-instructions lives there.
+        assert!(!path_in_agent_dir(Path::new(
+            "/p/app/.github/copilot-instructions.md"
+        )));
     }
 
     #[test]
@@ -861,12 +924,12 @@ mod tests {
             .iter()
             .any(|w| w.contains("Projects/app")));
         assert!(
-            report
-                .findings
-                .iter()
-                .any(|f| f.rule_id == "BLWK-AI-001" && f.redactable),
-            "the pasted Anthropic key must be a redactable finding"
+            report.findings.iter().any(|f| f.rule_id == "BLWK-AI-001"),
+            "the pasted Anthropic key must be detected"
         );
+        // Redactability is deliberately NOT asserted here — this CLAUDE.md is at the workspace root,
+        // and the redaction scope (leak surface AND inside an agent folder) is covered exhaustively
+        // by `redaction_is_confined_to_leak_surfaces_inside_agent_folders`.
         assert!(
             report.findings.iter().any(|f| f.rule_id == "BLWK-AI-002"),
             "the SessionStart hook must be flagged"
@@ -909,9 +972,10 @@ mod tests {
     fn redactable_files_dedupes_by_path() {
         let home = tempfile::tempdir().unwrap();
         let proj = home.path().join("Projects/app");
-        // Two secrets in one file → one redactable file.
+        write(&proj.join("CLAUDE.md"), "marker\n"); // makes it a discovered workspace
+                                                    // Two secrets in one agent-folder file → one redactable file.
         write(
-            &proj.join("CLAUDE.md"),
+            &proj.join(".claude/commands/notes.md"),
             &format!("k1 {}\nk2 {}\n", anthropic_key(), anthropic_key()),
         );
         let report = scan(&AiScanOptions::for_home(home.path().to_path_buf()), |_| {});
