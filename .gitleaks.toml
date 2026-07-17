@@ -32,4 +32,11 @@ paths = [
   # vectors shaped like each on-disk key format (OpenSSH/PEM/PKCS#8). Every one is a synthetic,
   # truncated header — no key material, never a real private key.
   '''crates/bulwark-core/src/collectors/ssh_keys\.rs''',
+
+  # The permission-autofix tests. Classifying a file as a private key (so its mode is tightened to
+  # 600) needs a fixture shaped like one — a synthetic, truncated `BEGIN OPENSSH PRIVATE KEY`
+  # header over placeholder bytes, no key material.
+  '''crates/bulwark-core/src/remediation/permissions\.rs''',
+  '''crates/bulwark-core/tests/remediation_e2e\.rs''',
+  '''crates/bulwarkctl/tests/fix_cli\.rs''',
 ]

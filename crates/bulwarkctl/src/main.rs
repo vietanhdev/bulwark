@@ -9,6 +9,8 @@ use clap::{Parser, Subcommand};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
+mod remote;
+
 #[derive(Parser)]
 #[command(
     name = "bulwarkctl",
@@ -48,6 +50,22 @@ enum Commands {
         /// section of the architecture doc.
         #[arg(long, value_delimiter = ',')]
         needs: Vec<String>,
+        /// Scan a REMOTE host over SSH instead of this machine. Takes a `[user@]host` spec (or a
+        /// `Host` alias from ~/.ssh/config). Prefers a bulwark installed on the remote; otherwise
+        /// pushes this binary + rule pack to a temp dir there, runs, and cleans up. Results are
+        /// shown here and kept in a per-host history DB, never mixed with this machine's findings.
+        #[arg(long, value_name = "[USER@]HOST")]
+        ssh: Option<String>,
+        /// SSH port for `--ssh` (default: ssh's own default / ~/.ssh/config).
+        #[arg(long, requires = "ssh")]
+        ssh_port: Option<u16>,
+        /// Identity (private key) file for `--ssh`, passed to ssh/scp as `-i`.
+        #[arg(long, requires = "ssh", value_name = "KEYFILE")]
+        ssh_identity: Option<PathBuf>,
+        /// Extra `-o Key=Value` ssh option for `--ssh` (repeatable), e.g.
+        /// `--ssh-opt StrictHostKeyChecking=accept-new`.
+        #[arg(long = "ssh-opt", requires = "ssh", value_name = "OPT")]
+        ssh_opts: Vec<String>,
     },
     /// Inspect the loaded rule pack
     Rules {
@@ -76,6 +94,53 @@ enum Commands {
     Ssh {
         #[command(subcommand)]
         action: SshAction,
+    },
+    /// Apply safe, reversible autofixes for issues a scan reports (file permissions, sshd
+    /// hardening). Dry-run by default — every subcommand previews and touches nothing without
+    /// `--apply`.
+    Fix {
+        #[command(subcommand)]
+        action: FixAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum FixAction {
+    /// Preview every available autofix for this host without changing anything.
+    List,
+    /// Tighten permissions in ~/.ssh (dir 700, private keys / config / authorized_keys 600).
+    /// User-scoped; needs no privilege. Only ever tightens, never loosens.
+    SshPerms {
+        /// Actually apply the changes. Without this, only previews.
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Tighten permissions on sensitive /etc files (shadow 640, sudoers 440, sshd_config 600, ...).
+    /// Needs root when applying — re-run under sudo.
+    EtcPerms {
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Harden /etc/ssh/sshd_config to clear the SSH rule findings (X11/TCP forwarding off,
+    /// MaxAuthTries, ...). Needs root when applying; keeps a backup and validates with `sshd -t`.
+    Sshd {
+        #[arg(long)]
+        apply: bool,
+        /// Also apply the two lockout-risky directives (PasswordAuthentication no, PermitRootLogin
+        /// no). ONLY do this once you have confirmed key-based login works — it can lock you out of
+        /// a password-only host.
+        #[arg(long)]
+        include_auth: bool,
+        /// Operate on this config file instead of /etc/ssh/sshd_config (for testing or a
+        /// non-default path). `Include` drop-ins are still resolved relative to /etc/ssh.
+        #[arg(long, value_name = "PATH")]
+        config: Option<PathBuf>,
+    },
+    /// Apply the safe subset in one pass: ~/.ssh perms, /etc perms (if root), and non-lockout sshd
+    /// hardening (if root). Never touches the lockout-risky auth directives or key passphrases.
+    All {
+        #[arg(long)]
+        apply: bool,
     },
 }
 
@@ -401,7 +466,31 @@ fn main() -> anyhow::Result<()> {
             no_persist,
             privileged,
             needs,
+            ssh,
+            ssh_port,
+            ssh_identity,
+            ssh_opts,
         } => {
+            // Remote path: run the same scan over SSH and bring the results home. `--privileged`
+            // here refers to the *remote* scan needing root, so we deliberately do NOT gate on local
+            // root — the remote invocation uses `sudo -n` on the far side (see remote::run_scan_cmd).
+            if let Some(spec) = ssh {
+                let worst = run_ssh_scan(
+                    remote::RemoteTarget {
+                        spec,
+                        port: ssh_port,
+                        identity: ssh_identity,
+                        ssh_opts,
+                    },
+                    privileged,
+                    &needs,
+                    json,
+                    no_persist,
+                    cli.rules_dir,
+                )?;
+                std::process::exit(exit_code_for(worst));
+            }
+
             if privileged && !engine::is_running_as_root() {
                 anyhow::bail!(
                     "--privileged requires root — re-run as: sudo bulwarkctl scan --privileged"
@@ -620,6 +709,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Logs { action } => run_logs(action, cli.db_path)?,
         Commands::Ai { action } => run_ai(action, cli.db_path)?,
         Commands::Ssh { action } => run_ssh(action)?,
+        Commands::Fix { action } => run_fix(action)?,
     }
 
     Ok(())
@@ -633,6 +723,325 @@ fn resolve_home() -> anyhow::Result<PathBuf> {
 
 /// Handles the `ssh` subcommand group. Calls the linked `bulwark-core` remediation directly —
 /// the CLI is just a front-door over the same in-process function the GUI uses.
+/// Drive a remote scan over SSH: run it, print it, persist it to an isolated per-host history DB,
+/// and return the worst severity so `main` can pick the process exit code. Kept separate from the
+/// local scan path because the persistence target differs — a remote host's findings must never
+/// land in this machine's single-host database, where reconciliation would resolve local findings
+/// whose rules the remote scan happened to run (the `findings` table has no host column by design).
+fn run_ssh_scan(
+    target: remote::RemoteTarget,
+    privileged: bool,
+    needs: &[String],
+    json: bool,
+    no_persist: bool,
+    rules_dir: Option<PathBuf>,
+) -> anyhow::Result<Option<Severity>> {
+    let rules_dir = resolve_rules_dir(rules_dir)?;
+    let local_binary = std::env::current_exe().context("cannot locate this bulwarkctl binary")?;
+
+    let spec = target.spec.clone();
+    if !json {
+        eprintln!("Scanning {spec} over SSH…");
+    }
+    let result = remote::run_remote_scan(&target, privileged, needs, &local_binary, &rules_dir)?;
+    let scan = result.scan;
+
+    // Same invariant as the local path: a scan that loaded no rules examined nothing, and its empty
+    // findings list is the absence of an opinion, not a clean bill of health. Refuse before persisting.
+    if scan.rules_loaded == 0 {
+        anyhow::bail!(
+            "remote scan of {spec} loaded 0 rules — refusing to report a clean result from a scan \
+             that examined nothing (is the rule pack present on the remote?)"
+        );
+    }
+
+    if !no_persist {
+        let db_path = remote_db_path(&spec)?;
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        let mut store = Store::open(&db_path)?;
+        store.persist_and_reconcile(&scan)?;
+        if !json {
+            eprintln!("History for {spec}: {}", db_path.display());
+        }
+    }
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&scan)?);
+    } else {
+        match &result.engine {
+            remote::RemoteEngine::Installed(path) => {
+                eprintln!("Ran the remote's installed bulwark ({path}).");
+            }
+            remote::RemoteEngine::Pushed { arch, .. } => {
+                eprintln!("Pushed this bulwarkctl ({arch}) to a temp dir and cleaned it up.");
+            }
+        }
+        print_scan_table(&scan);
+    }
+    Ok(scan.worst_severity())
+}
+
+/// Isolated per-remote-host history database, so each scanned host reconciles against its own prior
+/// findings and this machine's dashboard stays pristine. The host spec is slugified into a
+/// filesystem-safe name (`user@host:port` → `user_at_host_port`).
+fn remote_db_path(spec: &str) -> anyhow::Result<PathBuf> {
+    let home = std::env::var("HOME").context("HOME not set")?;
+    let slug: String = spec
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '.' => c,
+            _ => '_',
+        })
+        .collect();
+    let slug = if slug.is_empty() {
+        "host".to_string()
+    } else {
+        slug
+    };
+    Ok(Path::new(&home)
+        .join(".local/share/bulwark/remotes")
+        .join(format!("{slug}.db")))
+}
+
+fn run_fix(action: FixAction) -> anyhow::Result<()> {
+    use bulwark_core::{
+        etc_permission_targets, harden_sshd_config, ssh_permission_targets, tighten_permissions,
+    };
+
+    let home = std::env::var("HOME").context("HOME not set")?;
+    let ssh_dir = PathBuf::from(&home).join(".ssh");
+    let backup_dir = PathBuf::from(&home).join(".local/share/bulwark/sshd-config-backups");
+
+    match action {
+        FixAction::List => {
+            // A pure preview of everything, so a user can see the whole surface at a glance before
+            // choosing what to apply. Nothing here writes.
+            println!("Available autofixes (preview — nothing changed):\n");
+
+            let ssh_targets = ssh_permission_targets(&ssh_dir);
+            let ssh_report = tighten_permissions(&ssh_targets, false);
+            println!(
+                "• fix ssh-perms   ~/.ssh permissions — {} to tighten",
+                ssh_report.changes()
+            );
+            print_perm_report(&ssh_report, false, "    ");
+
+            let etc_report = tighten_permissions(&etc_permission_targets(), false);
+            println!(
+                "\n• fix etc-perms   /etc sensitive files — {} to tighten (needs root to apply)",
+                etc_report.changes()
+            );
+            print_perm_report(&etc_report, false, "    ");
+
+            match harden_sshd_config(None, &backup_dir, false, true) {
+                Ok(sshd_report) => {
+                    println!(
+                        "\n• fix sshd        sshd_config hardening — {} directive(s) to set (needs root to apply)",
+                        sshd_report.changes.len()
+                    );
+                    print_sshd_changes(&sshd_report, "    ");
+                }
+                Err(e) => {
+                    println!("\n• fix sshd        sshd_config hardening — unavailable: {e}");
+                }
+            }
+
+            println!("\nOther fixes (their own commands, need interactive input):");
+            println!("    ssh protect     add one passphrase to every unencrypted ~/.ssh key");
+            println!("    ai redact       remove leaked secrets from AI-assistant context files");
+            println!("\nApply with e.g.:  bulwarkctl fix ssh-perms --apply");
+            println!("Or the safe set:  sudo bulwarkctl fix all --apply");
+        }
+
+        FixAction::SshPerms { apply } => {
+            let targets = ssh_permission_targets(&ssh_dir);
+            if targets.is_empty() {
+                println!("No ~/.ssh directory found — nothing to fix.");
+                return Ok(());
+            }
+            let report = tighten_permissions(&targets, apply);
+            print_perm_report(&report, apply, "");
+            report_perm_summary(&report, apply);
+        }
+
+        FixAction::EtcPerms { apply } => {
+            if apply && !engine::is_running_as_root() {
+                anyhow::bail!(
+                    "fix etc-perms --apply changes root-owned files — re-run as: \
+                     sudo bulwarkctl fix etc-perms --apply"
+                );
+            }
+            let report = tighten_permissions(&etc_permission_targets(), apply);
+            print_perm_report(&report, apply, "");
+            report_perm_summary(&report, apply);
+        }
+
+        FixAction::Sshd {
+            apply,
+            include_auth,
+            config,
+        } => {
+            // Root is only required to write the real system config; an explicit --config path (used
+            // for testing or a user-owned copy) the caller can already write is exempt.
+            if apply && config.is_none() && !engine::is_running_as_root() {
+                anyhow::bail!(
+                    "fix sshd --apply edits /etc/ssh/sshd_config — re-run as: \
+                     sudo bulwarkctl fix sshd --apply"
+                );
+            }
+            if include_auth {
+                eprintln!(
+                    "⚠  --include-auth will set PasswordAuthentication no and PermitRootLogin no.\n\
+                     ⚠  Make sure key-based login already works, or you can be locked out.\n"
+                );
+            }
+            let report = harden_sshd_config(config.as_deref(), &backup_dir, apply, include_auth)?;
+            print_sshd_report(&report, apply);
+        }
+
+        FixAction::All { apply } => {
+            let is_root = engine::is_running_as_root();
+            println!(
+                "Running the safe autofix set{}:\n",
+                if apply { " (applying)" } else { " (preview)" }
+            );
+
+            // 1. ~/.ssh perms — always available (user-scoped).
+            let ssh_targets = ssh_permission_targets(&ssh_dir);
+            if ssh_targets.is_empty() {
+                println!("[ssh-perms] no ~/.ssh directory — skipped");
+            } else {
+                let r = tighten_permissions(&ssh_targets, apply);
+                println!("[ssh-perms] {} change(s)", r.changes());
+                print_perm_report(&r, apply, "    ");
+            }
+
+            // 2. /etc perms — only if root when applying.
+            if apply && !is_root {
+                println!("\n[etc-perms] needs root — skipped (re-run with sudo to include)");
+            } else {
+                let r = tighten_permissions(&etc_permission_targets(), apply);
+                println!("\n[etc-perms] {} change(s)", r.changes());
+                print_perm_report(&r, apply, "    ");
+            }
+
+            // 3. sshd hardening — non-lockout directives only, root when applying.
+            if apply && !is_root {
+                println!("\n[sshd] needs root — skipped (re-run with sudo to include)");
+            } else {
+                match harden_sshd_config(None, &backup_dir, apply, false) {
+                    Ok(r) => {
+                        println!(
+                            "\n[sshd] {} directive(s){}",
+                            r.pending_count(),
+                            if r.applied { " set" } else { " to set" }
+                        );
+                        print_sshd_changes(&r, "    ");
+                        if let Some(note) = &r.note {
+                            println!("    note: {note}");
+                        }
+                    }
+                    Err(e) => println!("\n[sshd] skipped: {e}"),
+                }
+            }
+
+            if !apply {
+                println!(
+                    "\nPreview only. Re-run with --apply (and sudo for the root-owned fixes)."
+                );
+            }
+            println!(
+                "\nNot included (need a decision or a secret): the lockout-risky sshd auth \
+                 directives (fix sshd --include-auth), key passphrases (ssh protect), secret \
+                 redaction (ai redact)."
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Print a permission report's per-file lines. `indent` prefixes each line so `fix list`/`fix all`
+/// can nest them under a heading.
+fn print_perm_report(report: &bulwark_core::PermReport, apply: bool, indent: &str) {
+    use bulwark_core::PermOutcome;
+    for r in &report.results {
+        let line = match &r.outcome {
+            PermOutcome::WouldTighten { from, to } => {
+                format!("would chmod {from} → {to}  {} ({})", r.path, r.label)
+            }
+            PermOutcome::Tightened { from, to } => {
+                format!("chmod {from} → {to}  {} ({})", r.path, r.label)
+            }
+            // In a preview or summary we don't spell out every already-ok/missing row unless it's
+            // the only content — keep the signal high.
+            _ => continue,
+        };
+        println!("{indent}{line}");
+    }
+    let _ = apply;
+}
+
+fn report_perm_summary(report: &bulwark_core::PermReport, apply: bool) {
+    if report.changes() == 0 {
+        println!("All checked permissions are already correct. Nothing to do.");
+        return;
+    }
+    if apply {
+        println!(
+            "\n{} tightened, {} already ok, {} missing, {} failed.",
+            report.tightened, report.already_ok, report.missing, report.failed
+        );
+        if report.failed > 0 {
+            println!("Some changes failed — see the lines above (often: needs root).");
+        }
+    } else {
+        println!(
+            "\n{} file(s) would be tightened. Re-run with --apply to make the change.",
+            report.would_tighten
+        );
+    }
+}
+
+fn print_sshd_changes(report: &bulwark_core::SshdHardeningReport, indent: &str) {
+    use bulwark_core::SshdChangeStatus;
+    for c in &report.changes {
+        let verb = match c.status {
+            SshdChangeStatus::WouldSet => "would set",
+            SshdChangeStatus::Set => "set",
+            SshdChangeStatus::SkippedLockout => "skipped (lockout risk — use --include-auth)",
+        };
+        println!(
+            "{indent}{verb}: {} {} (was {}) — {}",
+            c.keyword, c.desired, c.current, c.why
+        );
+    }
+}
+
+fn print_sshd_report(report: &bulwark_core::SshdHardeningReport, apply: bool) {
+    if report.changes.is_empty() {
+        println!("sshd_config is already hardened against the SSH rules. Nothing to do.");
+        return;
+    }
+    println!("sshd_config: {}", report.config_path);
+    print_sshd_changes(report, "  ");
+    if let Some(note) = &report.note {
+        println!("note: {note}");
+    }
+    if report.applied {
+        println!("\nApplied. Validate and reload with:  sudo sshd -t && sudo systemctl reload ssh");
+        if let Some(b) = &report.backup_path {
+            println!("Backup of the original: {b}");
+        }
+        println!("Undo: restore the backup, or delete the '# BEGIN bulwark-hardening' block.");
+    } else if apply {
+        println!("\nNothing was applied (only lockout-risky directives were pending — add --include-auth).");
+    } else {
+        println!("\nPreview only. Re-run with --apply (as root) to make the change.");
+    }
+}
+
 fn run_ssh(action: SshAction) -> anyhow::Result<()> {
     use bulwark_core::{protect_unencrypted_keys, KeyProtectionOutcome};
     match action {

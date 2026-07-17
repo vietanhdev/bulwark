@@ -162,7 +162,7 @@ pub fn parse_sshd_config(text: &str) -> Fact {
 /// names take precedence, consistent with first-wins). Relative patterns resolve against
 /// `/etc/ssh`. Supports the `<dir>/<prefix>*<suffix>` shape that real configs use
 /// (`sshd_config.d/*.conf`); a pattern with no `*` is treated as an exact filename.
-fn resolve_include_glob(pattern: &str) -> Vec<String> {
+pub(crate) fn resolve_include_glob(pattern: &str) -> Vec<String> {
     let full = if pattern.starts_with('/') {
         pattern.to_string()
     } else {

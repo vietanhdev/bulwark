@@ -5,6 +5,7 @@ pub mod condition;
 pub mod engine;
 pub mod logs;
 pub mod models;
+pub mod remediation;
 pub mod schema;
 pub mod store;
 
@@ -32,4 +33,9 @@ pub use logs::{
     LogScanRun, LogSource, SyslogLinesSource,
 };
 pub use models::{Fact, Finding, FindingStatus, OperatingSystem, Rule, ScanRun, Severity};
+pub use remediation::{
+    etc_permission_targets, harden_sshd_config, ssh_permission_targets, tighten_permissions,
+    PermOutcome, PermReport, PermResult, PermTarget, SshdChange, SshdChangeStatus,
+    SshdHardeningReport,
+};
 pub use store::{AiScanSnapshot, LatestScanMeta, ScanRunSummary, Store};
