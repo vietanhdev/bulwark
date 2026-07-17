@@ -239,6 +239,10 @@ export default withMermaid({
         text: "Articles",
         items: [
           {
+            text: "Antivirus for Linux (Ubuntu, Fedora…)",
+            link: "/articles/linux-antivirus-ubuntu-fedora",
+          },
+          {
             text: "AI coding assistant security",
             link: "/articles/ai-coding-assistant-security",
           },

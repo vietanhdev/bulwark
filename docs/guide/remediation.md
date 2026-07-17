@@ -1,22 +1,49 @@
 ---
 title: Fixing what Bulwark finds
-description: Which Agent Security findings Bulwark can fix for you, which you should fix by hand and why, and the exact command for each — grouped by how much damage a wrong fix could do.
+description: Which findings Bulwark fixes for you with one command — SSH permissions, sshd hardening, key passphrases, secret redaction — which you should fix by hand and why, grouped by how much damage a wrong fix could do.
 ---
 
 # Fixing what Bulwark finds
 
-Bulwark reports problems; it does not, with one deliberate exception, fix them for you. That is a
-design decision, not a missing feature. A scanner that edits your `sshd_config` or `sudoers` and
-gets it wrong has locked you out of your own machine — a strictly worse outcome than the finding it
-was trying to resolve.
+Bulwark fixes the problems that are **safe to fix automatically**, and hands you the exact command
+for the ones that aren't. That split is the whole design: a scanner that edits your `sshd_config` or
+`sudoers` and gets it wrong has locked you out of your own machine — a strictly worse outcome than
+the finding it was trying to resolve. So fixes divide by blast radius. The reversible, low-risk ones
+Bulwark automates — always **dry-run first, always with a backup**. The genuinely dangerous ones it
+shows you and gets out of the way.
 
-So the fixes divide into two groups by blast radius. Bulwark automates the one that is safe to
-automate. For the rest it gives you the exact command and gets out of your way.
+## What Bulwark can fix for you
 
-## What Bulwark fixes for you: leaked secrets
+The `fix` command is the front door for the safe autofixes. Everything previews by default and only
+changes anything with `--apply`:
 
-Secret redaction is the one auto-fix Bulwark performs, because it is the one that is unambiguous
-and fully reversible: the secret is either there or it isn't, and the original is always backed up.
+```bash
+bulwarkctl fix list             # preview every available fix, changes nothing
+bulwarkctl fix ssh-perms --apply    # tighten ~/.ssh (dir 700, keys/config 600) — no privilege needed
+sudo bulwarkctl fix all --apply     # the safe set: ~/.ssh + /etc permissions + non-lockout sshd hardening
+```
+
+Each fixer is reversible and never widens access:
+
+- **`fix ssh-perms`** tightens over-permissive files in `~/.ssh` (directory to `700`, private keys /
+  `config` / `authorized_keys` to `600`). Only ever tightens, never follows a symlink, records the
+  prior mode.
+- **`fix etc-perms`** pins sensitive `/etc` files (`shadow` `640`, `sudoers` `440`, `sshd_config`
+  `600`) when they're world- or group-writable. Needs root.
+- **`fix sshd`** hardens `/etc/ssh/sshd_config` to clear the SSH findings (X11/TCP forwarding off,
+  `MaxAuthTries`, …) by inserting one managed block at the top of the file, backing up the original
+  and validating with `sshd -t` before keeping it. The two directives that can lock you out —
+  `PasswordAuthentication no` and `PermitRootLogin no` — are opt-in behind `--include-auth` and
+  excluded from `fix all`.
+- **`ssh protect`** adds one passphrase to every unencrypted key in `~/.ssh` at once, backing each up
+  first — far better than leaving plaintext keys on disk.
+
+In the desktop app these live in **Settings → SSH hardening** (tighten permissions, protect keys).
+
+### Leaked secrets: redaction
+
+Secret redaction is fully reversible in the same way: the secret is either there or it isn't, and
+the original is always backed up.
 
 ```bash
 # Preview — shows exactly which files and how many secrets. Changes nothing.

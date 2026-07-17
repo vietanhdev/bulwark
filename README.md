@@ -104,6 +104,16 @@ a one-shot batch command today; continuous follow-mode is the next step (see the
 cargo build --workspace
 cargo run -p bulwarkctl -- scan
 
+# Scan another machine over SSH (agentless: reuses your ~/.ssh config, keys, and agent).
+# Prefers a bulwark installed on the remote; otherwise pushes the binary + rules and cleans up.
+cargo run -p bulwarkctl -- scan --ssh user@host
+
+# Apply safe, reversible autofixes for what a scan finds (dry-run by default; --apply to change).
+cargo run -p bulwarkctl -- fix list            # preview every available fix
+cargo run -p bulwarkctl -- fix ssh-perms --apply    # tighten ~/.ssh permissions
+sudo   bulwarkctl               fix all --apply     # ~/.ssh + /etc perms + sshd hardening
+cargo run -p bulwarkctl -- ssh protect         # one passphrase for every unencrypted key
+
 # GUI (from apps/bulwark-app/)
 npm install
 cargo tauri dev
