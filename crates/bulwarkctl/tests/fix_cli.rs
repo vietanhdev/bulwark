@@ -20,6 +20,22 @@ fn mode_of(p: &Path) -> u32 {
     fs::symlink_metadata(p).unwrap().permissions().mode() & 0o777
 }
 
+/// Whether the test process is running as root (effective uid 0). Read from `/proc/self/status`
+/// rather than via libc, to avoid a dev-dependency just for this. Linux-only, which these tests are.
+/// The CI distro matrix runs inside root containers, where the "needs root" guard legitimately does
+/// not trip — so root-gated refusal assertions must be skipped there.
+fn running_as_root() -> bool {
+    fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("Uid:"))
+                // "Uid:\t<real>\t<effective>\t<saved>\t<fs>" — the effective uid is field 2.
+                .and_then(|l| l.split_whitespace().nth(2).map(|u| u == "0"))
+        })
+        .unwrap_or(false)
+}
+
 /// Run `bulwarkctl fix …` with HOME pointed at `home` so writes stay contained.
 fn run_fix(home: &Path, args: &[&str]) -> (String, bool) {
     let out = Command::new(bin())
@@ -135,8 +151,13 @@ fn sshd_lockout_directives_are_opt_in() {
 
 #[test]
 fn etc_perms_apply_without_root_is_refused() {
+    // The refusal only fires when we're actually unprivileged. CI's distro matrix runs in root
+    // containers, where the command is legitimately allowed to proceed — nothing to assert there.
+    if running_as_root() {
+        return;
+    }
     let home = tempfile::tempdir().unwrap();
-    // Not root in CI, so --apply must refuse rather than silently fail on root-owned files.
+    // Unprivileged: --apply must refuse rather than silently fail on root-owned files.
     let (out, ok) = run_fix(home.path(), &["etc-perms", "--apply"]);
     assert!(!ok, "should exit non-zero:\n{out}");
     assert!(out.contains("root"), "should explain it needs root:\n{out}");

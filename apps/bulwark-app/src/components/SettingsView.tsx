@@ -136,8 +136,8 @@ export function SettingsView() {
         <section>
           <SectionLabel>Appearance</SectionLabel>
           <p className="mb-3 text-sm leading-relaxed text-muted-foreground">
-            Match Bulwark to your desktop — light or dark, plus accent and sidebar colours from Ubuntu's
-            palette.
+            Match Bulwark to your desktop — light or dark, plus an accent and sidebar colour to suit your
+            setup.
           </p>
           <AppearanceSettings />
         </section>

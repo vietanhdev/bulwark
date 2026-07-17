@@ -51,8 +51,8 @@ features:
   - title: Native CLI and desktop app
     details: >-
       One Rust engine, two front-doors. Scan from a terminal on a headless box, or run the desktop
-      app — both share the same rule pack and local history. Light/dark, and accent + sidebar colours
-      straight from Ubuntu's palette, so it looks like it belongs on your desktop.
+      app — both share the same rule pack and local history. Light/dark, with an accent and sidebar
+      colour you choose, so it looks like it belongs on your desktop.
   - title: Continuous, and fully local
     details: >-
       A background loop re-scans on a schedule and tells you only when something genuinely new shows
@@ -64,7 +64,7 @@ features:
 
 ## One app, your colours
 
-<p class="bw-sub">Light or dark, with an accent and sidebar colour picked from Ubuntu's own palette. Bulwark is built to look like part of the desktop it protects — not a visitor.</p>
+<p class="bw-sub">Light or dark, with an accent and sidebar colour you pick. Bulwark is built to look like part of the desktop it protects — not a visitor.</p>
 
 <div class="bw-fan">
   <img src="/screenshots/hero-green.png" alt="Bulwark with a green theme" class="bw-fan-img bw-fan-4" />
