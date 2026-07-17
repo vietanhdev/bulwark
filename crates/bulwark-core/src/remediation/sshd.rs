@@ -258,22 +258,31 @@ pub fn harden_sshd_config(
     include_lockout: bool,
 ) -> anyhow::Result<SshdHardeningReport> {
     let path = config_path.unwrap_or_else(|| Path::new(MAIN_CONFIG));
+    // Only `sshd -t`-validate the real system config. That path is edited as root (the CLI gates
+    // `fix sshd --apply` on it), where sshd can read the root-only host keys and the check is
+    // meaningful. An explicit `--config` path is for testing or a non-default file and is often
+    // edited unprivileged — and `sshd -t` run as non-root FALSE-fails because it can't read
+    // `/etc/ssh/ssh_host_*_key`, which would wrongly revert a perfectly good change.
+    let validate = config_path.is_none();
     harden_with(
         path,
         backup_dir,
         apply,
         include_lockout,
+        validate,
         &resolve_include_glob,
     )
 }
 
 /// Testable core: takes the include resolver as a parameter so unit tests can feed drop-ins without
-/// touching `/etc/ssh`.
+/// touching `/etc/ssh`. `validate` runs the `sshd -t` post-write check (only meaningful for the real
+/// root-owned config); tests pass `false` so the result never depends on whether sshd is installed.
 fn harden_with(
     path: &Path,
     backup_dir: &Path,
     apply: bool,
     include_lockout: bool,
+    validate: bool,
     resolve: &dyn Fn(&str) -> Vec<String>,
 ) -> anyhow::Result<SshdHardeningReport> {
     let mut report = SshdHardeningReport {
@@ -320,9 +329,9 @@ fn harden_with(
     std::fs::write(path, &new_content)?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(orig_mode))?;
 
-    // Validate with `sshd -t` when available; roll back on failure so we never leave a config that
-    // would stop sshd from starting.
-    match validate_sshd(path) {
+    // Validate with `sshd -t` when asked (real system config only) and available; roll back on
+    // failure so we never leave a config that would stop sshd from starting.
+    match validate.then(|| validate_sshd(path)).flatten() {
         Some(true) => report.validated = Some(true),
         Some(false) => {
             // Restore and report a failure rather than a false success.
@@ -336,11 +345,13 @@ fn harden_with(
         }
         None => {
             report.validated = None;
-            report.note = Some(
-                "sshd not found on PATH — wrote the change without `sshd -t` validation; run \
-                 `sshd -t` yourself before restarting sshd"
-                    .to_string(),
-            );
+            if validate {
+                report.note = Some(
+                    "sshd not found on PATH — wrote the change without `sshd -t` validation; run \
+                     `sshd -t` yourself before restarting sshd"
+                        .to_string(),
+                );
+            }
         }
     }
 
@@ -439,8 +450,15 @@ mod tests {
         std::fs::write(&cfg, "AllowTcpForwarding yes\n").unwrap();
         let before = std::fs::read_to_string(&cfg).unwrap();
 
-        let report =
-            harden_with(&cfg, &dir.path().join("bak"), false, false, &no_includes).unwrap();
+        let report = harden_with(
+            &cfg,
+            &dir.path().join("bak"),
+            false,
+            false,
+            false,
+            &no_includes,
+        )
+        .unwrap();
         assert!(report.pending_count() >= 1);
         assert!(!report.applied);
         assert_eq!(
@@ -457,7 +475,7 @@ mod tests {
         let bak = dir.path().join("bak");
         std::fs::write(&cfg, "AllowTcpForwarding yes\nX11Forwarding yes\nPort 22\n").unwrap();
 
-        let r1 = harden_with(&cfg, &bak, true, false, &no_includes).unwrap();
+        let r1 = harden_with(&cfg, &bak, true, false, false, &no_includes).unwrap();
         assert!(r1.applied);
         assert!(r1.backup_path.is_some());
         let after = std::fs::read_to_string(&cfg).unwrap();
@@ -474,7 +492,7 @@ mod tests {
 
         // Re-running sees the underlying (still-insecure) originals below the block, rebuilds the
         // single block, and does not stack a second one.
-        let r2 = harden_with(&cfg, &bak, true, false, &no_includes).unwrap();
+        let r2 = harden_with(&cfg, &bak, true, false, false, &no_includes).unwrap();
         assert!(r2.applied);
         let after2 = std::fs::read_to_string(&cfg).unwrap();
         assert_eq!(
@@ -491,7 +509,7 @@ mod tests {
         let bak = dir.path().join("bak");
         let original = "AllowTcpForwarding yes\nPort 2222\n";
         std::fs::write(&cfg, original).unwrap();
-        let report = harden_with(&cfg, &bak, true, false, &no_includes).unwrap();
+        let report = harden_with(&cfg, &bak, true, false, false, &no_includes).unwrap();
         let backup = std::fs::read_to_string(report.backup_path.unwrap()).unwrap();
         assert_eq!(backup, original, "backup is the pre-change file, verbatim");
     }
