@@ -149,6 +149,21 @@ to be one.
 
 **Future extension seam (still not built, deliberately):** `bulwark-sandbox` and `bulwark-agent` remain reserved as future workspace members, not started. `bulwark-core`'s executor and event-streaming pattern (a Tauri Channel for the GUI, a plain iterator/stream for the CLI) is written generically enough that a sandboxed-execution job or an agent action could plug into the same pattern instead of requiring a parallel system — see §14.
 
+**Remote scanning over SSH** (`bulwarkctl scan --ssh [user@]host`) lives in the CLI front-door (`crates/bulwarkctl/src/remote.rs`), **never** in `bulwark-core` — the core's no-network invariant (§10) is what backs the "fully local, no telemetry" claim, so anything that crosses the network is a front-door concern. It shells out to the system `ssh`/`scp` rather than bundling an SSH library, which reuses the operator's existing `~/.ssh/config`, agent, `known_hosts`, and jump hosts and keeps a security tool from reimplementing auth; the host spec is always a separate argv element, never interpolated into a shell string. The engine is untouched: we run the *same* `bulwarkctl scan --json` on the far side and deserialize its stdout back into a `ScanRun` — the identical round-trip the GUI's `pkexec` path already depends on. Bootstrap is "prefer installed, else push": if `command -v bulwarkctl`/`bulwark` finds a binary, run it in place; otherwise verify the remote arch (`uname -m`) matches, `scp` this binary + rule pack into a `mktemp -d`, run with an explicit `--rules-dir`, and `rm -rf` it afterward. Because the `findings` table has no host column (the local DB is single-host by design), a remote scan **must not** persist into it — doing so would let reconciliation resolve local findings whose rules the remote run happened to evaluate. Remote runs therefore persist to an isolated per-host database (`~/.local/share/bulwark/remotes/<host>.db`), which keeps each host's reconciliation correct and the local dashboard pristine.
+
+```mermaid
+flowchart LR
+  scan["scan --ssh host"] -->|"command -v"| probe{installed?}
+  probe -->|yes| run["ssh host: bulwarkctl scan --json"]
+  probe -->|no| push["uname -m ✓ → scp binary+rules → run → rm -rf"]
+  push --> run
+  run -->|"stdout JSON"| parse["deserialize ScanRun"]
+  parse --> perhost[("per-host DB<br/>remotes/&lt;host&gt;.db")]
+  parse --> term["table / --json"]
+```
+
+**Autofixes** (`bulwarkctl fix …`, plus `ssh protect` and `ai redact`) turn the safe, mechanical subset of each finding's one-line `fix` into a one-command remediation. The logic is in `bulwark-core::remediation` (filesystem-only, still no network): `permissions.rs` tightens over-permissive modes for `~/.ssh` (user-scoped) and sensitive `/etc` files (root), and `sshd.rs` hardens `sshd_config`. Every fixer follows the same discipline the existing `ssh_keys` passphrase fix and `ai_scan` redaction already do — **dry-run by default**, reversible (permission changes record the prior mode; the sshd rewrite keeps a backup and validates with `sshd -t` before keeping it, rolling back on failure), never widens access, never follows a symlink, and fails loud. The sshd rewrite inserts an idempotent `# BEGIN/END bulwark-hardening` block at the **top** of the file so that under OpenSSH's first-value-wins semantics it beats any `Include` drop-in without editing them, and only writes a directive when the effective config is actually insecure per the matching `BLWK-SSH-*` rule. The two directives that can lock an operator out of a password-only box (`PasswordAuthentication no`, `PermitRootLogin no`) are gated behind an explicit `--include-auth` and excluded from `fix all`.
+
 ---
 
 ## 5. Data model
