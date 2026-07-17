@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AlertTriangle, Check, ShieldAlert } from "lucide-react";
 import { PageShell, SectionLabel } from "@/components/PageShell";
-import { SEVERITY_ORDER, SeverityDot, railStyle, type Severity } from "@/components/Severity";
+import { SEVERITY_ORDER, SeverityDot, railStyle, severityLabel, type Severity } from "@/components/Severity";
 import { useRevision } from "@/lib/revision";
 import { cn } from "@/lib/utils";
 
@@ -90,7 +90,7 @@ export function AnalyticsView() {
 
   return (
     <PageShell
-      title="Analytics"
+      title="Activity"
       description="How this host's security posture is trending over time — findings per scan, what's open now, how much risk you've accepted, and the full scan-by-scan history — drawn from every scan Bulwark has recorded."
     >
       {empty ? (
@@ -184,7 +184,7 @@ export function AnalyticsView() {
                       )}
                     >
                       <SeverityDot severity={sev} />
-                      <span className="flex-1 text-sm capitalize">{sev}</span>
+                      <span className="flex-1 text-sm">{severityLabel(sev)}</span>
                       <span className="font-mono text-sm font-semibold tabular-nums">{count}</span>
                     </div>
                   ))

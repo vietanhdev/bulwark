@@ -1,6 +1,8 @@
 mod ai_security;
 mod monitoring;
 mod realtime_av;
+mod remediation;
+mod reveal;
 mod ssh_protect;
 mod tray;
 
@@ -835,7 +837,9 @@ pub fn run() {
             ai_security::ai_redact,
             ai_security::ai_settings_get,
             ai_security::ai_settings_set,
-            ssh_protect::ssh_protect_keys
+            ssh_protect::ssh_protect_keys,
+            remediation::fix_ssh_permissions,
+            reveal::open_flagged_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

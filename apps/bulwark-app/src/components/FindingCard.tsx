@@ -1,5 +1,6 @@
 import { type ReactNode } from "react";
 import { CommandBlock } from "@/components/ui/copy-button";
+import { FileLocation } from "@/components/FileLocation";
 import { SeverityLabel, railStyle, type Severity } from "@/components/Severity";
 import { cn } from "@/lib/utils";
 
@@ -10,6 +11,14 @@ export interface Finding {
   title: string;
   explanation: string;
   fix_hint: string;
+  /**
+   * The file this finding points at, if any. Config-rule findings don't carry one (their fix is a
+   * command); agent-security findings do, and when present we offer to open it or copy its path so
+   * a heuristic — "confirm by reading line N" — is one click from being verifiable. Optional so the
+   * many findings without a file are unaffected.
+   */
+  file?: string;
+  line?: number | null;
 }
 
 /**
@@ -38,7 +47,7 @@ export function FindingCard({
   return (
     <article
       className={cn(
-        "rail rail-dim rounded-md border border-border bg-card py-3.5 pr-4",
+        "rail rail-dim rounded-lg border border-border bg-card py-3.5 pr-4",
         animate && "finding-enter",
       )}
       style={railStyle(f.severity)}
@@ -52,6 +61,7 @@ export function FindingCard({
             <SeverityLabel severity={f.severity} />
           </div>
           <h3 className="mt-1.5 text-sm font-semibold">{f.title}</h3>
+          {f.file && <FileLocation file={f.file} line={f.line ?? null} />}
           <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{f.explanation}</p>
         </div>
         {action}

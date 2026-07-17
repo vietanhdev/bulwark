@@ -8,7 +8,8 @@ import { Callout } from "@/components/ui/callout";
 import { Switch } from "@/components/ui/switch";
 import { PageShell, SectionLabel } from "@/components/PageShell";
 import { ShieldMark } from "@/components/ShieldMark";
-import { SshKeyProtect } from "@/components/SshKeyProtect";
+import { SshKeyProtect, SshPermFix } from "@/components/SshKeyProtect";
+import { AppearanceSettings } from "@/components/AppearanceSettings";
 import { useRevision } from "@/lib/revision";
 import { cn } from "@/lib/utils";
 
@@ -129,9 +130,18 @@ export function SettingsView() {
   return (
     <PageShell
       title="Settings"
-      description="How often Bulwark checks this host on its own, and what version you're running."
+      description="How Bulwark looks, how often it checks this computer on its own, and the built-in tools that keep it safe."
     >
       <div className="flex flex-col gap-8">
+        <section>
+          <SectionLabel>Appearance</SectionLabel>
+          <p className="mb-3 text-sm leading-relaxed text-muted-foreground">
+            Match Bulwark to your desktop — light or dark, plus accent and sidebar colours from Ubuntu's
+            palette.
+          </p>
+          <AppearanceSettings />
+        </section>
+
         <section>
           <SectionLabel>Continuous monitoring</SectionLabel>
           <p className="mb-3 text-sm leading-relaxed text-muted-foreground">
@@ -206,8 +216,14 @@ export function SettingsView() {
         </section>
 
         <section>
-          <SectionLabel>SSH keys</SectionLabel>
+          <SectionLabel>SSH hardening</SectionLabel>
+          <p className="mb-3 text-sm text-muted-foreground">
+            One-click fixes for the two most common SSH weaknesses on a workstation — plaintext private keys
+            and loose <code>~/.ssh</code> permissions. Both run on your own files, need no elevation, and keep
+            a backup or preview before touching anything.
+          </p>
           <SshKeyProtect />
+          <SshPermFix />
         </section>
 
         <section>

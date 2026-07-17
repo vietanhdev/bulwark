@@ -7,7 +7,7 @@ import { PageShell, SectionLabel } from "@/components/PageShell";
 import { StatusHero, type ProtectionStatus } from "@/components/StatusHero";
 import { type Finding } from "@/components/FindingCard";
 import { CategoryFindings, groupFindingsByCategory } from "@/components/CategoryFindings";
-import { SEVERITY_ORDER, SeverityDot, railStyle, type Severity } from "@/components/Severity";
+import { SEVERITY_ORDER, SeverityDot, railStyle, severityLabel, type Severity } from "@/components/Severity";
 import { type View } from "@/components/Sidebar";
 import { computeHardeningIndex, type HardeningIndex } from "@/lib/hardening";
 import { useRevision, type ScannerId } from "@/lib/revision";
@@ -61,11 +61,11 @@ type ScanKind = "compliance" | "agent" | "antivirus";
 const SCAN_KINDS: { id: ScanKind; label: string; hint: string }[] = [
   {
     id: "compliance",
-    label: "Compliance",
+    label: "Checkups",
     hint: "The rule pack — SSH, sudo, kernel, cron, file integrity",
   },
-  { id: "agent", label: "Agent security", hint: "AI assistant context, MCP configs, transcripts" },
-  { id: "antivirus", label: "Antivirus", hint: "ClamAV signature scan — minutes, not seconds" },
+  { id: "agent", label: "AI assistants", hint: "AI assistant context, MCP configs, transcripts" },
+  { id: "antivirus", label: "Virus scan", hint: "ClamAV signature scan — minutes, not seconds" },
 ];
 
 // Fast, safe, and what you almost always want. Antivirus is deliberately off by default: it's a
@@ -212,7 +212,7 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
       {
         key: "compliance",
         view: "compliance" as View,
-        label: "Compliance",
+        label: "Checkups",
         issueCount: compliance.length,
         worst: worstOf(compliance),
         scanned: hasScanned,
@@ -220,7 +220,7 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
       {
         key: "antivirus",
         view: "antivirus" as View,
-        label: "Antivirus",
+        label: "Virus scan",
         issueCount: threats.length,
         worst: threats.length > 0 ? ("critical" as Severity) : null,
         scanned: avScanned,
@@ -228,7 +228,7 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
       {
         key: "agent-security",
         view: "agent-security" as View,
-        label: "Agent Security",
+        label: "AI assistants",
         issueCount: agent.length,
         worst: worstOf(agent),
         scanned: agentScanned,
@@ -236,7 +236,7 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
       {
         key: "file-integrity",
         view: "integrity" as View,
-        label: "File integrity",
+        label: "File changes",
         issueCount: fim.length,
         worst: worstOf(fim),
         scanned: hasScanned,
@@ -500,7 +500,7 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
 
   return (
     <PageShell
-      title="Overview"
+      title="Home"
       action={
         <>
           <div className="hidden items-center gap-1 sm:flex" role="group" aria-label="Scan profile">
@@ -818,7 +818,7 @@ function VerdictPanel({
         {hardening && (
           <div className="text-right">
             <div className="font-mono text-[10px] font-semibold tracking-widest text-muted-foreground uppercase">
-              Hardening index
+              Safety score
             </div>
             <div className="mt-0.5 flex items-baseline justify-end gap-1">
               <span
@@ -865,7 +865,7 @@ function VerdictPanel({
                   type="button"
                   aria-pressed={on}
                   onClick={() => onToggleSeverity(sev)}
-                  title={`Show only ${sev} findings`}
+                  title={`Show only ${severityLabel(sev)} findings`}
                   className={cn(
                     "flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs transition-colors",
                     "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
@@ -876,7 +876,7 @@ function VerdictPanel({
                 >
                   <SeverityDot severity={sev} />
                   <span className="font-mono font-semibold tabular-nums text-foreground">{count}</span>
-                  <span className="capitalize">{sev}</span>
+                  <span>{severityLabel(sev)}</span>
                 </button>
               );
             })}

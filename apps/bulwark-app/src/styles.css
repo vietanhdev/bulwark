@@ -2,20 +2,16 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
-/* Archivo (body/UI) + IBM Plex Mono (data). The pairing inverts the usual "characterful
-   display + neutral mono" split on purpose: Bulwark's screens are roughly 40% monospace data
-   by volume — rule IDs, paths, hashes, fix commands, counts, hostnames — so the mono is the
-   face doing the expressive work and the sans stays quiet underneath it. Plex Mono reads as
-   an engineering instrument rather than terminal cosplay, which is the register this app
-   wants: Bulwark is an auditor, not an attack tool.
-
-   Plex Mono has no variable build on fontsource, hence three explicit weights rather than one
-   variable file. (The docs site still uses Geist — it's a separate npm project with no shared
-   build step, and the two are no longer claimed to be in sync.) */
-@import "@fontsource-variable/archivo";
-@import "@fontsource/ibm-plex-mono/400.css";
-@import "@fontsource/ibm-plex-mono/500.css";
-@import "@fontsource/ibm-plex-mono/600.css";
+/* Ubuntu Sans (UI) + Ubuntu Sans Mono (data) — the host OS's own typefaces. Bulwark scans an
+   Ubuntu machine, so dressing it in Ubuntu's design system means dressing it in Ubuntu's type:
+   the app should look like it belongs to the desktop it audits, not like a visitor. Ubuntu Sans
+   and Ubuntu Sans Mono are Canonical's current brand faces (the 2023 refresh of the classic
+   Ubuntu font), and roughly 40% of these screens are monospace data by volume — rule IDs, paths,
+   hashes, fix commands, counts, hostnames — so Ubuntu Sans Mono does real expressive work rather
+   than being terminal cosplay. Both ship variable builds, so one file per family covers every
+   weight. */
+@import "@fontsource-variable/ubuntu-sans";
+@import "@fontsource-variable/ubuntu-sans-mono";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -35,37 +31,63 @@
    ============================================================================ */
 
 :root {
-  /* Chrome — dark in BOTH themes. */
-  --ink: oklch(0.21 0.024 205);
-  --ink-raised: oklch(0.26 0.026 205);
-  --ink-fg: oklch(0.88 0.012 205);
-  --ink-muted: oklch(0.63 0.016 205);
-  --ink-border: oklch(1 0 0 / 10%);
+  /* Chrome — Ubuntu aubergine, dark in BOTH themes. The classic Canonical brand pairing is
+     aubergine + orange (Unity-era Ubuntu), so the permanent dark rail is recoloured from the old
+     teal to Ubuntu's purple: with the orange accent it reads unmistakably as Ubuntu while keeping
+     the app's dark-chrome-framing-paper silhouette. */
+  --ink: oklch(0.22 0.07 350);
+  --ink-raised: oklch(0.28 0.078 350);
+  --ink-fg: oklch(0.93 0.014 350);
+  --ink-muted: oklch(0.69 0.03 350);
+  --ink-border: oklch(1 0 0 / 12%);
 
-  /* Workspace — paper. Cool blue-grey, deliberately not the warm cream that every
-     "designed" light theme reaches for. */
-  --background: oklch(0.965 0.005 210);
-  --foreground: oklch(0.2 0.02 205);
+  /* Workspace — Yaru paper. A near-neutral warm grey (the teal cast is gone), so the surfaces
+     read as the host desktop's own rather than a custom theme. Card stays pure white. */
+  --background: oklch(0.965 0.004 70);
+  --foreground: oklch(0.2 0.008 60);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.2 0.02 205);
+  --card-foreground: oklch(0.2 0.008 60);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.2 0.02 205);
+  --popover-foreground: oklch(0.2 0.008 60);
 
-  --primary: oklch(0.5 0.09 194);
-  --primary-foreground: oklch(0.98 0.01 195);
-  --secondary: oklch(0.945 0.008 210);
-  --secondary-foreground: oklch(0.26 0.02 205);
-  --muted: oklch(0.945 0.008 210);
-  --muted-foreground: oklch(0.5 0.015 205);
-  --accent: oklch(0.93 0.025 194);
-  --accent-foreground: oklch(0.3 0.05 194);
+  /* Ubuntu Orange (#E95420) — the default Yaru accent. Drives buttons, the active nav rail,
+     links, focus rings. */
+  --primary: oklch(0.646 0.19 41);
+  --primary-foreground: oklch(0.99 0.02 60);
+  --secondary: oklch(0.95 0.005 70);
+  --secondary-foreground: oklch(0.26 0.008 60);
+  --muted: oklch(0.95 0.005 70);
+  --muted-foreground: oklch(0.5 0.008 60);
+  --accent: oklch(0.95 0.03 55);
+  --accent-foreground: oklch(0.45 0.13 42);
   --destructive: oklch(0.585 0.205 27);
   --destructive-foreground: oklch(0.99 0.01 27);
-  --border: oklch(0.9 0.008 210);
-  --input: oklch(0.9 0.008 210);
-  --ring: oklch(0.5 0.09 194 / 0.5);
+  /* Softened one step (was 0.9) so a card reads as lifted by its shadow rather than boxed in by a
+     hard outline — the border is now a hairline that pairs with the elevation instead of competing
+     with it. */
+  --border: oklch(0.925 0.005 70);
+  --input: oklch(0.9 0.006 70);
+  --ring: oklch(0.646 0.19 41 / 0.5);
 
-  --radius: 0.5rem;
+  /* Corner radius scale. Bumped from 0.5rem for a softer, more modern feel — this one token
+     drives the whole `rounded-sm/md/lg/xl` set below, so cards, buttons, inputs, callouts and
+     pills all round up together rather than being edited one by one. */
+  --radius: 0.875rem;
+
+  /* ── Elevation (defense-in-depth layers) ─────────────────────────────────────
+     The workspace reads as stacked layers: the grey field, raised panels on it, and menus
+     floating above those. Depth is carried by a soft shadow plus the existing tint step (field
+     0.965 → card 1.0), which lets the border recede to a hairline instead of outlining every
+     box. `--shadow-1` is a resting panel; `--shadow-2` an interactive/floating one; `--shadow-pop`
+     a true overlay (menus, dialogs). Shadows are cool-tinted, not neutral grey, so they sit in the
+     same teal-cast world as the chrome. `--elevate-inset` recesses a nested layer (a fix command
+     block) INTO its card. */
+  --shadow-1: 0 1px 2px -1px oklch(0.45 0.03 220 / 0.1), 0 3px 8px -3px oklch(0.45 0.03 220 / 0.12);
+  --shadow-2: 0 2px 4px -2px oklch(0.45 0.03 220 / 0.12), 0 8px 20px -6px oklch(0.45 0.03 220 / 0.16);
+  --shadow-pop: 0 4px 8px -3px oklch(0.35 0.03 220 / 0.16), 0 16px 40px -10px oklch(0.35 0.03 220 / 0.24);
+  --elevate-inset: inset 0 1px 2px oklch(0.45 0.03 220 / 0.06);
+  /* A faint hairline that pairs with the shadow rather than fighting it. */
+  --layer-border: oklch(0.92 0.006 210);
 
   /* Severity triads. Each severity is three colours, not one, because it has three jobs:
        --sev-X       the RAIL — a graphical bar, held to WCAG 1.4.11's 3:1 non-text minimum
@@ -101,35 +123,55 @@
 
 .dark {
   /* Chrome sinks below the workspace rather than rising above it, so "chrome is darker than
-     paper" — the relationship the whole layout is built on — survives the theme flip. */
-  --ink: oklch(0.155 0.018 205);
-  --ink-raised: oklch(0.21 0.02 205);
-  --ink-fg: oklch(0.88 0.012 205);
-  --ink-muted: oklch(0.6 0.016 205);
+     paper" — the relationship the whole layout is built on — survives the theme flip. Still
+     aubergine, just deeper. */
+  --ink: oklch(0.16 0.05 350);
+  --ink-raised: oklch(0.22 0.06 350);
+  --ink-fg: oklch(0.9 0.014 350);
+  --ink-muted: oklch(0.62 0.028 350);
   --ink-border: oklch(1 0 0 / 8%);
 
-  --background: oklch(0.205 0.016 205);
-  --foreground: oklch(0.93 0.01 205);
-  /* Pinned: the dark severity triads above were solved for contrast against exactly this
-     card colour. Changing it without re-running that solve silently breaks their AA. */
-  --card: oklch(0.235 0.018 200);
-  --card-foreground: oklch(0.93 0.01 205);
-  --popover: oklch(0.235 0.018 200);
-  --popover-foreground: oklch(0.93 0.01 205);
+  --background: oklch(0.205 0.008 60);
+  --foreground: oklch(0.93 0.006 60);
+  /* Pinned LIGHTNESS: the dark severity triads were solved for contrast against this card's
+     luminance. Hue/chroma moved from teal to warm-neutral to drop the teal cast, but L=0.235 is
+     unchanged, so the rail's 3:1-against-card and the self-contained tint/fg chips still hold
+     (verified with a computed-contrast pass). */
+  --card: oklch(0.235 0.008 60);
+  --card-foreground: oklch(0.93 0.006 60);
+  --popover: oklch(0.235 0.008 60);
+  --popover-foreground: oklch(0.93 0.006 60);
 
-  --primary: oklch(0.75 0.12 194);
-  --primary-foreground: oklch(0.16 0.02 195);
-  --secondary: oklch(0.28 0.02 205);
-  --secondary-foreground: oklch(0.93 0.01 205);
-  --muted: oklch(0.28 0.02 205);
-  --muted-foreground: oklch(0.66 0.018 205);
-  --accent: oklch(0.3 0.04 194);
-  --accent-foreground: oklch(0.9 0.05 194);
+  /* Ubuntu Orange, brightened for the dark canvas; dark text on it for AA. */
+  --primary: oklch(0.72 0.16 46);
+  --primary-foreground: oklch(0.18 0.03 42);
+  --secondary: oklch(0.28 0.008 60);
+  --secondary-foreground: oklch(0.93 0.006 60);
+  --muted: oklch(0.28 0.008 60);
+  --muted-foreground: oklch(0.66 0.01 60);
+  --accent: oklch(0.32 0.06 45);
+  --accent-foreground: oklch(0.88 0.08 50);
   --destructive: oklch(0.715 0.178 27);
   --destructive-foreground: oklch(0.16 0.02 27);
-  --border: oklch(1 0 0 / 10%);
+  --border: oklch(1 0 0 / 8%);
   --input: oklch(1 0 0 / 14%);
-  --ring: oklch(0.75 0.12 194 / 0.5);
+  --ring: oklch(0.72 0.16 46 / 0.5);
+
+  /* Dark elevation: a shadow alone barely registers dark-on-dark, so each layer also carries a
+     faint top highlight (the inset light line) — the way a real raised surface catches light on
+     its top edge. Card (0.235) already sits above field (0.205); the shadow + highlight make that
+     step legible as depth rather than a colour accident. */
+  --shadow-1:
+    0 1px 2px -1px oklch(0 0 0 / 0.5), 0 3px 10px -3px oklch(0 0 0 / 0.55),
+    inset 0 1px 0 0 oklch(1 0 0 / 0.04);
+  --shadow-2:
+    0 2px 4px -2px oklch(0 0 0 / 0.55), 0 10px 24px -6px oklch(0 0 0 / 0.6),
+    inset 0 1px 0 0 oklch(1 0 0 / 0.05);
+  --shadow-pop:
+    0 6px 12px -4px oklch(0 0 0 / 0.6), 0 20px 48px -10px oklch(0 0 0 / 0.7),
+    inset 0 1px 0 0 oklch(1 0 0 / 0.06);
+  --elevate-inset: inset 0 1px 3px oklch(0 0 0 / 0.4);
+  --layer-border: oklch(1 0 0 / 7%);
 
   --sev-critical: oklch(0.715 0.178 27);
   --sev-critical-tint: oklch(0.31 0.062 27);
@@ -151,9 +193,168 @@
   --sev-resolved-fg: oklch(0.86 0.13 149);
 }
 
+/* ── Accent variants (Yaru-style) ──────────────────────────────────────────────
+   Ubuntu ships a palette of accent colours and lets you pick one; Bulwark does the same. Orange
+   is the default (defined in :root / .dark above); each `[data-accent="x"]` below re-points only
+   the accent tokens — primary, its foreground, the focus ring, and the hover tint — so the whole
+   UI recolours from one attribute set on <html>. Light accents (aqua, yellow) take dark text;
+   the rest take white in light mode, and every accent takes dark text on its brighter dark-mode
+   value. Each pair was checked with a computed-contrast pass. */
+[data-accent="aqua"] {
+  --primary: oklch(0.54 0.09 195);
+  --primary-foreground: oklch(0.99 0.02 195);
+  --ring: oklch(0.54 0.09 195 / 0.5);
+  --accent: oklch(0.95 0.03 195);
+  --accent-foreground: oklch(0.42 0.08 195);
+}
+.dark[data-accent="aqua"] {
+  --primary: oklch(0.74 0.09 195);
+  --primary-foreground: oklch(0.17 0.03 195);
+  --ring: oklch(0.74 0.09 195 / 0.5);
+}
+[data-accent="blue"] {
+  --primary: oklch(0.55 0.16 258);
+  --primary-foreground: oklch(0.99 0.02 258);
+  --ring: oklch(0.55 0.16 258 / 0.5);
+  --accent: oklch(0.95 0.03 258);
+  --accent-foreground: oklch(0.42 0.12 258);
+}
+.dark[data-accent="blue"] {
+  --primary: oklch(0.7 0.14 258);
+  --primary-foreground: oklch(0.17 0.03 258);
+  --ring: oklch(0.7 0.14 258 / 0.5);
+}
+[data-accent="green"] {
+  --primary: oklch(0.53 0.15 150);
+  --primary-foreground: oklch(0.99 0.02 150);
+  --ring: oklch(0.53 0.15 150 / 0.5);
+  --accent: oklch(0.95 0.04 150);
+  --accent-foreground: oklch(0.4 0.11 150);
+}
+.dark[data-accent="green"] {
+  --primary: oklch(0.7 0.16 150);
+  --primary-foreground: oklch(0.16 0.03 150);
+  --ring: oklch(0.7 0.16 150 / 0.5);
+}
+[data-accent="pink"] {
+  --primary: oklch(0.57 0.19 330);
+  --primary-foreground: oklch(0.99 0.02 330);
+  --ring: oklch(0.57 0.19 330 / 0.5);
+  --accent: oklch(0.95 0.04 330);
+  --accent-foreground: oklch(0.45 0.14 330);
+}
+.dark[data-accent="pink"] {
+  --primary: oklch(0.73 0.16 330);
+  --primary-foreground: oklch(0.17 0.03 330);
+  --ring: oklch(0.73 0.16 330 / 0.5);
+}
+[data-accent="aubergine"] {
+  --primary: oklch(0.42 0.15 342);
+  --primary-foreground: oklch(0.99 0.02 342);
+  --ring: oklch(0.42 0.15 342 / 0.5);
+  --accent: oklch(0.95 0.04 342);
+  --accent-foreground: oklch(0.42 0.13 342);
+}
+.dark[data-accent="aubergine"] {
+  --primary: oklch(0.64 0.16 342);
+  --primary-foreground: oklch(0.16 0.03 342);
+  --ring: oklch(0.64 0.16 342 / 0.5);
+}
+[data-accent="red"] {
+  --primary: oklch(0.54 0.2 27);
+  --primary-foreground: oklch(0.99 0.02 27);
+  --ring: oklch(0.54 0.2 27 / 0.5);
+  --accent: oklch(0.95 0.03 27);
+  --accent-foreground: oklch(0.45 0.15 27);
+}
+.dark[data-accent="red"] {
+  --primary: oklch(0.68 0.19 27);
+  --primary-foreground: oklch(0.16 0.03 27);
+  --ring: oklch(0.68 0.19 27 / 0.5);
+}
+[data-accent="yellow"] {
+  --primary: oklch(0.8 0.15 82);
+  --primary-foreground: oklch(0.2 0.04 82);
+  --ring: oklch(0.8 0.15 82 / 0.5);
+  --accent: oklch(0.95 0.05 82);
+  --accent-foreground: oklch(0.42 0.09 82);
+}
+.dark[data-accent="yellow"] {
+  --primary: oklch(0.84 0.15 85);
+  --primary-foreground: oklch(0.18 0.04 85);
+  --ring: oklch(0.84 0.15 85 / 0.5);
+}
+
+/* ── Chrome colour (sidebar + titlebar) ────────────────────────────────────────
+   The dark chrome is its own axis, independent of the accent — pick aubergine (default, in
+   :root/.dark), or re-tint it teal / blue / green / indigo / graphite. Each variant only moves the
+   hue of the `--ink*` scale; the lightness structure (and therefore the text contrast on the
+   chrome) is held constant, so any choice stays readable. Chrome stays dark in both themes by
+   design — light mode gets the mid-dark tint, dark mode a deeper one. */
+[data-chrome="teal"] {
+  --ink: oklch(0.22 0.055 195);
+  --ink-raised: oklch(0.28 0.062 195);
+  --ink-fg: oklch(0.93 0.016 195);
+  --ink-muted: oklch(0.69 0.03 195);
+}
+.dark[data-chrome="teal"] {
+  --ink: oklch(0.16 0.045 195);
+  --ink-raised: oklch(0.22 0.052 195);
+  --ink-fg: oklch(0.9 0.016 195);
+  --ink-muted: oklch(0.62 0.028 195);
+}
+[data-chrome="blue"] {
+  --ink: oklch(0.23 0.06 258);
+  --ink-raised: oklch(0.29 0.068 258);
+  --ink-fg: oklch(0.93 0.016 258);
+  --ink-muted: oklch(0.7 0.03 258);
+}
+.dark[data-chrome="blue"] {
+  --ink: oklch(0.17 0.05 258);
+  --ink-raised: oklch(0.23 0.058 258);
+  --ink-fg: oklch(0.9 0.016 258);
+  --ink-muted: oklch(0.63 0.028 258);
+}
+[data-chrome="green"] {
+  --ink: oklch(0.23 0.055 150);
+  --ink-raised: oklch(0.29 0.062 150);
+  --ink-fg: oklch(0.93 0.016 150);
+  --ink-muted: oklch(0.7 0.03 150);
+}
+.dark[data-chrome="green"] {
+  --ink: oklch(0.17 0.045 150);
+  --ink-raised: oklch(0.23 0.052 150);
+  --ink-fg: oklch(0.9 0.016 150);
+  --ink-muted: oklch(0.63 0.028 150);
+}
+[data-chrome="indigo"] {
+  --ink: oklch(0.23 0.07 290);
+  --ink-raised: oklch(0.29 0.078 290);
+  --ink-fg: oklch(0.93 0.016 290);
+  --ink-muted: oklch(0.7 0.032 290);
+}
+.dark[data-chrome="indigo"] {
+  --ink: oklch(0.17 0.06 290);
+  --ink-raised: oklch(0.23 0.068 290);
+  --ink-fg: oklch(0.9 0.016 290);
+  --ink-muted: oklch(0.63 0.03 290);
+}
+[data-chrome="graphite"] {
+  --ink: oklch(0.24 0.006 260);
+  --ink-raised: oklch(0.3 0.008 260);
+  --ink-fg: oklch(0.93 0.004 260);
+  --ink-muted: oklch(0.69 0.008 260);
+}
+.dark[data-chrome="graphite"] {
+  --ink: oklch(0.17 0.005 260);
+  --ink-raised: oklch(0.23 0.006 260);
+  --ink-fg: oklch(0.9 0.004 260);
+  --ink-muted: oklch(0.62 0.008 260);
+}
+
 @theme inline {
-  --font-sans: "Archivo Variable", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-sans: "Ubuntu Sans Variable", "Ubuntu", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Ubuntu Sans Mono Variable", "Ubuntu Mono", ui-monospace, "SF Mono", Menlo, monospace;
   --font-heading: var(--font-sans);
 
   --color-ink: var(--ink);
@@ -224,9 +425,34 @@
    implement it. */
 
 .app-shell {
-  border-radius: 10px;
+  border-radius: 14px;
   overflow: hidden;
   border: 1px solid var(--ink-border);
+}
+
+/* ── Defense-in-depth layers ───────────────────────────────────────────────────
+   The signature of this pass: every panel is a raised layer floating on the field, not a boxed-in
+   outline. A single rule gives all card surfaces their resting shadow, so depth stays consistent
+   across every screen without each component opting in. Popovers/menus float higher; a fix-command
+   block is recessed INTO its card. Components that set their own `shadow-*` utility still win (the
+   utilities layer loads after this one), so a deliberately flat or extra-lifted element is free to
+   say so. */
+@layer components {
+  .bg-card {
+    box-shadow: var(--shadow-1);
+  }
+  .bg-popover {
+    box-shadow: var(--shadow-pop);
+  }
+}
+
+/* Tailwind's bare `rounded` is a fixed 0.25rem that doesn't follow `--radius`, so small controls
+   (icon buttons, filter chips, menu rows) were left at a sharp 4px while every themed `rounded-*`
+   rounded up. Pin it to the scaled small radius so the whole UI shares one corner language. */
+@layer utilities {
+  .rounded {
+    border-radius: var(--radius-sm);
+  }
 }
 
 /* ---------------------------------------------------------------------------
@@ -246,11 +472,14 @@
 .rail::before {
   content: "";
   position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
+  /* Inset from the corners and fully rounded, so on a rounded, elevated card the accent reads as a
+     soft pill floating in the left gutter rather than a hard bar whose square ends poke past the
+     card's rounded corners. Keeps the "read severity peripherally" idea, loses the boxed-in edge. */
+  top: 0.5rem;
+  bottom: 0.5rem;
+  left: 0.4rem;
   width: 3px;
-  border-radius: 0 2px 2px 0;
+  border-radius: 999px;
   background: var(--rail-color, var(--border));
 }
 /* Muted until hovered/expanded, so a long list reads as a calm gradient of colour rather

@@ -30,18 +30,21 @@ interface CalloutProps {
  */
 export function Callout({ tone, children, action, className }: CalloutProps) {
   const { sev, icon: Icon } = TONE[tone];
+  // A soft, fully-outlined tinted panel rather than a hard 3px left bar — the border is the severity
+  // colour dialled back so it reads as a gentle tint edge, matching the rounded, elevated surfaces
+  // around it instead of the old left-accent stripe.
   const style = sev
     ? {
         background: `var(--sev-${sev}-tint)`,
         color: `var(--sev-${sev}-fg)`,
-        borderColor: `var(--sev-${sev})`,
+        borderColor: `color-mix(in oklch, var(--sev-${sev}) 38%, transparent)`,
       }
     : undefined;
 
   return (
     <div
       className={cn(
-        "flex items-start gap-2.5 rounded-md border-l-[3px] px-3 py-2.5 text-sm",
+        "flex items-start gap-2.5 rounded-lg border px-3 py-2.5 text-sm",
         // `info` has no severity hue to borrow, so it falls back to the neutral surface.
         !sev && "border-border bg-muted text-muted-foreground",
         className,

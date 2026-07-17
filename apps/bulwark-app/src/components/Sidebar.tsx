@@ -71,24 +71,24 @@ interface NavItem {
 const GROUPS: { label: string | null; items: NavItem[] }[] = [
   {
     label: null,
-    items: [{ id: "overview", label: "Overview", icon: LayoutDashboard }],
+    items: [{ id: "overview", label: "Home", icon: LayoutDashboard }],
   },
   {
     label: "Scans",
     items: [
-      { id: "compliance", label: "Compliance", icon: BadgeCheck },
-      { id: "antivirus", label: "Antivirus", icon: ShieldCheck },
+      { id: "compliance", label: "Checkups", icon: BadgeCheck },
+      { id: "antivirus", label: "Virus scan", icon: ShieldCheck },
       // The newest pillar, and the one most users won't know to look for — so it carries a "new"
       // badge. A badge, not a colour: see NavItem.badge for why it must not borrow the rail.
-      { id: "agent-security", label: "Agent Security", icon: Bot, badge: "New" },
-      { id: "integrity", label: "File integrity", icon: FileCheck2 },
+      { id: "agent-security", label: "AI assistants", icon: Bot, badge: "New" },
+      { id: "integrity", label: "File changes", icon: FileCheck2 },
     ],
   },
   {
     label: "Reference",
     items: [
-      { id: "rules", label: "Rules", icon: ListChecks },
-      { id: "analytics", label: "Analytics", icon: LineChart },
+      { id: "rules", label: "All checks", icon: ListChecks },
+      { id: "analytics", label: "Activity", icon: LineChart },
     ],
   },
 ];
@@ -171,10 +171,10 @@ export function Sidebar({ view, onChange, historyCount, monitoringEnabled }: Sid
             </span>
             <span className="text-xs font-medium text-ink-fg">
               {monitoringEnabled === null
-                ? "Checking status…"
+                ? "Checking…"
                 : monitoringEnabled
-                  ? "Monitoring active"
-                  : "Monitoring paused"}
+                  ? "Keeping watch"
+                  : "Watch paused"}
             </span>
           </span>
           <span className="pl-3 font-mono text-[11px] text-ink-muted">
