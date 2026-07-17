@@ -1,6 +1,6 @@
 import { AlertTriangle, Check, Clock, HelpCircle, X, type LucideIcon } from "lucide-react";
 import { ShieldMark } from "@/components/ShieldMark";
-import { SeverityDot, type Severity } from "@/components/Severity";
+import { SeverityDot, severityLabel, type Severity } from "@/components/Severity";
 import { cn } from "@/lib/utils";
 
 export type ProtectionStatus = "idle" | "clean" | "warning" | "critical" | "scanning";
@@ -13,22 +13,22 @@ const CONFIG: Record<
 > = {
   idle: {
     icon: HelpCircle,
-    headline: "This host hasn't been scanned yet",
+    headline: "Let's check this computer",
     shieldColor: "var(--muted-foreground)",
   },
   clean: {
     icon: Check,
-    headline: "This host is in good shape",
+    headline: "Your computer looks safe",
     shieldColor: "var(--sev-resolved)",
   },
   warning: {
     icon: AlertTriangle,
-    headline: "A few things are worth tightening",
+    headline: "Your computer needs a little attention",
     shieldColor: "var(--sev-medium)",
   },
   critical: {
     icon: X,
-    headline: "This host needs attention now",
+    headline: "Your computer needs attention",
     shieldColor: "var(--sev-critical)",
   },
 };
@@ -80,7 +80,7 @@ export function StatusHero({ status, counts, host, showBreakdown = true }: Statu
 
       <div className="min-w-0">
         <h2 className="font-heading text-lg font-semibold tracking-tight">
-          {scanning ? "Scanning this host…" : headline}
+          {scanning ? "Checking your computer…" : headline}
         </h2>
 
         {showBreakdown && !scanning && present.length > 0 && (
@@ -89,7 +89,7 @@ export function StatusHero({ status, counts, host, showBreakdown = true }: Statu
               <span key={sev} className="flex items-center gap-1.5 text-sm">
                 <SeverityDot severity={sev} />
                 <span className="font-mono font-semibold tabular-nums">{count}</span>
-                <span className="text-muted-foreground">{sev}</span>
+                <span className="text-muted-foreground">{severityLabel(sev)}</span>
               </span>
             ))}
           </div>

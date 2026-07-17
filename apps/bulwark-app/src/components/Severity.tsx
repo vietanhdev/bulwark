@@ -6,13 +6,24 @@ export type Severity = "critical" | "high" | "medium" | "low" | "info";
 /** Worst first. The single source of truth for severity ordering across sorting and counting. */
 export const SEVERITY_ORDER: Severity[] = ["critical", "high", "medium", "low", "info"];
 
+/**
+ * Action-oriented, plain-language labels rather than the raw CIS severity words — a home user reads
+ * "Should fix" and knows what to do, where "High" only ranks it. The underlying `Severity` enum
+ * (and its colours, ordering and storage) is unchanged; this is purely how the level is spoken.
+ */
 const LABEL: Record<Severity, string> = {
-  critical: "Critical",
-  high: "High",
-  medium: "Medium",
-  low: "Low",
-  info: "Info",
+  critical: "Important",
+  high: "Should fix",
+  medium: "Worth doing",
+  low: "Minor",
+  info: "FYI",
 };
+
+/** The plain-language label for a severity — the single source of truth, shared by the chip, the
+ *  count pills, and anywhere else the level is named. */
+export function severityLabel(severity: Severity): string {
+  return LABEL[severity];
+}
 
 /**
  * Paints a row's severity rail — the 3px bar in its left gutter. Pair with the `rail` class
@@ -33,7 +44,7 @@ export function SeverityLabel({ severity, className }: { severity: Severity; cla
   return (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center rounded-sm px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider",
+        "inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-semibold",
         className,
       )}
       style={{

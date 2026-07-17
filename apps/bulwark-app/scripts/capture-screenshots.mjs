@@ -41,11 +41,12 @@ const OUT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../../docs/
  * picture of a button — so that capture drives the mock scan to completion first.
  */
 const SHOTS = [
-  { tab: null, file: "overview.png" }, // Overview is the landing view
-  { tab: "Compliance", file: "compliance.png" },
-  { tab: "Antivirus", file: "antivirus.png", run: "Run a virus scan", settleMs: 8000 },
-  { tab: "Agent Security", file: "agent-security.png" },
-  { tab: "Rules", file: "rules.png" },
+  { tab: null, file: "overview.png" }, // Home is the landing view
+  { tab: "Checkups", file: "compliance.png" },
+  { tab: "Virus scan", file: "antivirus.png", run: "Run a virus scan", settleMs: 8000 },
+  { tab: "AI assistants", file: "agent-security.png" },
+  { tab: "All checks", file: "rules.png" },
+  { tab: "Settings", file: "settings.png" },
 ];
 
 const browser = await chromium.launch();
@@ -73,8 +74,39 @@ for (const { tab, file, run, settleMs } of SHOTS) {
     await page.waitForTimeout(settleMs ?? 5000);
   }
 
-  await page.screenshot({ path: resolve(OUT_DIR, file) });
+  // `omitBackground` captures the transparent page background as alpha rather than filling it
+  // white — so the window's rounded corners (`.app-shell` radius, `body` is transparent) read as a
+  // real floating window instead of being squared off into the PNG's corners.
+  await page.screenshot({ path: resolve(OUT_DIR, file), omitBackground: true });
   console.log(`captured ${file}`);
+}
+
+// ── Hero variants ────────────────────────────────────────────────────────────
+// The same Home screen in several sidebar + accent colours, transparent-cornered, so the website
+// hero can fan/stack them to show Bulwark's theming at a glance. Each pairs a sidebar colour with a
+// matching accent so the variants read as distinct at a glance.
+const HERO = [
+  { chrome: "aubergine", accent: "orange" },
+  { chrome: "teal", accent: "aqua" },
+  { chrome: "blue", accent: "blue" },
+  { chrome: "green", accent: "green" },
+];
+await nav.getByRole("button", { name: "Home" }).first().click();
+await page.waitForTimeout(800);
+for (const { chrome, accent } of HERO) {
+  await page.evaluate(
+    ({ chrome, accent }) => {
+      const el = document.documentElement;
+      if (chrome === "aubergine") delete el.dataset.chrome;
+      else el.dataset.chrome = chrome;
+      if (accent === "orange") delete el.dataset.accent;
+      else el.dataset.accent = accent;
+    },
+    { chrome, accent },
+  );
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: resolve(OUT_DIR, `hero-${chrome}.png`), omitBackground: true });
+  console.log(`captured hero-${chrome}.png`);
 }
 
 await browser.close();

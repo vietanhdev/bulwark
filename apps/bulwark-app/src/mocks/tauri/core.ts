@@ -96,6 +96,22 @@ const aiFindings = [
     redactable: false,
   },
   {
+    id: "ai-5b",
+    rule_id: "BLWK-AI-011",
+    severity: "high",
+    tool: "Claude",
+    title: "An instruction file contains prompt-injection style directives",
+    explanation:
+      'This instruction file contains a phrase associated with prompt injection ("do not tell the user"). Confirm by reading line 80 — this is a heuristic, not a certainty.',
+    fix_hint:
+      "Open the file and review line 80 for adversarial instructions (e.g. 'ignore previous instructions', commands to exfiltrate or edit config). Remove anything that steers the agent against the user.",
+    file: "/home/user/Projects/web/.claude/commands/notes.md",
+    line: 80,
+    evidence: "do not tell the user",
+    references: ["ATTACK-T1204"],
+    redactable: false,
+  },
+  {
     id: "ai-6",
     rule_id: "BLWK-AI-016",
     severity: "high",
@@ -362,6 +378,40 @@ const handlers: Record<string, (args: Args) => unknown> = {
     undetermined: 0,
     failed: 0,
   }),
+  fix_ssh_permissions: (args?: Args) => {
+    const apply = Boolean(args?.apply);
+    const status = apply ? "tightened" : "would_tighten";
+    return {
+      results: [
+        {
+          path: "/home/user/.ssh",
+          label: ".ssh directory",
+          current_mode: "755",
+          desired_mode: "700",
+          outcome: { status, from: "755", to: "700" },
+        },
+        {
+          path: "/home/user/.ssh/id_ed25519",
+          label: "private key",
+          current_mode: "644",
+          desired_mode: "600",
+          outcome: { status, from: "644", to: "600" },
+        },
+      ],
+      tightened: apply ? 2 : 0,
+      would_tighten: apply ? 0 : 2,
+      already_ok: 0,
+      missing: 0,
+      skipped_symlink: 0,
+      failed: 0,
+    };
+  },
+  // In the browser mock there's no OS to open a file with — log it and succeed so the UI flow
+  // (and any error handling) can be exercised without a real Tauri backend.
+  open_flagged_file: (args?: Args) => {
+    console.info("[mock] open_flagged_file", args?.path, "reveal=", args?.reveal);
+    return null;
+  },
 };
 
 export async function invoke<T>(cmd: string, args?: Args): Promise<T> {

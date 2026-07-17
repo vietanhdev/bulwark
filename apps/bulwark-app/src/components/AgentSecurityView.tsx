@@ -8,6 +8,7 @@ import { CommandBlock } from "@/components/ui/copy-button";
 import { Switch } from "@/components/ui/switch";
 import { PageShell, SectionLabel } from "@/components/PageShell";
 import { PathDropZone } from "@/components/PathDropZone";
+import { FileLocation } from "@/components/FileLocation";
 import { SeverityLabel, railStyle, SEVERITY_ORDER, type Severity } from "@/components/Severity";
 import { useRevision } from "@/lib/revision";
 import { cn } from "@/lib/utils";
@@ -242,7 +243,7 @@ export function AgentSecurityView({ active }: { active: boolean }) {
 
   return (
     <PageShell
-      title="Agent Security"
+      title="AI assistants"
       description="Scans the AI coding assistants on this machine — Claude Code, Cursor, Copilot, Codex and more — for secrets leaked into context or transcripts and for agent configuration that a prompt injection could turn into code execution."
       action={
         scanning ? (
@@ -381,10 +382,9 @@ export function AgentSecurityView({ active }: { active: boolean }) {
 }
 
 function AiFindingCard({ f }: { f: AiFinding }) {
-  const loc = f.line ? `${f.file}:${f.line}` : f.file;
   return (
     <article
-      className="rail rail-dim rounded-md border border-border bg-card py-3.5 pr-4"
+      className="rail rail-dim rounded-lg border border-border bg-card py-3.5 pr-4"
       style={railStyle(f.severity)}
     >
       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
@@ -405,9 +405,7 @@ function AiFindingCard({ f }: { f: AiFinding }) {
         )}
       </div>
       <h3 className="mt-1.5 text-sm font-semibold">{f.title}</h3>
-      <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground" title={loc}>
-        {loc}
-      </div>
+      <FileLocation file={f.file} line={f.line} />
       <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{f.explanation}</p>
       {f.evidence && (
         <div className="mt-2 inline-block rounded bg-muted/60 px-2 py-1 font-mono text-[11px] text-foreground">

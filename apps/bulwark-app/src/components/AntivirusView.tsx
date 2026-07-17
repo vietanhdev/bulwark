@@ -209,7 +209,7 @@ export function AntivirusView({ active }: { active: boolean }) {
 
   return (
     <PageShell
-      title="Antivirus"
+      title="Virus scan"
       description="Signature-based malware scanning through ClamAV. Bulwark shells out to it rather than reimplementing detection."
       action={
         scanning ? (

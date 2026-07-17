@@ -196,7 +196,7 @@ export function ComplianceView() {
 
   return (
     <PageShell
-      title="Compliance"
+      title="Checkups"
       description="Everything the configuration rule pack found on this host — SSH, sudo, kernel, cron, accounts, logging and more — grouped by subsystem, each with the reason it matters and the exact command to fix it."
       action={
         scanning ? (

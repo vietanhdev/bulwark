@@ -6,7 +6,14 @@ import { Callout } from "@/components/ui/callout";
 import { CommandBlock } from "@/components/ui/copy-button";
 import { PageShell, SectionLabel } from "@/components/PageShell";
 import { HardeningRing } from "@/components/HardeningRing";
-import { SEVERITY_ORDER, SeverityDot, SeverityLabel, railStyle, type Severity } from "@/components/Severity";
+import {
+  SEVERITY_ORDER,
+  SeverityDot,
+  SeverityLabel,
+  railStyle,
+  severityLabel,
+  type Severity,
+} from "@/components/Severity";
 import { computeHardeningIndex } from "@/lib/hardening";
 import { useRevision } from "@/lib/revision";
 import { cn } from "@/lib/utils";
@@ -225,7 +232,7 @@ export function RulesView() {
 
   return (
     <PageShell
-      title="Rules"
+      title="All checks"
       description={
         rules
           ? `Everything Bulwark checks — ${rules.length} rules across ${new Set(rules.map((r) => r.category)).size} categories, each one a YAML file in the rule pack.`
@@ -401,7 +408,7 @@ export function RulesView() {
                         )}
                       >
                         <SeverityDot severity={sev} />
-                        {sev}
+                        {severityLabel(sev)}
                         <span className="font-mono tabular-nums opacity-60">{severityCounts.get(sev)}</span>
                       </button>
                     );

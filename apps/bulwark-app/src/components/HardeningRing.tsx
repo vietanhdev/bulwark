@@ -56,7 +56,7 @@ export function HardeningRing({
       </div>
       <div className="min-w-0">
         <div className="font-mono text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
-          Hardening index
+          Safety score
         </div>
         <div className="mt-1 text-sm font-medium">
           {index.passing}/{index.evaluated} checks passing

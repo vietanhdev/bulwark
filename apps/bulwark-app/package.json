@@ -2,6 +2,7 @@
   "name": "bulwark-app",
   "private": true,
   "version": "0.6.8",
+  "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -14,9 +15,8 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
-    "@fontsource-variable/archivo": "^5.2.8",
-    "@fontsource-variable/geist": "^5.2.9",
-    "@fontsource/ibm-plex-mono": "^5.2.7",
+    "@fontsource-variable/ubuntu-sans": "^5.2.10",
+    "@fontsource-variable/ubuntu-sans-mono": "^5.2.10",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "class-variance-authority": "^0.7.1",

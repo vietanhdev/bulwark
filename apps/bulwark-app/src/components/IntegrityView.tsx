@@ -72,7 +72,7 @@ export function IntegrityView() {
 
   return (
     <PageShell
-      title="File integrity"
+      title="File changes"
       description="Bulwark hashes a curated set of security-critical files and tells you when one of them changes."
       action={
         <Button onClick={runBaseline} disabled={baselining}>

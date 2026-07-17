@@ -50,6 +50,9 @@ export function CopyButton({ value, className }: { value: string; className?: st
 export function CommandBlock({ command, className }: { command: string; className?: string }) {
   return (
     <div
+      // Recessed nested layer: the fix command sits INTO its card (inset shadow) rather than on
+      // top of it — the deepest layer in the defense-in-depth stack.
+      style={{ boxShadow: "var(--elevate-inset)" }}
       className={cn(
         "group/cmd flex items-start gap-2 rounded-md border border-border bg-muted/60 py-1.5 pr-1.5 pl-2.5",
         className,
