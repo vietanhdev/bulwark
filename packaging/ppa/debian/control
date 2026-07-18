@@ -1,0 +1,37 @@
+Source: bulwark
+Section: admin
+Priority: optional
+Maintainer: Viet Anh Nguyen <vietanh.dev@gmail.com>
+# Launchpad builders have NO network access, so every crate is vendored into the
+# source tarball (see scripts/build-ppa-source.sh) and the build runs with
+# CARGO_NET_OFFLINE=true. Build-Depends therefore lists only the toolchain, not
+# individual librust-* packages. `cargo`/`rustc` come from the target series'
+# archive — verify the series' rustc is new enough for the dependency tree before
+# uploading (24.04 noble ships ~1.75); the bundled SQLite in libsqlite3-sys needs
+# only a C compiler, which build-essential (always present on builders) provides.
+Build-Depends:
+ debhelper-compat (= 13),
+ cargo,
+ rustc,
+Standards-Version: 4.6.2
+Homepage: https://bulwark.nrl.ai
+Vcs-Git: https://github.com/vietanhdev/bulwark.git
+Vcs-Browser: https://github.com/vietanhdev/bulwark
+Rules-Requires-Root: no
+
+Package: bulwarkctl
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+# ClamAV powers the optional antivirus scan; the rest of Bulwark works without it
+# and prints a distro-aware install hint when it is absent. apt installs Recommends
+# by default, matching the .deb produced by `cargo deb`.
+Recommends: clamav
+Description: Linux security misconfiguration & intrusion scanner (CLI)
+ Bulwark scans a Linux host for security misconfigurations and intrusion
+ indicators using a native Rust rule engine over declarative YAML rules, and
+ explains findings in plain language with a suggested fix.
+ .
+ This package provides the command-line front-door, bulwarkctl. It can scan the
+ local host or a remote machine over SSH, with no display session required, and
+ covers configuration hardening, SSH, log analysis, and AI-assistant artifact
+ checks. See the bulwark-app package for the desktop GUI.

@@ -1,0 +1,42 @@
+name: Publish Snap (GUI)
+
+# Manual only. Publishes the classic-confinement GUI snap to the Snap Store.
+#
+# Required repository secret:
+#   SNAPCRAFT_STORE_CREDENTIALS — output of `snapcraft export-login -`, for an
+#                                 account with upload rights to the 'bulwark' snap.
+#
+# NOTE on classic confinement: the store rejects a classic snap on the 'stable'
+# channel until the name is granted classic confinement (forum review). 'edge'
+# and 'beta' accept it immediately, so the default here is 'edge'.
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Snap Store channel to release to"
+        type: choice
+        options: [edge, beta, candidate, stable]
+        default: edge
+
+permissions:
+  contents: read
+
+jobs:
+  publish-snap:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      # Builds snap/snapcraft.yaml with LXD inside the runner.
+      # TODO(pin): SHA-pin these two snapcore actions to match repo policy.
+      - name: Build snap
+        id: build
+        uses: snapcore/action-build@v1
+
+      - name: Publish snap
+        uses: snapcore/action-publish@v1
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        with:
+          snap: ${{ steps.build.outputs.snap }}
+          release: ${{ github.event.inputs.channel }}

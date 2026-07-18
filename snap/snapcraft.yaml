@@ -1,0 +1,107 @@
+name: bulwark
+title: Bulwark
+base: core24
+version: '0.7.0'   # keep in lockstep with the workspace; scripts/bump-version.sh does NOT touch this yet — see packaging/README.md
+summary: Linux security misconfiguration & intrusion scanner (GUI)
+description: |
+  Bulwark scans a Linux host for security misconfigurations and intrusion
+  indicators using a native Rust rule engine over declarative YAML rules, and
+  explains findings in plain language with a suggested fix.
+
+  This is the desktop GUI. Privileged scans elevate via pkexec/polkit and read
+  system files under /etc, so this snap uses CLASSIC confinement — a strict
+  sandbox would prevent it from auditing the host it is installed on. Classic
+  confinement requires manual review and approval by the Snap Store team before
+  it can be published; see packaging/README.md.
+
+license: Apache-2.0
+grade: stable
+confinement: classic     # NOT strict: pkexec + host /etc access are load-bearing (see README)
+
+apps:
+  bulwark:
+    command: bin/bulwark-app
+    # classic snaps get no auto-connected desktop interfaces; the wrapper below
+    # sets the library + resource paths the app needs.
+    desktop: usr/share/applications/bulwark.desktop
+
+parts:
+  # ---------------------------------------------------------------------------
+  # Frontend + Tauri app binary. Unlike the Launchpad PPA, snapcraft build
+  # environments HAVE network access, so npm and cargo can fetch normally — no
+  # vendoring needed here.
+  # ---------------------------------------------------------------------------
+  bulwark-app:
+    plugin: nil
+    source: .
+    build-packages:
+      - curl
+      - build-essential
+      - pkg-config
+      - libwebkit2gtk-4.1-dev
+      - libssl-dev
+      - libgtk-3-dev
+      - libayatana-appindicator3-dev
+      - librsvg2-dev
+      - nodejs
+      - npm
+    stage-packages:
+      # Runtime libs the app links against. Classic confinement means the app
+      # runs unconfined, but its own binary still needs these present.
+      - libwebkit2gtk-4.1-0
+      - libgtk-3-0
+      - libayatana-appindicator3-1
+    override-build: |
+      set -eux
+      # Ubuntu 24.04's archive rustc may be too old for the workspace; pin a
+      # current toolchain via rustup for the build.
+      export RUSTUP_HOME="$CRAFT_PART_BUILD/.rustup"
+      export CARGO_HOME="$CRAFT_PART_BUILD/.cargo"
+      curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+      export PATH="$CARGO_HOME/bin:$PATH"
+
+      cd "$CRAFT_PART_SRC/apps/bulwark-app"
+      npm ci
+      npm run build            # vite -> apps/bulwark-app/dist (embedded by Tauri)
+
+      # Build the GUI binary and the bundled CLI sidecar.
+      cargo build --release -p bulwark-app
+      cargo build --release -p bulwarkctl
+
+      # --- install layout --------------------------------------------------
+      install -D -m0755 "$CRAFT_PART_SRC/target/release/bulwark-app" \
+        "$CRAFT_PART_INSTALL/bin/bulwark-app"
+      # The GUI shells out to a sidecar named `bulwark` (NOT bulwarkctl) sitting
+      # beside the GUI binary — resolve_cli_binary pins exactly that.
+      install -D -m0755 "$CRAFT_PART_SRC/target/release/bulwarkctl" \
+        "$CRAFT_PART_INSTALL/bin/bulwark"
+
+      # Rule pack / decoders / log-rules. NOTE: the app resolves these via
+      # Tauri's resource dir at runtime. Confirm the path Tauri computes inside
+      # the snap (run `snap try` and check the logs) and adjust if needed — this
+      # is the one part that cannot be validated without a local snapcraft build.
+      # TODO(verify): align this destination with tauri resource resolution.
+      for d in rules decoders log-rules; do
+        cp -r "$CRAFT_PART_SRC/$d" "$CRAFT_PART_INSTALL/bin/$d"
+      done
+
+      # Desktop entry + icon.
+      install -D -m0644 "$CRAFT_PART_SRC/apps/bulwark-app/src-tauri/icons/128x128.png" \
+        "$CRAFT_PART_INSTALL/usr/share/icons/hicolor/128x128/apps/bulwark.png"
+      install -D -m0644 /dev/stdin \
+        "$CRAFT_PART_INSTALL/usr/share/applications/bulwark.desktop" <<'DESKTOP'
+      [Desktop Entry]
+      Name=Bulwark
+      Comment=Linux security misconfiguration & intrusion scanner
+      Exec=bulwark
+      Icon=bulwark
+      Terminal=false
+      Type=Application
+      Categories=System;Security;
+      DESKTOP
+
+# NOTE on polkit: the standalone .deb/.rpm install polkit/com.bulwark.policy so
+# pkexec uses auth_admin (one prompt per scan). A classic snap cannot drop a file
+# into /usr/share/polkit-1/actions on the host, so a snap install falls back to
+# the distro default polkit action for pkexec. Document this for snap users, or
+# ship install-polkit.sh alongside — same opt-in caveat as the .deb today.
