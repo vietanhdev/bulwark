@@ -24,6 +24,10 @@ apps:
     # classic snaps get no auto-connected desktop interfaces; the wrapper below
     # sets the library + resource paths the app needs.
     desktop: usr/share/applications/bulwark.desktop
+  # The bundled CLI, exposed as `bulwark.cli` — usable directly, and what the CI
+  # install-verify step smoke-tests (the GUI needs a display; the CLI doesn't).
+  cli:
+    command: bin/bulwark
 
 parts:
   # ---------------------------------------------------------------------------

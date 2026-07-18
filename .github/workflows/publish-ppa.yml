@@ -100,6 +100,19 @@ jobs:
               ls -1 "target/ppa/bulwark_"*"~${s}"*"_source.changes"
               # Prove the signature on the .changes is valid without uploading.
               gpg --verify "target/ppa/bulwark_"*"~${s}"*"_source.changes" 2>&1 | grep -i "good signature" || true
+              # Install-test: build the BINARY .deb the way Launchpad's builder
+              # would (offline, from the same vendored source), install it, and
+              # smoke-test the CLI — this is what `apt install bulwarkctl` gives.
+              echo "::group::binary build + install test ($s)"
+              src_dir=$(ls -d target/ppa/bulwark-*/ | head -1)
+              ( cd "$src_dir" && dpkg-buildpackage -b -us -uc )
+              sudo apt-get install -y ./target/ppa/bulwarkctl_*_amd64.deb
+              bulwarkctl --version
+              m=$(bulwarkctl rules list | grep -c '^BLWK-' || true)
+              echo "bulwarkctl rules after install: $m"
+              test "$m" -gt 0
+              bulwarkctl scan --help >/dev/null
+              echo "::endgroup::"
               continue
             fi
             echo "::group::dput $s"
