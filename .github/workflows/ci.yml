@@ -6,6 +6,18 @@ on:
   pull_request:
 
 jobs:
+  # Seconds-long static checks over the sandboxed packaging manifests. Deliberately first
+  # and dependency-free: the bug that motivated it (an undeclared single-instance D-Bus
+  # name) produced a Flatpak that built cleanly, launched, logged normally, and drew an
+  # empty window — findable only by installing and looking. A grep would have caught it
+  # before the first build.
+  packaging:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check packaging manifest consistency
+        run: scripts/check-packaging-consistency.sh
+
   test:
     runs-on: ubuntu-24.04
     steps:

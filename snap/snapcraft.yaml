@@ -1,7 +1,7 @@
 name: bulwark
 title: Bulwark
 base: core24
-version: '0.8.4'   # keep in lockstep with the workspace; scripts/bump-version.sh does NOT touch this yet — see packaging/README.md
+version: '0.8.5'   # set by scripts/bump-version.sh (checked by scripts/check-packaging-consistency.sh)
 summary: Linux security misconfiguration & intrusion scanner (GUI)
 description: |
   Bulwark scans a Linux host for security misconfigurations and intrusion
