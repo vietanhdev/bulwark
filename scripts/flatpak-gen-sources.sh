@@ -29,16 +29,18 @@ else
 fi
 
 echo ">> generating cargo-sources.json from Cargo.lock"
-# Needs python 'aiohttp' + 'toml'. Install into a throwaway venv if missing.
+# flatpak-cargo-generator needs python 'aiohttp' + 'tomlkit' (and 'toml' on older
+# versions). Test for ALL of them — a system that has aiohttp but not tomlkit must
+# still fall back to the venv, or the generator dies with ModuleNotFoundError.
 python3 - <<'PY' 2>/dev/null || PIP_NEEDED=1
-import aiohttp, toml  # noqa
+import aiohttp, tomlkit  # noqa
 PY
 if [[ "${PIP_NEEDED:-0}" == "1" ]]; then
-  echo "   (installing aiohttp/toml into a venv)"
+  echo "   (installing aiohttp/tomlkit/toml into a venv)"
   python3 -m venv "$REPO_ROOT/target/flatpak-venv"
   # shellcheck disable=SC1091
   source "$REPO_ROOT/target/flatpak-venv/bin/activate"
-  pip install --quiet aiohttp toml
+  pip install --quiet aiohttp tomlkit toml
 fi
 python3 "$TOOLS_DIR/cargo/flatpak-cargo-generator.py" \
   "$REPO_ROOT/Cargo.lock" -o "$OUT/cargo-sources.json"
