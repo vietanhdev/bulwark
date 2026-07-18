@@ -106,3 +106,9 @@ desktop.ini
 packaging/flatpak/cargo-sources.json
 packaging/flatpak/node-sources.json
 snaplogin
+
+# Playwright
+apps/bulwark-app/test-results/
+apps/bulwark-app/playwright-report/
+apps/bulwark-app/blob-report/
+apps/bulwark-app/.playwright/
