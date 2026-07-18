@@ -83,6 +83,16 @@
   </branding>
 
   <releases>
+    <release version="0.8.5" date="2026-07-18">
+      <description>
+        <p>Fixes opening files from a finding, and restores the system tray icon.</p>
+        <ul>
+          <li>Opening or showing a flagged file works again instead of reporting a sandbox error</li>
+          <li>The system tray icon is back, so monitoring keeps running when the window is closed</li>
+          <li>Clearer message when a scan needs administrator access, which the sandbox cannot request</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.8.4" date="2026-07-18">
       <description>
         <p>Fixes the application failing to start in this Flatpak build.</p>

@@ -80,6 +80,12 @@ find %{buildroot}%{_datadir}/bulwark -type d -exec chmod 0755 {} +
 %{_datadir}/bulwark/
 
 %changelog
+* Sat Jul 18 2026 Viet Anh Nguyen <vietanh.dev@gmail.com> - 0.8.5-1
+- No CLI changes; version kept in step with the desktop application.
+
+* Sat Jul 18 2026 Viet Anh Nguyen <vietanh.dev@gmail.com> - 0.8.4-1
+- No CLI changes; version kept in step with the desktop application.
+
 * Sat Jul 18 2026 Viet Anh Nguyen <vietanh.dev@gmail.com> - 0.8.3-1
 - Resolve the findings database via XDG_DATA_HOME.
 

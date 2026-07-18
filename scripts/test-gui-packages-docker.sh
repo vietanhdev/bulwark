@@ -49,6 +49,17 @@ GUI_ENV='
 
 # Shared verdict logic. Reads the app log and decides pass/fail. Kept in one place so
 # every package format is judged by identical criteria.
+#
+# The screenshot check exists because everything else here can pass on an app that renders
+# NOTHING. A Tauri app whose WebKit WebProcess fails to start still runs, still logs its
+# rule pack, and still holds its PID — the user just gets an empty window. That is exactly
+# what shipped in the Flatpak (WebKit could not reach the Flatpak spawn portal, so the page
+# never loaded). "The process is alive" is not "the app works": capture the screen and
+# require the window to contain real content.
+#
+# `identify -format %k` counts unique colours. A blank or single-colour window scores a
+# handful; a rendered UI scores hundreds. The threshold is deliberately low so this fails
+# only on genuinely empty output, not on a restyled interface.
 VERDICT='
   echo "----- app output -----"; cat /tmp/app.log
   echo "----------------------"
@@ -59,6 +70,20 @@ VERDICT='
   if ! grep -q "rules directory resolved" /tmp/app.log; then
     echo "FAIL: never logged a resolved rules directory"; fail=1; fi
   if ! kill -0 $APP_PID 2>/dev/null; then echo "FAIL: process died during settle"; fail=1; fi
+
+  import -window root /tmp/shot.png 2>/dev/null || xwd -root -silent > /tmp/shot.xwd 2>/dev/null
+  [ -f /tmp/shot.png ] || convert /tmp/shot.xwd /tmp/shot.png 2>/dev/null
+  if [ -f /tmp/shot.png ]; then
+    colors=$(identify -format "%k" /tmp/shot.png 2>/dev/null || echo 0)
+    echo "distinct colours on screen: ${colors}"
+    if [ "${colors:-0}" -lt 50 ]; then
+      echo "FAIL: window appears blank (${colors} colours) — the UI did not render"
+      fail=1
+    fi
+  else
+    echo "WARN: could not capture a screenshot; rendering not verified"
+  fi
+
   [ $fail -eq 0 ] && echo "PASS" || true
   exit $fail
 '
@@ -76,7 +101,7 @@ for t in "${TARGETS[@]}"; do
         set -u
         export DEBIAN_FRONTEND=noninteractive
         apt-get update -qq >/dev/null
-        apt-get install -y -qq xvfb >/dev/null 2>&1
+        apt-get install -y -qq xvfb imagemagick x11-apps >/dev/null 2>&1
         apt-get install -y -qq /a/${DEB} >/dev/null 2>&1 \
           || { echo 'FAIL: apt install failed'; exit 1; }
         ${GUI_ENV}
@@ -90,7 +115,7 @@ for t in "${TARGETS[@]}"; do
       RPM="$(find_one "bulwark-desktop-*.x86_64.rpm")"
       docker run --rm -v "${ASSETS}:/a:ro" fedora:latest bash -c "
         set -u
-        dnf install -y -q xorg-x11-server-Xvfb >/dev/null 2>&1
+        dnf install -y -q xorg-x11-server-Xvfb ImageMagick xorg-x11-apps >/dev/null 2>&1
         dnf install -y -q /a/${RPM} >/dev/null 2>&1 \
           || { echo 'FAIL: dnf install failed'; exit 1; }
         ${GUI_ENV}
@@ -108,7 +133,7 @@ for t in "${TARGETS[@]}"; do
         set -u
         export DEBIAN_FRONTEND=noninteractive
         apt-get update -qq >/dev/null
-        apt-get install -y -qq xvfb libwebkit2gtk-4.1-0 libgtk-3-0 >/dev/null 2>&1
+        apt-get install -y -qq xvfb imagemagick x11-apps libwebkit2gtk-4.1-0 libgtk-3-0 >/dev/null 2>&1
         cd /tmp && cp /a/${APPIMAGE} app.AppImage
         chmod +x app.AppImage && ./app.AppImage --appimage-extract >/dev/null 2>&1 \
           || { echo 'FAIL: AppImage extract failed'; exit 1; }

@@ -35,6 +35,18 @@ finish-args:
   # flatpak-builder-lint flags as finish-args-unnecessary-xdg-data-access.)
   - --talk-name=org.freedesktop.Notifications
   - --talk-name=org.kde.StatusNotifierWatcher
+  # WebKitGTK renders nothing in this sandbox without these, which for a Tauri app means a
+  # transparent, empty window — the app runs, logs normally, holds its PID, and draws no UI.
+  # Its DMA-BUF renderer needs GPU buffer sharing that does not survive the sandbox on many
+  # drivers, and its accelerated compositing path fails the same way; both fall back cleanly
+  # when switched off. This is the long-standing "blank window in Flatpak" failure behind
+  # tauri-apps/tauri#8970 and #10626, and it is not Tauri's bug.
+  #
+  # Worth noting how long this hid: scripts/test-gui-packages-docker.sh sets exactly these
+  # two variables so WebKit works headlessly, so the .deb/.rpm/AppImage rendered under test
+  # while the Flatpak — which set neither — did not.
+  - --env=WEBKIT_DISABLE_DMABUF_RENDERER=1
+  - --env=WEBKIT_DISABLE_COMPOSITING_MODE=1
   # NOTE: --talk-name=org.freedesktop.Flatpak (i.e. `flatpak-spawn --host`) is
   # deliberately NOT requested. Privileged scans would need it, but the app-code
   # path that detects /.flatpak-info and reroutes to a host pkexec doesn't exist
