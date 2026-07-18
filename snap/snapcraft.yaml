@@ -1,7 +1,7 @@
 name: bulwark
 title: Bulwark
 base: core24
-version: '0.7.0'   # keep in lockstep with the workspace; scripts/bump-version.sh does NOT touch this yet — see packaging/README.md
+version: '0.8.0'   # keep in lockstep with the workspace; scripts/bump-version.sh does NOT touch this yet — see packaging/README.md
 summary: Linux security misconfiguration & intrusion scanner (GUI)
 description: |
   Bulwark scans a Linux host for security misconfigurations and intrusion
@@ -88,11 +88,10 @@ parts:
       install -D -m0755 "$CRAFT_PART_SRC/target/release/bulwarkctl" \
         "$CRAFT_PART_INSTALL/bin/bulwark"
 
-      # Rule pack / decoders / log-rules. NOTE: the app resolves these via
-      # Tauri's resource dir at runtime. Confirm the path Tauri computes inside
-      # the snap (run `snap try` and check the logs) and adjust if needed — this
-      # is the one part that cannot be validated without a local snapcraft build.
-      # TODO(verify): align this destination with tauri resource resolution.
+      # Rule pack / decoders / log-rules, beside the binaries. Verified in CI: the
+      # bundled CLI (bulwark.cli) resolves /snap/bulwark/current/bin/rules
+      # next-to-exe. The GUI's in-process scans use the same resolver; only the
+      # GUI window rendering itself still wants an eyeball on a real desktop.
       for d in rules decoders log-rules; do
         cp -r "$CRAFT_PART_SRC/$d" "$CRAFT_PART_INSTALL/bin/$d"
       done
