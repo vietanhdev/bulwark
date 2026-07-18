@@ -70,7 +70,9 @@ Beyond the GitHub-release artifacts, Bulwark can ship on the native app channels
 
 **CI publishing** — three **manual** (`workflow_dispatch`) workflows, never on tag/push, because a PPA/Snap upload hits a live store and a PPA upload is irreversible: `.github/workflows/publish-ppa.yml` (signed source pkg → `dput`; secrets `LAUNCHPAD_GPG_PRIVATE_KEY`/`LAUNCHPAD_GPG_PASSPHRASE`), `publish-snap.yml` (`snapcore/action-*`; secret `SNAPCRAFT_STORE_CREDENTIALS`), `publish-flatpak.yml` (builds `bulwark.flatpak`, no secrets). The PPA signing key must sign non-interactively: the workflow writes a `passphrase-file` + `pinentry-mode loopback` into `gpg.conf` (the gpg-agent *preset* method fails headless — proven). See `packaging/README.md` "CI publishing" for the secret provisioning and the one-time Launchpad key-import + Snap macaroon steps.
 
-`scripts/bump-version.sh` does **not** yet touch `snap/snapcraft.yaml` or the Flatpak `metainfo.xml` — bump those by hand, or add them to that script's file list if this publishing becomes routine.
+`scripts/bump-version.sh` does **not** touch `snap/snapcraft.yaml` — bump that by hand, or add it to the script's file list if this publishing becomes routine.
+
+The Flatpak `metainfo.xml` is a special case: the script **checks it but never writes it**. Its `<releases>` block is a changelog, and only a human can write the notes — but Flathub *renders those notes on the store page*, so bumping without adding an entry advertises the previous release to every visitor. `--check` therefore fails until the newest `<release version="…">` matches, and tells you to write the entry. That's a deliberate split: the six version declarations are set mechanically, the changelog is refused rather than faked.
 
 ### Finding lifecycle (open → resolved)
 
