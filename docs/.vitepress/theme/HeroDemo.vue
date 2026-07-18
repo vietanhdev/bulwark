@@ -39,7 +39,7 @@ onMounted(() => {
 .hero-demo {
   width: 100%;
   display: block;
-  border-radius: 16px;
+  border-radius: 8px;
   background: #17121a;
   box-shadow: 0 30px 70px -24px rgba(20, 10, 20, 0.5);
 }
