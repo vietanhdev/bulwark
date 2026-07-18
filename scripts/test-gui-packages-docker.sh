@@ -31,8 +31,19 @@ find_one() {
   basename "${matches[0]}"
 }
 
+# Targets are "kind" or "kind:image". Defaults cover every distro family that consumes
+# each artifact, not just one convenient image: a .deb that runs on Ubuntu 24.04 can still
+# fail on Debian 12's older WebKit or Ubuntu 26.04's newer one.
 TARGETS=("$@")
-[[ ${#TARGETS[@]} -eq 0 ]] && TARGETS=(deb rpm appimage)
+[[ ${#TARGETS[@]} -eq 0 ]] && TARGETS=(
+  deb:ubuntu:24.04
+  deb:ubuntu:22.04
+  deb:ubuntu:26.04
+  deb:debian:12
+  rpm:fedora:latest
+  appimage:ubuntu:24.04
+  appimage:ubuntu:26.04
+)
 
 # Xvfb + software rendering: containers have no GPU, and WebKitGTK's DMA-BUF renderer
 # and its own sandbox both fail without one. These mirror what a headless CI runner needs;
@@ -69,6 +80,13 @@ VERDICT='
     echo "FAIL: rules directory not resolved (continuous monitoring disabled)"; fail=1; fi
   if ! grep -q "rules directory resolved" /tmp/app.log; then
     echo "FAIL: never logged a resolved rules directory"; fail=1; fi
+  # A packaged build must serve the embedded frontend (tauri://localhost). An http(s) URL
+  # means it was built without --features custom-protocol, so Tauri fell back to devUrl and
+  # the window renders empty on any machine with nothing on that port. This shipped once.
+  if grep -qE "webview url: https?://" /tmp/app.log; then
+    echo "FAIL: DEV build — the UI is loaded over http, not the embedded frontend"; fail=1; fi
+  if ! grep -q "webview url: tauri://" /tmp/app.log; then
+    echo "FAIL: webview did not load the embedded frontend (tauri://localhost)"; fail=1; fi
   if ! kill -0 $APP_PID 2>/dev/null; then echo "FAIL: process died during settle"; fail=1; fi
 
   import -window root /tmp/shot.png 2>/dev/null || xwd -root -silent > /tmp/shot.xwd 2>/dev/null
@@ -89,15 +107,18 @@ VERDICT='
 '
 
 overall=0
-for t in "${TARGETS[@]}"; do
+for spec in "${TARGETS[@]}"; do
+  t="${spec%%:*}"
+  IMAGE="${spec#*:}"
+  [[ "${IMAGE}" == "${t}" ]] && IMAGE=""      # bare kind, use the per-kind default
   echo
   echo "=============================================================="
-  echo ">> GUI launch test: ${t}"
+  echo ">> GUI launch test: ${t} on ${IMAGE:-<default>}"
   echo "=============================================================="
   case "${t}" in
     deb)
       DEB="$(find_one "bulwark-desktop_*_amd64.deb")"
-      docker run --rm -v "${ASSETS}:/a:ro" ubuntu:24.04 bash -c "
+      docker run --rm -v "${ASSETS}:/a:ro" "${IMAGE:-ubuntu:24.04}" bash -c "
         set -u
         export DEBIAN_FRONTEND=noninteractive
         apt-get update -qq >/dev/null
@@ -113,7 +134,7 @@ for t in "${TARGETS[@]}"; do
       ;;
     rpm)
       RPM="$(find_one "bulwark-desktop-*.x86_64.rpm")"
-      docker run --rm -v "${ASSETS}:/a:ro" fedora:latest bash -c "
+      docker run --rm -v "${ASSETS}:/a:ro" "${IMAGE:-fedora:latest}" bash -c "
         set -u
         dnf install -y -q xorg-x11-server-Xvfb ImageMagick xorg-x11-apps >/dev/null 2>&1
         dnf install -y -q /a/${RPM} >/dev/null 2>&1 \
@@ -129,7 +150,7 @@ for t in "${TARGETS[@]}"; do
       APPIMAGE="$(find_one "bulwark-desktop-*-x86_64.AppImage")"
       # --appimage-extract rather than a direct run: mounting an AppImage needs FUSE,
       # which a container doesn't have. Extraction exercises the same payload.
-      docker run --rm -v "${ASSETS}:/a:ro" ubuntu:24.04 bash -c "
+      docker run --rm -v "${ASSETS}:/a:ro" "${IMAGE:-ubuntu:24.04}" bash -c "
         set -u
         export DEBIAN_FRONTEND=noninteractive
         apt-get update -qq >/dev/null
@@ -147,7 +168,8 @@ for t in "${TARGETS[@]}"; do
     *) echo "unknown target: ${t}"; exit 2 ;;
   esac
   rc=$?
-  [[ ${rc} -eq 0 ]] && echo ">> ${t}: PASS" || { echo ">> ${t}: FAIL (rc=${rc})"; overall=1; }
+  [[ ${rc} -eq 0 ]] && echo ">> ${t} on ${IMAGE:-default}: PASS" \
+    || { echo ">> ${t} on ${IMAGE:-default}: FAIL (rc=${rc})"; overall=1; }
 done
 
 echo

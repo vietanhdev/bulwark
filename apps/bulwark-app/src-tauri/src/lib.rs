@@ -833,6 +833,37 @@ pub fn run() {
                 Err(e) => eprintln!("[bulwark] warning: {e} — continuous monitoring disabled"),
             }
 
+            // Log where the UI is loaded from, permanently, and shout if it is a dev URL.
+            //
+            // A packaged build must serve the frontend embedded from `frontendDist`, i.e.
+            // `tauri://localhost`. If it instead points at `devUrl` (http://localhost:1420),
+            // nothing is listening on a user's machine and the window renders empty — while
+            // every other signal stays healthy: it compiles, installs, starts, resolves its
+            // rules, completes setup and spawns a WebKit process. That is exactly what the
+            // Flatpak and Snap shipped, because Tauri computes `let dev = !custom_protocol`
+            // and both built with plain `cargo build`, without that feature.
+            //
+            // One line makes an otherwise invisible failure obvious in any bug report, and
+            // gives the packaging launch tests something to assert on. See
+            // scripts/test-gui-packages-docker.sh, which fails on `url = http://`.
+            if let Some(w) = app.get_webview_window("main") {
+                match w.url() {
+                    Ok(url) => {
+                        println!("[bulwark] webview url: {url}");
+                        if url.scheme() == "http" || url.scheme() == "https" {
+                            eprintln!(
+                                "[bulwark] ERROR: this build loads the UI from {url} — a DEV \
+                                 build. A packaged build must embed the frontend (build with \
+                                 --features custom-protocol). The window will be empty."
+                            );
+                        }
+                    }
+                    Err(e) => eprintln!("[bulwark] warning: couldn't read the webview url: {e}"),
+                }
+            } else {
+                eprintln!("[bulwark] ERROR: no webview window was created");
+            }
+
             // Resumes real-time AV protection if it was left enabled on a previous run —
             // "persists across restarts" should mean protection actually restarts, not just
             // that the toggle remembers where it was left.

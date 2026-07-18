@@ -93,7 +93,7 @@ jobs:
       - name: GUI launch test (the CLI smoke test cannot catch a GUI crash)
         run: |
           set -uo pipefail
-          sudo apt-get install -y -qq xvfb >/dev/null
+          sudo apt-get install -y -qq xvfb imagemagick x11-apps >/dev/null
           export DISPLAY=:99
           Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 &
           sleep 3
@@ -110,6 +110,28 @@ jobs:
           grep -q "rules directory resolved" "$RUNNER_TEMP/gui.log" || {
             echo "FAIL: GUI never logged a resolved rules directory"; fail=1; }
           kill -0 $APP_PID 2>/dev/null || { echo "FAIL: GUI process died"; fail=1; }
+
+          # The frontend must come from the embedded assets. An http(s) URL means the build
+          # lacked --features custom-protocol, so Tauri served devUrl and the window is empty
+          # on any machine with nothing on that port. The Flatpak shipped exactly that, and
+          # every check above passed the whole time.
+          grep -qE "webview url: https?://" "$RUNNER_TEMP/gui.log" && {
+            echo "FAIL: DEV build — UI loaded over http instead of the embedded frontend"; fail=1; }
+          grep -q "webview url: tauri://" "$RUNNER_TEMP/gui.log" || {
+            echo "FAIL: webview never loaded the embedded frontend"; fail=1; }
+
+          # And prove it actually painted. Every assertion above is true of an app rendering
+          # a blank window; only the pixels disprove that. A rendered UI scores hundreds of
+          # distinct colours, an empty one a handful.
+          import -window root "$RUNNER_TEMP/shot.png" 2>/dev/null || true
+          if [ -f "$RUNNER_TEMP/shot.png" ]; then
+            colors=$(identify -format "%k" "$RUNNER_TEMP/shot.png" 2>/dev/null || echo 0)
+            echo "distinct colours on screen: ${colors}"
+            [ "${colors:-0}" -lt 50 ] && { echo "FAIL: window is blank (${colors} colours)"; fail=1; }
+          else
+            echo "WARN: no screenshot captured; rendering not verified"
+          fi
+
           kill $APP_PID 2>/dev/null || true
           [ $fail -eq 0 ] && echo "GUI launch OK"
           exit $fail
