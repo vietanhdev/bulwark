@@ -425,7 +425,7 @@
    implement it. */
 
 .app-shell {
-  border-radius: 14px;
+  border-radius: 8px;
   overflow: hidden;
   border: 1px solid var(--ink-border);
 }
