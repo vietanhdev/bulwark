@@ -1,0 +1,57 @@
+name: Test PPA package (live install)
+
+# Installs bulwarkctl from the LIVE PPA exactly as a user would — add-apt-repository,
+# apt install — inside a clean container of the target Ubuntu series, then smoke-tests
+# the installed package. This validates the actual PUBLISHED artifact end-to-end
+# (rule-pack resolution from /usr/share/bulwark, scan, fix), which the pre-publish
+# install-verify in publish-ppa.yml can't: that tests a locally-built .deb, this tests
+# what `apt install` actually delivers.
+#
+# Run it AFTER a series' build has published in the PPA (a freshly-uploaded series
+# 403s on apt update until its first binary is published). Manual + weekly.
+on:
+  workflow_dispatch:
+    inputs:
+      series:
+        description: "Ubuntu series codename to test (must be published in the PPA)"
+        type: choice
+        options: [resolute, noble, stonking]
+        default: resolute
+  schedule:
+    - cron: "17 6 * * 1" # weekly — catch a PPA that silently stops working
+
+permissions:
+  contents: read
+
+jobs:
+  install-from-ppa:
+    runs-on: ubuntu-24.04
+    # Clean container of the target series (Ubuntu images carry codename tags).
+    container: ubuntu:${{ github.event.inputs.series || 'resolute' }}
+    steps:
+      - name: Add the PPA and install bulwarkctl
+        run: |
+          set -eux
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends software-properties-common ca-certificates
+          add-apt-repository -y ppa:vietanhng/bulwark
+          apt-get update
+          # --no-install-recommends skips the optional clamav to keep the test lean;
+          # bulwarkctl works fully without it.
+          apt-get install -y --no-install-recommends bulwarkctl
+
+      - name: Smoke-test the installed package
+        run: |
+          set -eux
+          # Installed from the archive: binary on PATH, rules under /usr/share/bulwark.
+          bulwarkctl --version
+          test "$(bulwarkctl rules list | grep -c '^BLWK-')" -gt 0
+          # scan exits non-zero when it finds issues (linter-style) — capture, then
+          # assert it produced JSON that actually loaded rules.
+          bulwarkctl scan --json > /tmp/scan.json || true
+          test -s /tmp/scan.json
+          grep -q '"rules_loaded"' /tmp/scan.json
+          grep -q '"rules_loaded": *0' /tmp/scan.json && { echo "::error::scan loaded 0 rules"; exit 1; } || true
+          bulwarkctl fix list | grep -i "Available autofixes" >/dev/null && echo "fix preview OK"
+          echo "PPA package installs and runs on ${{ github.event.inputs.series || 'resolute' }} ✅"
