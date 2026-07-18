@@ -32,6 +32,14 @@ MOCK_APP="apps/bulwark-app/src/mocks/tauri/app.ts"
 # advertises the previous release forever. So it is checked, not set.
 METAINFO="packaging/flatpak/com.vietanhdev.bulwark.metainfo.xml"
 
+# Distro packaging. These were bumped by hand until a 0.8.4 release shipped a Snap still
+# declaring 0.8.3 — the exact class of drift this script exists to prevent, so they belong
+# in it rather than in a README note asking people to remember.
+SNAP="snap/snapcraft.yaml"
+AUR_PKGBUILD="packaging/aur/PKGBUILD"
+AUR_SRCINFO="packaging/aur/.SRCINFO"
+COPR_SPEC="packaging/copr/bulwarkctl.spec"
+
 # Pull the current version out of each file with a pattern specific enough that it can't match
 # a dependency's version or an unrelated field.
 read_cargo_toml()  { sed -n 's/^version = "\(.*\)"/\1/p' "$CARGO_TOML" | head -1; }
@@ -42,15 +50,21 @@ read_tauri()       { sed -n 's/^  "version": "\(.*\)",/\1/p' "$TAURI_CONF" | hea
 read_mock()        { sed -n 's/^  return "\(.*\)";/\1/p' "$MOCK_APP" | head -1; }
 # Newest entry only — <releases> is newest-first, so head -1 is the current release.
 read_metainfo()    { sed -n 's/.*<release version="\([^"]*\)".*/\1/p' "$METAINFO" | head -1; }
+read_snap()        { sed -n "s/^version: '\(.*\)'.*/\1/p" "$SNAP" | head -1; }
+read_aur_pkgbuild(){ sed -n 's/^pkgver=\(.*\)/\1/p' "$AUR_PKGBUILD" | head -1; }
+read_aur_srcinfo() { sed -n 's/^\tpkgver = \(.*\)/\1/p' "$AUR_SRCINFO" | head -1; }
+read_copr()        { sed -n 's/^Version: *\(.*\)/\1/p' "$COPR_SPEC" | head -1; }
 
 report() {
   printf '  %-48s %s\n' "$1" "$2"
 }
 
 check() {
-  local ct cd rp ap tc mk
+  local ct cd rp ap tc mk sn ab as cs
   ct=$(read_cargo_toml); cd=$(read_ctl_dep); rp=$(read_root_pkg)
   ap=$(read_app_pkg);    tc=$(read_tauri);   mk=$(read_mock)
+  sn=$(read_snap);       ab=$(read_aur_pkgbuild)
+  as=$(read_aur_srcinfo); cs=$(read_copr)
   echo "Current version declarations:"
   report "$CARGO_TOML (workspace)"           "$ct"
   report "$CTL_CARGO (bulwark-core dep pin)" "$cd"
@@ -58,9 +72,13 @@ check() {
   report "$APP_PKG"                          "$ap"
   report "$TAURI_CONF"                       "$tc"
   report "$MOCK_APP (screenshot mock)"       "$mk"
+  report "$SNAP (snap version)"              "$sn"
+  report "$AUR_PKGBUILD (pkgver)"            "$ab"
+  report "$AUR_SRCINFO (pkgver)"             "$as"
+  report "$COPR_SPEC (Version)"              "$cs"
   # Every non-empty value must be identical. An empty read means the pattern stopped matching —
   # a file was reformatted — which is itself a failure worth surfacing loudly.
-  for v in "$ct" "$cd" "$rp" "$ap" "$tc" "$mk"; do
+  for v in "$ct" "$cd" "$rp" "$ap" "$tc" "$mk" "$sn" "$ab" "$as" "$cs"; do
     if [ -z "$v" ]; then
       echo "ERROR: a version declaration could not be read — a file's format drifted from this script's patterns." >&2
       exit 1
@@ -86,7 +104,15 @@ check() {
     echo "       block (newest first) describing what changed, then re-run --check." >&2
     exit 1
   fi
-  echo "OK: all six declarations agree at $ct, and the metainfo changelog matches"
+  echo "OK: all ten declarations agree at $ct, and the metainfo changelog matches"
+  # The AUR checksum can only be right after the tag exists, so it is reported rather than
+  # verified: fetching it would put a network call in the middle of a version bump.
+  local sha
+  sha=$(sed -n "s/^sha256sums=('\(.*\)')/\1/p" "$AUR_PKGBUILD" | head -1)
+  echo
+  echo "REMINDER: $AUR_PKGBUILD pins sha256 ${sha:0:16}… for the v$ct source tarball."
+  echo "          After pushing the tag, refresh it (the tarball must exist first):"
+  echo "            scripts/refresh-aur-checksum.sh"
 }
 
 if [ "${1:-}" = "--check" ]; then
@@ -127,6 +153,12 @@ edit "$ROOT_PKG"    "s/^(  \"version\": )\"$OLD\",/\1\"$NEW\",/"                
 edit "$APP_PKG"     "s/^(  \"version\": )\"$OLD\",/\1\"$NEW\",/"                                                             "app package.json"
 edit "$TAURI_CONF"  "s/^(  \"version\": )\"$OLD\",/\1\"$NEW\",/"                                                             "tauri.conf.json"
 edit "$MOCK_APP"    "s/^(  return )\"$OLD\";/\1\"$NEW\";/"                                                                   "screenshot mock getVersion"
+edit "$SNAP"        "s/^(version: ')$OLD(')/\1$NEW\2/"                                                                       "snap version"
+edit "$AUR_PKGBUILD" "s/^pkgver=$OLD$/pkgver=$NEW/"                                                                          "AUR pkgver"
+# .SRCINFO is machine-generated and mentions the version in pkgver and in both source URLs,
+# so a global replace is correct here and keeps it byte-identical to `makepkg --printsrcinfo`.
+edit "$AUR_SRCINFO" "s/$OLD/$NEW/g"                                                                                          "AUR .SRCINFO"
+edit "$COPR_SPEC"   "s/^(Version: +)$OLD$/\1$NEW/"                                                                           "COPR Version"
 
 # Sync Cargo.lock so the workspace crates' recorded versions match. Offline + minimal so this
 # neither hits the network nor upgrades unrelated dependencies.

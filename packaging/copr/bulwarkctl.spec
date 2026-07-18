@@ -17,7 +17,7 @@
 # project rather than of this file, so it does not travel with the spec — anyone
 # recreating the project must set it again.
 Name:           bulwarkctl
-Version:        0.8.3
+Version:        0.8.4
 Release:        1%{?dist}
 Summary:        Linux host security and misconfiguration scanner (CLI)
 
