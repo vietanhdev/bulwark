@@ -81,6 +81,36 @@ jobs:
           python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["rules_loaded"]>0,d;print("scan OK: rules_loaded",d["rules_loaded"],"findings",len(d.get("findings",[])))' "$RUNNER_TEMP/scan.json"
           flatpak run --command=bulwark com.vietanhdev.bulwark fix list | grep -i "Available autofixes" >/dev/null && echo "fix preview OK"
 
+      # Every assertion above passed on a build whose GUI crashed on launch: they all
+      # drive `--command=bulwark`, the CLI sidecar, which shares a directory with the GUI
+      # but not its code. The shipped app died in a libayatana-appindicator dlopen panic
+      # (absent from the GNOME runtime) and, before that, logged "couldn't find a 'rules'
+      # directory" because the GUI has its own resolver that only checked resource_dir().
+      # So: launch the actual GUI binary under Xvfb and fail on any panic.
+      - name: GUI launch test (the CLI smoke test cannot catch a GUI crash)
+        run: |
+          set -uo pipefail
+          sudo apt-get install -y -qq xvfb >/dev/null
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 &
+          sleep 3
+          # No --socket overrides: run it exactly as a user would, so a missing runtime
+          # library or a wrong permission fails here rather than on someone's desktop.
+          timeout 60 flatpak run com.vietanhdev.bulwark >"$RUNNER_TEMP/gui.log" 2>&1 &
+          APP_PID=$!
+          sleep 25
+          echo "----- GUI output -----"; cat "$RUNNER_TEMP/gui.log"; echo "----------------------"
+          fail=0
+          grep -qi "panicked" "$RUNNER_TEMP/gui.log" && { echo "FAIL: GUI panicked on launch"; fail=1; }
+          grep -q "couldn.t find a .rules. directory" "$RUNNER_TEMP/gui.log" && {
+            echo "FAIL: rules not resolved — continuous monitoring would be silently disabled"; fail=1; }
+          grep -q "rules directory resolved" "$RUNNER_TEMP/gui.log" || {
+            echo "FAIL: GUI never logged a resolved rules directory"; fail=1; }
+          kill -0 $APP_PID 2>/dev/null || { echo "FAIL: GUI process died"; fail=1; }
+          kill $APP_PID 2>/dev/null || true
+          [ $fail -eq 0 ] && echo "GUI launch OK"
+          exit $fail
+
       - name: Upload bundle as workflow artifact
         uses: actions/upload-artifact@v7
         with:

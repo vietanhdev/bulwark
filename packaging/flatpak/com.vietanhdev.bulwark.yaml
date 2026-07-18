@@ -71,9 +71,18 @@ modules:
       - cargo build --release --offline -p bulwarkctl
       - install -Dm755 target/release/bulwark-app ${FLATPAK_DEST}/bin/bulwark-app
       - install -Dm755 target/release/bulwarkctl ${FLATPAK_DEST}/bin/bulwark
-      # 3. Rule pack beside the binaries. Verified: bulwark-core's resolver finds
-      #    /app/bin/rules next-to-exe in-sandbox (the CLI sidecar lists all rules
-      #    here with no --rules-dir), so the GUI's in-process scans resolve too.
+      # 3. Rule pack beside the binaries, which is where the CLI sidecar's resolver
+      #    looks (next-to-exe, no --rules-dir needed).
+      #
+      #    The GUI does NOT share that resolver. It has its own in src-tauri/src/lib.rs,
+      #    and it used to check only Tauri's resource_dir() — which in this layout points
+      #    at a directory containing no rules. So the shipped Flatpak started with
+      #    "couldn't find a 'rules' directory" and silently ran with continuous monitoring
+      #    disabled, while the comment here claimed the path was verified. It wasn't: the
+      #    CLI was tested and the GUI was *inferred* from it. resolve_rules_dir now has an
+      #    explicit next-to-exe fallback, and scripts/test-gui-packages-docker.sh launches
+      #    the real GUI and fails if that warning ever appears again. Test the binary that
+      #    ships, not a sibling that shares a directory with it.
       - cp -r rules decoders log-rules ${FLATPAK_DEST}/bin/
       # 4. Desktop entry, icon, AppStream metainfo (Flathub requires the last two).
       # Flathub requires >=256px (or SVG); icon.png is 512x512. The 128px copy stays

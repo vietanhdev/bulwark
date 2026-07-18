@@ -2,8 +2,20 @@
 # tarball. Only `bulwarkctl` is packaged — the Tauri GUI needs WebKitGTK and is
 # distributed as Flatpak/Snap/AppImage instead.
 #
-# COPR's mock builders have network access, so cargo fetches crates normally (no
-# vendoring, unlike the Launchpad PPA whose builders are offline).
+# NETWORK: this spec fetches crates from crates.io during %build, which requires the
+# COPR *project* to have networking switched on:
+#
+#     copr-cli modify bulwarkctl --enable-net on
+#
+# mock disables builder networking by default — exactly like the Launchpad PPA — so
+# without that flag every build dies with "Could not resolve host: index.crates.io"
+# while cargo tries to fetch the first dependency. An earlier version of this comment
+# asserted the opposite ("COPR builders have network access, so no vendoring needed");
+# that was wrong, and it cost a full failed build to find out. The alternative is
+# vendoring the crates into a second source tarball as the PPA does; enabling the
+# project flag is simpler and is a supported COPR feature, but it is a property of the
+# project rather than of this file, so it does not travel with the spec — anyone
+# recreating the project must set it again.
 Name:           bulwarkctl
 Version:        0.8.3
 Release:        1%{?dist}

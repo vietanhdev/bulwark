@@ -427,3 +427,53 @@ here, also update:
 If PPA/snap publishing becomes routine, add `snap/snapcraft.yaml` to the file list
 in `scripts/bump-version.sh` so a bump keeps it in sync (that list is the single
 source of truth for what a bump touches).
+
+## Arch AUR + Fedora COPR (CLI only)
+
+Both ship `bulwarkctl` only — the Tauri GUI needs WebKitGTK and goes out as
+Flatpak/AppImage instead. Sources live in `packaging/aur/` and `packaging/copr/`.
+
+Live at:
+- <https://aur.archlinux.org/packages/bulwarkctl>
+- <https://copr.fedorainfracloud.org/coprs/vietanhdev/bulwarkctl/>
+
+### The one bug both share: distro LTO vs bundled SQLite
+
+The workspace enables `libsqlite3-sys`'s `bundled` feature, so the `cc` crate compiles
+`sqlite3.c` itself. Arch's `makepkg` and Fedora's RPM macros both enable LTO by default,
+which makes those C objects LTO bytecode that the rustc link step cannot resolve — the
+build dies with `undefined symbol: sqlite3_bind_null` **even though bundling is active**
+(the first hypothesis, "it's picking up system sqlite", is wrong; `cargo tree` disproves
+it). Hence `options=('!lto')` in the PKGBUILD and `%global _lto_cflags %{nil}` in the
+spec. Do not remove either without rebuilding on both distros.
+
+### AUR
+
+Publishing is a `git push` over SSH — the web account's password does nothing for it.
+An SSH **public key** must be registered under My Account at aur.archlinux.org first;
+verify with `ssh aur@aur.archlinux.org` (a successful key prints a welcome banner).
+
+```bash
+git clone ssh://aur@aur.archlinux.org/bulwarkctl.git
+cp packaging/aur/PKGBUILD packaging/aur/.SRCINFO bulwarkctl/
+cd bulwarkctl && git commit -am "Update to x.y.z" && git push origin HEAD:master
+```
+
+Two traps: the AUR branch is **`master`** (a local `main` needs `HEAD:master`, else
+`src refspec master does not match any`), and `.SRCINFO` must agree exactly with the
+PKGBUILD — regenerate it with `makepkg --printsrcinfo` in an Arch container rather than
+editing by hand, since a mismatch is a common first-import rejection.
+
+### COPR
+
+`scripts/publish-copr.sh` does the whole thing: builds the SRPM in a Fedora container,
+creates the project if absent, and submits the build. It needs an API **token** (never a
+password) from <https://copr.fedorainfracloud.org/api/> saved to `~/.config/copr`.
+
+**COPR builders have no network**, exactly like Launchpad's — mock disables it by
+default. The spec fetches crates from crates.io during `%build`, so the project must be
+created with (or modified to) `--enable-net on`, which the script now does and asserts.
+Without it every build fails with `Could not resolve host: index.crates.io` after ~6
+minutes. This is a property of the *project*, not of the spec file, so it does not travel
+with the repo: anyone recreating the project must set it again. The alternative is
+vendoring crates into a second source tarball as the PPA does.

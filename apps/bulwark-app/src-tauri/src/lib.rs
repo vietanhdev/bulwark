@@ -109,10 +109,24 @@ fn find_workspace_rules_dir() -> Option<PathBuf> {
     None
 }
 
-/// Resolution order: explicit env override, dev-mode workspace walk-up, then the rule pack
-/// bundled as a Tauri resource (`tauri.conf.json`'s `bundle.resources`) — the path a real
-/// packaged install actually uses. `app` is `None` only in contexts with no AppHandle yet
-/// (there currently are none, but this keeps the function testable without one).
+/// The rule pack sitting **next to the running executable**, canonicalized.
+///
+/// Tauri's `resource_dir()` is not the only layout a real package uses: the Flatpak installs both
+/// binaries into `/app/bin` with `rules/` beside them (so the bundled CLI sidecar, which resolves
+/// next-to-exe, can find them), and `resource_dir()` there points at a directory that holds no
+/// rules at all. Relying on `resource_dir()` alone is what shipped a Flatpak whose GUI started with
+/// "couldn't find a 'rules' directory" and silently disabled continuous monitoring.
+fn find_exe_sibling_rules_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
+    let rules = exe.parent()?.join("rules");
+    rules.is_dir().then_some(rules)
+}
+
+/// Resolution order: explicit env override, dev-mode workspace walk-up, then the two layouts a
+/// real packaged install actually uses — the rule pack bundled as a Tauri resource
+/// (`tauri.conf.json`'s `bundle.resources`), and the pack installed beside the executable
+/// (Flatpak). `app` is `None` only in contexts with no AppHandle yet (there currently are none,
+/// but this keeps the function testable without one).
 fn resolve_rules_dir(app: Option<&tauri::AppHandle>) -> Result<PathBuf, String> {
     if let Ok(p) = std::env::var("BULWARK_RULES_DIR") {
         return Ok(PathBuf::from(p));
@@ -127,6 +141,9 @@ fn resolve_rules_dir(app: Option<&tauri::AppHandle>) -> Result<PathBuf, String> 
                 return Ok(rules);
             }
         }
+    }
+    if let Some(dir) = find_exe_sibling_rules_dir() {
+        return Ok(dir);
     }
     Err("couldn't find a 'rules' directory (set BULWARK_RULES_DIR)".to_string())
 }
@@ -152,6 +169,12 @@ fn resolve_privileged_rules_dir(app: &tauri::AppHandle) -> Result<PathBuf, Strin
         if rules.is_dir() {
             return Ok(rules);
         }
+    }
+    // Next-to-exe, canonicalized — the Flatpak layout. This is the same trusted location
+    // `resolve_cli_binary` pins the root binary to, and for the same reason: it is chosen by the
+    // package, not by anything an unprivileged actor can set. No env or CWD influence reaches it.
+    if let Some(dir) = find_exe_sibling_rules_dir() {
+        return Ok(dir);
     }
     Err("couldn't find the bundled 'rules' directory for the privileged scan".to_string())
 }
@@ -791,9 +814,31 @@ pub fn run() {
             // so the AI Security tab shows fresh data without the user clicking Scan first.
             ai_security::spawn(handle);
 
-            if let Err(e) = tray::spawn(app.handle()) {
-                eprintln!("[bulwark] warning: couldn't create tray icon: {e}");
-            }
+            // `catch_unwind`, not just the `Result`, because the failure that actually shipped was
+            // a *panic*, not an `Err`: libappindicator-sys loads libayatana-appindicator3 with
+            // dlopen at first use and panics outright when it is absent, which is the case in a
+            // Flatpak runtime that doesn't ship it. That killed the whole app on launch — a
+            // missing tray must degrade the tray, never take the window down with it. The
+            // single-instance plugin remains the escape hatch if the window is later hidden with
+            // no tray to restore it from.
+            let tray_handle = app.handle().clone();
+            let tray_available =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                    tray::spawn(&tray_handle)
+                })) {
+                    Ok(Ok(())) => true,
+                    Ok(Err(e)) => {
+                        eprintln!("[bulwark] warning: couldn't create tray icon: {e}");
+                        false
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "[bulwark] warning: tray unavailable (no AppIndicator library) — \
+                         continuing without a tray icon"
+                        );
+                        false
+                    }
+                };
 
             // The ordinary window-manager close button hides the window instead of quitting
             // the process — see tray.rs's module doc for why. Quitting is the tray menu's
@@ -802,8 +847,15 @@ pub fn run() {
                 let window_to_hide = window.clone();
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        api.prevent_close();
-                        let _ = window_to_hide.hide();
+                        // Hide-instead-of-quit is only honest when a tray icon exists to restore
+                        // the window from. Without one — a Flatpak runtime with no AppIndicator
+                        // library, or any desktop where the tray failed — hiding would make the
+                        // app vanish with no visible way back, which is worse than quitting.
+                        // So the close button falls back to its ordinary meaning.
+                        if tray_available {
+                            api.prevent_close();
+                            let _ = window_to_hide.hide();
+                        }
                     }
                 });
             }

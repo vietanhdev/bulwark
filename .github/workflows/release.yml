@@ -384,8 +384,33 @@ jobs:
             echo "PASSED: the AppImage bundles its webkit/GTK stack; only host-provided graphics/X11/font libs resolve from the system, exactly as an AppImage expects"
           '
 
+  # Launch the GUI packages for real.
+  #
+  # Everything above this point — "cargo tauri build exited 0", "the .deb contains 65 rule
+  # files", "the AppImage's linkage resolves" — was true of a Flatpak that crashed on launch,
+  # because none of it starts the GUI. A binary can pass every structural check and still die
+  # before it draws a window (a dlopen panic for a library the runtime lacks) or come up
+  # silently degraded (its own rules resolver finding nothing, disabling monitoring). The only
+  # assertion that catches that is running the thing and reading what it prints.
+  verify-gui-launch:
+    needs: linux
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: bulwark-linux-x86_64
+          path: build/relassets
+
+      - name: Launch-test the GUI .deb, .rpm and AppImage
+        run: |
+          set -euo pipefail
+          # Artifact filenames carry the version; the script globs for them.
+          ls -1 build/relassets
+          scripts/test-gui-packages-docker.sh
+
   release:
-    needs: [linux, verify-install, verify-appimage]
+    needs: [linux, verify-install, verify-appimage, verify-gui-launch]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7

@@ -83,6 +83,16 @@
   </branding>
 
   <releases>
+    <release version="0.8.4" date="2026-07-18">
+      <description>
+        <p>Fixes the application failing to start in this Flatpak build.</p>
+        <ul>
+          <li>The application no longer closes immediately on launch when the system tray library is unavailable; it now starts normally and runs without a tray icon</li>
+          <li>Security checks are found correctly again, so continuous monitoring works instead of being silently switched off</li>
+          <li>When no tray icon is available, closing the window now quits the application rather than hiding it out of reach</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.8.3" date="2026-07-18">
       <description>
         <p>Fixes scan history not being saved in this Flatpak build.</p>
