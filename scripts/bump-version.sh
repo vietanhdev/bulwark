@@ -26,6 +26,11 @@ ROOT_PKG="package.json"
 APP_PKG="apps/bulwark-app/package.json"
 TAURI_CONF="apps/bulwark-app/src-tauri/tauri.conf.json"
 MOCK_APP="apps/bulwark-app/src/mocks/tauri/app.ts"
+# Not a declaration this script rewrites — it's a changelog, and only a human can write
+# the release notes. But its newest <release> must still name the current version, because
+# Flathub renders these notes on the store page: bump without touching it and the app page
+# advertises the previous release forever. So it is checked, not set.
+METAINFO="packaging/flatpak/com.vietanhdev.bulwark.metainfo.xml"
 
 # Pull the current version out of each file with a pattern specific enough that it can't match
 # a dependency's version or an unrelated field.
@@ -35,6 +40,8 @@ read_root_pkg()    { sed -n 's/^  "version": "\(.*\)",/\1/p' "$ROOT_PKG" | head 
 read_app_pkg()     { sed -n 's/^  "version": "\(.*\)",/\1/p' "$APP_PKG" | head -1; }
 read_tauri()       { sed -n 's/^  "version": "\(.*\)",/\1/p' "$TAURI_CONF" | head -1; }
 read_mock()        { sed -n 's/^  return "\(.*\)";/\1/p' "$MOCK_APP" | head -1; }
+# Newest entry only — <releases> is newest-first, so head -1 is the current release.
+read_metainfo()    { sed -n 's/.*<release version="\([^"]*\)".*/\1/p' "$METAINFO" | head -1; }
 
 report() {
   printf '  %-48s %s\n' "$1" "$2"
@@ -63,7 +70,23 @@ check() {
       exit 1
     fi
   done
-  echo "OK: all six declarations agree at $ct"
+  # Checked separately and last, because the fix is different: you don't re-run this
+  # script, you hand-write a changelog entry.
+  local mi
+  mi=$(read_metainfo)
+  report "$METAINFO (newest release entry)" "${mi:-<unreadable>}"
+  if [ -z "$mi" ]; then
+    echo "ERROR: could not read a <release version=...> from $METAINFO." >&2
+    exit 1
+  fi
+  if [ "$mi" != "$ct" ]; then
+    echo "ERROR: $METAINFO tops out at $mi but the version is $ct." >&2
+    echo "       Flathub renders these notes on the store page, so shipping without an" >&2
+    echo "       entry advertises $mi to every visitor. Add a <release version=\"$ct\">" >&2
+    echo "       block (newest first) describing what changed, then re-run --check." >&2
+    exit 1
+  fi
+  echo "OK: all six declarations agree at $ct, and the metainfo changelog matches"
 }
 
 if [ "${1:-}" = "--check" ]; then

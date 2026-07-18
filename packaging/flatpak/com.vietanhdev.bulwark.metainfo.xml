@@ -83,6 +83,16 @@
   </branding>
 
   <releases>
+    <release version="0.8.1" date="2026-07-18">
+      <description>
+        <p>Packaging fixes for this Flatpak build.</p>
+        <ul>
+          <li>Adds screenshots and release notes to the store listing</li>
+          <li>Ships a higher-resolution application icon</li>
+          <li>Drops a sandbox permission the application does not use</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.8.0" date="2026-07-18">
       <description>
         <p>Distribution and packaging release.</p>
