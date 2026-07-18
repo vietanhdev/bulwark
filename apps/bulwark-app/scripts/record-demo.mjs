@@ -21,13 +21,17 @@ const BASE_URL = process.argv[2] ?? "http://localhost:4173";
 const OUT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../../docs/public");
 const W = 1280;
 const H = 800;
+const SCALE = 2; // record at 2x (retina) so text stays crisp after downscaling
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const browser = await chromium.launch();
+const browser = await chromium.launch({
+  // Force a stable device scale in headless so the captured frames are genuinely 2x.
+  args: [`--force-device-scale-factor=${SCALE}`, "--high-dpi-support=1"],
+});
 const context = await browser.newContext({
   viewport: { width: W, height: H },
-  deviceScaleFactor: 1,
-  recordVideo: { dir: OUT_DIR, size: { width: W, height: H } },
+  deviceScaleFactor: SCALE,
+  recordVideo: { dir: OUT_DIR, size: { width: W * SCALE, height: H * SCALE } },
 });
 const page = await context.newPage();
 // Never let a mis-named selector stall the take for 30s — fail fast and keep the flow moving.
