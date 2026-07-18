@@ -55,6 +55,12 @@ modules:
         # npm's offline cache, populated by node-sources.json under flatpak-node/.
         XDG_CACHE_HOME: /run/build/bulwark/flatpak-node/cache
         npm_config_cache: /run/build/bulwark/flatpak-node/npm-cache
+        # The frontend build needs devDependencies (vite, typescript), which drags
+        # in @playwright/test — used only by the e2e suite, never by the app. Its
+        # postinstall would try to download a browser, which fails in the offline
+        # build, so suppress it. (The package itself is still vendored so
+        # `npm install --offline` can resolve the lockfile.)
+        PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
     build-commands:
       # 1. Frontend deps from the offline cache, then the vite build -> apps/bulwark-app/dist
       #    (which Tauri's build.rs embeds; plain `cargo build` does NOT run beforeBuildCommand).
