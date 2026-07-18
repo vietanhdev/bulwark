@@ -5,7 +5,7 @@
 # COPR's mock builders have network access, so cargo fetches crates normally (no
 # vendoring, unlike the Launchpad PPA whose builders are offline).
 Name:           bulwarkctl
-Version:        0.8.2
+Version:        0.8.3
 Release:        1%{?dist}
 Summary:        Linux host security and misconfiguration scanner (CLI)
 
@@ -68,5 +68,8 @@ find %{buildroot}%{_datadir}/bulwark -type d -exec chmod 0755 {} +
 %{_datadir}/bulwark/
 
 %changelog
+* Sat Jul 18 2026 Viet Anh Nguyen <vietanh.dev@gmail.com> - 0.8.3-1
+- Resolve the findings database via XDG_DATA_HOME.
+
 * Sat Jul 18 2026 Viet Anh Nguyen <vietanh.dev@gmail.com> - 0.8.2-1
 - Initial COPR package of the Bulwark CLI.
