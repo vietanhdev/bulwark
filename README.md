@@ -4,15 +4,19 @@
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-bulwark.nrl.ai-007372)](https://bulwark.nrl.ai)
 
-A Linux host security scanner with a native CLI and desktop GUI, built for everyone running
-Linux — desktops and servers alike. Bulwark checks a machine's configuration against a
-declarative rule pack — SSH hardening, systemd/cron persistence, sudoers, kernel/sysctl
-hardening, file permissions, logging, rootkit indicators — and explains every finding in plain
-language with a concrete fix, alongside real ClamAV virus scanning and continuous background
-monitoring.
+Security & antivirus for your Linux computer — desktops and servers alike. Bulwark checks a
+machine's real configuration (SSH, sudo, kernel, cron, permissions, persistence), scans for viruses
+with ClamAV, and — the part no other scanner does — watches your **AI coding assistants** (Claude
+Code, Cursor, Copilot, Codex, Gemini) for API keys leaked into transcripts and for agent config a
+prompt injection could turn into code execution. Every finding is in plain language, sorted by how
+much it matters, with a **one-click, reversible fix**. It scans other machines over SSH too.
 
 Built with Tauri v2 + Rust + React. One rule engine, one rule pack, two front-doors: `bulwarkctl`
-(CLI) and the desktop app.
+(CLI) and the desktop app. Fully local — no telemetry, nothing leaves the machine.
+
+## Demo
+
+![Bulwark in action — run a scan, read plain-language findings, catch an API key leaked into an AI assistant, and theme the app to match your desktop](docs/public/demo.gif)
 
 ## Screenshots
 

@@ -62,6 +62,12 @@ features:
 
 <div class="bw-showcase">
 
+## See it work
+
+<p class="bw-sub">Run a scan, read plain-language findings, catch a leaked API key in an AI assistant, and theme the app to match your desktop — in about twenty seconds.</p>
+
+<video class="bw-demo" src="/demo.mp4" autoplay muted loop playsinline poster="/screenshots/overview.png" aria-label="A screen recording of Bulwark scanning a machine and being re-themed"></video>
+
 ## One app, your colours
 
 <p class="bw-sub">Light or dark, with an accent and sidebar colour you pick. Bulwark is built to look like part of the desktop it protects — not a visitor.</p>
@@ -114,6 +120,15 @@ features:
   max-width: 42rem;
   margin: 0.5rem auto 0;
   color: var(--vp-c-text-2);
+}
+.bw-demo {
+  display: block;
+  width: 100%;
+  max-width: 960px;
+  margin: 2rem auto 0;
+  border-radius: 14px;
+  box-shadow: 0 20px 50px -14px rgba(0, 0, 0, 0.4);
+  background: #17121a;
 }
 .bw-fan {
   position: relative;
