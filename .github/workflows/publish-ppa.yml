@@ -24,10 +24,6 @@ on:
         description: "Build + sign only; skip the (irreversible) dput upload"
         type: boolean
         default: false
-  # TEMPORARY (revert before merge to main): branch testing. A push-triggered run
-  # is ALWAYS dry (see DRY_RUN default below), so it can never upload.
-  push:
-    branches: [feat/distro-publishing]
 
 permissions:
   contents: read
@@ -85,11 +81,9 @@ jobs:
 
       - name: Build and upload source package(s)
         env:
-          # `|| default` covers the push-trigger test path, where dispatch inputs
-          # are empty. On push, DRY_RUN is forced true so it can never upload.
-          SERIES: ${{ github.event.inputs.series || 'noble' }}
-          PPA_REV: ${{ github.event.inputs.ppa_rev || '1' }}
-          DRY_RUN: ${{ github.event.inputs.dry_run || 'true' }}
+          SERIES: ${{ github.event.inputs.series }}
+          PPA_REV: ${{ github.event.inputs.ppa_rev }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
           DEBEMAIL: "vietanh.dev@gmail.com"
           DEBFULLNAME: "Viet Anh Nguyen"
         run: |

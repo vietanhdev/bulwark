@@ -20,9 +20,6 @@ on:
         type: choice
         options: [edge, beta, candidate, stable]
         default: edge
-  # TEMPORARY (revert before merge to main): build + install-test on this branch.
-  push:
-    branches: [feat/distro-publishing]
 
 permissions:
   contents: read

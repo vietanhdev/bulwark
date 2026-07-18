@@ -11,10 +11,6 @@ on:
         description: "If set, attach the bundle to this existing release tag (e.g. v0.7.0). Leave blank to only produce a workflow artifact."
         required: false
         default: ""
-  # TEMPORARY (revert before merge to main): lets this dispatch-only workflow be
-  # tested on a feature branch, since workflow_dispatch only fires from default.
-  push:
-    branches: [feat/distro-publishing]
 
 permissions:
   contents: write   # only used when release_tag is set, to upload the asset
