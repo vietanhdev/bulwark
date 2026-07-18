@@ -1,0 +1,66 @@
+name: Publish Snap (GUI)
+
+# Manual publish; every run also builds + install-tests the snap. Publishing only
+# happens on workflow_dispatch — a push (branch test) builds and smoke-tests but
+# never uploads to the store.
+#
+# Required repository secret (publish only):
+#   SNAPCRAFT_STORE_CREDENTIALS — output of `snapcraft export-login`, for an
+#                                 account with upload rights to the 'bulwark' snap.
+#
+# Classic confinement: the store rejects a classic snap on EVERY channel (edge
+# included) until the registered name is granted classic confinement via a
+# Store-requests forum post (forum.snapcraft.io/c/store-requests/19). Register the
+# name first (`snapcraft register bulwark`), then request classic, then publish.
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Snap Store channel to release to"
+        type: choice
+        options: [edge, beta, candidate, stable]
+        default: edge
+
+permissions:
+  contents: read
+
+jobs:
+  publish-snap:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      # Builds snap/snapcraft.yaml with LXD inside the runner.
+      # TODO(pin): SHA-pin these snapcore actions to match repo policy.
+      - name: Build snap
+        id: build
+        uses: snapcore/action-build@v1
+
+      - name: Upload snap artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: bulwark-snap
+          path: ${{ steps.build.outputs.snap }}
+          if-no-files-found: error
+
+      - name: Install snap + smoke-test
+        run: |
+          set -euo pipefail
+          sudo snap install --dangerous --classic "${{ steps.build.outputs.snap }}"
+          # The CLI app must resolve the bundled rule pack (next-to-exe under $SNAP).
+          bulwark.cli --version
+          n=$(bulwark.cli rules list | grep -c '^BLWK-' || true)
+          echo "rules visible from the snap: $n"
+          test "$n" -gt 0
+          # Functional: a real scan produces valid JSON with rules loaded; fix previews.
+          bulwark.cli scan --json | python3 -c 'import sys,json;d=json.load(sys.stdin);assert d["rules_loaded"]>0,d;print("scan OK: rules_loaded",d["rules_loaded"],"findings",len(d.get("findings",[])))'
+          bulwark.cli fix list | grep -i "Available autofixes" >/dev/null && echo "fix preview OK"
+
+      - name: Publish snap
+        if: github.event_name == 'workflow_dispatch'
+        uses: snapcore/action-publish@v1
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        with:
+          snap: ${{ steps.build.outputs.snap }}
+          release: ${{ github.event.inputs.channel }}

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metainfo, required by Flathub. Validate with:
+       flatpak run org.freedesktop.appstream-glib validate com.vietanhdev.bulwark.metainfo.xml
+     TODO(verify): before submitting to Flathub, add real <screenshots> with
+     hosted image URLs and confirm the <releases> list matches your tags. -->
+<component type="desktop-application">
+  <id>com.vietanhdev.bulwark</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Apache-2.0</project_license>
+  <name>Bulwark</name>
+  <summary>Linux security misconfiguration &amp; intrusion scanner</summary>
+
+  <description>
+    <p>
+      Bulwark scans a Linux host for security misconfigurations and intrusion
+      indicators using a native Rust rule engine over declarative YAML rules, and
+      explains findings in plain language with a suggested fix.
+    </p>
+    <p>
+      It covers configuration hardening, SSH, file integrity, log analysis,
+      AI-assistant artifact checks, and optional ClamAV antivirus scanning — all
+      fully local, with no telemetry.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">com.vietanhdev.bulwark.desktop</launchable>
+  <url type="homepage">https://bulwark.nrl.ai</url>
+  <url type="bugtracker">https://github.com/vietanhdev/bulwark/issues</url>
+  <developer id="ai.nrl">
+    <name>Viet Anh Nguyen</name>
+  </developer>
+
+  <content_rating type="oars-1.1" />
+
+  <releases>
+    <release version="0.8.0" date="2026-07-18" />
+    <release version="0.7.0" date="2026-07-18" />
+  </releases>
+</component>

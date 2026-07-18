@@ -1,0 +1,93 @@
+name: Publish Flatpak (GUI)
+
+# Manual only. Builds the GUI Flatpak offline and produces a single-file
+# `bulwark.flatpak` bundle, uploaded as a workflow artifact and (optionally)
+# attached to a GitHub release. Flathub proper is a SEPARATE submission (a PR to
+# flathub/flathub); this workflow does not push to Flathub.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "If set, attach the bundle to this existing release tag (e.g. v0.7.0). Leave blank to only produce a workflow artifact."
+        required: false
+        default: ""
+
+permissions:
+  contents: write   # only used when release_tag is set, to upload the asset
+
+jobs:
+  publish-flatpak:
+    runs-on: ubuntu-24.04
+    steps:
+      # Shallow checkout: the manifest's `type: dir` copies the repo into the
+      # sandbox, so keep .git small. A fresh checkout has no target/ or
+      # node_modules, so nothing heavy is copied.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Install flatpak + builder + generator deps
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          # elfutils provides eu-strip/eu-elfcompress, which flatpak-builder uses
+          # to split debuginfo into the .Debug extension (absent on stock runners).
+          sudo apt-get install -y --no-install-recommends \
+            flatpak flatpak-builder python3 python3-venv python3-pip git xz-utils elfutils
+          flatpak remote-add --user --if-not-exists flathub \
+            https://dl.flathub.org/repo/flathub.flatpakrepo
+
+      - name: Install runtime + SDK + extensions (matches the manifest)
+        run: |
+          set -euo pipefail
+          flatpak install -y --user --noninteractive flathub \
+            org.gnome.Platform//50 \
+            org.gnome.Sdk//50 \
+            org.freedesktop.Sdk.Extension.rust-stable//25.08 \
+            org.freedesktop.Sdk.Extension.node20//25.08
+
+      - name: Generate offline cargo/node sources
+        run: scripts/flatpak-gen-sources.sh
+
+      - name: Build Flatpak + bundle
+        run: |
+          set -euo pipefail
+          # Build/state/repo OUTSIDE the repo tree so the `type: dir` source copy
+          # can never recurse into its own build dir.
+          flatpak-builder \
+            --user --force-clean --disable-rofiles-fuse \
+            --repo="$RUNNER_TEMP/fp-repo" \
+            --state-dir="$RUNNER_TEMP/fp-state" \
+            "$RUNNER_TEMP/fp-build" \
+            packaging/flatpak/com.vietanhdev.bulwark.yaml
+          flatpak build-bundle "$RUNNER_TEMP/fp-repo" \
+            bulwark.flatpak com.vietanhdev.bulwark master
+
+      - name: Install bundle + smoke-test
+        run: |
+          set -euo pipefail
+          flatpak install -y --user bulwark.flatpak
+          flatpak info com.vietanhdev.bulwark | grep -E "ID:|Version:"
+          # The bundled CLI sidecar must resolve the rule pack from inside the
+          # sandbox (proves install layout + next-to-exe rule resolution).
+          flatpak run --command=bulwark com.vietanhdev.bulwark --version
+          n=$(flatpak run --command=bulwark com.vietanhdev.bulwark rules list | grep -c '^BLWK-' || true)
+          echo "rules visible in sandbox: $n"
+          test "$n" -gt 0
+          # Functional: real scan produces valid JSON with rules loaded; fix previews.
+          flatpak run --command=bulwark com.vietanhdev.bulwark scan --json | python3 -c 'import sys,json;d=json.load(sys.stdin);assert d["rules_loaded"]>0,d;print("scan OK: rules_loaded",d["rules_loaded"],"findings",len(d.get("findings",[])))'
+          flatpak run --command=bulwark com.vietanhdev.bulwark fix list | grep -i "Available autofixes" >/dev/null && echo "fix preview OK"
+
+      - name: Upload bundle as workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: bulwark-flatpak
+          path: bulwark.flatpak
+          if-no-files-found: error
+
+      - name: Attach bundle to release
+        if: ${{ github.event.inputs.release_tag != '' }}
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        with:
+          tag_name: ${{ github.event.inputs.release_tag }}
+          files: bulwark.flatpak

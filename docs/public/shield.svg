@@ -1,3 +1,5 @@
 <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-  <path d="M50 4 L91 19 V49 C91 73 73 90 50 97 C27 90 9 73 9 49 V19 Z" fill="oklch(0.5 0.09 194)" />
+  <!-- Bulwark brand mark: Ubuntu-aubergine shield with an orange check — the app's two colours. -->
+  <path d="M50 4 L91 19 V49 C91 73 73 90 50 97 C27 90 9 73 9 49 V19 Z" fill="#772953" />
+  <path d="M31 51 L44 64 L70 34" fill="none" stroke="#e95420" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" />
 </svg>

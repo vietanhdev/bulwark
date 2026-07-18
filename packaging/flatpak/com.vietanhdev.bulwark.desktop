@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Bulwark
+Comment=Linux security misconfiguration & intrusion scanner
+Exec=bulwark-app
+Icon=com.vietanhdev.bulwark
+Terminal=false
+Type=Application
+Categories=System;Security;Utility;
+Keywords=security;hardening;audit;scanner;
+StartupWMClass=bulwark

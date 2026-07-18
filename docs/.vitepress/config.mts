@@ -181,10 +181,11 @@ export default withMermaid({
     );
   },
 
-  // Teal palette matching apps/bulwark-app/src/styles.css's tokens (oklch hue ~194, converted
+  // Aubergine palette matching apps/bulwark-app/src/styles.css's brand (Ubuntu aubergine, converted
   // to hex since mermaid doesn't understand oklch()). Only governs light mode — the plugin
   // forces mermaid's own built-in dark theme when `.dark` is on <html>, this config has no
-  // effect there (a vitepress-plugin-mermaid limitation, not a choice made here).
+  // effect there (a vitepress-plugin-mermaid limitation, not a choice made here — the dark
+  // diagrams are recoloured to aubergine directly in theme/custom.css instead).
   mermaid: {
     theme: "base",
     themeVariables: {
@@ -198,20 +199,20 @@ export default withMermaid({
       // the diagrams no longer sit in Trebuchet MS while the page around them is in Archivo.
       fontFamily: '"Archivo Variable", ui-sans-serif, system-ui, sans-serif',
 
-      primaryColor: "#d5f2f1",
-      primaryTextColor: "#081717",
-      primaryBorderColor: "#007372",
-      lineColor: "#007372",
-      secondaryColor: "#fafcfc",
-      secondaryBorderColor: "#dae3e3",
+      primaryColor: "#f0dbe6",
+      primaryTextColor: "#1a0d14",
+      primaryBorderColor: "#772953",
+      lineColor: "#772953",
+      secondaryColor: "#faf5f7",
+      secondaryBorderColor: "#e6d5dd",
       tertiaryColor: "#ffffff",
-      tertiaryBorderColor: "#dae3e3",
-      textColor: "#081717",
-      actorBkg: "#d5f2f1",
-      actorBorder: "#007372",
-      actorTextColor: "#081717",
-      signalColor: "#007372",
-      signalTextColor: "#081717",
+      tertiaryBorderColor: "#e6d5dd",
+      textColor: "#1a0d14",
+      actorBkg: "#f0dbe6",
+      actorBorder: "#772953",
+      actorTextColor: "#1a0d14",
+      signalColor: "#772953",
+      signalTextColor: "#1a0d14",
     },
   },
 

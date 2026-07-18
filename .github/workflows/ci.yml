@@ -178,6 +178,34 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
 
+  # Playwright UI tests against the real React app with every @tauri-apps/api/* import swapped for a
+  # fixture-backed mock (VITE_MOCK_TAURI=true — src/mocks/tauri/). No Tauri/webkit runtime or display
+  # needed, so it runs on a plain runner. Node 22 because the vite/rolldown frontend build needs
+  # >=20.12. The mock dev server is started automatically by playwright.config.ts's webServer.
+  frontend-e2e:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/bulwark-app
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/bulwark-app/package-lock.json
+      - run: npm ci
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      - name: Run Playwright UI tests
+        run: npm run test:e2e
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report
+          path: apps/bulwark-app/playwright-report/
+          retention-days: 7
+
   # Renders every docs mermaid diagram against the exact mermaid version the site ships and fails
   # if any produces a syntax error. VitePress builds fine with a broken diagram — mermaid only errors
   # at client render time — so nothing else catches "Syntax error in text" before a human loads the

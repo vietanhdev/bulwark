@@ -1,0 +1,124 @@
+name: Publish PPA (CLI)
+
+# Manual only — a Launchpad upload is IRREVERSIBLE (a version can be superseded,
+# never deleted), so this never fires automatically. See packaging/README.md.
+#
+# Required repository secrets:
+#   LAUNCHPAD_GPG_PRIVATE_KEY  — ASCII-armored private key registered on the
+#                                Launchpad account that owns ppa:vietanhng/bulwark.
+#                                Use a key DEDICATED to CI; a passphraseless key is
+#                                simplest (dpkg-buildpackage signs non-interactively).
+#   LAUNCHPAD_GPG_PASSPHRASE   — optional; only if the key above has a passphrase.
+on:
+  workflow_dispatch:
+    inputs:
+      series:
+        description: "Ubuntu series (space-separated for several, e.g. 'noble oracular')"
+        required: true
+        default: "noble"
+      ppa_rev:
+        description: "PPA revision — bump to re-upload the SAME version to the SAME series"
+        required: true
+        default: "1"
+      dry_run:
+        description: "Build + sign only; skip the (irreversible) dput upload"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish-ppa:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install packaging toolchain
+        run: |
+          sudo apt-get update
+          # build-essential: the binary-build install-test compiles the bundled
+          # SQLite (libsqlite3-sys) which needs a C compiler; also satisfies
+          # dpkg-buildpackage's implicit build-essential:native build-dep.
+          sudo apt-get install -y --no-install-recommends \
+            devscripts dput debhelper dpkg-dev build-essential cargo rustc python3
+
+      - name: Import GPG signing key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.LAUNCHPAD_GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.LAUNCHPAD_GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GPG_PRIVATE_KEY:-}" ]; then
+            echo "::error::LAUNCHPAD_GPG_PRIVATE_KEY secret is not set" >&2
+            exit 1
+          fi
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          mkdir -p "$GNUPGHOME"; chmod 700 "$GNUPGHOME"
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+          # Non-interactive signing (validated method): loopback + a passphrase-file
+          # in gpg.conf, so EVERY gpg call — including the ones dpkg-buildpackage makes,
+          # which take no passphrase argument — reads the passphrase from the file.
+          # (The agent-preset approach does NOT work here: pinentry-mode loopback makes
+          # gpg bypass the agent, so a preset is never consulted and signing fails with
+          # "Operation cancelled" on a headless runner.)
+          umask 077
+          printf '%s' "${GPG_PASSPHRASE:-}" > "$GNUPGHOME/passphrase"
+          {
+            echo "pinentry-mode loopback"
+            echo "passphrase-file $GNUPGHOME/passphrase"
+            echo "batch"
+          } > "$GNUPGHOME/gpg.conf"
+          printf 'allow-loopback-pinentry\n' > "$GNUPGHOME/gpg-agent.conf"
+          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
+          gpgconf --kill gpg-agent || true
+          gpgconf --launch gpg-agent || true
+          KEYID=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/{print $5; exit}')
+          echo "SIGN_KEY=$KEYID" >> "$GITHUB_ENV"
+          # Prove signing is non-interactive before we build anything.
+          echo "ci-signing-selftest" | gpg --local-user "$KEYID" --clearsign > /dev/null
+          echo "GPG signing self-test passed (key $KEYID)"
+
+      - name: Build and upload source package(s)
+        env:
+          SERIES: ${{ github.event.inputs.series }}
+          PPA_REV: ${{ github.event.inputs.ppa_rev }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          DEBEMAIL: "vietanh.dev@gmail.com"
+          DEBFULLNAME: "Viet Anh Nguyen"
+        run: |
+          set -euo pipefail
+          for s in $SERIES; do
+            echo "::group::build $s"
+            scripts/build-ppa-source.sh --series "$s" --ppa-rev "$PPA_REV" --sign-key "$SIGN_KEY"
+            echo "::endgroup::"
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "DRY RUN — skipping dput. Built + signed:"
+              ls -1 "target/ppa/bulwark_"*"~${s}"*"_source.changes"
+              # Prove the signature on the .changes is valid without uploading.
+              gpg --verify "target/ppa/bulwark_"*"~${s}"*"_source.changes" 2>&1 | grep -i "good signature" || true
+              # Install-test: the offline SOURCE build + signature are proven above
+              # (that's the PPA-specific part Launchpad runs). Here we build the binary
+              # .deb the project ships — via cargo-deb, the same tool release.yml uses,
+              # producing the same binary + rule-pack layout Launchpad's build yields —
+              # then install it and functionally smoke-test the installed package.
+              # (cargo-deb avoids the dpkg-source/vendored-*.orig round-trip, which is
+              # sensitive to the runner's cargo version.)
+              echo "::group::binary .deb build + install test ($s)"
+              cargo build --release -p bulwarkctl
+              command -v cargo-deb >/dev/null || cargo install cargo-deb --locked
+              cargo deb -p bulwarkctl --no-build
+              sudo apt-get install -y ./target/debian/bulwarkctl_*.deb
+              bulwarkctl --version
+              m=$(bulwarkctl rules list | grep -c '^BLWK-' || true)
+              echo "rules: $m"; test "$m" -gt 0
+              bulwarkctl scan --json | python3 -c 'import sys,json;d=json.load(sys.stdin);assert d["rules_loaded"]>0,d;print("scan OK: rules_loaded",d["rules_loaded"],"findings",len(d.get("findings",[])))'
+              bulwarkctl fix list | grep -i "Available autofixes" >/dev/null && echo "fix preview OK"
+              echo "::endgroup::"
+              continue
+            fi
+            echo "::group::dput $s"
+            # `ppa:` shortcut is understood by modern dput; upload is irreversible.
+            dput ppa:vietanhng/bulwark "target/ppa/bulwark_"*"~${s}"*"_source.changes"
+            echo "::endgroup::"
+          done

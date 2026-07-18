@@ -138,20 +138,21 @@ const esc = (s) =>
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 
-/** The card template. Mirrors the existing cards: teal shield mark, heavy title, angled wedge. */
+/** The card template. Bulwark brand: aubergine shield with an orange check, heavy title, angled
+    aubergine-tinted wedge. */
 function cardHtml({ title, subtitle }) {
   return `<!doctype html><html><head><meta charset="utf-8"><style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     width: 1200px; height: 630px; position: relative; overflow: hidden;
-    background: #f8fafc;
+    background: #faf7f8;
     font-family: "Roboto", "Inter", "Liberation Sans", sans-serif;
     -webkit-font-smoothing: antialiased;
   }
-  /* The angled wedge on the right edge — same teal, heavily tinted. */
+  /* The angled wedge on the right edge — aubergine, heavily tinted. */
   .wedge {
     position: absolute; top: 0; right: 0; width: 420px; height: 630px;
-    background: #d7ecec;
+    background: #f0dbe6;
     clip-path: polygon(58% 0, 100% 0, 100% 100%, 100% 100%, 22% 100%);
   }
   /* Fixed text column, vertically centred between the brand mark and the footer. This is why
@@ -160,25 +161,26 @@ function cardHtml({ title, subtitle }) {
   .inner { position: relative; padding: 84px 0 0 90px; width: 880px; }
   .brand { display: flex; align-items: center; gap: 16px; margin-bottom: 58px; }
   .brand svg { width: 42px; height: 42px; display: block; }
-  .brand span { font-size: 33px; font-weight: 700; color: #0d7a7a; letter-spacing: -0.01em; }
+  .brand span { font-size: 33px; font-weight: 700; color: #772953; letter-spacing: -0.01em; }
   h1 {
-    font-size: 58px; font-weight: 800; line-height: 1.12; color: #0b0d0e;
+    font-size: 58px; font-weight: 800; line-height: 1.12; color: #1a0d14;
     letter-spacing: -0.022em; max-width: 800px;
   }
   p {
-    margin-top: 26px; font-size: 25px; line-height: 1.42; color: #5b6570;
+    margin-top: 26px; font-size: 25px; line-height: 1.42; color: #6b5560;
     max-width: 790px; font-weight: 400;
   }
   .site {
     position: absolute; left: 90px; bottom: 62px;
-    font-size: 20px; font-weight: 700; color: #0d7a7a;
+    font-size: 20px; font-weight: 700; color: #772953;
   }
 </style></head><body>
   <div class="wedge"></div>
   <div class="inner">
     <div class="brand">
       <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-        <path d="M50 4 L91 19 V49 C91 73 73 90 50 97 C27 90 9 73 9 49 V19 Z" fill="#0d7a7a"/>
+        <path d="M50 4 L91 19 V49 C91 73 73 90 50 97 C27 90 9 73 9 49 V19 Z" fill="#772953"/>
+        <path d="M31 51 L44 64 L70 34" fill="none" stroke="#e95420" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       <span>Bulwark</span>
     </div>

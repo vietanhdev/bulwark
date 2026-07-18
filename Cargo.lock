@@ -368,11 +368,11 @@ dependencies = [
 
 [[package]]
 name = "bulwark-agent"
-version = "0.7.0"
+version = "0.8.0"
 
 [[package]]
 name = "bulwark-app"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "bulwark-core",
@@ -393,7 +393,7 @@ dependencies = [
 
 [[package]]
 name = "bulwark-core"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -419,11 +419,11 @@ dependencies = [
 
 [[package]]
 name = "bulwark-proto"
-version = "0.7.0"
+version = "0.8.0"
 
 [[package]]
 name = "bulwarkctl"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "bulwark-core",

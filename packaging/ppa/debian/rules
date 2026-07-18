@@ -1,0 +1,46 @@
+#!/usr/bin/make -f
+# Bulwark CLI — Debian packaging rules for the Launchpad PPA build.
+#
+# This is deliberately NOT dh-cargo (which expects every crate packaged
+# separately in the archive). Instead the source tarball ships a vendored copy of
+# every dependency under vendor/ plus a .cargo/config.toml that redirects
+# crates-io to it, so the whole build is offline — which is what Launchpad's
+# network-less builders require. See scripts/build-ppa-source.sh for how the
+# tarball is assembled, and packaging/README.md for the full workflow.
+
+export CARGO_NET_OFFLINE = true
+# Keep cargo's state inside the build tree; the builder's $HOME is not a good place.
+export CARGO_HOME = $(CURDIR)/debian/cargo-home
+# Reproducibility: don't let cargo phone home or hash absolute paths more than needed.
+export CARGO_INCREMENTAL = 0
+
+%:
+	dh $@
+
+# No autotools/cmake/etc. to configure — the vendored cargo build is self-contained.
+override_dh_auto_configure:
+
+# The trimmed workspace shipped in the source tarball contains only bulwark-core
+# and bulwarkctl, so this builds exactly the CLI and its library, offline.
+override_dh_auto_build:
+	cargo build --release --offline -p bulwarkctl
+
+# Unit/e2e tests need Docker fixtures and/or root; CI is the backstop for those.
+# Running them here would fail the offline builder.
+override_dh_auto_test:
+
+override_dh_auto_install:
+	install -D -m0755 target/release/bulwarkctl \
+		debian/bulwarkctl/usr/bin/bulwarkctl
+	# The rule pack is load-bearing, not dressing: on an installed system
+	# `resolve_rules_dir` falls back to /usr/share/bulwark/rules, so a package
+	# without it fails on every invocation. Ship rules, decoders and log-rules,
+	# mirroring the layout the `cargo deb` build uses.
+	install -d debian/bulwarkctl/usr/share/bulwark
+	cp -r rules decoders log-rules debian/bulwarkctl/usr/share/bulwark/
+
+# vendor/ and cargo-home are build artefacts, not part of the installed package;
+# leave them out of the binary .deb. (They live in the source tarball only.)
+override_dh_auto_clean:
+	rm -rf debian/cargo-home
+	cargo clean --offline || true
