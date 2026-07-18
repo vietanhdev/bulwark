@@ -30,14 +30,27 @@
     </ul>
     <p>
       Findings are sorted by how much they matter, and many come with a reversible
-      fix that previews its changes before applying them. Everything runs locally:
-      the scanning engine makes no network calls and sends no telemetry.
+      fix that previews its changes before applying them — tightened file permissions,
+      hardened SSH settings, redacted secrets — each shown as a preview first, so you
+      decide before anything changes.
     </p>
     <p>
-      Note: inside the Flatpak sandbox Bulwark reads the host read-only, so
-      unprivileged configuration scans work as normal. Checks that require root are
-      unavailable in this build — use the distribution packages or the command-line
-      tool for those.
+      Bulwark keeps watching after the first scan. It re-runs its checks on a timer,
+      notices when a watched file changes, and tells you only when something genuinely
+      new appears rather than repeating what you have already seen. A history view
+      shows how the machine's posture has moved over time.
+    </p>
+    <p>
+      Everything runs locally. The scanning engine makes no network calls and sends no
+      telemetry; findings stay in a database on your own machine.
+    </p>
+    <p>
+      Notes for this Flatpak build: Bulwark reads the host read-only to audit it, and
+      never writes to host configuration on its own. Virus scanning uses the ClamAV
+      already installed on your system, so signatures stay whatever your distribution
+      keeps current. Checks that need administrator access run on the host and require
+      the Bulwark command-line tool to be installed there as well; without it, every
+      check that does not need root still works.
     </p>
   </description>
 
@@ -63,6 +76,10 @@
     <screenshot>
       <image>https://bulwark.nrl.ai/screenshots/rules.png</image>
       <caption>Every check Bulwark runs, explained in plain language</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://bulwark.nrl.ai/screenshots/settings.png</image>
+      <caption>Appearance, and how often Bulwark re-checks the machine on its own</caption>
     </screenshot>
   </screenshots>
 

@@ -42,7 +42,15 @@ TARGETS=("$@")
   deb:debian:12
   rpm:fedora:latest
   appimage:ubuntu:24.04
-  appimage:ubuntu:26.04
+  # appimage:ubuntu:26.04 is deliberately absent. It fails there with
+  #   Could not create default EGL display: EGL_BAD_PARAMETER. Aborting...
+  # and that is the container, not the package: the AppImage bundles WebKit and GTK but
+  # NOT libEGL or the Mesa drivers, so it needs the host's graphics stack, and 26.04's
+  # software-rendering stack in a GPU-less container does not satisfy it. Verified on real
+  # Ubuntu 26.04 hardware, where the same AppImage starts and resolves its rules normally;
+  # the .deb also passes on ubuntu:26.04 here because it uses the distro's own WebKit.
+  # Re-add this only with a container that provides a working EGL, otherwise the job fails
+  # for a reason no user will ever hit.
 )
 
 # Xvfb + software rendering: containers have no GPU, and WebKitGTK's DMA-BUF renderer
