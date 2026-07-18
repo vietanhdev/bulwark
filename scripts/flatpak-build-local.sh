@@ -35,9 +35,27 @@ echo ">> staging clean tree at ${STAGE}"
 rm -rf "${STAGE}"
 mkdir -p "${STAGE}"
 git -C "${REPO_ROOT}" archive --format=tar HEAD | tar -x -C "${STAGE}"
-# Overlay untracked packaging bits the manifest + build reference.
-mkdir -p "${STAGE}/packaging"
-cp -r "${REPO_ROOT}/packaging/flatpak" "${STAGE}/packaging/flatpak"
+# Overlay the packaging dir, whose generated *-sources.json are gitignored and so never
+# come out of `git archive`.
+#
+# Note the trailing `/.`: it copies the directory's *contents*. `cp -r src dst` nests
+# instead (dst/flatpak/...) whenever dst already exists — and it does exist, because the
+# manifest and metainfo are tracked and arrive via git archive. That nesting left
+# cargo-sources.json one level too deep, flatpak-builder failed to deserialize the whole
+# `sources` list (including the `type: dir` source), and the build ran against an empty
+# tree with a bare "Can't open cargo-sources.json" warning as the only clue. It was a
+# latent bug that only bit once these files were committed.
+mkdir -p "${STAGE}/packaging/flatpak"
+cp -r "${REPO_ROOT}/packaging/flatpak/." "${STAGE}/packaging/flatpak/"
+
+# flatpak-builder treats an unreadable sources file as a *warning*, drops the entire
+# `sources` list, and then builds an empty tree — the failure surfaces hundreds of lines
+# later as a confusing "package.json not found". Fail here instead, where the cause is
+# obvious.
+for f in cargo-sources.json node-sources.json; do
+  [[ -f "${STAGE}/packaging/flatpak/${f}" ]] \
+    || { echo "ERROR: ${f} missing from the staged tree (${STAGE}/packaging/flatpak/)" >&2; exit 1; }
+done
 
 echo ">> building ${APP_ID} (offline, native flatpak-builder)"
 cd "${STAGE}"

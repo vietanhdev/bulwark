@@ -95,6 +95,11 @@ enum ScanEvent {
 
 /// Dev-mode heuristic: walk up from the current directory (src-tauri when run via
 /// `cargo tauri dev`) looking for the workspace's `rules/` dir.
+///
+/// Compiled out of shipped builds entirely — both callers gate it on `debug_assertions`,
+/// because "whatever `rules/` sits near the launch directory" is a sane rule for a dev loop
+/// and an unpredictable one for an installed application.
+#[cfg(debug_assertions)]
 fn find_workspace_rules_dir() -> Option<PathBuf> {
     let mut candidate = std::env::current_dir().ok()?;
     for _ in 0..4 {
@@ -131,6 +136,14 @@ fn resolve_rules_dir(app: Option<&tauri::AppHandle>) -> Result<PathBuf, String> 
     if let Ok(p) = std::env::var("BULWARK_RULES_DIR") {
         return Ok(PathBuf::from(p));
     }
+    // The workspace walk-up is a *dev* heuristic and is now compiled out of shipped builds,
+    // matching what `resolve_privileged_rules_dir` has always done. It walks up from the
+    // current directory looking for any `rules/`, which in a released app means the pack
+    // depends on where the user happened to launch from. That is not hypothetical: the
+    // Flatpak has `--filesystem=host:ro`, so launching it from a checkout silently loaded
+    // that checkout's rules instead of the packaged ones — and it masked the fact that the
+    // next-to-exe fallback below is what a real install actually depends on.
+    #[cfg(debug_assertions)]
     if let Some(dir) = find_workspace_rules_dir() {
         return Ok(dir);
     }
