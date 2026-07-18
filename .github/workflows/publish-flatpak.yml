@@ -78,6 +78,9 @@ jobs:
           n=$(flatpak run --command=bulwark com.vietanhdev.bulwark rules list | grep -c '^BLWK-' || true)
           echo "rules visible in sandbox: $n"
           test "$n" -gt 0
+          # Functional: real scan produces valid JSON with rules loaded; fix previews.
+          flatpak run --command=bulwark com.vietanhdev.bulwark scan --json | python3 -c 'import sys,json;d=json.load(sys.stdin);assert d["rules_loaded"]>0,d;print("scan OK: rules_loaded",d["rules_loaded"],"findings",len(d.get("findings",[])))'
+          flatpak run --command=bulwark com.vietanhdev.bulwark fix list | grep -qi "Available autofixes" && echo "fix preview OK"
 
       - name: Upload bundle as workflow artifact
         uses: actions/upload-artifact@v7
