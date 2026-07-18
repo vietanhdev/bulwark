@@ -49,6 +49,13 @@ TARGETS=("$@")
 # and its own sandbox both fail without one. These mirror what a headless CI runner needs;
 # they are test-harness settings, not something the app requires on a real desktop.
 GUI_ENV='
+  for t in Xvfb import identify; do
+    command -v "$t" >/dev/null || {
+      echo "HARNESS ERROR: $t missing — test dependencies failed to install."
+      echo "This is a broken test environment, NOT an application failure."
+      exit 90
+    }
+  done
   export DISPLAY=:99
   export WEBKIT_DISABLE_COMPOSITING_MODE=1
   export WEBKIT_DISABLE_DMABUF_RENDERER=1
@@ -136,7 +143,7 @@ for spec in "${TARGETS[@]}"; do
       RPM="$(find_one "bulwark-desktop-*.x86_64.rpm")"
       docker run --rm -v "${ASSETS}:/a:ro" "${IMAGE:-fedora:latest}" bash -c "
         set -u
-        dnf install -y -q xorg-x11-server-Xvfb ImageMagick xorg-x11-apps >/dev/null 2>&1
+        dnf install -y -q xorg-x11-server-Xvfb ImageMagick >/dev/null 2>&1
         dnf install -y -q /a/${RPM} >/dev/null 2>&1 \
           || { echo 'FAIL: dnf install failed'; exit 1; }
         ${GUI_ENV}
