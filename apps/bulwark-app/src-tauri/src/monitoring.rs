@@ -372,6 +372,13 @@ fn super_db_path() -> Result<PathBuf, String> {
     if let Ok(p) = std::env::var("BULWARK_DB_PATH") {
         return Ok(PathBuf::from(p));
     }
+    // XDG_DATA_HOME before ~/.local/share (XDG base directory spec). Unset on a normal
+    // system, so this resolves identically to before; inside a Flatpak it is the app's
+    // writable ~/.var/app/<id>/data while $HOME is the read-only real home, so the old
+    // hardcoded path made every persisted scan fail with "readonly database".
+    if let Some(dir) = std::env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()) {
+        return Ok(PathBuf::from(dir).join("bulwark/bulwark.db"));
+    }
     let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
     Ok(PathBuf::from(home).join(".local/share/bulwark/bulwark.db"))
 }

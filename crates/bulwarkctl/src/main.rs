@@ -426,6 +426,16 @@ fn resolve_db_path(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
     if let Ok(p) = std::env::var("BULWARK_DB_PATH") {
         return Ok(PathBuf::from(p));
     }
+    // Honour XDG_DATA_HOME before falling back to ~/.local/share, per the XDG base
+    // directory spec. On a normal system XDG_DATA_HOME is unset, so this resolves to
+    // exactly the same path as before. It matters inside a Flatpak: there $HOME is the
+    // real (read-only) home while XDG_DATA_HOME points at the app's writable
+    // ~/.var/app/<id>/data, so hardcoding ~/.local/share made every scan fail with
+    // "attempt to write a readonly database" — and working around it with an extra
+    // --filesystem grant is what Flathub's linter flags as unnecessary.
+    if let Some(dir) = std::env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()) {
+        return Ok(Path::new(&dir).join("bulwark/bulwark.db"));
+    }
     let home = std::env::var("HOME").context("HOME not set")?;
     Ok(Path::new(&home).join(".local/share/bulwark/bulwark.db"))
 }

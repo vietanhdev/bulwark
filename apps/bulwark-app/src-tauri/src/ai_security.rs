@@ -32,6 +32,11 @@ fn db_path() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("BULWARK_DB_PATH") {
         return Some(PathBuf::from(p));
     }
+    // XDG_DATA_HOME before ~/.local/share — see monitoring.rs's resolver for why this
+    // matters (Flatpak: $HOME is read-only, XDG_DATA_HOME is the writable app dir).
+    if let Some(dir) = std::env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(dir).join("bulwark/bulwark.db"));
+    }
     let home = std::env::var("HOME").ok()?;
     Some(PathBuf::from(home).join(".local/share/bulwark/bulwark.db"))
 }
