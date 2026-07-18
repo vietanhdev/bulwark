@@ -106,8 +106,16 @@ echo ">> vendor size: $(du -sh "$SRC_DIR/vendor" | cut -f1)"
 # has different contents"). Fixed sort/mtime/owner + xz -T0-off make every run
 # byte-identical. (cargo vendor is itself deterministic for a fixed Cargo.lock.)
 ORIG="${BUILD_DIR}/bulwark_${UPSTREAM}.orig.tar.xz"
+# REUSE an orig already built in this run. A version has exactly ONE orig, shared by
+# every series, and Launchpad rejects any later series whose .dsc references a
+# different one ("already exists, but uploaded version has different contents").
+# Regenerating per series is only safe if the source tree is byte-identical — which
+# it is NOT the moment any commit lands between runs. So: build it once, reuse the
+# file, and upload every series of a version from a SINGLE run at ONE commit.
+if [ -f "$ORIG" ]; then
+  echo ">> reusing existing $ORIG (shared by all series in this run)"
+else
 echo ">> creating $ORIG (deterministic)"
-rm -f "$ORIG"
 tar --create \
     --sort=name \
     --mtime='2020-01-01 00:00:00Z' \
@@ -118,6 +126,7 @@ tar --create \
     --transform "s,^\./,bulwark-${UPSTREAM}/," \
     -C "$SRC_DIR" . \
   | xz -6 -T1 > "$ORIG"
+fi
 
 # ---- debian/ packaging + changelog -------------------------------------------
 echo ">> installing debian/ packaging"

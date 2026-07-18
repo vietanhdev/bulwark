@@ -119,11 +119,31 @@ Omit `--sign-key` for a local unsigned test build (produces the source package b
 Launchpad compiles with the **target series' archive `rustc`**, which lags the
 toolchain you develop with:
 
-| Series | archive `rustc` (approx) |
-|---|---|
-| 24.04 noble (LTS) | ~1.75 — the one at real risk |
-| 26.04 resolute (LTS) | current, much newer |
-| 26.10 stonking (devel) | newest |
+| Series | archive `rustc`/`cargo` | PPA support |
+|---|---|---|
+| 24.04 noble (LTS) | 1.75.0 | ❌ **unsupported** — see below |
+| 26.04 resolute (LTS) | 1.93.1 | ✅ |
+| 26.10 stonking (devel) | newest | ✅ |
+
+**noble (24.04 LTS) cannot be supported.** Its cargo 1.75 cannot even *parse* this
+workspace's `Cargo.lock` (lockfile format v4, which needs cargo ≥ 1.78) — the build
+dies in ~38 s with `error: failed to parse lock file`. Downgrading the lockfile to
+v3 would only move the failure into the compile, since rustc 1.75 (Dec 2023) is far
+older than the dependency tree requires. noble users should install the
+GitHub-release `.deb` instead.
+
+### ⚠️ Upload every series of a version in ONE run
+
+A version has exactly **one** `.orig` tarball, shared by all series. The first
+series uploads it (`-sa`); later series reference it (`-sd`). Two consequences:
+
+- `scripts/build-ppa-source.sh` builds the orig once per run and **reuses the
+  file** for subsequent series, so they are byte-identical by construction.
+- **Never split a version's series across separate runs.** The orig contains the
+  whole source tree, so any commit landing in between changes it, and Launchpad
+  rejects the later series with *"already exists, but uploaded version has
+  different contents"*. (This is exactly how the 0.8.1 resolute/stonking uploads
+  were rejected after noble had already been accepted from an earlier commit.)
 
 If any dependency's minimum supported Rust version exceeds the series' `rustc`,
 that series' build will fail (this is the single most common reason Rust PPAs

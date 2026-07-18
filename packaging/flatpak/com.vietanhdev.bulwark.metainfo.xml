@@ -83,6 +83,14 @@
   </branding>
 
   <releases>
+    <release version="0.8.2" date="2026-07-18">
+      <description>
+        <p>Packaging fixes.</p>
+        <ul>
+          <li>Fixes the Ubuntu PPA build, so the command-line tool can be installed with apt</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.8.1" date="2026-07-18">
       <description>
         <p>Packaging fixes for this Flatpak build.</p>

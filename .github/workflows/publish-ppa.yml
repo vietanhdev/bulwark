@@ -12,10 +12,13 @@ name: Publish PPA (CLI)
 on:
   workflow_dispatch:
     inputs:
+      # Upload EVERY series of a version in ONE run: a version has a single shared
+      # .orig, and a later run (at a different commit) produces a different orig,
+      # which Launchpad rejects. noble is deliberately absent — see below.
       series:
-        description: "Ubuntu series (space-separated for several, e.g. 'noble resolute stonking')"
+        description: "Ubuntu series, space-separated. Upload all series of a version in ONE run. (noble unsupported: cargo 1.75 can't parse Cargo.lock v4)"
         required: true
-        default: "noble"
+        default: "resolute stonking"
       ppa_rev:
         description: "PPA revision — bump to re-upload the SAME version to the SAME series"
         required: true
