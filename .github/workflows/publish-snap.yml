@@ -8,8 +8,10 @@ name: Publish Snap (GUI)
 #   SNAPCRAFT_STORE_CREDENTIALS — output of `snapcraft export-login`, for an
 #                                 account with upload rights to the 'bulwark' snap.
 #
-# Classic confinement: the store rejects a classic snap on 'stable' until the name
-# is granted classic (forum review); 'edge'/'beta' accept it immediately.
+# Classic confinement: the store rejects a classic snap on EVERY channel (edge
+# included) until the registered name is granted classic confinement via a
+# Store-requests forum post (forum.snapcraft.io/c/store-requests/19). Register the
+# name first (`snapcraft register bulwark`), then request classic, then publish.
 on:
   workflow_dispatch:
     inputs:

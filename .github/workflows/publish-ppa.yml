@@ -41,8 +41,11 @@ jobs:
       - name: Install packaging toolchain
         run: |
           sudo apt-get update
+          # build-essential: the binary-build install-test compiles the bundled
+          # SQLite (libsqlite3-sys) which needs a C compiler; also satisfies
+          # dpkg-buildpackage's implicit build-essential:native build-dep.
           sudo apt-get install -y --no-install-recommends \
-            devscripts dput debhelper dpkg-dev cargo rustc python3
+            devscripts dput debhelper dpkg-dev build-essential cargo rustc python3
 
       - name: Import GPG signing key
         env:

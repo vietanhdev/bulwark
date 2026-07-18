@@ -304,8 +304,17 @@ gh secret set SNAPCRAFT_STORE_CREDENTIALS < snapcraft-creds.txt
 rm snapcraft-creds.txt
 ```
 
-Classic confinement can't publish to `stable` until the name is granted classic
-(forum review) — publish to `edge`/`beta` meanwhile.
+**Classic confinement is gated on approval for _every_ channel** (edge included),
+not just `stable` — a classic snap is rejected on upload until the registered name
+is granted classic. Two one-time steps, in order:
+
+1. **Register the name:** `snapcraft register bulwark` (or [snapcraft.io/register-snap](https://snapcraft.io/register-snap)).
+2. **Request classic:** open a topic in the *Store requests* category —
+   [forum.snapcraft.io/c/store-requests/19](https://forum.snapcraft.io/c/store-requests/19) —
+   with the snap name, the source URL, and the justification (host security
+   auditor: needs `pkexec` + host `/etc`, which a strict sandbox blocks). A
+   reviewer grants classic manually (days to weeks). Only then can any publish
+   (including `edge`) succeed.
 
 ---
 

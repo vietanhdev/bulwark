@@ -47,8 +47,8 @@ parts:
       - libgtk-3-dev
       - libayatana-appindicator3-dev
       - librsvg2-dev
-      - nodejs
-      - npm
+      # NOTE: no nodejs/npm here — core24 ships Node 18, too old for the vite
+      # frontend build (needs >=20.12). override-build fetches Node 22 instead.
     stage-packages:
       # Runtime libs the app links against. Classic confinement means the app
       # runs unconfined, but its own binary still needs these present.
@@ -63,6 +63,14 @@ parts:
       export CARGO_HOME="$CRAFT_PART_BUILD/.cargo"
       curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
       export PATH="$CARGO_HOME/bin:$PATH"
+
+      # core24's Node is 18; the frontend build (vite/rolldown) needs >=20.12
+      # (it imports styleText from node:util). Fetch an official Node 22 build.
+      NODE_VER=22.12.0
+      curl -fsSL "https://nodejs.org/dist/v${NODE_VER}/node-v${NODE_VER}-linux-x64.tar.xz" \
+        | tar -xJ -C "$CRAFT_PART_BUILD"
+      export PATH="$CRAFT_PART_BUILD/node-v${NODE_VER}-linux-x64/bin:$PATH"
+      node --version
 
       cd "$CRAFT_PART_SRC/apps/bulwark-app"
       npm ci
