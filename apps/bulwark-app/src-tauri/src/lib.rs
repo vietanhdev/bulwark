@@ -779,6 +779,10 @@ async fn dashboard_snapshot() -> Result<DashboardSnapshot, String> {
 /// browser, which is intentionally out of scope for this pass (see AGENTS.md's status notes).
 #[tauri::command]
 async fn history_count() -> Result<i64, String> {
+    // Temporary boot diagnostic: the frontend calls this on mount, so seeing it proves the
+    // webview loaded and executed our JS. Without a visible window that is otherwise
+    // unknowable — the backend looks identical whether the UI rendered or never ran.
+    eprintln!("[bulwark:boot] frontend called history_count — webview is alive");
     let db_path = db_path()?;
     if !db_path.exists() {
         return Ok(0);
