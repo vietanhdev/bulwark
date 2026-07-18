@@ -18,12 +18,38 @@ license: Apache-2.0
 grade: stable
 confinement: classic     # NOT strict: pkexec + host /etc access are load-bearing (see README)
 
+# tauri-plugin-single-instance claims a session-bus name at startup, and a sandbox
+# blocks any name the manifest does not declare. In the Flatpak this produced a bare
+# GDBus NotAllowed error painted on an empty window, before the UI existed. Classic
+# confinement should not enforce this, but the declaration is cheap, is what the Tauri
+# docs prescribe, and keeps the snap working if it ever moves to strict confinement.
+#
+# The name derives from tauri.conf.json's *identifier* with dots and dashes replaced by
+# underscores — currently com.vietanhnv.bulwark, hence vietanhnv below. It must match
+# what the binary asks for; rename it only together with the identifier.
+# https://v2.tauri.app/plugin/single-instance/#usage-in-snap-and-flatpak
+slots:
+  single-instance:
+    interface: dbus
+    bus: session
+    name: org.com_vietanhnv_bulwark.SingleInstance
+
+plugs:
+  single-instance-plug:
+    interface: dbus
+    bus: session
+    name: org.com_vietanhnv_bulwark.SingleInstance
+
 apps:
   bulwark:
     command: bin/bulwark-app
     # classic snaps get no auto-connected desktop interfaces; the wrapper below
     # sets the library + resource paths the app needs.
     desktop: usr/share/applications/bulwark.desktop
+    plugs:
+      - single-instance-plug
+    slots:
+      - single-instance
   # The bundled CLI, exposed as `bulwark.cli` — usable directly, and what the CI
   # install-verify step smoke-tests (the GUI needs a display; the CLI doesn't).
   cli:

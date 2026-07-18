@@ -47,6 +47,21 @@ finish-args:
   # while the Flatpak — which set neither — did not.
   - --env=WEBKIT_DISABLE_DMABUF_RENDERER=1
   - --env=WEBKIT_DISABLE_COMPOSITING_MODE=1
+  # tauri-plugin-single-instance claims a session-bus name at startup, and Flatpak blocks
+  # owning any name the manifest does not declare. It is registered as the FIRST plugin
+  # (see lib.rs — it is the escape hatch from "closed to tray"), so the denial happens
+  # before the UI exists and surfaces as a bare
+  #   GDBus.Error:org.freedesktop.portal.Error.NotAllowed
+  # painted on a window that is transparent by design. Documented at
+  # https://v2.tauri.app/plugin/single-instance/#usage-in-snap-and-flatpak
+  #
+  # The name is derived from tauri.conf.json's *identifier*, with dots and dashes turned
+  # into underscores — NOT from this app-id. The identifier is still com.vietanhnv.bulwark
+  # (the typo noted at the top of this file), so the name below reads vietanhnv while the
+  # app-id reads vietanhdev. Do not "correct" it here: it must match what the binary asks
+  # for, or the app breaks again. Fix them together when the identifier is renamed.
+  - --own-name=org.com_vietanhnv_bulwark.SingleInstance
+  - --talk-name=org.com_vietanhnv_bulwark.SingleInstance
   # NOTE: --talk-name=org.freedesktop.Flatpak (i.e. `flatpak-spawn --host`) is
   # deliberately NOT requested. Privileged scans would need it, but the app-code
   # path that detects /.flatpak-info and reroutes to a host pkexec doesn't exist
