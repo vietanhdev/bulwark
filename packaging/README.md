@@ -265,6 +265,72 @@ satisfies this — the maintainer owns `vietanhdev.com`, so this app-id is Flath
 and needs no rename. (Had that not been the case, the fallbacks would be
 `io.github.vietanhdev.bulwark` or `ai.nrl.bulwark`.)
 
+### Submitting to Flathub
+
+Building the Flatpak is **not** publishing it. `publish-flatpak.yml` only produces a
+`bulwark.flatpak` bundle; Flathub is a separate PR to `flathub/flathub`, reviewed by
+a human, after which Flathub creates `flathub/com.vietanhdev.bulwark` and builds from
+*that* repo — not from this one.
+
+That last point drives the whole process. Flathub's buildbot has no copy of this
+working tree, so the dev manifest's `type: dir, path: ../..` source is meaningless
+there; the submitted manifest must fetch a **tagged commit** of this repo instead.
+Maintaining a second manifest by hand is how the two drift, so it's generated:
+
+```bash
+scripts/flatpak-gen-flathub-manifest.sh          # defaults to the newest v* tag
+scripts/flatpak-gen-flathub-manifest.sh v0.8.1   # or pin one
+```
+
+It inherits everything from the dev manifest and rewrites *only* the source block to
+`type: git` + `tag` + `commit`, then stages `build/flathub-submission/` with the
+manifest, the two generated `*-sources.json`, the `.desktop`, the `.metainfo.xml` and
+a `flathub.json` pinning `x86_64`/`aarch64`.
+
+**Tag first, then generate.** The build installs the metainfo *from the fetched
+source tree*, so a fix that is only in your working copy is invisible to Flathub —
+you would ship the tagged file and wonder why the screenshots never appeared. The
+script refuses a tag that isn't pushed to `origin`, but it cannot tell you the tag is
+stale. Cut a fresh tag whenever anything under `packaging/flatpak/` changes.
+
+Then lint both artifacts (this is what Flathub runs, and it must be clean):
+
+```bash
+cd build/flathub-submission
+flatpak run --command=flatpak-builder-lint org.flatpak.Builder appstream com.vietanhdev.bulwark.metainfo.xml
+flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest com.vietanhdev.bulwark.yaml
+```
+
+Finally: fork `flathub/flathub` (**uncheck** "copy the master branch only"), branch
+off `new-pr`, copy the staged files in, and open the PR against the **`new-pr` base
+branch** — not `master`.
+
+#### The two permissions Flathub will argue with
+
+`appstream` passes clean. `manifest` reports two errors that are *not* bugs to
+silently paper over:
+
+| Linter error | Status |
+|---|---|
+| `finish-args-host-ro-filesystem-access` | **Needs a Flathub exception.** `--filesystem=host:ro` is the product: an auditor that can't read the host's `/etc` has nothing to audit. Request the exception in the PR with that justification — don't drop the permission to make the linter quiet, that ships a scanner which silently sees nothing. |
+| `finish-args-unnecessary-xdg-data-bulwark-create-access` | **Unresolved — needs a live sandbox test.** The linter calls `--filesystem=xdg-data/bulwark:create` redundant because the app already gets a writable `~/.var/app/<id>/data`. But it was added for a real, observed failure ("attempt to write a readonly database") caused by `--filesystem=host:ro`. Removing it blind risks reintroducing that. Build, run a scan in the sandbox, and confirm the history persists *before* deciding. |
+
+`--talk-name=org.freedesktop.Flatpak` was **removed**: it exists for `flatpak-spawn
+--host pkexec` privileged scans, and that code path isn't implemented. The linter
+errors on it, and asking reviewers for a sandbox escape the code never exercises is a
+straightforward way to fail review. Add it back in the same change that implements
+privileged scanning.
+
+#### Still outstanding
+
+- **Domain verification.** Flathub may require a token at
+  `https://vietanhdev.com/.well-known/org.flathub.VerifiedApps.txt`. Only the domain
+  owner can place it — note the app-id domain is `vietanhdev.com`, while the app's
+  homepage is `bulwark.nrl.ai`.
+- **A full offline build from the generated manifest** has not been run. The dev
+  manifest is validated end-to-end, but the `type: git` source has only been linted,
+  not built.
+
 ---
 
 ## CI publishing (GitHub Actions)

@@ -107,6 +107,10 @@ packaging/flatpak/cargo-sources.json
 packaging/flatpak/node-sources.json
 snaplogin
 
+# Flathub submission tree, staged by scripts/flatpak-gen-flathub-manifest.sh.
+# Generated from the dev manifest + a tag; regenerate rather than commit it.
+/build/
+
 # Playwright
 apps/bulwark-app/test-results/
 apps/bulwark-app/playwright-report/

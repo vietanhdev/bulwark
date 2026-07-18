@@ -1,14 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- AppStream metainfo, required by Flathub. Validate with:
-       flatpak run org.freedesktop.appstream-glib validate com.vietanhdev.bulwark.metainfo.xml
-     TODO(verify): before submitting to Flathub, add real <screenshots> with
-     hosted image URLs and confirm the <releases> list matches your tags. -->
+<!-- AppStream metainfo, required by Flathub. Validate it with the appstream mode of
+     flatpak-builder-lint (see packaging/README.md; note that an XML comment may not
+     contain a double hyphen, so the command line can't be written out here).
+
+     Screenshot URLs must stay reachable: Flathub re-fetches them on every rebuild and
+     a 404 fails the build. They are served from docs/public/screenshots/ via the
+     VitePress site, so regenerating screenshots keeps these URLs valid. -->
 <component type="desktop-application">
   <id>com.vietanhdev.bulwark</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>Apache-2.0</project_license>
   <name>Bulwark</name>
-  <summary>Linux security misconfiguration &amp; intrusion scanner</summary>
+  <summary>Security and antivirus scanner for Linux</summary>
 
   <description>
     <p>
@@ -16,24 +19,91 @@
       indicators using a native Rust rule engine over declarative YAML rules, and
       explains findings in plain language with a suggested fix.
     </p>
+    <p>Bulwark checks:</p>
+    <ul>
+      <li>System configuration — SSH, sudo, kernel parameters, cron, file permissions</li>
+      <li>Persistence and intrusion indicators, including promiscuous network interfaces</li>
+      <li>File integrity against a recorded baseline</li>
+      <li>AI coding assistants, for API keys leaked into transcripts and for agent
+          configuration a prompt injection could turn into code execution</li>
+      <li>Viruses and malware, using ClamAV when it is installed</li>
+    </ul>
     <p>
-      It covers configuration hardening, SSH, file integrity, log analysis,
-      AI-assistant artifact checks, and optional ClamAV antivirus scanning — all
-      fully local, with no telemetry.
+      Findings are sorted by how much they matter, and many come with a reversible
+      fix that previews its changes before applying them. Everything runs locally:
+      the scanning engine makes no network calls and sends no telemetry.
+    </p>
+    <p>
+      Note: inside the Flatpak sandbox Bulwark reads the host read-only, so
+      unprivileged configuration scans work as normal. Checks that require root are
+      unavailable in this build — use the distribution packages or the command-line
+      tool for those.
     </p>
   </description>
 
   <launchable type="desktop-id">com.vietanhdev.bulwark.desktop</launchable>
+
+  <screenshots>
+    <screenshot type="default">
+      <image>https://bulwark.nrl.ai/screenshots/overview.png</image>
+      <caption>An overall safety score, with findings sorted by how much they matter</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://bulwark.nrl.ai/screenshots/agent-security.png</image>
+      <caption>Scanning AI coding assistants for leaked secrets and risky configuration</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://bulwark.nrl.ai/screenshots/compliance.png</image>
+      <caption>Hardening checks grouped by category, with a compliance score</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://bulwark.nrl.ai/screenshots/antivirus.png</image>
+      <caption>ClamAV virus scanning with live per-file progress</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://bulwark.nrl.ai/screenshots/rules.png</image>
+      <caption>Every check Bulwark runs, explained in plain language</caption>
+    </screenshot>
+  </screenshots>
+
   <url type="homepage">https://bulwark.nrl.ai</url>
   <url type="bugtracker">https://github.com/vietanhdev/bulwark/issues</url>
-  <developer id="ai.nrl">
-    <name>Viet Anh Nguyen</name>
+  <url type="vcs-browser">https://github.com/vietanhdev/bulwark</url>
+  <url type="contribute">https://github.com/vietanhdev/bulwark/blob/main/CONTRIBUTING.md</url>
+
+  <developer id="com.vietanhdev">
+    <name>Viet-Anh Nguyen</name>
   </developer>
 
   <content_rating type="oars-1.1" />
 
+  <branding>
+    <color type="primary" scheme_preference="light">#fbeee7</color>
+    <color type="primary" scheme_preference="dark">#2a1a1c</color>
+  </branding>
+
   <releases>
-    <release version="0.8.0" date="2026-07-18" />
-    <release version="0.7.0" date="2026-07-18" />
+    <release version="0.8.0" date="2026-07-18">
+      <description>
+        <p>Distribution and packaging release.</p>
+        <ul>
+          <li>Published to the Ubuntu PPA, with classic Snap and Flatpak packaging</li>
+          <li>Install-verification in CI asserts each package actually ships its rule pack</li>
+          <li>Browser-driven interface tests for the desktop app</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.7.0" date="2026-07-17">
+      <description>
+        <p>Automatic fixes and remote scanning.</p>
+        <ul>
+          <li>Reversible fixes for file permissions and SSH server configuration,
+              previewed before they are applied</li>
+          <li>Scan a remote machine over SSH, with an isolated per-host history</li>
+          <li>Secret-detection accuracy fixes, removing false positives from
+              placeholders and test fixtures</li>
+        </ul>
+      </description>
+    </release>
   </releases>
 </component>
