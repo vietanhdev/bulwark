@@ -888,6 +888,16 @@ pub fn run() {
             // The ordinary window-manager close button hides the window instead of quitting
             // the process — see tray.rs's module doc for why. Quitting is the tray menu's
             // explicit "Quit" item, or a real process kill/logout, not an accidental click.
+            // Does Tauri actually have a webview, and what did it try to load? The webview
+            // process spawns either way, so its existence proves nothing; the URL is what
+            // distinguishes "never created" from "created but the load failed".
+            match app.get_webview_window("main") {
+                Some(w) => match w.url() {
+                    Ok(u) => eprintln!("[bulwark:boot] webview exists, url = {u}"),
+                    Err(e) => eprintln!("[bulwark:boot] webview exists, url ERROR: {e}"),
+                },
+                None => eprintln!("[bulwark:boot] NO WEBVIEW WINDOW named 'main' was created"),
+            }
             eprintln!("[bulwark:boot] wiring window events");
             if let Some(window) = app.get_webview_window("main") {
                 let window_to_hide = window.clone();
