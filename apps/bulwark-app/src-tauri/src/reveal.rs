@@ -21,33 +21,61 @@ fn in_flatpak_sandbox() -> bool {
     Path::new("/.flatpak-info").exists()
 }
 
+/// Hand `path` to the sandbox's `xdg-open`, which is Flatpak's portal shim.
+///
+/// Inside a sandbox the opener plugin's normal route fails. It asks the OpenURI portal to open a
+/// `file://` URI, and xdg-desktop-portal refuses that from a sandboxed caller — sandboxed apps
+/// must use `OpenFile` and pass a *file descriptor*, so the app cannot name a host path it has no
+/// right to. The refusal surfaces as:
+///
+///   GDBus.Error:org.freedesktop.portal.Error.NotAllowed: This call is not available inside the sandbox
+///
+/// Flatpak's `/usr/bin/xdg-open` is exactly the shim for this: it opens the file itself and passes
+/// the descriptor, so it works for both files and directories with no extra permission. Note this
+/// applies to plain *opening* too, not only revealing — an earlier fix that redirected "reveal" to
+/// open the parent directory did not help, because it went through the same rejected call.
+fn open_via_portal_shim(path: &str) -> Result<(), String> {
+    let status = std::process::Command::new("xdg-open")
+        .arg(path)
+        .status()
+        .map_err(|e| format!("couldn't launch xdg-open for {path}: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "couldn't open {path} (xdg-open exited with {status})"
+        ))
+    }
+}
+
 /// Open `path` in the system default application (`reveal = false`), or highlight it in the file
 /// manager (`reveal = true`). Returns a readable error string on failure so the UI can surface it
 /// instead of failing silently.
 ///
-/// Revealing takes a different route inside a Flatpak. `reveal_item_in_dir` calls
-/// `org.freedesktop.FileManager1.ShowItems` over the session bus, and the sandbox rejects it with
-/// `org.freedesktop.portal.Error.NotAllowed: This call is not available inside the sandbox` — a raw
-/// GDBus string that means nothing to a user looking at a security finding. Granting
+/// Revealing also has no sandbox route of its own: `reveal_item_in_dir` calls
+/// `org.freedesktop.FileManager1.ShowItems` on the session bus, which the sandbox answers with
+/// `ServiceUnknown` because the app may not talk to that name. Granting
 /// `--talk-name=org.freedesktop.FileManager1` would fix it, but that is a broad permission to ask
-/// Flathub reviewers for so one button can highlight a file. Opening the *containing directory*
-/// through the OpenURI portal lands the user in the same folder, needs no extra permission, and is
-/// the behaviour every file manager gives for "show in folder" anyway.
+/// Flathub reviewers for so one button can highlight a file. Opening the containing *directory*
+/// instead lands the user in the same folder, which is what "show in folder" means anyway.
 #[tauri::command]
 pub fn open_flagged_file(app: tauri::AppHandle, path: String, reveal: bool) -> Result<(), String> {
     if path.trim().is_empty() {
         return Err("no file path on this finding".into());
     }
-    if reveal {
-        if in_flatpak_sandbox() {
-            let parent = Path::new(&path)
+    if in_flatpak_sandbox() {
+        let target = if reveal {
+            Path::new(&path)
                 .parent()
-                .ok_or_else(|| format!("{path} has no containing folder"))?;
-            return app
-                .opener()
-                .open_path(parent.to_string_lossy().to_string(), None::<&str>)
-                .map_err(|e| format!("couldn't open the folder containing {path}: {e}"));
-        }
+                .ok_or_else(|| format!("{path} has no containing folder"))?
+                .to_string_lossy()
+                .to_string()
+        } else {
+            path.clone()
+        };
+        return open_via_portal_shim(&target);
+    }
+    if reveal {
         app.opener()
             .reveal_item_in_dir(&path)
             .map_err(|e| format!("couldn't reveal {path}: {e}"))

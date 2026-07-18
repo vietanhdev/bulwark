@@ -57,6 +57,11 @@ for f in cargo-sources.json node-sources.json; do
     || { echo "ERROR: ${f} missing from the staged tree (${STAGE}/packaging/flatpak/)" >&2; exit 1; }
 done
 
+# shared-modules is a git submodule, so a plain `git clone` leaves it empty and
+# flatpak-builder fails on a missing module file rather than on the real cause.
+[[ -f "${STAGE}/packaging/flatpak/shared-modules/libappindicator/libappindicator-gtk3-12.10.json" ]] \
+  || { echo "ERROR: packaging/flatpak/shared-modules is empty — run: git submodule update --init" >&2; exit 1; }
+
 echo ">> building ${APP_ID} (offline, native flatpak-builder)"
 cd "${STAGE}"
 # --disable-rofiles-fuse: harmless here and dodges FUSE trouble in nested/container

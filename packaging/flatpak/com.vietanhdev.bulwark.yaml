@@ -43,6 +43,20 @@ finish-args:
   # in the same change that implements privileged scanning, with a justification.
 
 modules:
+  # The system-tray stack, built into the app because the GNOME runtime ships no
+  # appindicator or dbusmenu at all. Without it libappindicator-sys's dlopen fails and
+  # the app has no tray — which for Bulwark is not cosmetic: the tray is what keeps
+  # continuous monitoring running after the window is closed (see tray.rs).
+  #
+  # This is flathub/shared-modules, vendored as a git submodule, which is the canonical
+  # way Flathub apps pull this chain (libdbusmenu + libindicator + libappindicator, plus
+  # intltool and dbus-glib). Don't hand-copy the JSON: the patches travel with it, and
+  # upstream maintains the FTBFS fixes this 2012-era autotools code needs.
+  #
+  # `git clone --recurse-submodules`, or `git submodule update --init` in an existing
+  # checkout, or the build fails with a missing-module error.
+  - shared-modules/libappindicator/libappindicator-gtk3-12.10.json
+
   - name: bulwark
     buildsystem: simple
     build-options:

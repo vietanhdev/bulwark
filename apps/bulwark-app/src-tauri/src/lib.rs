@@ -849,24 +849,34 @@ pub fn run() {
             // missing tray must degrade the tray, never take the window down with it. The
             // single-instance plugin remains the escape hatch if the window is later hidden with
             // no tray to restore it from.
+            //
+            // The hook is swapped out for the duration of the call. `catch_unwind` catches the
+            // unwind, but Rust's default hook has already printed the panic message and a
+            // "note: run with RUST_BACKTRACE=1" line to stderr by then — so a user whose runtime
+            // simply lacks a tray library sees a full crash report for something that was handled
+            // and is not a crash. Silencing it here (and only here, restoring immediately after)
+            // leaves the one-line warning below as the whole story.
             let tray_handle = app.handle().clone();
-            let tray_available =
-                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                    tray::spawn(&tray_handle)
-                })) {
-                    Ok(Ok(())) => true,
-                    Ok(Err(e)) => {
-                        eprintln!("[bulwark] warning: couldn't create tray icon: {e}");
-                        false
-                    }
-                    Err(_) => {
-                        eprintln!(
-                            "[bulwark] warning: tray unavailable (no AppIndicator library) — \
+            let previous_hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(|_| {}));
+            let tray_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                tray::spawn(&tray_handle)
+            }));
+            std::panic::set_hook(previous_hook);
+            let tray_available = match tray_result {
+                Ok(Ok(())) => true,
+                Ok(Err(e)) => {
+                    eprintln!("[bulwark] warning: couldn't create tray icon: {e}");
+                    false
+                }
+                Err(_) => {
+                    eprintln!(
+                        "[bulwark] warning: tray unavailable (no AppIndicator library) — \
                          continuing without a tray icon"
-                        );
-                        false
-                    }
-                };
+                    );
+                    false
+                }
+            };
 
             // The ordinary window-manager close button hides the window instead of quitting
             // the process — see tray.rs's module doc for why. Quitting is the tray menu's

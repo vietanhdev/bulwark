@@ -25,6 +25,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 1
+          # packaging/flatpak/shared-modules is a submodule carrying the libappindicator
+          # build chain; without this the manifest references a file that isn't there.
+          submodules: true
 
       - name: Install flatpak + builder + generator deps
         run: |
