@@ -24,7 +24,11 @@ fn detect_installed() -> Option<bool> {
         "/opt/homebrew/bin/clamscan",
         "/snap/bin/clamscan",
     ];
-    if KNOWN_PATHS.iter().any(|p| Path::new(p).exists()) {
+    // In a Flatpak these paths are the *runtime's*, not the host's, so a hit would say
+    // nothing about the machine being audited and a miss would say nothing either. The
+    // question is only ever answerable by asking the host.
+    let via_host = crate::sandbox::detect() == crate::sandbox::Sandbox::Flatpak;
+    if !via_host && KNOWN_PATHS.iter().any(|p| Path::new(p).exists()) {
         return Some(true);
     }
     match crate::sandbox::host_command("clamscan")
@@ -32,6 +36,12 @@ fn detect_installed() -> Option<bool> {
         .output()
     {
         Ok(o) if o.status.success() => Some(true),
+        // Through flatpak-spawn the process we launch is always present, so a missing host
+        // binary can never surface as ErrorKind::NotFound — it comes back as a non-zero exit
+        // with the portal's own message. Without this arm the provable negative degrades to
+        // "undetermined", BLWK-AV-001 abstains with MissingField, and the scan reports a
+        // collector error instead of the plain truth that ClamAV is not installed.
+        Ok(o) if via_host && host_reported_missing(&o.stderr) => Some(false),
         // Present but `--version` failed (broken install) — can't conclude "not installed".
         Ok(_) => None,
         // The OS looked and there is no such binary: a provable negative.
@@ -39,6 +49,18 @@ fn detect_installed() -> Option<bool> {
         // EACCES, EMFILE, ENOMEM, … — we couldn't determine anything.
         Err(_) => None,
     }
+}
+
+/// Whether `flatpak-spawn`'s stderr says the host has no such binary, as opposed to some
+/// other failure (portal denied, host busy, permission error) which proves nothing.
+///
+/// Matching on message text is unpleasant, but the exit status is 1 for every failure mode,
+/// so it is the only signal available. Both fragments must be present, and anything
+/// unrecognised stays undetermined — the collector invariant is that "couldn't look" must
+/// never become a confident negative.
+fn host_reported_missing(stderr: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(stderr);
+    text.contains("Failed to execute child process") && text.contains("No such file or directory")
 }
 
 /// Rootkit/malware detection in Bulwark is deliberately *not* a reimplemented signature
@@ -140,5 +162,37 @@ mod tests {
             !fact.contains_key("installed"),
             "an undetermined install state must not assert installed=false"
         );
+    }
+}
+
+#[cfg(test)]
+mod host_spawn_tests {
+    use super::host_reported_missing;
+
+    /// The exact message `flatpak-spawn --host` produces for a binary the host lacks.
+    /// Captured from a real run inside the sandbox, not invented — if the portal ever
+    /// rewords it, this test is what notices before users get a collector error instead of
+    /// "ClamAV is not installed".
+    #[test]
+    fn portal_missing_binary_message_is_a_provable_negative() {
+        let real = b"Portal call failed: Failed to start command: Failed to execute child \
+                     process \xe2\x80\x9cdefinitely-not-a-real-binary\xe2\x80\x9d (No such file \
+                     or directory)\n";
+        assert!(host_reported_missing(real));
+    }
+
+    /// Everything else proves nothing. A denied portal, a busy host or an empty stderr must
+    /// stay undetermined: reporting "ClamAV is not installed" because we could not ask is
+    /// the confident-negative bug this collector exists to avoid.
+    #[test]
+    fn other_failures_stay_undetermined() {
+        assert!(!host_reported_missing(b""));
+        assert!(!host_reported_missing(
+            b"Portal call failed: Permission denied"
+        ));
+        assert!(!host_reported_missing(
+            b"Failed to execute child process (Permission denied)"
+        ));
+        assert!(!host_reported_missing(b"No such file or directory"));
     }
 }
