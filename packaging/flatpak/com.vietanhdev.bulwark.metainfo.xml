@@ -83,6 +83,16 @@
   </branding>
 
   <releases>
+    <release version="0.8.6" date="2026-07-18">
+      <description>
+        <p>Fixes the application window being empty in the Flatpak and Snap builds.</p>
+        <ul>
+          <li>The interface now loads correctly instead of showing a sandbox error on an empty window</li>
+          <li>Restores the system tray icon, so monitoring keeps running when the window is closed</li>
+          <li>Opening or showing a flagged file works again</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.8.5" date="2026-07-18">
       <description>
         <p>Fixes opening files from a finding, and restores the system tray icon.</p>

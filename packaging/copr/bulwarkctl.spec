@@ -17,7 +17,7 @@
 # project rather than of this file, so it does not travel with the spec — anyone
 # recreating the project must set it again.
 Name:           bulwarkctl
-Version:        0.8.5
+Version:        0.8.6
 Release:        1%{?dist}
 Summary:        Linux host security and misconfiguration scanner (CLI)
 
@@ -80,6 +80,9 @@ find %{buildroot}%{_datadir}/bulwark -type d -exec chmod 0755 {} +
 %{_datadir}/bulwark/
 
 %changelog
+* Sat Jul 18 2026 Viet Anh Nguyen <vietanh.dev@gmail.com> - 0.8.6-1
+- No CLI changes; version kept in step with the desktop application.
+
 * Sat Jul 18 2026 Viet Anh Nguyen <vietanh.dev@gmail.com> - 0.8.5-1
 - No CLI changes; version kept in step with the desktop application.
 
