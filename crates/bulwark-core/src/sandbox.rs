@@ -53,6 +53,53 @@ pub fn detect() -> Sandbox {
     Sandbox::None
 }
 
+/// Build a [`Command`] that runs `program` **on the host** when that is necessary.
+///
+/// Outside a sandbox this is just `Command::new(program)`. Inside a Flatpak it becomes
+/// `flatpak-spawn --host program …`, which asks the Flatpak portal to run the program in the
+/// user's normal session. That is how a sandboxed app reaches a tool the sandbox does not
+/// contain — ClamAV being the case here: the engine and its ~250 MB signature database live
+/// on the host, are updated there by the distribution, and bundling a second copy inside the
+/// Flatpak would mean shipping and version-tracking an AV engine plus a database that is
+/// stale the day it ships.
+///
+/// This requires `--talk-name=org.freedesktop.Flatpak` in the manifest. It is a real
+/// widening of the sandbox and should stay limited to tools that genuinely cannot live
+/// inside it. Precedent: flathub/io.github.linx_systems.ClamUI, a published ClamAV GUI,
+/// ships exactly this permission (alongside a broader `--filesystem=host` than Bulwark's
+/// read-only one) for the same reason.
+///
+/// Snap is deliberately NOT rewritten: a classic snap already runs with host filesystem
+/// access, so a host binary resolves normally, and a strict snap has no equivalent escape.
+pub fn host_command(program: &str) -> std::process::Command {
+    if detect() == Sandbox::Flatpak {
+        let mut cmd = std::process::Command::new("flatpak-spawn");
+        cmd.arg("--host").arg(program);
+        return cmd;
+    }
+    std::process::Command::new(program)
+}
+
+/// Whether reaching host tools is actually possible from here.
+///
+/// Inside a Flatpak this depends on a permission the manifest may not have been granted, so
+/// it is probed rather than assumed: without `--talk-name=org.freedesktop.Flatpak` the
+/// `flatpak-spawn` call fails, and the honest UI response ("this build cannot reach ClamAV")
+/// differs from the one when the host simply has no ClamAV installed ("install it").
+/// Confusing those two is what sent users to run an install command that changed nothing.
+pub fn can_reach_host() -> bool {
+    match detect() {
+        Sandbox::None => true,
+        Sandbox::Snap => true,
+        Sandbox::Flatpak => std::process::Command::new("flatpak-spawn")
+            .arg("--host")
+            .arg("true")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false),
+    }
+}
+
 /// What to tell the user when a host tool (ClamAV, `pkexec`) is unavailable.
 ///
 /// Returns `None` when not sandboxed, meaning "the ordinary install instructions apply".

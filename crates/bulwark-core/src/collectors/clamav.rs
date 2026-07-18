@@ -2,7 +2,6 @@ use super::Collector;
 use crate::models::Fact;
 use serde_json::Value;
 use std::path::Path;
-use std::process::Command;
 use std::time::SystemTime;
 
 pub struct ClamavStatusCollector;
@@ -28,7 +27,10 @@ fn detect_installed() -> Option<bool> {
     if KNOWN_PATHS.iter().any(|p| Path::new(p).exists()) {
         return Some(true);
     }
-    match Command::new("clamscan").arg("--version").output() {
+    match crate::sandbox::host_command("clamscan")
+        .arg("--version")
+        .output()
+    {
         Ok(o) if o.status.success() => Some(true),
         // Present but `--version` failed (broken install) — can't conclude "not installed".
         Ok(_) => None,

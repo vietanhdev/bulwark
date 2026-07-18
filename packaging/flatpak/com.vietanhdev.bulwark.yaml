@@ -91,12 +91,28 @@ finish-args:
   # Verify with: flatpak info --show-permissions com.vietanhdev.bulwark  (must read `=own`)
   - --talk-name=org.com_vietanhdev_bulwark.SingleInstance
   - --own-name=org.com_vietanhdev_bulwark.SingleInstance
-  # NOTE: --talk-name=org.freedesktop.Flatpak (i.e. `flatpak-spawn --host`) is
-  # deliberately NOT requested. Privileged scans would need it, but the app-code
-  # path that detects /.flatpak-info and reroutes to a host pkexec doesn't exist
-  # yet — and flatpak-builder-lint errors on flatpak-spawn access, which would be
-  # asking Flathub reviewers for a sandbox escape the code never uses. Add it back
-  # in the same change that implements privileged scanning, with a justification.
+  # Run two specific tools on the host, because neither can live in the sandbox.
+  #
+  # flatpak-builder-lint flags this, and rightly — it is a genuine widening. The case:
+  #
+  #   * ClamAV. The engine and its ~250 MB signature database are maintained on the host by
+  #     the distribution. Bundling a second copy would mean shipping an AV engine (its own
+  #     CVE stream to track) plus a database that is stale the day it ships, and asking every
+  #     user to re-download it. Running the host's clamscan uses signatures the machine
+  #     already keeps current.
+  #   * Privileged scans. Auditing a host as root is what a security scanner is for. The
+  #     elevation must happen on the host, against a host-installed `bulwarkctl` — the app
+  #     checks for one and explains itself if it is absent, rather than failing obscurely.
+  #
+  # Both are gated in code on the sandbox actually being reachable
+  # (bulwark_core::sandbox::can_reach_host), so a build without this permission degrades to
+  # an honest message instead of a broken feature. Unprivileged configuration scanning — the
+  # majority of what Bulwark does — never touches this path.
+  #
+  # Precedent: flathub/io.github.linx_systems.ClamUI, a published ClamAV GUI, ships this
+  # same permission together with a full read-write `--filesystem=host`. Bulwark asks for
+  # this plus a read-only host filesystem, which is strictly narrower.
+  - --talk-name=org.freedesktop.Flatpak
 
 modules:
   # The system-tray stack, built into the app because the GNOME runtime ships no

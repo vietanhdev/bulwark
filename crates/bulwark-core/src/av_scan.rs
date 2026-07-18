@@ -10,7 +10,7 @@
 use serde::Serialize;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ThreatDetection {
@@ -53,7 +53,10 @@ pub fn parse_version_output(output: &str) -> Option<ClamavVersionInfo> {
 /// `clamav_status`-collector-driven "is it installed at all" signal, so this doesn't need to
 /// distinguish those two cases itself.
 pub fn get_version_info() -> Option<ClamavVersionInfo> {
-    let output = Command::new("clamscan").arg("-V").output().ok()?;
+    let output = crate::sandbox::host_command("clamscan")
+        .arg("-V")
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -92,21 +95,22 @@ pub fn install_command_for_os_release(os_release_text: &str) -> &'static str {
 }
 
 pub fn detect_install_command() -> &'static str {
-    // Inside a sandbox, an install command is the wrong answer: the user can run it, and
-    // ClamAV still will not be reachable, because the sandbox has its own filesystem rather
-    // than the host's. Telling them to `sudo apt install clamav` sends them to fix
-    // something that is not broken. Say what is actually true instead.
-    match crate::sandbox::detect() {
-        crate::sandbox::Sandbox::Flatpak => {
-            return "Virus scanning isn't available in the Flatpak build — installing ClamAV \
-                    on the host won't help, because the sandbox can't run host programs. Use \
-                    the .deb, .rpm or AppImage, or scan with the bulwarkctl command-line tool."
-        }
-        crate::sandbox::Sandbox::Snap => {
-            return "Virus scanning isn't available in this snap. Use the .deb, .rpm or \
-                    AppImage, or scan with the bulwarkctl command-line tool."
-        }
-        crate::sandbox::Sandbox::None => {}
+    // Inside a Flatpak the right advice depends on whether we can reach the host at all.
+    // With --talk-name=org.freedesktop.Flatpak we run the host's clamscan via flatpak-spawn,
+    // so "sudo apt install clamav" genuinely fixes the problem and is the correct thing to
+    // say. Without that permission no install helps, and saying so is the only honest
+    // answer — telling a user to install something that cannot be reached sends them to fix
+    // what was never broken.
+    if crate::sandbox::detect() == crate::sandbox::Sandbox::Flatpak
+        && !crate::sandbox::can_reach_host()
+    {
+        return "Virus scanning isn't available in this Flatpak build: it can't reach the \
+                host's ClamAV. Use the .deb, .rpm or AppImage, or the bulwarkctl \
+                command-line tool.";
+    }
+    if crate::sandbox::detect() == crate::sandbox::Sandbox::Snap {
+        return "Virus scanning isn't available in this snap. Use the .deb, .rpm or \
+                AppImage, or scan with the bulwarkctl command-line tool.";
     }
     std::fs::read_to_string("/etc/os-release")
         .map(|text| install_command_for_os_release(&text))
@@ -220,7 +224,7 @@ pub fn default_realtime_watch_targets(home: &Path) -> Vec<PathBuf> {
 }
 
 fn is_clamscan_available() -> bool {
-    Command::new("clamscan")
+    crate::sandbox::host_command("clamscan")
         .arg("--version")
         .output()
         .map(|o| o.status.success())
@@ -241,7 +245,7 @@ pub fn scan(paths: &[PathBuf]) -> anyhow::Result<AvScanResult> {
         });
     }
 
-    let output = Command::new("clamscan")
+    let output = crate::sandbox::host_command("clamscan")
         .arg("--recursive")
         .arg("--infected")
         .arg("--no-summary")
@@ -322,7 +326,7 @@ pub fn scan_streaming_cancellable(
         });
     }
 
-    let mut child = Command::new("clamscan")
+    let mut child = crate::sandbox::host_command("clamscan")
         .arg("--recursive")
         .arg("--no-summary")
         // `--` ends option parsing. This is the path the GUI's "scan this folder" command drives

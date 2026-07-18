@@ -395,28 +395,64 @@ async fn scan_privileged(app: tauri::AppHandle) -> Result<ScanRun, String> {
         // need `--talk-name=org.freedesktop.Flatpak` (a sandbox escape) plus a host-installed
         // bulwarkctl to elevate. Neither exists yet, so say so in words the user can act on
         // rather than letting them hit "failed to launch pkexec: No such file or directory".
-        if bulwark_core::sandbox::detect() == bulwark_core::sandbox::Sandbox::Flatpak {
-            return Err(
-                "Privileged scans aren't available in the Flatpak version, because \
-                        the sandbox can't request administrator access. Everything that \
-                        doesn't need root still works. For the full system scan, install \
-                        Bulwark from the .deb, .rpm or AppImage, or use the bulwarkctl \
-                        command-line tool with sudo."
-                    .to_string(),
-            );
-        }
-        let rules_dir = resolve_privileged_rules_dir(&app)?;
-        let cli = resolve_cli_binary()?;
-        let output = std::process::Command::new("pkexec")
-            .arg(&cli)
-            .arg("scan")
-            .arg("--privileged")
-            .arg("--json")
-            .arg("--no-persist")
-            .arg("--rules-dir")
-            .arg(&rules_dir)
-            .output()
-            .map_err(|e| format!("failed to launch pkexec: {e}"))?;
+        // In a Flatpak the elevation has to happen on the HOST, and it cannot use this
+        // build's own binaries: /app and the bundled rule pack do not exist outside the
+        // sandbox, so `flatpak-spawn --host pkexec /app/bin/bulwark` would fail with a path
+        // the host cannot resolve. What works is a bulwarkctl the host itself has — from the
+        // .deb/.rpm/AUR/COPR/PPA package — driven through the spawn portal.
+        let sandboxed_flatpak =
+            bulwark_core::sandbox::detect() == bulwark_core::sandbox::Sandbox::Flatpak;
+        let output = if sandboxed_flatpak {
+            if !bulwark_core::sandbox::can_reach_host() {
+                return Err(
+                    "Privileged scans need to run a program on the host, and this \
+                            Flatpak build isn't permitted to. Everything that doesn't need \
+                            administrator access still works. For the full system scan, \
+                            install Bulwark from the .deb, .rpm or AppImage, or run \
+                            `sudo bulwarkctl scan --privileged`."
+                        .to_string(),
+                );
+            }
+            // Resolve the host's own bulwarkctl. Deliberately not this sandbox's copy: the
+            // host cannot see it, and the point is to use the package the user installed.
+            let probe = bulwark_core::sandbox::host_command("bulwarkctl")
+                .arg("--version")
+                .output();
+            let have_host_cli = probe.map(|o| o.status.success()).unwrap_or(false);
+            if !have_host_cli {
+                return Err(
+                    "Privileged scans need the Bulwark command-line tool installed \
+                            on the host, which this Flatpak can then elevate. Install it \
+                            (apt/dnf/pacman package `bulwarkctl`, or the PPA/AUR/COPR \
+                            builds) and try again — or run `sudo bulwarkctl scan \
+                            --privileged` directly."
+                        .to_string(),
+                );
+            }
+            // The host CLI resolves its own installed rule pack, so no --rules-dir is
+            // passed: a path from inside the sandbox would be meaningless out there.
+            bulwark_core::sandbox::host_command("pkexec")
+                .arg("bulwarkctl")
+                .arg("scan")
+                .arg("--privileged")
+                .arg("--json")
+                .arg("--no-persist")
+                .output()
+                .map_err(|e| format!("failed to launch pkexec on the host: {e}"))?
+        } else {
+            let rules_dir = resolve_privileged_rules_dir(&app)?;
+            let cli = resolve_cli_binary()?;
+            std::process::Command::new("pkexec")
+                .arg(&cli)
+                .arg("scan")
+                .arg("--privileged")
+                .arg("--json")
+                .arg("--no-persist")
+                .arg("--rules-dir")
+                .arg(&rules_dir)
+                .output()
+                .map_err(|e| format!("failed to launch pkexec: {e}"))?
+        };
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
