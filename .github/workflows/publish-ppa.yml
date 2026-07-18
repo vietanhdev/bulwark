@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       series:
-        description: "Ubuntu series (space-separated for several, e.g. 'noble oracular')"
+        description: "Ubuntu series (space-separated for several, e.g. 'noble resolute stonking')"
         required: true
         default: "noble"
       ppa_rev:
@@ -22,6 +22,10 @@ on:
         default: "1"
       dry_run:
         description: "Build + sign only; skip the (irreversible) dput upload"
+        type: boolean
+        default: false
+      orig_uploaded:
+        description: "The .orig for this version is already in the PPA (use -sd for ALL series, e.g. a retry that only adds series)"
         type: boolean
         default: false
 
@@ -84,14 +88,23 @@ jobs:
           SERIES: ${{ github.event.inputs.series }}
           PPA_REV: ${{ github.event.inputs.ppa_rev }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}
+          ORIG_UPLOADED: ${{ github.event.inputs.orig_uploaded }}
           DEBEMAIL: "vietanh.dev@gmail.com"
           DEBFULLNAME: "Viet Anh Nguyen"
         run: |
           set -euo pipefail
+          # A version's .orig is uploaded ONCE. The first series includes it (-sa);
+          # every later series references it (-sd) — re-uploading the same orig
+          # filename 550s in Launchpad's incoming. If the orig is already in the PPA
+          # (a retry that only adds series), force -sd for all via orig_uploaded.
+          first=1
           for s in $SERIES; do
-            echo "::group::build $s"
-            scripts/build-ppa-source.sh --series "$s" --ppa-rev "$PPA_REV" --sign-key "$SIGN_KEY"
+            sd_flag=""
+            if [ "$ORIG_UPLOADED" = "true" ] || [ "$first" = "0" ]; then sd_flag="--sd"; fi
+            echo "::group::build $s ${sd_flag:+(-sd)}"
+            scripts/build-ppa-source.sh --series "$s" --ppa-rev "$PPA_REV" --sign-key "$SIGN_KEY" $sd_flag
             echo "::endgroup::"
+            first=0
             if [ "$DRY_RUN" = "true" ]; then
               echo "DRY RUN — skipping dput. Built + signed:"
               ls -1 "target/ppa/bulwark_"*"~${s}"*"_source.changes"

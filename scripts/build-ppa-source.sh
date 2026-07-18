@@ -24,9 +24,12 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 # ---- args ---------------------------------------------------------------------
-SERIES="noble"          # target Ubuntu series (noble, oracular, plucky, jammy, ...)
+SERIES="noble"          # target Ubuntu series (noble, resolute, stonking, ...)
 PPA_REV="1"             # bump when re-uploading the SAME upstream version to the SAME series
 SIGN_KEY=""             # gpg key id/email; empty => unsigned (-us -uc), NOT uploadable
+SOURCE_OPT="-sa"        # -sa: include the .orig in the upload (FIRST series of a version).
+                        # -sd: exclude it (subsequent series — the orig is already uploaded;
+                        #      re-uploading the same filename 550s in Launchpad's incoming).
 MAINTAINER="Viet Anh Nguyen <vietanh.dev@gmail.com>"
 
 while [[ $# -gt 0 ]]; do
@@ -34,6 +37,7 @@ while [[ $# -gt 0 ]]; do
     --series)   SERIES="$2"; shift 2 ;;
     --ppa-rev)  PPA_REV="$2"; shift 2 ;;
     --sign-key) SIGN_KEY="$2"; shift 2 ;;
+    --sd)       SOURCE_OPT="-sd"; shift ;;
     -h|--help)  grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -137,9 +141,9 @@ SIGN_ARGS=(-us -uc)
 if [[ -n "$SIGN_KEY" ]]; then
   SIGN_ARGS=(--sign-key="$SIGN_KEY")
 fi
-# -S: source only.  -sa: include the .orig tarball in the upload (first time for
-# this upstream version).  -d: don't check build-deps on this machine.
-( cd "$SRC_DIR" && dpkg-buildpackage -S -sa -d "${SIGN_ARGS[@]}" )
+# -S: source only.  $SOURCE_OPT is -sa (include .orig) or -sd (exclude it, for
+# subsequent series of the same version).  -d: don't check build-deps on this machine.
+( cd "$SRC_DIR" && dpkg-buildpackage -S "$SOURCE_OPT" -d "${SIGN_ARGS[@]}" )
 
 echo
 echo "=============================================================================="
