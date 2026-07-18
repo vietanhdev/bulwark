@@ -92,6 +92,21 @@ PY
 cp "${SRC_DIR}/cargo-sources.json" "${SRC_DIR}/node-sources.json" "${OUT_DIR}/"
 cp "${SRC_DIR}/${APP_ID}.desktop" "${SRC_DIR}/${APP_ID}.metainfo.xml" "${OUT_DIR}/"
 
+# shared-modules carries the libappindicator build chain the manifest references by path.
+# Without it the submission is a manifest pointing at a file that isn't there, and the
+# Flathub buildbot fails on a missing module rather than anything diagnosable. It is a git
+# submodule here, so it must be copied explicitly — `git archive` and a plain file copy of
+# the packaging dir both skip it.
+if [[ ! -f "${SRC_DIR}/shared-modules/libappindicator/libappindicator-gtk3-12.10.json" ]]; then
+  echo "ERROR: packaging/flatpak/shared-modules is empty — run: git submodule update --init" >&2
+  exit 1
+fi
+mkdir -p "${OUT_DIR}/shared-modules"
+cp -r "${SRC_DIR}/shared-modules/." "${OUT_DIR}/shared-modules/"
+# Drop the submodule's own git metadata; the Flathub repo tracks these as plain files
+# (or as its own submodule, which the PR description explains).
+rm -rf "${OUT_DIR}/shared-modules/.git"
+
 # x86_64 only, deliberately. Flathub BUILDS every arch listed here, so claiming
 # aarch64 without having built it once turns an untested target into a failing
 # submission. Everything shipped so far (PPA, AUR, COPR, GitHub releases) is

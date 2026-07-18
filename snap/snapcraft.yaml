@@ -25,20 +25,20 @@ confinement: classic     # NOT strict: pkexec + host /etc access are load-bearin
 # docs prescribe, and keeps the snap working if it ever moves to strict confinement.
 #
 # The name derives from tauri.conf.json's *identifier* with dots and dashes replaced by
-# underscores — currently com.vietanhnv.bulwark, hence vietanhnv below. It must match
-# what the binary asks for; rename it only together with the identifier.
+# underscores. It must match what the binary asks for; rename it only together with the
+# identifier, and let check-packaging-consistency.sh verify the two agree.
 # https://v2.tauri.app/plugin/single-instance/#usage-in-snap-and-flatpak
 slots:
   single-instance:
     interface: dbus
     bus: session
-    name: org.com_vietanhnv_bulwark.SingleInstance
+    name: org.com_vietanhdev_bulwark.SingleInstance
 
 plugs:
   single-instance-plug:
     interface: dbus
     bus: session
-    name: org.com_vietanhnv_bulwark.SingleInstance
+    name: org.com_vietanhdev_bulwark.SingleInstance
 
 apps:
   bulwark:

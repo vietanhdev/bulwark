@@ -3,7 +3,7 @@
   "productName": "bulwark",
   "mainBinaryName": "bulwark-app",
   "version": "0.8.6",
-  "identifier": "com.vietanhnv.bulwark",
+  "identifier": "com.vietanhdev.bulwark",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",

@@ -9,9 +9,10 @@
 # scripts/flatpak-gen-sources.sh into cargo-sources.json + node-sources.json.
 
 app-id: com.vietanhdev.bulwark
-# NOTE: the Tauri app identifier in tauri.conf.json is still com.vietanhnv.bulwark.
-# For the cleanest desktop integration those should match; changing the Tauri one
-# is a separate, more invasive change (it moves the app's config/data dirs).
+# tauri.conf.json's identifier matches this exactly, and must keep matching: Flathub's
+# linter rejects owning a D-Bus name outside the app-id prefix, and the single-instance
+# name below is derived from the identifier. They disagreed until 0.8.6 (a `vietanhnv`
+# typo), which is what finally forced the rename.
 
 runtime: org.gnome.Platform
 runtime-version: '50'
@@ -74,20 +75,20 @@ finish-args:
   # https://v2.tauri.app/plugin/single-instance/#usage-in-snap-and-flatpak
   #
   # The name is derived from tauri.conf.json's *identifier*, with dots and dashes turned
-  # into underscores — NOT from this app-id. The identifier is still com.vietanhnv.bulwark
-  # (the typo noted at the top of this file), so the name below reads vietanhnv while the
-  # app-id reads vietanhdev. Do not "correct" it here: it must match what the binary asks
-  # for, or the app breaks again. Fix them together when the identifier is renamed.
+  # into underscores. It must match what the binary actually asks for, so never edit it
+  # here alone — change the identifier and let check-packaging-consistency.sh re-derive it.
+  # Flathub additionally requires an owned name to sit under the app-id, which is why the
+  # identifier had to stop being com.vietanhnv.bulwark.
   #
   # ORDER MATTERS, and not in a way the manifest hints at. Both flags write the same key
   # in the built metadata, so the last one wins — and `own` is strictly stronger than
   # `talk`. Listing own-name first (as this file did) silently produced
-  #   org.com_vietanhnv_bulwark.SingleInstance=talk
+  #   org.com_vietanhdev_bulwark.SingleInstance=talk
   # and the plugin still could not claim the name, so the app stayed broken while the
   # manifest looked correct. Keep talk-name first, exactly as the Tauri docs show it.
   # Verify with: flatpak info --show-permissions com.vietanhdev.bulwark  (must read `=own`)
-  - --talk-name=org.com_vietanhnv_bulwark.SingleInstance
-  - --own-name=org.com_vietanhnv_bulwark.SingleInstance
+  - --talk-name=org.com_vietanhdev_bulwark.SingleInstance
+  - --own-name=org.com_vietanhdev_bulwark.SingleInstance
   # NOTE: --talk-name=org.freedesktop.Flatpak (i.e. `flatpak-spawn --host`) is
   # deliberately NOT requested. Privileged scans would need it, but the app-code
   # path that detects /.flatpak-info and reroutes to a host pkexec doesn't exist

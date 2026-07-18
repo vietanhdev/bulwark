@@ -42,6 +42,20 @@ echo "single-instance D-Bus name derived from identifier '${IDENTIFIER}':"
 note "${DBUS_NAME}"
 echo
 
+# Flathub's linter rejects owning a bus name outside the app-id prefix
+# (finish-args-own-name-...), and the name above comes from the identifier, so the
+# identifier and the Flatpak app-id have to agree. They did not until 0.8.6 — the app-id
+# said vietanhdev and the identifier said vietanhnv — and the submission failed lint.
+APP_ID="$(sed -n 's/^app-id: *//p' "${FLATPAK_MANIFEST}" | head -1)"
+if [[ "${APP_ID}" == "${IDENTIFIER}" ]]; then
+  ok "tauri identifier matches the Flatpak app-id (${APP_ID})"
+else
+  bad "tauri identifier '${IDENTIFIER}' != Flatpak app-id '${APP_ID}'"
+  note "Flathub rejects owning a D-Bus name outside the app-id, and that name is derived"
+  note "from the identifier — so these must be equal for the submission to pass lint."
+fi
+
+
 if grep -qF -- "--own-name=${DBUS_NAME}" "${FLATPAK_MANIFEST}"; then
   ok "flatpak manifest owns ${DBUS_NAME}"
 else
