@@ -90,22 +90,17 @@ pathlib.Path("${OUT_DIR}/${APP_ID}.yaml").write_text(out)
 PY
 
 cp "${SRC_DIR}/cargo-sources.json" "${SRC_DIR}/node-sources.json" "${OUT_DIR}/"
-cp "${SRC_DIR}/${APP_ID}.desktop" "${SRC_DIR}/${APP_ID}.metainfo.xml" "${OUT_DIR}/"
 
-# shared-modules carries the libappindicator build chain the manifest references by path.
-# Without it the submission is a manifest pointing at a file that isn't there, and the
-# Flathub buildbot fails on a missing module rather than anything diagnosable. It is a git
-# submodule here, so it must be copied explicitly — `git archive` and a plain file copy of
-# the packaging dir both skip it.
-if [[ ! -f "${SRC_DIR}/shared-modules/libappindicator/libappindicator-gtk3-12.10.json" ]]; then
-  echo "ERROR: packaging/flatpak/shared-modules is empty — run: git submodule update --init" >&2
-  exit 1
-fi
-mkdir -p "${OUT_DIR}/shared-modules"
-cp -r "${SRC_DIR}/shared-modules/." "${OUT_DIR}/shared-modules/"
-# Drop the submodule's own git metadata; the Flathub repo tracks these as plain files
-# (or as its own submodule, which the PR description explains).
-rm -rf "${OUT_DIR}/shared-modules/.git"
+# The .desktop and metainfo.xml are deliberately NOT copied. The manifest installs them
+# with paths relative to the *git source* it checks out (packaging/flatpak/...), so they
+# travel with the upstream repo and have no business in the Flathub one. Checked against
+# real Tauri submissions — flathub/io.github.CyberTimon.RapidRAW,
+# flathub/org.openscopeproject.TrguiNG and flathub/dev.fredol.open-tv all contain only the
+# manifest, the generated *-sources.json, flathub.json and .gitmodules.
+#
+# shared-modules is likewise NOT copied: the Flathub repo takes it as a git submodule, the
+# way TrguiNG does. Copying the files would work but diverges from every reviewed example
+# and forks a tree upstream maintains. The branch-prep step below adds it properly.
 
 # x86_64 only, deliberately. Flathub BUILDS every arch listed here, so claiming
 # aarch64 without having built it once turns an untested target into a failing
@@ -122,7 +117,18 @@ echo ">> staged in ${OUT_DIR}:"
 ls -1 "${OUT_DIR}" | sed 's/^/     /'
 echo
 echo ">> next:"
-echo "     1. flatpak run org.flatpak.Builder --lint manifest '${OUT_DIR}/${APP_ID}.yaml'"
-echo "     2. build it once from this staged tree to prove the git source resolves"
-echo "     3. copy these files into a flathub/flathub checkout on a branch off 'new-pr'"
+echo "     1. lint:  flatpak run --command=flatpak-builder-lint org.flatpak.Builder \\"
+echo "                 manifest '${OUT_DIR}/${APP_ID}.yaml'"
+echo "     2. in a fork of flathub/flathub, branch off 'new-pr':"
+echo "          git checkout -b ${APP_ID} new-pr"
+echo "          cp ${OUT_DIR}/* ."
+echo "          git submodule add https://github.com/flathub/shared-modules shared-modules"
+echo "        (the manifest references shared-modules/libappindicator/... — the Flathub repo"
+echo "         tracks it as a submodule, as flathub/org.openscopeproject.TrguiNG does)"
+echo "     3. build once from that tree to prove the git source and submodule resolve"
 echo "     4. open the PR against the 'new-pr' base branch (NOT master)"
+echo
+echo "     Read https://docs.flathub.org/docs/for-app-authors/requirements first."
+echo "     The PR description, checklist answers and review replies must be written by a"
+echo "     human — see packaging/flatpak/flathub-submission-facts.md for the technical"
+echo "     details to check against, not to copy."
