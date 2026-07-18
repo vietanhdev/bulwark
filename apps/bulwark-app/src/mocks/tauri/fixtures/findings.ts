@@ -149,6 +149,9 @@ export const clamavInfo = {
     database_date: "Thu Jul  9 13:25:20 2026",
   },
   install_command: null,
+  // Screenshot/e2e runs pose as a normal install, where ClamAV is present and no sandbox
+  // caveat applies. The sandboxed variants are what AntivirusView branches on.
+  sandbox: null,
 };
 
 export const monitoringStatusInitial = {

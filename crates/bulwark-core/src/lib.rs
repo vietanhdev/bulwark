@@ -6,6 +6,7 @@ pub mod engine;
 pub mod logs;
 pub mod models;
 pub mod remediation;
+pub mod sandbox;
 pub mod schema;
 pub mod store;
 

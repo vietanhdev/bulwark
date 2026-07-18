@@ -35,6 +35,8 @@ interface DashboardSnapshot {
 interface ClamavInfoResponse {
   version: { engine_version: string; database_version: string; database_date: string } | null;
   install_command: string | null;
+  /** "Flatpak" | "Snap" when running sandboxed, else null — see sandbox.rs. */
+  sandbox: string | null;
 }
 
 interface RealtimeAvStatus {
@@ -237,12 +239,22 @@ export function AntivirusView({ active }: { active: boolean }) {
             current, decide whether anything below this is worth trusting. */}
         {clamav && !clamav.version && (
           <Callout tone="warning">
-            <div className="font-medium">ClamAV isn't installed, so there's nothing to scan with.</div>
-            {clamav.install_command && (
-              <div className="mt-1.5 rounded bg-card/70 px-2 py-1 font-mono text-xs text-foreground">
-                {clamav.install_command}
-              </div>
-            )}
+            {/* In a sandbox "ClamAV isn't installed" is the wrong diagnosis: it may well be
+                installed on the host, and this build still cannot reach it. Saying so sent
+                Flatpak users to run an install command that changes nothing. */}
+            <div className="font-medium">
+              {clamav.sandbox
+                ? `Virus scanning isn't available in the ${clamav.sandbox} build.`
+                : "ClamAV isn't installed, so there's nothing to scan with."}
+            </div>
+            {clamav.install_command &&
+              (clamav.sandbox ? (
+                <div className="mt-1.5 text-xs opacity-90">{clamav.install_command}</div>
+              ) : (
+                <div className="mt-1.5 rounded bg-card/70 px-2 py-1 font-mono text-xs text-foreground">
+                  {clamav.install_command}
+                </div>
+              ))}
           </Callout>
         )}
         {clamav?.version && dbStale && (

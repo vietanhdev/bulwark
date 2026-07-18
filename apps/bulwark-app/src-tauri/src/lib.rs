@@ -395,7 +395,7 @@ async fn scan_privileged(app: tauri::AppHandle) -> Result<ScanRun, String> {
         // need `--talk-name=org.freedesktop.Flatpak` (a sandbox escape) plus a host-installed
         // bulwarkctl to elevate. Neither exists yet, so say so in words the user can act on
         // rather than letting them hit "failed to launch pkexec: No such file or directory".
-        if std::path::Path::new("/.flatpak-info").exists() {
+        if bulwark_core::sandbox::detect() == bulwark_core::sandbox::Sandbox::Flatpak {
             return Err(
                 "Privileged scans aren't available in the Flatpak version, because \
                         the sandbox can't request administrator access. Everything that \
@@ -523,8 +523,13 @@ struct ClamavInfoResponse {
     /// collector's `db_age_days`).
     version: Option<ClamavVersionInfo>,
     /// Populated only when `version` is `None` — the distro-appropriate install command, so
-    /// the "ClamAV isn't installed" state actually helps instead of assuming `apt`.
+    /// the "ClamAV isn't installed" state actually helps instead of assuming `apt`. Inside a
+    /// sandbox this carries an explanation instead, because no install command would work.
     install_command: Option<String>,
+    /// The sandbox this build runs in ("Flatpak", "Snap") or None. The UI needs it to avoid
+    /// saying "ClamAV isn't installed" when the truth is "this build can't reach ClamAV at
+    /// all" — the first sends the user to install something that will not help.
+    sandbox: Option<String>,
 }
 
 /// Backs the Antivirus page's status card with real detail (exact ClamAV/database version,
@@ -539,9 +544,14 @@ async fn clamav_info() -> Result<ClamavInfoResponse, String> {
         } else {
             None
         };
+        let sandbox = {
+            let s = bulwark_core::sandbox::detect();
+            s.is_sandboxed().then(|| s.name().to_string())
+        };
         ClamavInfoResponse {
             version,
             install_command,
+            sandbox,
         }
     })
     .await

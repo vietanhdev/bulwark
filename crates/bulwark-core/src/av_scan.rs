@@ -92,6 +92,22 @@ pub fn install_command_for_os_release(os_release_text: &str) -> &'static str {
 }
 
 pub fn detect_install_command() -> &'static str {
+    // Inside a sandbox, an install command is the wrong answer: the user can run it, and
+    // ClamAV still will not be reachable, because the sandbox has its own filesystem rather
+    // than the host's. Telling them to `sudo apt install clamav` sends them to fix
+    // something that is not broken. Say what is actually true instead.
+    match crate::sandbox::detect() {
+        crate::sandbox::Sandbox::Flatpak => {
+            return "Virus scanning isn't available in the Flatpak build — installing ClamAV \
+                    on the host won't help, because the sandbox can't run host programs. Use \
+                    the .deb, .rpm or AppImage, or scan with the bulwarkctl command-line tool."
+        }
+        crate::sandbox::Sandbox::Snap => {
+            return "Virus scanning isn't available in this snap. Use the .deb, .rpm or \
+                    AppImage, or scan with the bulwarkctl command-line tool."
+        }
+        crate::sandbox::Sandbox::None => {}
+    }
     std::fs::read_to_string("/etc/os-release")
         .map(|text| install_command_for_os_release(&text))
         .unwrap_or("See https://docs.clamav.net/manual/Installing.html for your distro")
