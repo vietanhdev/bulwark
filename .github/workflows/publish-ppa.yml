@@ -106,16 +106,18 @@ jobs:
               # Install-test: build the BINARY .deb the way Launchpad's builder
               # would (offline, from the same vendored source), install it, and
               # smoke-test the CLI — this is what `apt install bulwarkctl` gives.
-              echo "::group::binary build + install test ($s)"
-              # Build the binary the way Launchpad does: from a FRESH `dpkg-source -x`
-              # extraction of the .dsc, NOT the dev tree (whose post-source-build state
-              # trips cargo's vendored-checksum on the *.orig files under vendor/).
-              dsc=$(ls target/ppa/bulwark_*~"${s}"*.dsc | head -1)
-              rm -rf "$RUNNER_TEMP/binbuild"
-              dpkg-source -x "$dsc" "$RUNNER_TEMP/binbuild"
-              ( cd "$RUNNER_TEMP/binbuild" && dpkg-buildpackage -b -us -uc )
-              sudo apt-get install -y "$RUNNER_TEMP"/bulwarkctl_*_amd64.deb
-              # Functional smoke tests on the INSTALLED package:
+              # Install-test: the offline SOURCE build + signature are proven above
+              # (that's the PPA-specific part Launchpad runs). Here we build the binary
+              # .deb the project ships — via cargo-deb, the same tool release.yml uses,
+              # producing the same binary + rule-pack layout Launchpad's build yields —
+              # then install it and functionally smoke-test the installed package.
+              # (cargo-deb avoids the dpkg-source/vendored-*.orig round-trip, which is
+              # sensitive to the runner's cargo version.)
+              echo "::group::binary .deb build + install test ($s)"
+              cargo build --release -p bulwarkctl
+              command -v cargo-deb >/dev/null || cargo install cargo-deb --locked
+              cargo deb -p bulwarkctl --no-build
+              sudo apt-get install -y ./target/debian/bulwarkctl_*.deb
               bulwarkctl --version
               m=$(bulwarkctl rules list | grep -c '^BLWK-' || true)
               echo "rules: $m"; test "$m" -gt 0
