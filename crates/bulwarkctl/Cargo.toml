@@ -34,7 +34,16 @@ maintainer = "Viet Anh Nguyen"
 copyright = "2026, Viet Anh Nguyen"
 license-file = ["../../LICENSE", "0"]
 extended-description = "Scans a Linux host for security misconfigurations and intrusion indicators using a native Rust rule engine over declarative YAML rules, and explains findings in plain language with a suggested fix. CLI front-door — see bulwark-app for the GUI."
+# The external tools Bulwark shells out to, declared as Recommends (not hard Depends): every one is
+# for an optional path that degrades gracefully when the tool is absent, and apt installs Recommends
+# by default so a normal `apt install` still pulls them in.
+#   clamav          — the antivirus scan (Bulwark prints a distro-aware install hint if missing)
+#   openssh-client  — `scan --ssh` remote scanning and `ssh protect` (ssh, scp, ssh-keygen)
+#   git             — the AI-assistant scan uses `git check-ignore` to skip gitignored files
+# Deliberately NOT openssh-server: `fix sshd` validation uses `sshd -t`, but installing an SSH
+# *server* on a machine just to run a security tool would enlarge its attack surface, not shrink it.
 depends = "$auto"
+recommends = "clamav, openssh-client, git"
 section = "admin"
 priority = "optional"
 assets = [
@@ -56,3 +65,11 @@ assets = [
     { source = "decoders/*.yaml", dest = "/usr/share/bulwark/decoders/", mode = "644" },
     { source = "log-rules/*/*.yaml", dest = "/usr/share/bulwark/log-rules/", mode = "644" },
 ]
+
+# Same rationale as the .deb's `recommends` above — dnf installs weak deps by default, so these come
+# along on a normal install but stay optional. cargo-generate-rpm takes dependencies as a table of
+# `name = version-constraint` ("*" = any). Note the Fedora/RHEL package name: openssh-clients.
+[package.metadata.generate-rpm.recommends]
+clamav = "*"
+openssh-clients = "*"
+git = "*"
