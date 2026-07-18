@@ -65,7 +65,10 @@ mapfile -t CHROOTS < <(copr-cli list-chroots | grep -E '^fedora-([0-9]+)-x86_64$
 [[ ${#CHROOTS[@]} -gt 0 ]] || { echo "ERROR: no active fedora x86_64 chroots found" >&2; exit 1; }
 echo ">> chroots: ${CHROOTS[*]}"
 
-if ! copr-cli list 2>/dev/null | grep -qx "${PROJECT}"; then
+# `copr-cli list` prints "Name: <project>" plus an indented block, not a bare name, so a
+# `grep -x` against the project name never matches and the script tried to create a project
+# that already existed ("You already have a project named 'bulwarkctl'"). Match the field.
+if ! copr-cli list 2>/dev/null | grep -qE "^Name:[[:space:]]+${PROJECT}$"; then
   echo ">> creating COPR project ${PROJECT}"
   # Build the flag list as separate argv entries. "${CHROOTS[@]/#/--chroot }"
   # looks equivalent but embeds the space *inside* one argument, so copr-cli

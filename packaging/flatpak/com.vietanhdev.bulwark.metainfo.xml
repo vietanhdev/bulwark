@@ -100,6 +100,14 @@
   </branding>
 
   <releases>
+    <release version="0.8.8" date="2026-07-18">
+      <description>
+        <p>Fixes an error when checking for antivirus support.</p>
+        <ul>
+          <li>When ClamAV isn't installed, Bulwark now says so plainly instead of reporting a check failure</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.8.7" date="2026-07-18">
       <description>
         <p>Virus scanning and administrator checks now work in the sandboxed builds.</p>
