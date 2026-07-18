@@ -83,6 +83,15 @@
   </branding>
 
   <releases>
+    <release version="0.8.3" date="2026-07-18">
+      <description>
+        <p>Fixes scan history not being saved in this Flatpak build.</p>
+        <ul>
+          <li>Findings are now stored in the application's own data directory, so scans are recorded correctly</li>
+          <li>Removes a sandbox permission that is no longer needed</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.8.2" date="2026-07-18">
       <description>
         <p>Packaging fixes.</p>
