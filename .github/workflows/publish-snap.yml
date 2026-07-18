@@ -59,6 +59,42 @@ jobs:
           python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["rules_loaded"]>0,d;print("scan OK: rules_loaded",d["rules_loaded"],"findings",len(d.get("findings",[])))' "$RUNNER_TEMP/scan.json"
           bulwark.cli fix list | grep -i "Available autofixes" >/dev/null && echo "fix preview OK"
 
+      # Everything above drives bulwark.cli — the bundled CLI, which shares a directory with
+      # the GUI but not a line of its code. The Flatpak passed the identical set of checks
+      # while shipping a GUI that could not render at all (built without --features
+      # custom-protocol, so it served devUrl and drew an empty window). The snap is built the
+      # same way and had the same defect. So: launch the real GUI and look at the pixels.
+      - name: GUI launch test (the CLI smoke test cannot catch a broken GUI)
+        run: |
+          set -uo pipefail
+          sudo apt-get install -y -qq xvfb imagemagick x11-apps >/dev/null
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 &
+          sleep 3
+          export WEBKIT_DISABLE_DMABUF_RENDERER=1 LIBGL_ALWAYS_SOFTWARE=1 GDK_BACKEND=x11
+          timeout 60 bulwark >"$RUNNER_TEMP/gui.log" 2>&1 &
+          APP_PID=$!
+          sleep 25
+          echo "----- GUI output -----"; cat "$RUNNER_TEMP/gui.log"; echo "----------------------"
+          fail=0
+          grep -qi "panicked" "$RUNNER_TEMP/gui.log" && { echo "FAIL: GUI panicked"; fail=1; }
+          grep -q "rules directory resolved" "$RUNNER_TEMP/gui.log" || {
+            echo "FAIL: GUI never resolved a rules directory"; fail=1; }
+          grep -qE "webview url: https?://" "$RUNNER_TEMP/gui.log" && {
+            echo "FAIL: DEV build — UI served over http instead of the embedded frontend"; fail=1; }
+          grep -q "webview url: tauri://" "$RUNNER_TEMP/gui.log" || {
+            echo "FAIL: webview never loaded the embedded frontend"; fail=1; }
+          kill -0 $APP_PID 2>/dev/null || { echo "FAIL: GUI process died"; fail=1; }
+          import -window root "$RUNNER_TEMP/shot.png" 2>/dev/null || true
+          if [ -f "$RUNNER_TEMP/shot.png" ]; then
+            colors=$(identify -format "%k" "$RUNNER_TEMP/shot.png" 2>/dev/null || echo 0)
+            echo "distinct colours on screen: ${colors}"
+            [ "${colors:-0}" -lt 50 ] && { echo "FAIL: window is blank (${colors} colours)"; fail=1; }
+          fi
+          kill $APP_PID 2>/dev/null || true
+          [ $fail -eq 0 ] && echo "snap GUI launch OK"
+          exit $fail
+
       - name: Publish snap
         if: github.event_name == 'workflow_dispatch'
         uses: snapcore/action-publish@v1

@@ -18,6 +18,27 @@ jobs:
       - name: Check packaging manifest consistency
         run: scripts/check-packaging-consistency.sh
 
+  # The snap was never built by CI — it was only ever built by the manual publish workflow,
+  # which is why it silently inherited the same "built without --features custom-protocol"
+  # defect as the Flatpak and would have shipped a GUI that could not render. Building it on
+  # any change to the snap or the app closes that gap; publishing stays manual.
+  snap-build:
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build snap
+        id: build
+        uses: snapcore/action-build@v1
+      - name: Install and verify the built snap
+        run: |
+          set -euo pipefail
+          sudo snap install --dangerous --classic "${{ steps.build.outputs.snap }}"
+          bulwark.cli --version
+          n=$(bulwark.cli rules list | grep -c '^BLWK-' || true)
+          echo "rules visible from the snap: $n"
+          test "$n" -gt 0
+
   test:
     runs-on: ubuntu-24.04
     steps:
