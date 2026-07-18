@@ -112,7 +112,10 @@ jobs:
               bulwarkctl --version
               m=$(bulwarkctl rules list | grep -c '^BLWK-' || true)
               echo "rules: $m"; test "$m" -gt 0
-              bulwarkctl scan --json | python3 -c 'import sys,json;d=json.load(sys.stdin);assert d["rules_loaded"]>0,d;print("scan OK: rules_loaded",d["rules_loaded"],"findings",len(d.get("findings",[])))'
+              # `scan` exits non-zero when it finds issues (linter-style), so capture
+              # to a file and validate the JSON separately from the exit code.
+              bulwarkctl scan --json > "$RUNNER_TEMP/scan.json" || true
+              python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["rules_loaded"]>0,d;print("scan OK: rules_loaded",d["rules_loaded"],"findings",len(d.get("findings",[])))' "$RUNNER_TEMP/scan.json"
               bulwarkctl fix list | grep -i "Available autofixes" >/dev/null && echo "fix preview OK"
               echo "::endgroup::"
               continue
