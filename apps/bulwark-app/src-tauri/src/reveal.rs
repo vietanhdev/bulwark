@@ -10,17 +10,44 @@
 //! the JS-side scope gate — appropriate here because the path always comes from a finding Bulwark
 //! itself produced by scanning the user's own files, never from arbitrary web content.
 
+use std::path::Path;
 use tauri_plugin_opener::OpenerExt;
+
+/// Whether this process is running inside a Flatpak sandbox.
+///
+/// `/.flatpak-info` is present in every Flatpak sandbox and nowhere else, which is the check
+/// Flatpak itself documents for this purpose.
+fn in_flatpak_sandbox() -> bool {
+    Path::new("/.flatpak-info").exists()
+}
 
 /// Open `path` in the system default application (`reveal = false`), or highlight it in the file
 /// manager (`reveal = true`). Returns a readable error string on failure so the UI can surface it
 /// instead of failing silently.
+///
+/// Revealing takes a different route inside a Flatpak. `reveal_item_in_dir` calls
+/// `org.freedesktop.FileManager1.ShowItems` over the session bus, and the sandbox rejects it with
+/// `org.freedesktop.portal.Error.NotAllowed: This call is not available inside the sandbox` — a raw
+/// GDBus string that means nothing to a user looking at a security finding. Granting
+/// `--talk-name=org.freedesktop.FileManager1` would fix it, but that is a broad permission to ask
+/// Flathub reviewers for so one button can highlight a file. Opening the *containing directory*
+/// through the OpenURI portal lands the user in the same folder, needs no extra permission, and is
+/// the behaviour every file manager gives for "show in folder" anyway.
 #[tauri::command]
 pub fn open_flagged_file(app: tauri::AppHandle, path: String, reveal: bool) -> Result<(), String> {
     if path.trim().is_empty() {
         return Err("no file path on this finding".into());
     }
     if reveal {
+        if in_flatpak_sandbox() {
+            let parent = Path::new(&path)
+                .parent()
+                .ok_or_else(|| format!("{path} has no containing folder"))?;
+            return app
+                .opener()
+                .open_path(parent.to_string_lossy().to_string(), None::<&str>)
+                .map_err(|e| format!("couldn't open the folder containing {path}: {e}"));
+        }
         app.opener()
             .reveal_item_in_dir(&path)
             .map_err(|e| format!("couldn't reveal {path}: {e}"))

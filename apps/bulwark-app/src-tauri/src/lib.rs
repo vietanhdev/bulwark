@@ -127,11 +127,12 @@ fn find_exe_sibling_rules_dir() -> Option<PathBuf> {
     rules.is_dir().then_some(rules)
 }
 
-/// Resolution order: explicit env override, dev-mode workspace walk-up, then the two layouts a
-/// real packaged install actually uses — the rule pack bundled as a Tauri resource
-/// (`tauri.conf.json`'s `bundle.resources`), and the pack installed beside the executable
-/// (Flatpak). `app` is `None` only in contexts with no AppHandle yet (there currently are none,
-/// but this keeps the function testable without one).
+/// Resolution order: explicit env override, then (debug builds only) the workspace walk-up, then
+/// the two layouts a real packaged install actually uses — the rule pack bundled as a Tauri
+/// resource (`tauri.conf.json`'s `bundle.resources`), and the pack installed beside the executable
+/// (Flatpak). A shipped build therefore resolves deterministically, independent of where it was
+/// launched from. `app` is `None` only in contexts with no AppHandle yet (there currently are
+/// none, but this keeps the function testable without one).
 fn resolve_rules_dir(app: Option<&tauri::AppHandle>) -> Result<PathBuf, String> {
     if let Ok(p) = std::env::var("BULWARK_RULES_DIR") {
         return Ok(PathBuf::from(p));
@@ -390,6 +391,20 @@ async fn scan_start(
 #[tauri::command]
 async fn scan_privileged(app: tauri::AppHandle) -> Result<ScanRun, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        // In a Flatpak there is no pkexec inside the sandbox, and reaching the host's would
+        // need `--talk-name=org.freedesktop.Flatpak` (a sandbox escape) plus a host-installed
+        // bulwarkctl to elevate. Neither exists yet, so say so in words the user can act on
+        // rather than letting them hit "failed to launch pkexec: No such file or directory".
+        if std::path::Path::new("/.flatpak-info").exists() {
+            return Err(
+                "Privileged scans aren't available in the Flatpak version, because \
+                        the sandbox can't request administrator access. Everything that \
+                        doesn't need root still works. For the full system scan, install \
+                        Bulwark from the .deb, .rpm or AppImage, or use the bulwarkctl \
+                        command-line tool with sudo."
+                    .to_string(),
+            );
+        }
         let rules_dir = resolve_privileged_rules_dir(&app)?;
         let cli = resolve_cli_binary()?;
         let output = std::process::Command::new("pkexec")
