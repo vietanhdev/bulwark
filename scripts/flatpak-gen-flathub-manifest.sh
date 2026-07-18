@@ -92,9 +92,13 @@ PY
 cp "${SRC_DIR}/cargo-sources.json" "${SRC_DIR}/node-sources.json" "${OUT_DIR}/"
 cp "${SRC_DIR}/${APP_ID}.desktop" "${SRC_DIR}/${APP_ID}.metainfo.xml" "${OUT_DIR}/"
 
+# x86_64 only, deliberately. Flathub BUILDS every arch listed here, so claiming
+# aarch64 without having built it once turns an untested target into a failing
+# submission. Everything shipped so far (PPA, AUR, COPR, GitHub releases) is
+# x86_64; add aarch64 here once an aarch64 build has actually been proven.
 cat >"${OUT_DIR}/flathub.json" <<'JSON'
 {
-  "only-arches": ["x86_64", "aarch64"]
+  "only-arches": ["x86_64"]
 }
 JSON
 
