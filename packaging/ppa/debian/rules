@@ -44,3 +44,12 @@ override_dh_auto_install:
 override_dh_auto_clean:
 	rm -rf debian/cargo-home
 	cargo clean --offline || true
+
+# CRITICAL: dh_clean deletes every *.orig file as "patch cruft" during the clean
+# step that runs before the build. That silently removes cargo's vendored
+# Cargo.toml.orig files, which .cargo-checksum.json references, so the subsequent
+# offline `cargo build` dies with "failed to calculate checksum … Cargo.toml.orig:
+# No such file". Exclude .orig from dh_clean so the vendored sources stay intact.
+# (This is why the Launchpad build failed while a plain `cargo build` succeeds.)
+override_dh_clean:
+	dh_clean -X.orig

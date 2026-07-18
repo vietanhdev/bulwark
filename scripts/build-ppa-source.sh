@@ -95,15 +95,25 @@ EOF
 echo ">> vendor size: $(du -sh "$SRC_DIR/vendor" | cut -f1)"
 
 # ---- orig tarball (upstream = everything EXCEPT debian/) -----------------------
+# DETERMINISTIC: the same upstream version keys ONE orig filename
+# (bulwark_<v>.orig.tar.xz) shared across every series' upload. Launchpad rejects
+# a re-uploaded orig whose bytes differ from the first, so a non-reproducible
+# tarball breaks all series after the first ("already exists but uploaded version
+# has different contents"). Fixed sort/mtime/owner + xz -T0-off make every run
+# byte-identical. (cargo vendor is itself deterministic for a fixed Cargo.lock.)
 ORIG="${BUILD_DIR}/bulwark_${UPSTREAM}.orig.tar.xz"
-echo ">> creating $ORIG"
+echo ">> creating $ORIG (deterministic)"
 rm -f "$ORIG"
-tar --create --xz \
+tar --create \
+    --sort=name \
+    --mtime='2020-01-01 00:00:00Z' \
+    --owner=0 --group=0 --numeric-owner \
+    --pax-option='exthdr.name=%d/PaxHeaders/%f,delete=atime,delete=ctime' \
     --exclude='./debian' \
     -C "$BUILD_DIR" \
     --transform "s,^\./,bulwark-${UPSTREAM}/," \
-    -f "$ORIG" \
-    -C "$SRC_DIR" .
+    -C "$SRC_DIR" . \
+  | xz -6 -T1 > "$ORIG"
 
 # ---- debian/ packaging + changelog -------------------------------------------
 echo ">> installing debian/ packaging"
