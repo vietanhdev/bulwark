@@ -29,6 +29,10 @@ finish-args:
   - --device=dri
   # Read the host it audits (read-only; the GUI never writes host state).
   - --filesystem=host:ro
+  # Its own SQLite history/DB. Needed because --filesystem=host:ro makes $HOME
+  # (the real home) read-only, so without this the scan can't persist and fails
+  # with "attempt to write a readonly database".
+  - --filesystem=xdg-data/bulwark:create
   - --talk-name=org.freedesktop.Notifications
   - --talk-name=org.kde.StatusNotifierWatcher
   # Privileged scans can only leave the sandbox via `flatpak-spawn --host pkexec`,

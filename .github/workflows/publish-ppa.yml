@@ -97,9 +97,6 @@ jobs:
               ls -1 "target/ppa/bulwark_"*"~${s}"*"_source.changes"
               # Prove the signature on the .changes is valid without uploading.
               gpg --verify "target/ppa/bulwark_"*"~${s}"*"_source.changes" 2>&1 | grep -i "good signature" || true
-              # Install-test: build the BINARY .deb the way Launchpad's builder
-              # would (offline, from the same vendored source), install it, and
-              # smoke-test the CLI — this is what `apt install bulwarkctl` gives.
               # Install-test: the offline SOURCE build + signature are proven above
               # (that's the PPA-specific part Launchpad runs). Here we build the binary
               # .deb the project ships — via cargo-deb, the same tool release.yml uses,
@@ -116,7 +113,7 @@ jobs:
               m=$(bulwarkctl rules list | grep -c '^BLWK-' || true)
               echo "rules: $m"; test "$m" -gt 0
               bulwarkctl scan --json | python3 -c 'import sys,json;d=json.load(sys.stdin);assert d["rules_loaded"]>0,d;print("scan OK: rules_loaded",d["rules_loaded"],"findings",len(d.get("findings",[])))'
-              bulwarkctl fix list | grep -qi "Available autofixes" && echo "fix preview OK"
+              bulwarkctl fix list | grep -i "Available autofixes" >/dev/null && echo "fix preview OK"
               echo "::endgroup::"
               continue
             fi

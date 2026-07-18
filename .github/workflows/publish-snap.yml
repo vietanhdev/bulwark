@@ -54,7 +54,7 @@ jobs:
           test "$n" -gt 0
           # Functional: a real scan produces valid JSON with rules loaded; fix previews.
           bulwark.cli scan --json | python3 -c 'import sys,json;d=json.load(sys.stdin);assert d["rules_loaded"]>0,d;print("scan OK: rules_loaded",d["rules_loaded"],"findings",len(d.get("findings",[])))'
-          bulwark.cli fix list | grep -qi "Available autofixes" && echo "fix preview OK"
+          bulwark.cli fix list | grep -i "Available autofixes" >/dev/null && echo "fix preview OK"
 
       - name: Publish snap
         if: github.event_name == 'workflow_dispatch'
