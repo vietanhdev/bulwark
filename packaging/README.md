@@ -89,11 +89,18 @@ dput ppa:vietanhng/bulwark target/ppa/bulwark_0.7.0-0ppa1~noble1_source.changes
 ```
 
 To publish for several series, run once per series (each gets its own
-`~seriesN` version so upgrades sort correctly):
+`~seriesN` version so upgrades sort correctly). **Only upload to *active* series** —
+a PPA rejects End-of-Life ones. Check the live list before choosing:
 ```bash
-for s in noble oracular plucky; do
+# active Ubuntu series (status != Obsolete) that a PPA will accept:
+curl -s "https://api.launchpad.net/1.0/ubuntu/series" | \
+  python3 -c 'import sys,json;[print(s["version"],s["name"],s["status"]) for s in json.load(sys.stdin)["entries"] if s["active"]]'
+# as of 0.8.0: noble (24.04 LTS), resolute (26.04 LTS), stonking (26.10 devel).
+# oracular/plucky/questing have gone EOL and are rejected.
+
+for s in noble resolute stonking; do
   scripts/build-ppa-source.sh --series "$s" --sign-key <KEYID>
-  dput ppa:vietanhng/bulwark target/ppa/bulwark_0.7.0-0ppa1~${s}1_source.changes
+  dput ppa:vietanhng/bulwark target/ppa/bulwark_*~${s}1_source.changes
 done
 ```
 
@@ -114,8 +121,9 @@ toolchain you develop with:
 
 | Series | archive `rustc` (approx) |
 |---|---|
-| 24.04 noble | ~1.75 |
-| 24.10 / 25.04 | newer, still behind |
+| 24.04 noble (LTS) | ~1.75 — the one at real risk |
+| 26.04 resolute (LTS) | current, much newer |
+| 26.10 stonking (devel) | newest |
 
 If any dependency's minimum supported Rust version exceeds the series' `rustc`,
 that series' build will fail (this is the single most common reason Rust PPAs
