@@ -106,13 +106,16 @@ else
   note "network-monitor calls fail, and the UI silently never renders."
 fi
 
-# WEBKIT_DISABLE_COMPOSITING_MODE is deliberately NOT asserted: it disables the path that
-# `transparent: true` depends on, and none of the surveyed Tauri Flathub apps set it.
-if grep -qF -- "--env=WEBKIT_DISABLE_DMABUF_RENDERER=1" "${FLATPAK_MANIFEST}"; then
-  ok "flatpak manifest sets WEBKIT_DISABLE_DMABUF_RENDERER"
-else
-  bad "flatpak manifest is missing --env=WEBKIT_DISABLE_DMABUF_RENDERER=1"
-fi
+# Neither WEBKIT_DISABLE_* variable is required, and shipping them has a cost: DMABUF
+# forces WebKit onto a slower CPU rendering path (visibly sluggish UI), COMPOSITING_MODE
+# breaks `transparent: true`. Both were added on a guess and removed once the real cause
+# (--share=network + custom-protocol) was found. Warn rather than fail, so re-adding one is
+# a deliberate, noticed act.
+for v in WEBKIT_DISABLE_DMABUF_RENDERER WEBKIT_DISABLE_COMPOSITING_MODE; do
+  if grep -qF -- "--env=${v}=1" "${FLATPAK_MANIFEST}"; then
+    note "NOTE: ${v} is set — it slows rendering for every user. Keep it only with evidence."
+  fi
+done
 
 # --- 3. production builds must enable custom-protocol --------------------------------
 # The single worst bug of this whole packaging effort. Tauri's build script computes

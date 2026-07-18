@@ -57,16 +57,18 @@ finish-args:
   # flatpak-builder-lint flags as finish-args-unnecessary-xdg-data-access.)
   - --talk-name=org.freedesktop.Notifications
   - --talk-name=org.kde.StatusNotifierWatcher
-  # WebKitGTK's DMA-BUF renderer wants GPU buffer sharing that does not survive the sandbox
-  # on many drivers; disabling it falls back cleanly and is what two of the surveyed Tauri
-  # Flathub apps do. Related, though not the cause of the blank window here:
-  # tauri-apps/tauri#8970, #10626.
-  - --env=WEBKIT_DISABLE_DMABUF_RENDERER=1
-  # NOT set: WEBKIT_DISABLE_COMPOSITING_MODE=1. It was added here on a guess while hunting
-  # the blank window, and it is the wrong tool twice over — the real cause was the missing
-  # --share=network above, and disabling accelerated compositing also disables the path
-  # `transparent: true` relies on. None of the seven Tauri apps surveyed on Flathub sets
-  # it; two set only the DMABUF one above.
+  # Neither WEBKIT_DISABLE_DMABUF_RENDERER nor WEBKIT_DISABLE_COMPOSITING_MODE is set.
+  #
+  # Both were added here while hunting the blank window, and neither was the cause — that
+  # was the missing --share=network above plus a build without --features custom-protocol.
+  # They are not free: DMABUF disables WebKit's GPU buffer sharing, which forces a slower
+  # CPU path and makes the UI visibly sluggish on hardware that renders fine, and
+  # COMPOSITING_MODE additionally disables the path `transparent: true` depends on. Five of
+  # the seven Tauri apps surveyed on Flathub set neither.
+  #
+  # If a blank or corrupted window ever reappears on some driver, they are the usual
+  # workarounds (tauri-apps/tauri#8970, #10626) — but reach for them with evidence, and
+  # prefer per-user `flatpak override` over shipping the cost to everyone.
   # tauri-plugin-single-instance claims a session-bus name at startup, and Flatpak blocks
   # owning any name the manifest does not declare, so this declaration is required for the
   # plugin to work at all. It does NOT explain the blank window that was being chased when
