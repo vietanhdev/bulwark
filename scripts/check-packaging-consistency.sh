@@ -55,6 +55,22 @@ else
   bad "flatpak manifest is missing --talk-name=${DBUS_NAME}"
 fi
 
+# Order is load-bearing and invisible: both flags write the same metadata key, so the last
+# one wins, and `own` outranks `talk`. own-name listed first is silently downgraded to
+# talk — the manifest reads correctly, the build succeeds, and the app stays broken. This
+# actually happened; it cost a whole build cycle after the fix was already "in".
+OWN_LINE="$(grep -nF -- "--own-name=${DBUS_NAME}" "${FLATPAK_MANIFEST}" | head -1 | cut -d: -f1)"
+TALK_LINE="$(grep -nF -- "--talk-name=${DBUS_NAME}" "${FLATPAK_MANIFEST}" | head -1 | cut -d: -f1)"
+if [[ -n "${OWN_LINE}" && -n "${TALK_LINE}" ]]; then
+  if (( OWN_LINE > TALK_LINE )); then
+    ok "--own-name comes after --talk-name (so the grant resolves to 'own')"
+  else
+    bad "--own-name (line ${OWN_LINE}) must come AFTER --talk-name (line ${TALK_LINE})"
+    note "Both write the same key; the last wins. own-name first silently degrades to"
+    note "'=talk' and the single-instance plugin cannot claim the name."
+  fi
+fi
+
 if grep -qF "name: ${DBUS_NAME}" "${SNAP_MANIFEST}"; then
   ok "snap manifest declares ${DBUS_NAME}"
 else

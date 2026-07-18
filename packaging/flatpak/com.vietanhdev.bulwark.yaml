@@ -60,8 +60,16 @@ finish-args:
   # (the typo noted at the top of this file), so the name below reads vietanhnv while the
   # app-id reads vietanhdev. Do not "correct" it here: it must match what the binary asks
   # for, or the app breaks again. Fix them together when the identifier is renamed.
-  - --own-name=org.com_vietanhnv_bulwark.SingleInstance
+  #
+  # ORDER MATTERS, and not in a way the manifest hints at. Both flags write the same key
+  # in the built metadata, so the last one wins — and `own` is strictly stronger than
+  # `talk`. Listing own-name first (as this file did) silently produced
+  #   org.com_vietanhnv_bulwark.SingleInstance=talk
+  # and the plugin still could not claim the name, so the app stayed broken while the
+  # manifest looked correct. Keep talk-name first, exactly as the Tauri docs show it.
+  # Verify with: flatpak info --show-permissions com.vietanhdev.bulwark  (must read `=own`)
   - --talk-name=org.com_vietanhnv_bulwark.SingleInstance
+  - --own-name=org.com_vietanhnv_bulwark.SingleInstance
   # NOTE: --talk-name=org.freedesktop.Flatpak (i.e. `flatpak-spawn --host`) is
   # deliberately NOT requested. Privileged scans would need it, but the app-code
   # path that detects /.flatpak-info and reroutes to a host pkexec doesn't exist
