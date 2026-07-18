@@ -130,5 +130,6 @@ echo "     4. open the PR against the 'new-pr' base branch (NOT master)"
 echo
 echo "     Read https://docs.flathub.org/docs/for-app-authors/requirements first."
 echo "     The PR description, checklist answers and review replies must be written by a"
-echo "     human — see packaging/flatpak/flathub-submission-facts.md for the technical"
-echo "     details to check against, not to copy."
+echo "     human. packaging/flatpak/flathub-submission-facts.md holds the technical detail"
+echo "     to check the manifest against (untracked working notes, kept out of git so"
+echo "     nobody pastes them into a PR whose words have to be their own)."

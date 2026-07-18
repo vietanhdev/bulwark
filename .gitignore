@@ -116,3 +116,12 @@ apps/bulwark-app/test-results/
 apps/bulwark-app/playwright-report/
 apps/bulwark-app/blob-report/
 apps/bulwark-app/.playwright/
+
+# Flathub submission working notes. Deliberately untracked: these are preparation material
+# for a submission a human writes and posts — a fact sheet to check the manifest against,
+# the upstream PR template, and the permissions rationale. They are not build inputs and
+# nothing in the packaging reads them, so keeping them in the repo only invites someone to
+# paste them verbatim into a PR whose description has to be the submitter's own words.
+# They stay on disk locally; regenerate the template with
+#   gh api repos/flathub/flathub/contents/.github/pull_request_template.md -q .content | base64 -d
+packaging/flatpak/*.md
