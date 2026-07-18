@@ -477,3 +477,37 @@ Without it every build fails with `Could not resolve host: index.crates.io` afte
 minutes. This is a property of the *project*, not of the spec file, so it does not travel
 with the repo: anyone recreating the project must set it again. The alternative is
 vendoring crates into a second source tarball as the PPA does.
+
+### Debugging the Flatpak: two traps that cost hours
+
+**1. `pkill -f com.vietanhdev.bulwark` and `flatpak kill com.vietanhdev.bulwark` also kill an
+in-progress build.** flatpak-builder runs the build inside a sandbox under the *same app ID*,
+so a pattern kill aimed at the running app takes the build with it. It shows up as
+
+    Error: module bulwark: Child process exited with code 137
+
+and — worse — as a *successful-looking* rerun that silently installs nothing new, because
+the previous good install is still there. Kill by PID, or don't kill while building.
+
+**2. Never assume an install landed. Check the permissions, not the exit code.**
+
+```bash
+flatpak info com.vietanhdev.bulwark | grep Commit
+flatpak info --show-permissions com.vietanhdev.bulwark
+```
+
+The `[Session Bus Policy]` and `[Context]` sections are the ground truth for what the
+installed build actually has. A manifest edit that never made it into the installed
+build looks exactly like a fix that did not work — and if you are also testing by hand,
+you will conclude the fix is wrong and go looking for a different one.
+
+**Capturing app output.** The app's stdout is awkward to capture from a wrapper script.
+Writing it inside the sandbox works reliably:
+
+```bash
+flatpak run --command=sh com.vietanhdev.bulwark -c 'bulwark-app > $XDG_DATA_HOME/diag.log 2>&1'
+cat ~/.var/app/com.vietanhdev.bulwark/data/diag.log
+```
+
+Note `$HOME` inside the sandbox is the *real* home (read-only via `--filesystem=host:ro`),
+so redirecting there fails with "Read-only file system"; `$XDG_DATA_HOME` is writable.
