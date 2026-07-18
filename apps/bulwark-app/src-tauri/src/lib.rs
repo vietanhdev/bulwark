@@ -833,11 +833,13 @@ pub fn run() {
                 Err(e) => eprintln!("[bulwark] warning: {e} — continuous monitoring disabled"),
             }
 
+            eprintln!("[bulwark:boot] starting real-time AV (if enabled)");
             // Resumes real-time AV protection if it was left enabled on a previous run —
             // "persists across restarts" should mean protection actually restarts, not just
             // that the toggle remembers where it was left.
             realtime_av::start_if_enabled(handle.clone());
 
+            eprintln!("[bulwark:boot] spawning background AI sweep");
             // Background AI-artifact auto-scan: one sweep shortly after launch, then periodic,
             // so the AI Security tab shows fresh data without the user clicking Scan first.
             ai_security::spawn(handle);
@@ -856,6 +858,7 @@ pub fn run() {
             // simply lacks a tray library sees a full crash report for something that was handled
             // and is not a crash. Silencing it here (and only here, restoring immediately after)
             // leaves the one-line warning below as the whole story.
+            eprintln!("[bulwark:boot] creating tray icon");
             let tray_handle = app.handle().clone();
             let previous_hook = std::panic::take_hook();
             std::panic::set_hook(Box::new(|_| {}));
@@ -881,6 +884,7 @@ pub fn run() {
             // The ordinary window-manager close button hides the window instead of quitting
             // the process — see tray.rs's module doc for why. Quitting is the tray menu's
             // explicit "Quit" item, or a real process kill/logout, not an accidental click.
+            eprintln!("[bulwark:boot] wiring window events");
             if let Some(window) = app.get_webview_window("main") {
                 let window_to_hide = window.clone();
                 window.on_window_event(move |event| {
@@ -898,6 +902,7 @@ pub fn run() {
                 });
             }
 
+            eprintln!("[bulwark:boot] setup complete");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
