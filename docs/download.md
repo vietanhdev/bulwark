@@ -1,6 +1,6 @@
 ---
 title: Download
-description: Download Bulwark for Linux — desktop app (.deb, .rpm, AppImage) and CLI.
+description: Download Bulwark for Linux — desktop app (.deb, .rpm, AppImage, Snap, Flatpak) and CLI (.deb, .rpm, PPA, tarball).
 ---
 
 <script setup>
@@ -99,6 +99,25 @@ chmod +x bulwark-desktop-*-x86_64.AppImage
 ./bulwark-desktop-*-x86_64.AppImage
 ```
 
+### Snap
+
+```bash
+sudo snap install bulwark --classic
+```
+
+Classic confinement is required: Bulwark elevates privileged scans via `pkexec`
+and reads system files under `/etc`, which a strict sandbox would block.
+
+### Flatpak
+
+```bash
+flatpak install flathub com.vietanhdev.bulwark
+flatpak run com.vietanhdev.bulwark
+```
+
+The Flatpak is sandboxed — it reads host config read-only for unprivileged scans.
+Privileged (root) scans are available in the `.deb`/`.rpm`/AppImage/Snap builds.
+
 ## CLI
 
 `bulwarkctl` scans from a terminal — no display session, so it works over plain SSH on a
@@ -121,6 +140,17 @@ headless box. Same engine and same rule pack as the GUI.
 
 ```bash
 sudo dpkg -i bulwarkctl_*_amd64.deb   # or: sudo rpm -i bulwarkctl-*.x86_64.rpm
+bulwarkctl scan
+```
+
+### Ubuntu PPA
+
+For Ubuntu, install from the PPA to get automatic updates via `apt`:
+
+```bash
+sudo add-apt-repository ppa:vietanhng/bulwark
+sudo apt update
+sudo apt install bulwarkctl
 bulwarkctl scan
 ```
 
