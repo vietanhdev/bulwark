@@ -35,3 +35,13 @@ chrono.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+
+[features]
+# DO NOT REMOVE. Tauri's build script computes `let dev = !custom_protocol`, so without this
+# feature enabled a build is a *dev* build: the app loads `devUrl` (http://localhost:1420)
+# instead of the assets embedded from `frontendDist`, and shows a connection error in an
+# empty window. `cargo tauri build` turns it on for you, which is why the .deb/.rpm/AppImage
+# were fine — but the Flatpak and Snap run plain `cargo build --release`, and shipped a GUI
+# that could never load. The Tauri template defines this feature for exactly this reason; it
+# was missing here.
+custom-protocol = ["tauri/custom-protocol"]

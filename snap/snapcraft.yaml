@@ -103,7 +103,10 @@ parts:
       npm run build            # vite -> apps/bulwark-app/dist (embedded by Tauri)
 
       # Build the GUI binary and the bundled CLI sidecar.
-      cargo build --release -p bulwark-app
+      # --features custom-protocol is REQUIRED: Tauri's build script does
+      # `let dev = !custom_protocol`, so without it the app loads devUrl
+      # (http://localhost:1420) rather than the embedded frontend and never renders.
+      cargo build --release -p bulwark-app --features custom-protocol
       cargo build --release -p bulwarkctl
 
       # --- install layout --------------------------------------------------

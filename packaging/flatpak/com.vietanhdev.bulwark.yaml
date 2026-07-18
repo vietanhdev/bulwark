@@ -24,6 +24,27 @@ command: bulwark-app
 
 finish-args:
   - --share=ipc
+  # REQUIRED for the UI to render at all, which is not obvious and cost a long hunt.
+  #
+  # Inside any Flatpak, GLib installs the *portal-backed* proxy resolver and network
+  # monitor unconditionally — gproxyresolverportal.c picks the portal purely on the bus
+  # name being owned, never checking whether a lookup would be permitted. WebKit's network
+  # process then calls them while loading the app, and xdg-desktop-portal answers from
+  # proxy-resolver.c / network-monitor.c:
+  #
+  #   if (!xdp_app_info_has_network (app_info))
+  #     ... "This call is not available inside the sandbox"
+  #
+  # `xdp_app_info_has_network()` is true exactly when the app was built with
+  # --share=network. Without it the page load fails and Tauri paints that error string
+  # into the webview — which, on a window that is `transparent: true`, reads as an empty
+  # window with a line of text floating in it. The backend is entirely healthy: setup()
+  # completes, the WebKit process spawns, and the frontend's first invoke never arrives.
+  #
+  # The app itself makes no network calls — bulwark-core's no-network invariant still
+  # holds, and this grants the *sandbox* what WebKit needs to load a local page. 6 of 7
+  # Tauri apps surveyed on Flathub ship this.
+  - --share=network
   - --socket=wayland
   - --socket=fallback-x11
   - --device=dri
@@ -35,24 +56,21 @@ finish-args:
   # flatpak-builder-lint flags as finish-args-unnecessary-xdg-data-access.)
   - --talk-name=org.freedesktop.Notifications
   - --talk-name=org.kde.StatusNotifierWatcher
-  # WebKitGTK renders nothing in this sandbox without these, which for a Tauri app means a
-  # transparent, empty window — the app runs, logs normally, holds its PID, and draws no UI.
-  # Its DMA-BUF renderer needs GPU buffer sharing that does not survive the sandbox on many
-  # drivers, and its accelerated compositing path fails the same way; both fall back cleanly
-  # when switched off. This is the long-standing "blank window in Flatpak" failure behind
-  # tauri-apps/tauri#8970 and #10626, and it is not Tauri's bug.
-  #
-  # Worth noting how long this hid: scripts/test-gui-packages-docker.sh sets exactly these
-  # two variables so WebKit works headlessly, so the .deb/.rpm/AppImage rendered under test
-  # while the Flatpak — which set neither — did not.
+  # WebKitGTK's DMA-BUF renderer wants GPU buffer sharing that does not survive the sandbox
+  # on many drivers; disabling it falls back cleanly and is what two of the surveyed Tauri
+  # Flathub apps do. Related, though not the cause of the blank window here:
+  # tauri-apps/tauri#8970, #10626.
   - --env=WEBKIT_DISABLE_DMABUF_RENDERER=1
-  - --env=WEBKIT_DISABLE_COMPOSITING_MODE=1
+  # NOT set: WEBKIT_DISABLE_COMPOSITING_MODE=1. It was added here on a guess while hunting
+  # the blank window, and it is the wrong tool twice over — the real cause was the missing
+  # --share=network above, and disabling accelerated compositing also disables the path
+  # `transparent: true` relies on. None of the seven Tauri apps surveyed on Flathub sets
+  # it; two set only the DMABUF one above.
   # tauri-plugin-single-instance claims a session-bus name at startup, and Flatpak blocks
-  # owning any name the manifest does not declare. It is registered as the FIRST plugin
-  # (see lib.rs — it is the escape hatch from "closed to tray"), so the denial happens
-  # before the UI exists and surfaces as a bare
-  #   GDBus.Error:org.freedesktop.portal.Error.NotAllowed
-  # painted on a window that is transparent by design. Documented at
+  # owning any name the manifest does not declare, so this declaration is required for the
+  # plugin to work at all. It does NOT explain the blank window that was being chased when
+  # it was added: a refused name ownership returns org.freedesktop.DBus.Error.AccessDenied,
+  # a bus error, never a portal error. That was --share=network (see above). Documented at
   # https://v2.tauri.app/plugin/single-instance/#usage-in-snap-and-flatpak
   #
   # The name is derived from tauri.conf.json's *identifier*, with dots and dashes turned
@@ -116,7 +134,11 @@ modules:
       - npm install --prefix=apps/bulwark-app --offline
       - npm --prefix=apps/bulwark-app run build
       # 2. GUI binary + the CLI sidecar named `bulwark` (matching resolve_cli_binary).
-      - cargo build --release --offline -p bulwark-app
+      # --features custom-protocol is REQUIRED, not optional. Tauri's build script does
+      # `let dev = !custom_protocol`, so without it this is a dev build that loads
+      # devUrl (http://localhost:1420) instead of the embedded frontend, and ships a GUI
+      # that can never render. `cargo tauri build` sets it implicitly; plain cargo does not.
+      - cargo build --release --offline -p bulwark-app --features custom-protocol
       - cargo build --release --offline -p bulwarkctl
       - install -Dm755 target/release/bulwark-app ${FLATPAK_DEST}/bin/bulwark-app
       - install -Dm755 target/release/bulwarkctl ${FLATPAK_DEST}/bin/bulwark

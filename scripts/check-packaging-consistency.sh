@@ -22,6 +22,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
 TAURI_CONF="apps/bulwark-app/src-tauri/tauri.conf.json"
+TAURI_CARGO="apps/bulwark-app/src-tauri/Cargo.toml"
 FLATPAK_MANIFEST="packaging/flatpak/com.vietanhdev.bulwark.yaml"
 SNAP_MANIFEST="snap/snapcraft.yaml"
 
@@ -77,19 +78,59 @@ else
   bad "snap manifest is missing a dbus slot/plug named ${DBUS_NAME}"
 fi
 
-# --- 2. WebKit rendering workarounds -----------------------------------------------
-# WebKitGTK's DMA-BUF renderer and accelerated compositing both fail inside the Flatpak
-# sandbox on many drivers, and the symptom is an app that runs perfectly while painting
-# nothing. tauri-apps/tauri#8970, #10626.
-for var in WEBKIT_DISABLE_DMABUF_RENDERER WEBKIT_DISABLE_COMPOSITING_MODE; do
-  if grep -qF -- "--env=${var}=1" "${FLATPAK_MANIFEST}"; then
-    ok "flatpak manifest sets ${var}"
-  else
-    bad "flatpak manifest is missing --env=${var}=1 (blank-window risk)"
+# --- 2. the webview must be able to load at all --------------------------------------
+# The one that actually mattered. GLib installs the portal-backed proxy resolver and
+# network monitor inside every Flatpak, WebKit calls them while loading the page, and
+# xdg-desktop-portal refuses with "This call is not available inside the sandbox" unless
+# xdp_app_info_has_network() — which is true only with --share=network. Without it the
+# app starts, setup() completes, the WebKit process spawns, and the UI never renders.
+if grep -qE '^\s*-\s*--share=network\s*$' "${FLATPAK_MANIFEST}"; then
+  ok "flatpak manifest shares network (portal proxy-resolver calls succeed)"
+else
+  bad "flatpak manifest is missing --share=network"
+  note "WebKit cannot load even a local page without it: the portal proxy-resolver and"
+  note "network-monitor calls fail, and the UI silently never renders."
+fi
+
+# WEBKIT_DISABLE_COMPOSITING_MODE is deliberately NOT asserted: it disables the path that
+# `transparent: true` depends on, and none of the surveyed Tauri Flathub apps set it.
+if grep -qF -- "--env=WEBKIT_DISABLE_DMABUF_RENDERER=1" "${FLATPAK_MANIFEST}"; then
+  ok "flatpak manifest sets WEBKIT_DISABLE_DMABUF_RENDERER"
+else
+  bad "flatpak manifest is missing --env=WEBKIT_DISABLE_DMABUF_RENDERER=1"
+fi
+
+# --- 3. production builds must enable custom-protocol --------------------------------
+# The single worst bug of this whole packaging effort. Tauri's build script computes
+#   let dev = !custom_protocol;
+# so a build WITHOUT the `custom-protocol` feature is a *dev* build: the app loads
+# `devUrl` (http://localhost:1420) instead of the assets embedded from `frontendDist`.
+# It compiles, installs, starts, resolves its rule pack, completes setup — and then shows
+# an empty window, because nothing is listening on the dev port on a user's machine.
+#
+# `cargo tauri build` enables the feature implicitly, so the .deb/.rpm/AppImage were always
+# fine. The Flatpak and Snap invoke plain `cargo build --release`, and both shipped a GUI
+# that could not possibly render. Any packaging that builds the app with bare cargo must
+# pass this feature.
+for m in "${FLATPAK_MANIFEST}" "${SNAP_MANIFEST}"; do
+  if grep -qE "cargo build .*-p bulwark-app" "${m}"; then
+    if grep -qE "cargo build .*-p bulwark-app.*--features custom-protocol" "${m}"; then
+      ok "$(basename "${m}") builds bulwark-app with --features custom-protocol"
+    else
+      bad "$(basename "${m}") builds bulwark-app WITHOUT --features custom-protocol"
+      note "That produces a dev build which loads devUrl and renders an empty window."
+    fi
   fi
 done
 
-# --- 3. the rule pack must travel with the app -------------------------------------
+# And the feature has to exist, or the flag above is a build error rather than a fix.
+if grep -qF 'custom-protocol = ["tauri/custom-protocol"]' "${TAURI_CARGO}"; then
+  ok "src-tauri/Cargo.toml defines the custom-protocol feature"
+else
+  bad "src-tauri/Cargo.toml does not define custom-protocol = [\"tauri/custom-protocol\"]"
+fi
+
+# --- 4. the rule pack must travel with the app -------------------------------------
 # A packaged build with no rules is a scanner that reports a clean host. Each manifest
 # has its own way of shipping the pack, so assert per manifest rather than centrally.
 if grep -q "cp -r rules decoders log-rules" "${FLATPAK_MANIFEST}"; then
