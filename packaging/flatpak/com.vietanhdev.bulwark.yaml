@@ -181,6 +181,8 @@ modules:
       - install -Dm644 apps/bulwark-app/src-tauri/icons/128x128.png ${FLATPAK_DEST}/share/icons/hicolor/128x128/apps/com.vietanhdev.bulwark.png
       - install -Dm644 packaging/flatpak/com.vietanhdev.bulwark.desktop ${FLATPAK_DEST}/share/applications/com.vietanhdev.bulwark.desktop
       - install -Dm644 packaging/flatpak/com.vietanhdev.bulwark.metainfo.xml ${FLATPAK_DEST}/share/metainfo/com.vietanhdev.bulwark.metainfo.xml
+      # 5. Licence text. Flathub requires it installed under share/licenses/$FLATPAK_ID.
+      - install -Dm644 LICENSE ${FLATPAK_DEST}/share/licenses/${FLATPAK_ID}/LICENSE
     sources:
       - type: dir
         path: ../..

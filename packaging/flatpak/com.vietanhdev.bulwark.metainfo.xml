@@ -4,14 +4,18 @@
      contain a double hyphen, so the command line can't be written out here).
 
      Screenshot URLs must stay reachable: Flathub re-fetches them on every rebuild and
-     a 404 fails the build. They are served from docs/public/screenshots/ via the
-     VitePress site, so regenerating screenshots keeps these URLs valid. -->
+     a 404 fails the build. Flathub also requires them pinned to a tag or commit rather
+     than a branch or a live site, so they point at raw.githubusercontent.com at a
+     release tag. Bump that tag when the screenshots are regenerated. -->
 <component type="desktop-application">
   <id>com.vietanhdev.bulwark</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>Apache-2.0</project_license>
   <name>Bulwark</name>
-  <summary>Security and antivirus scanner for Linux</summary>
+  <!-- Flathub caps the summary at 35 characters (ideal 10-25): sentence case, no full
+       stop, no leading article, no app name, no "app"/"tool", no platform name, and
+       understandable without technical knowledge. -->
+  <summary>Find security risks on your system</summary>
 
   <description>
     <p>
@@ -58,28 +62,28 @@
 
   <screenshots>
     <screenshot type="default">
-      <image>https://bulwark.nrl.ai/screenshots/overview.png</image>
-      <caption>An overall safety score, with findings sorted by how much they matter</caption>
+      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.8.8/docs/public/screenshots/overview.png</image>
+      <caption>A safety score with findings ranked by severity</caption>
     </screenshot>
     <screenshot>
-      <image>https://bulwark.nrl.ai/screenshots/agent-security.png</image>
-      <caption>Scanning AI coding assistants for leaked secrets and risky configuration</caption>
+      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.8.8/docs/public/screenshots/agent-security.png</image>
+      <caption>Checking AI coding assistants for leaked secrets</caption>
     </screenshot>
     <screenshot>
-      <image>https://bulwark.nrl.ai/screenshots/compliance.png</image>
-      <caption>Hardening checks grouped by category, with a compliance score</caption>
+      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.8.8/docs/public/screenshots/compliance.png</image>
+      <caption>Hardening checks grouped by category</caption>
     </screenshot>
     <screenshot>
-      <image>https://bulwark.nrl.ai/screenshots/antivirus.png</image>
-      <caption>ClamAV virus scanning with live per-file progress</caption>
+      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.8.8/docs/public/screenshots/antivirus.png</image>
+      <caption>Virus scanning with live progress</caption>
     </screenshot>
     <screenshot>
-      <image>https://bulwark.nrl.ai/screenshots/rules.png</image>
-      <caption>Every check Bulwark runs, explained in plain language</caption>
+      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.8.8/docs/public/screenshots/rules.png</image>
+      <caption>Every check explained in plain language</caption>
     </screenshot>
     <screenshot>
-      <image>https://bulwark.nrl.ai/screenshots/settings.png</image>
-      <caption>Appearance, and how often Bulwark re-checks the machine on its own</caption>
+      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.8.8/docs/public/screenshots/settings.png</image>
+      <caption>Appearance and automatic re-check frequency</caption>
     </screenshot>
   </screenshots>
 
@@ -94,12 +98,27 @@
 
   <content_rating type="oars-1.1" />
 
+  <!-- Flathub rejects brand colours that are white, black or near-grey: they must be
+       colourful and must differ between the two schemes. The previous pair (#fbeee7 /
+       #2a1a1c) was near-white and near-black. Both below are tints of the app's own
+       accent, #E95420 (styles.css). -->
   <branding>
-    <color type="primary" scheme_preference="light">#fbeee7</color>
-    <color type="primary" scheme_preference="dark">#2a1a1c</color>
+    <color type="primary" scheme_preference="light">#ffd3bd</color>
+    <color type="primary" scheme_preference="dark">#7a2d10</color>
   </branding>
 
   <releases>
+    <release version="0.8.9" date="2026-07-19">
+      <description>
+        <p>Store listing corrections. No changes to the application itself.</p>
+        <ul>
+          <li>Shorter summary, and screenshot captions trimmed to one line each</li>
+          <li>Brand colours now use the application's own accent instead of near-white and near-black</li>
+          <li>Screenshots are served from a fixed release tag, so a listing can never point at a moved image</li>
+          <li>The licence text is now installed with the application</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.8.8" date="2026-07-18">
       <description>
         <p>Fixes an error when checking for antivirus support.</p>

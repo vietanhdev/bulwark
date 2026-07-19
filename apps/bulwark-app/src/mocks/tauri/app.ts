@@ -1,6 +1,6 @@
 // Mock of @tauri-apps/api/app — see README.md.
 export async function getVersion(): Promise<string> {
-  return "0.8.8";
+  return "0.8.9";
 }
 
 export async function getTauriVersion(): Promise<string> {

@@ -5,7 +5,7 @@
 # already ship). Only `bulwarkctl` is packaged — the Tauri GUI needs WebKitGTK and
 # is distributed as Flatpak/Snap/AppImage instead.
 pkgname=bulwarkctl
-pkgver=0.8.8
+pkgver=0.8.9
 pkgrel=1
 pkgdesc="Linux host security and misconfiguration scanner (CLI)"
 arch=('x86_64')
