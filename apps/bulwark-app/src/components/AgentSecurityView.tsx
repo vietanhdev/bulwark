@@ -192,11 +192,24 @@ export function AgentSecurityView({ active }: { active: boolean }) {
 
   async function redactAll() {
     if (redactableFiles.length === 0) return;
+    await applyRedaction(redactableFiles);
+  }
+
+  /**
+   * Rewrites the secrets out of exactly `paths` and prunes the findings they resolved. Shared by
+   * the bulk button (every redactable file) and the per-issue button (one file), so a single-file
+   * redact goes through the same allowlist-checked command and the same post-redact bookkeeping —
+   * there is no second, weaker path.
+   *
+   * The backend intersects `paths` against the files the latest scan flagged as redactable and
+   * drops anything else; passing one path here narrows what is touched, it does not bypass that.
+   */
+  async function applyRedaction(paths: string[]) {
     setRedacting(true);
     setError(null);
     try {
       const report = await invoke<RedactionReport>("ai_redact", {
-        paths: redactableFiles,
+        paths,
         apply: true,
       });
       setRedactResult(report);
@@ -369,7 +382,12 @@ export function AgentSecurityView({ active }: { active: boolean }) {
           ) : (
             <div className="flex flex-col gap-2.5">
               {sorted.map((f) => (
-                <AiFindingCard key={f.id} f={f} />
+                <AiFindingCard
+                  key={f.id}
+                  f={f}
+                  busy={redacting}
+                  onRedact={f.redactable ? () => applyRedaction([f.file]) : undefined}
+                />
               ))}
             </div>
           )}
@@ -381,7 +399,48 @@ export function AgentSecurityView({ active }: { active: boolean }) {
   );
 }
 
-function AiFindingCard({ f }: { f: AiFinding }) {
+/**
+ * One agent-security finding.
+ *
+ * A `redactable` finding carries its own Redact button, which acts on **this file only**. It exists
+ * because the bulk "Redact N secrets" button was previously the only way to act: a user who wanted
+ * one secret gone from one transcript had to rewrite every flagged file at once, or do it by hand.
+ *
+ * Like every other mutating action in the app it previews before it writes: the first click runs
+ * the redactor with `apply = false` and reports how many secrets it would remove from this file;
+ * only a second, explicit click rewrites it. Non-redactable findings get no button — a live key in
+ * a `.env` is reported so you rotate it, and is deliberately never rewritten, because something
+ * reads that value back and redacting it would destroy the working config along with the only copy
+ * of the key.
+ */
+function AiFindingCard({
+  f,
+  busy,
+  onRedact,
+}: {
+  f: AiFinding;
+  busy?: boolean;
+  /** Only supplied for redactable findings; absent means no button is drawn at all. */
+  onRedact?: () => Promise<void>;
+}) {
+  const [preview, setPreview] = useState<RedactionReport | null>(null);
+  const [pending, setPending] = useState(false);
+  const [cardError, setCardError] = useState<string | null>(null);
+
+  async function runPreview() {
+    setPending(true);
+    setCardError(null);
+    try {
+      setPreview(await invoke<RedactionReport>("ai_redact", { paths: [f.file], apply: false }));
+    } catch (e) {
+      setCardError(String(e));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  const wouldRedact = preview?.total_secrets ?? 0;
+
   return (
     <article
       className="rail rail-dim rounded-lg border border-border bg-card py-3.5 pr-4"
@@ -413,6 +472,61 @@ function AiFindingCard({ f }: { f: AiFinding }) {
         </div>
       )}
       <CommandBlock command={f.fix_hint} className="mt-2.5" />
+
+      {onRedact && (
+        <div className="mt-2.5">
+          {cardError && (
+            <Callout tone="critical" className="mb-2">
+              {cardError}
+            </Callout>
+          )}
+          {preview === null ? (
+            <Button size="sm" variant="outline" onClick={runPreview} disabled={pending || busy}>
+              {pending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Eraser className="h-3.5 w-3.5" />
+              )}
+              Redact this file
+            </Button>
+          ) : (
+            <div className="rounded-md border border-border bg-muted/40 p-3">
+              <p className="text-xs font-medium">
+                {wouldRedact === 0
+                  ? "Nothing left to redact in this file."
+                  : `${wouldRedact} secret${wouldRedact === 1 ? "" : "s"} would be removed from this file. Nothing has been written yet.`}
+              </p>
+              {preview.errors.length > 0 && (
+                <ul className="mt-1.5 space-y-0.5 text-[11px] text-[var(--sev-critical-fg)]">
+                  {preview.errors.map((e) => (
+                    <li key={e}>{e}</li>
+                  ))}
+                </ul>
+              )}
+              <p className="mt-1.5 text-[11px] text-muted-foreground">
+                The original is backed up first. Redaction removes the secret from disk — it can't un-leak it,
+                so <strong>rotate</strong> the credential either way.
+              </p>
+              <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                {wouldRedact > 0 && (
+                  <Button size="sm" onClick={() => onRedact()} disabled={busy}>
+                    {busy ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Eraser className="h-3.5 w-3.5" />
+                    )}
+                    Redact {wouldRedact} secret{wouldRedact === 1 ? "" : "s"}
+                  </Button>
+                )}
+                <Button size="sm" variant="ghost" onClick={() => setPreview(null)} disabled={busy}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {f.references.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {f.references.map((r) => (

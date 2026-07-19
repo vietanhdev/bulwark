@@ -483,14 +483,45 @@
   background: var(--rail-color, var(--border));
 }
 /* Muted until hovered/expanded, so a long list reads as a calm gradient of colour rather
-   than 30 competing full-strength bars. The row you're actually pointing at snaps to full. */
+   than 30 competing full-strength bars. The row you're actually pointing at is emphasised.
+
+   The emphasis is gated on *intent*, not on the pointer merely being somewhere. The original
+   0.45 → 1 snap fired on every row a pointer crossed, so dragging down a 30-row list ran a
+   wave of bars from near-invisible to full and back — read as flicker rather than as feedback.
+   Three changes, all preserving the calm-gradient intent above:
+
+   1. The resting state is 0.62, not 0.45. At 0.45 the low/info hues were a near-white wash on
+      a white card, so the delta to full was violent *and* the resting rail barely did the one
+      job it exists for (severity readable peripherally). A shorter distance to travel is a
+      quieter transition, and a legible resting bar is a better default.
+   2. Hovering in waits out a pass-through (`transition-delay`). A pointer travelling to some
+      other row never lights the rows it crosses; a pointer that stops on a row does. This is
+      what actually removes the flicker — the delta alone only makes it smaller.
+   3. Leaving is undelayed and quick, so the list never holds a stale highlight behind the
+      pointer.
+
+   `[data-open="true"]` is an expanded row, not a hover, so it takes full strength immediately —
+   delaying it would make clicking a row feel laggy. Its rule sits last so it wins the tie. */
 .rail-dim::before {
-  opacity: 0.45;
+  opacity: 0.62;
   transition: opacity 140ms ease-out;
 }
-.rail-dim:hover::before,
+.rail-dim:hover::before {
+  opacity: 1;
+  transition-delay: 120ms;
+}
 .rail-dim[data-open="true"]::before {
   opacity: 1;
+  transition-delay: 0ms;
+}
+
+/* Honour a reduced-motion preference: the emphasis still happens, it just stops animating. */
+@media (prefers-reduced-motion: reduce) {
+  .rail-dim::before,
+  .rail-dim:hover::before {
+    transition: none;
+    transition-delay: 0ms;
+  }
 }
 
 /* Scan in progress: two staggered rings reading as a ping propagating outward, not a blink. */

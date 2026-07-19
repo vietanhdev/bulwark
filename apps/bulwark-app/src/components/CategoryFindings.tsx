@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { Ban, Check, ChevronRight, Copy, MoreVertical, RotateCw } from "lucide-react";
 import { FindingCard, type Finding } from "@/components/FindingCard";
+import { FixIssueButton } from "@/components/FixActions";
+import { type FixCapability } from "@/lib/fixes";
 import { SEVERITY_ORDER, SeverityDot, SeverityLabel, railStyle, type Severity } from "@/components/Severity";
 import { categoryLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -13,10 +15,15 @@ export interface FindingGroup {
 
 /** Actions a view can offer on an issue type. Both optional — when neither is passed, the per-issue
  *  menu isn't rendered (e.g. a read-only context). `onIgnoreType` suppresses the rule (with a
- *  mandatory reason); `onRecheck` re-runs the scan. */
+ *  mandatory reason); `onRecheck` re-runs the scan. `fixCapabilities` maps a rule id to the fixer
+ *  that can clear it — a rule absent from the map gets no Fix button at all, which is most of them:
+ *  only the SSH-permission, /etc-permission and sshd-config rules have a real fixer behind them.
+ *  `onFixed` runs after a fix is applied so the view can re-scan. */
 export interface IssueActions {
   onIgnoreType?: (ruleId: string, reason: string) => Promise<void>;
   onRecheck?: () => void;
+  fixCapabilities?: Map<string, FixCapability>;
+  onFixed?: () => void;
 }
 
 const bySeverity = (a: Finding, b: Finding) =>
@@ -180,6 +187,9 @@ function IssueTypeGroup({
     }
   }
 
+  const capability = actions?.fixCapabilities?.get(group.ruleId);
+  const fixRow = capability ? <FixIssueButton capability={capability} onFixed={actions?.onFixed} /> : null;
+
   const reasonRow = ignoring ? (
     <div className="mt-2 flex items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-2">
       <input
@@ -217,6 +227,7 @@ function IssueTypeGroup({
     return (
       <div>
         <FindingCard finding={first} animate={streamed} action={menu} />
+        {fixRow}
         {reasonRow}
       </div>
     );
@@ -249,6 +260,7 @@ function IssueTypeGroup({
         </button>
         {menu}
       </div>
+      {fixRow && <div className="px-3 pb-1">{fixRow}</div>}
       {reasonRow && <div className="px-3 pb-2">{reasonRow}</div>}
       {open && (
         <div className="flex flex-col gap-2.5 px-3 pb-3">

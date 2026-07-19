@@ -15,7 +15,7 @@
 //!
 //! Dry-run is the default everywhere: nothing is written unless the caller passes `apply = true`.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -39,7 +39,7 @@ impl PermTarget {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum PermOutcome {
     /// Was too permissive; tightened from `from` to `to` (octal strings). Only set when applied.
@@ -56,17 +56,17 @@ pub enum PermOutcome {
     Failed { reason: String },
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermResult {
     pub path: String,
-    pub label: &'static str,
+    pub label: String,
     /// Current mode as an octal string (e.g. "644"), or `None` if the path is missing/unreadable.
     pub current_mode: Option<String>,
     pub desired_mode: String,
     pub outcome: PermOutcome,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PermReport {
     pub results: Vec<PermResult>,
     pub tightened: usize,
@@ -97,7 +97,7 @@ pub fn tighten_permissions(targets: &[PermTarget], apply: bool) -> PermReport {
         let desired_mode = format!("{:o}", t.desired & 0o777);
         let mut result = PermResult {
             path: t.path.display().to_string(),
-            label: t.label,
+            label: t.label.to_string(),
             current_mode: None,
             desired_mode: desired_mode.clone(),
             outcome: PermOutcome::Missing,

@@ -248,8 +248,203 @@ const mockAudit: {
   at: string;
 }[] = [];
 
+/* Report builders for the autofix mocks. Shaped exactly like `bulwark-core`'s report structs so
+   the browser mock exercises the same rendering path the real backend drives. */
+function mockEtcPerms(apply: boolean) {
+  const status = apply ? "tightened" : "would_tighten";
+  return {
+    results: [
+      {
+        path: "/etc/shadow",
+        label: "/etc/shadow (password hashes)",
+        current_mode: "644",
+        desired_mode: "640",
+        outcome: { status, from: "644", to: "640" },
+      },
+    ],
+    tightened: apply ? 1 : 0,
+    would_tighten: apply ? 0 : 1,
+    already_ok: 0,
+    missing: 0,
+    skipped_symlink: 0,
+    failed: 0,
+  };
+}
+
+function mockSshd(apply: boolean, includeAuth: boolean) {
+  const status = { status: apply ? "set" : "would_set" };
+  const changes = [
+    {
+      keyword: "X11Forwarding",
+      current: "yes",
+      desired: "no",
+      lockout_risk: false,
+      why: "X11 forwarding exposes the client's display to the server (BLWK-SSH-004)",
+      status,
+    },
+  ];
+  if (includeAuth) {
+    changes.unshift({
+      keyword: "PasswordAuthentication",
+      current: "yes",
+      desired: "no",
+      lockout_risk: true,
+      why: "password logins are brute-forceable; prefer keys (BLWK-SSH-001)",
+      status,
+    });
+  }
+  return {
+    config_path: "/etc/ssh/sshd_config",
+    changes,
+    applied: apply,
+    backup_path: apply ? "/home/user/.local/share/bulwark/sshd-config-backups/sshd_config.bak" : null,
+    validated: apply ? true : null,
+    note: null,
+  };
+}
+
+function mockSysctl(apply: boolean, ruleId: string) {
+  const field = ruleId === "BLWK-KERNEL-017" ? "log_martians" : "send_redirects";
+  const desired = ruleId === "BLWK-KERNEL-017" ? "1" : "0";
+  const current = ruleId === "BLWK-KERNEL-017" ? "0" : "1";
+  const status = { status: apply ? "set" : "would_set" };
+  return {
+    conf_path: "/etc/sysctl.d/99-bulwark-hardening.conf",
+    // Every scope, not just `all` — the real fixer writes per interface because the kernel folds
+    // them together.
+    changes: ["all", "default", "eth0"].map((scope) => ({
+      key: `net.ipv4.conf.${scope}.${field}`,
+      current,
+      desired,
+      why: `${field} (${ruleId})`,
+      status,
+    })),
+    applied: apply,
+    backup_path: null,
+    verified: apply ? true : null,
+    note: null,
+  };
+}
+
+function mockBanner(apply: boolean) {
+  const status = apply ? "written" : "would_write";
+  return {
+    results: [
+      {
+        path: "/etc/issue",
+        label: "local login banner",
+        outcome: { status },
+        backup_path: apply ? "/home/user/.local/share/bulwark/banner-backups/issue.bak" : null,
+      },
+      {
+        path: "/etc/issue.net",
+        label: "remote (ssh) login banner",
+        outcome: { status },
+        backup_path: apply ? "/home/user/.local/share/bulwark/banner-backups/issue.net.bak" : null,
+      },
+    ],
+    written: apply ? 2 : 0,
+    would_write: apply ? 0 : 2,
+    already_custom: 0,
+    missing: 0,
+    failed: 0,
+    applied: apply,
+  };
+}
+
+function mockLoginDefs(apply: boolean, ruleId: string) {
+  const isMax = ruleId === "BLWK-ACCT-002";
+  return {
+    config_path: "/etc/login.defs",
+    changes: [
+      {
+        key: isMax ? "PASS_MAX_DAYS" : "PASS_MIN_DAYS",
+        current: isMax ? "99999" : "0",
+        desired: isMax ? "90" : "1",
+        why: ruleId,
+        status: { status: apply ? "set" : "would_set" },
+      },
+    ],
+    applied: apply,
+    backup_path: apply ? "/home/user/.local/share/bulwark/login-defs-backups/login.defs.bak" : null,
+    note: null,
+  };
+}
+
+/// A scored standard, shaped exactly like `bulwark_core::compliance::StandardReport`. Deliberately
+/// includes a `not_assessed` control and a failing *addressable* one: those are the two states the
+/// UI must not flatten into "failing", so a fixture that omitted them would let a regression
+/// through unseen.
+const mockComplianceReport = {
+  scanned: true,
+  evidence_missing: false,
+  reports: [
+    {
+      standard_id: "hipaa-security-rule",
+      name: "HIPAA Security Rule",
+      version: "45 CFR Part 164 Subpart C",
+      source_url: "https://www.ecfr.gov/current/title-45/part-164/subpart-C",
+      scope_note:
+        "Covers only the technical safeguards testable from a Linux host's configuration. The administrative and physical safeguards, and most of the technical ones, cannot be assessed by a host scanner.",
+      score: 67,
+      assessed: 3,
+      passing: 2,
+      failing: 1,
+      not_assessed: 1,
+      mapped_controls: 4,
+      catalog_size: null,
+      controls: [
+        {
+          control_id: "164.312(b)",
+          title: "Audit controls: record and examine activity in systems holding ePHI",
+          obligation: "standard",
+          status: "pass",
+          assessed_rules: ["BLWK-LOG-002"],
+          failing_rules: [],
+        },
+        {
+          control_id: "164.312(a)(2)(iv)",
+          title: "Encryption and decryption of ePHI at rest",
+          obligation: "addressable",
+          status: "fail",
+          assessed_rules: ["BLWK-DISK-001"],
+          failing_rules: ["BLWK-DISK-001"],
+        },
+        {
+          control_id: "164.312(d)",
+          title: "Person or entity authentication",
+          obligation: "standard",
+          status: "pass",
+          assessed_rules: ["BLWK-SSH-001"],
+          failing_rules: [],
+        },
+        {
+          control_id: "164.312(c)(1)",
+          title: "Integrity: protect ePHI from improper alteration or destruction",
+          obligation: "standard",
+          status: "not_assessed",
+          assessed_rules: [],
+          failing_rules: [],
+        },
+      ],
+    },
+  ],
+  rule_controls: {
+    "BLWK-SSH-001": [
+      {
+        standard_id: "hipaa-security-rule",
+        standard_name: "HIPAA Security Rule",
+        control_id: "164.312(d)",
+        control_title: "Person or entity authentication",
+        obligation: "standard",
+      },
+    ],
+  },
+};
+
 const handlers: Record<string, (args: Args) => unknown> = {
   rules_list: () => rulesFixture,
+  compliance_report: () => mockComplianceReport,
   suppressions_list: () => mockSuppressions,
   suppression_audit: (args) => {
     const ruleId = args?.ruleId as string | null | undefined;
@@ -305,11 +500,14 @@ const handlers: Record<string, (args: Args) => unknown> = {
   },
   ai_redact: (args) => {
     const paths = (args?.paths as string[]) ?? [];
-    // Pretend the redaction happened: drop the redactable findings from the snapshot.
+    // Pretend the redaction happened: drop the redactable findings for exactly the files asked
+    // for. Scoped to `paths` rather than clearing every redactable finding, so the per-issue
+    // redact button can be exercised in the browser mock without looking like a bulk redact.
+    const requested = new Set(paths);
     aiSnapshot = {
       snapshot: {
         ...(aiSnapshot.snapshot as Record<string, unknown>),
-        findings: aiFindings.filter((f) => !f.redactable),
+        findings: aiFindings.filter((f) => !(f.redactable && requested.has(f.file as string))),
       },
     };
     return {
@@ -404,6 +602,56 @@ const handlers: Record<string, (args: Args) => unknown> = {
       missing: 0,
       skipped_symlink: 0,
       failed: 0,
+    };
+  },
+  fix_capabilities: () => [
+    { rule_id: "BLWK-FS-001", kind: "etc_perms", lockout_risk: false, needs_root: true },
+    { rule_id: "BLWK-FS-002", kind: "etc_perms", lockout_risk: false, needs_root: true },
+    { rule_id: "BLWK-SSH-001", kind: "sshd", lockout_risk: true, needs_root: true },
+    { rule_id: "BLWK-SSH-002", kind: "sshd", lockout_risk: true, needs_root: true },
+    { rule_id: "BLWK-SSH-004", kind: "sshd", lockout_risk: false, needs_root: true },
+    { rule_id: "BLWK-SSH-011", kind: "sshd", lockout_risk: false, needs_root: true },
+    { rule_id: "BLWK-KERNEL-016", kind: "sysctl", lockout_risk: false, needs_root: true },
+    { rule_id: "BLWK-KERNEL-017", kind: "sysctl", lockout_risk: false, needs_root: true },
+    { rule_id: "BLWK-BANN-001", kind: "banner", lockout_risk: false, needs_root: true },
+    { rule_id: "BLWK-ACCT-002", kind: "login_defs", lockout_risk: false, needs_root: true },
+    { rule_id: "BLWK-ACCT-003", kind: "login_defs", lockout_risk: false, needs_root: true },
+  ],
+  fix_rule: (args?: Args) => {
+    const apply = Boolean(args?.apply);
+    const ruleId = String(args?.ruleId ?? "");
+    const empty = {
+      ssh_perms: null,
+      etc_perms: null,
+      sshd: null,
+      sysctl: null,
+      banner: null,
+      login_defs: null,
+      sshd_error: null,
+      errors: [],
+      applied: apply,
+    };
+    if (ruleId.startsWith("BLWK-FS-")) return { ...empty, etc_perms: mockEtcPerms(apply) };
+    if (ruleId.startsWith("BLWK-SSH-"))
+      return { ...empty, sshd: mockSshd(apply, ruleId === "BLWK-SSH-001" || ruleId === "BLWK-SSH-002") };
+    if (ruleId.startsWith("BLWK-KERNEL-")) return { ...empty, sysctl: mockSysctl(apply, ruleId) };
+    if (ruleId === "BLWK-BANN-001") return { ...empty, banner: mockBanner(apply) };
+    if (ruleId.startsWith("BLWK-ACCT-")) return { ...empty, login_defs: mockLoginDefs(apply, ruleId) };
+    throw new Error(`${ruleId} has no autofix`);
+  },
+  fix_all: (args?: Args) => {
+    const apply = Boolean(args?.apply);
+    return {
+      ssh_perms: handlers.fix_ssh_permissions(args),
+      etc_perms: mockEtcPerms(apply),
+      // Never includes the lockout-risky auth directives — mirrors the real `fix all --root-only`.
+      sshd: mockSshd(apply, false),
+      sysctl: mockSysctl(apply, "BLWK-KERNEL-016"),
+      banner: mockBanner(apply),
+      login_defs: mockLoginDefs(apply, "BLWK-ACCT-002"),
+      sshd_error: null,
+      errors: [],
+      applied: apply,
     };
   },
   // In the browser mock there's no OS to open a file with — log it and succeed so the UI flow

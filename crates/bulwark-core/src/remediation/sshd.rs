@@ -28,7 +28,7 @@
 
 use crate::collectors::sshd::{parse_sshd_config_with, resolve_include_glob};
 use crate::models::Fact;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -42,6 +42,11 @@ const END_MARKER: &str = "# END bulwark-hardening";
 struct Directive {
     keyword: &'static str,
     field: &'static str,
+    /// The `BLWK-SSH-*` rule this directive clears. Named explicitly rather than parsed out of
+    /// `why`, so `remediation::FIX_CAPABILITIES` can be checked against this table by a test.
+    /// Read only by that test — the hardener itself works off `field`.
+    #[cfg_attr(not(test), allow(dead_code))]
+    rule_id: &'static str,
     desired: &'static str,
     lockout_risk: bool,
     why: &'static str,
@@ -50,6 +55,7 @@ struct Directive {
 const DIRECTIVES: &[Directive] = &[
     Directive {
         keyword: "PasswordAuthentication",
+        rule_id: "BLWK-SSH-001",
         field: "password_authentication",
         desired: "no",
         lockout_risk: true,
@@ -57,6 +63,7 @@ const DIRECTIVES: &[Directive] = &[
     },
     Directive {
         keyword: "PermitRootLogin",
+        rule_id: "BLWK-SSH-002",
         field: "permit_root_login",
         desired: "no",
         lockout_risk: true,
@@ -64,6 +71,7 @@ const DIRECTIVES: &[Directive] = &[
     },
     Directive {
         keyword: "PermitEmptyPasswords",
+        rule_id: "BLWK-SSH-003",
         field: "permit_empty_passwords",
         desired: "no",
         lockout_risk: false,
@@ -71,6 +79,7 @@ const DIRECTIVES: &[Directive] = &[
     },
     Directive {
         keyword: "X11Forwarding",
+        rule_id: "BLWK-SSH-004",
         field: "x11_forwarding",
         desired: "no",
         lockout_risk: false,
@@ -78,6 +87,7 @@ const DIRECTIVES: &[Directive] = &[
     },
     Directive {
         keyword: "AllowTcpForwarding",
+        rule_id: "BLWK-SSH-005",
         field: "allow_tcp_forwarding",
         desired: "no",
         lockout_risk: false,
@@ -85,6 +95,7 @@ const DIRECTIVES: &[Directive] = &[
     },
     Directive {
         keyword: "PermitUserEnvironment",
+        rule_id: "BLWK-SSH-006",
         field: "permit_user_environment",
         desired: "no",
         lockout_risk: false,
@@ -92,6 +103,7 @@ const DIRECTIVES: &[Directive] = &[
     },
     Directive {
         keyword: "PermitTunnel",
+        rule_id: "BLWK-SSH-007",
         field: "permit_tunnel",
         desired: "no",
         lockout_risk: false,
@@ -99,6 +111,7 @@ const DIRECTIVES: &[Directive] = &[
     },
     Directive {
         keyword: "StrictModes",
+        rule_id: "BLWK-SSH-008",
         field: "strict_modes",
         desired: "yes",
         lockout_risk: false,
@@ -106,6 +119,7 @@ const DIRECTIVES: &[Directive] = &[
     },
     Directive {
         keyword: "GatewayPorts",
+        rule_id: "BLWK-SSH-009",
         field: "gateway_ports",
         desired: "no",
         lockout_risk: false,
@@ -113,6 +127,7 @@ const DIRECTIVES: &[Directive] = &[
     },
     Directive {
         keyword: "AllowAgentForwarding",
+        rule_id: "BLWK-SSH-010",
         field: "allow_agent_forwarding",
         desired: "no",
         lockout_risk: false,
@@ -120,12 +135,28 @@ const DIRECTIVES: &[Directive] = &[
     },
     Directive {
         keyword: "MaxAuthTries",
+        rule_id: "BLWK-SSH-011",
         field: "max_auth_tries",
         desired: "4",
         lockout_risk: false,
         why: "fewer auth attempts per connection slows brute forcing (BLWK-SSH-011)",
     },
 ];
+
+/// The rule ids this hardener can clear — the set `remediation::FIX_CAPABILITIES` must mirror.
+#[cfg(test)]
+pub(crate) fn managed_rule_ids() -> Vec<&'static str> {
+    DIRECTIVES.iter().map(|d| d.rule_id).collect()
+}
+
+/// The directive table's own view of whether a rule's fix risks locking the operator out.
+#[cfg(test)]
+pub(crate) fn directive_lockout_risk(rule_id: &str) -> Option<bool> {
+    DIRECTIVES
+        .iter()
+        .find(|d| d.rule_id == rule_id)
+        .map(|d| d.lockout_risk)
+}
 
 /// Whether the current effective value of `field` is insecure — kept in lockstep with the
 /// `BLWK-SSH-*` rule conditions so a fix only fires where the scanner would flag.
@@ -138,7 +169,7 @@ fn is_insecure(field: &str, value: &Value) -> bool {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum SshdChangeStatus {
     /// Would be set (dry run) from the current value to the desired value.
@@ -149,7 +180,7 @@ pub enum SshdChangeStatus {
     SkippedLockout,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SshdChange {
     pub keyword: String,
     pub current: String,
@@ -159,7 +190,7 @@ pub struct SshdChange {
     pub status: SshdChangeStatus,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SshdHardeningReport {
     pub config_path: String,
     pub changes: Vec<SshdChange>,

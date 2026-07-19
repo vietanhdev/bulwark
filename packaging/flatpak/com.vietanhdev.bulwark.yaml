@@ -175,10 +175,18 @@ modules:
       #    ships, not a sibling that shares a directory with it.
       - cp -r rules decoders log-rules ${FLATPAK_DEST}/bin/
       # 4. Desktop entry, icon, AppStream metainfo (Flathub requires the last two).
-      # Flathub requires >=256px (or SVG); icon.png is 512x512. The 128px copy stays
-      # so smaller icon slots don't have to downscale the 512.
-      - install -Dm644 apps/bulwark-app/src-tauri/icons/icon.png ${FLATPAK_DEST}/share/icons/hicolor/512x512/apps/com.vietanhdev.bulwark.png
+      # Flathub requires >=256px (or SVG); icon.png is 512x512. The smaller copies
+      # are shipped natively rather than left to the loader to downscale — GNOME
+      # asks for 48px constantly (dash, alt-tab, window list) and a 48 rendered
+      # from a 512 is visibly softer than one authored at 48.
+      - install -Dm644 apps/bulwark-app/src-tauri/icons/512x512.png ${FLATPAK_DEST}/share/icons/hicolor/512x512/apps/com.vietanhdev.bulwark.png
+      - install -Dm644 apps/bulwark-app/src-tauri/icons/256x256.png ${FLATPAK_DEST}/share/icons/hicolor/256x256/apps/com.vietanhdev.bulwark.png
       - install -Dm644 apps/bulwark-app/src-tauri/icons/128x128.png ${FLATPAK_DEST}/share/icons/hicolor/128x128/apps/com.vietanhdev.bulwark.png
+      - install -Dm644 apps/bulwark-app/src-tauri/icons/64x64.png ${FLATPAK_DEST}/share/icons/hicolor/64x64/apps/com.vietanhdev.bulwark.png
+      - install -Dm644 apps/bulwark-app/src-tauri/icons/48x48.png ${FLATPAK_DEST}/share/icons/hicolor/48x48/apps/com.vietanhdev.bulwark.png
+      - install -Dm644 apps/bulwark-app/src-tauri/icons/32x32.png ${FLATPAK_DEST}/share/icons/hicolor/32x32/apps/com.vietanhdev.bulwark.png
+      - install -Dm644 apps/bulwark-app/src-tauri/icons/24x24.png ${FLATPAK_DEST}/share/icons/hicolor/24x24/apps/com.vietanhdev.bulwark.png
+      - install -Dm644 apps/bulwark-app/src-tauri/icons/16x16.png ${FLATPAK_DEST}/share/icons/hicolor/16x16/apps/com.vietanhdev.bulwark.png
       - install -Dm644 packaging/flatpak/com.vietanhdev.bulwark.desktop ${FLATPAK_DEST}/share/applications/com.vietanhdev.bulwark.desktop
       - install -Dm644 packaging/flatpak/com.vietanhdev.bulwark.metainfo.xml ${FLATPAK_DEST}/share/metainfo/com.vietanhdev.bulwark.metainfo.xml
       # 5. Licence text. Flathub requires it installed under share/licenses/$FLATPAK_ID.

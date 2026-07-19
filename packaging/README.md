@@ -689,3 +689,32 @@ cat ~/.var/app/com.vietanhdev.bulwark/data/diag.log
 
 Note `$HOME` inside the sandbox is the *real* home (read-only via `--filesystem=host:ro`),
 so redirecting there fails with "Read-only file system"; `$XDG_DATA_HOME` is writable.
+
+## Desktop icons and the Wayland app_id
+
+Ubuntu's default session is GNOME on Wayland, where the shell does **not** read X11's
+`WM_CLASS`. It matches a window to its `.desktop` entry on the Wayland **app_id**, and a
+window that matches no entry gets a generic icon no matter how good the hicolor assets are.
+
+The app_id is neither `tauri.conf.json`'s `identifier` nor the `.desktop` file's basename —
+GTK advertises the **binary name**. Measured on a live session rather than assumed:
+
+```bash
+WAYLAND_DEBUG=1 bulwark-app 2>&1 | grep -o 'set_app_id([^)]*)'
+# -> set_app_id("bulwark-app")
+```
+
+All three of ours legitimately differ (`com.vietanhdev.bulwark` / `bulwark.desktop` /
+`bulwark-app`), so `StartupWMClass=bulwark-app` is the only thing holding the association
+together, in three separately-authored desktop entries (the `.deb`/`.rpm` template, the
+Flatpak entry, the snap heredoc). `scripts/check-packaging-consistency.sh` asserts all
+three against `mainBinaryName`; the Flatpak entry said `bulwark` and the snap declared
+nothing at all until that check existed.
+
+**Icon sizes: never list an `@2x` PNG in `bundle.icon`.** tauri-bundler derives the hicolor
+directory from each PNG's *actual pixel dimensions* and appends `@2` when the filename ends
+in `@2x`. So `128x128@2x.png` — really a 256px image — was installed to `256x256@2/`, a
+scale-2 slot the spec says holds a **512px** image, handing HiDPI users a half-resolution
+icon. No `@2x` filename can land in a correct directory under that rule. Ship plain sizes
+instead (16/24/32/48/64/128/256/512 are all in the list now); 48 matters most, because it
+is what GNOME asks for in the dash, alt-tab and the window list.

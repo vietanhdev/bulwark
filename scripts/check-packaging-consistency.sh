@@ -296,6 +296,61 @@ else
   note "Widen it once a real aarch64 flatpak-builder run has succeeded."
 fi
 
+# --- 6. the window must be able to find its own icon ---------------------------------
+# On Wayland (Ubuntu's default) GNOME does not read X11's WM_CLASS; it matches a window
+# to its .desktop entry on the Wayland app_id, and falls back to a generic icon when no
+# entry matches. GTK advertises the *binary name* as that app_id — verified on a live
+# session with WAYLAND_DEBUG=1, which logs xdg_toplevel.set_app_id("bulwark-app") — not
+# tauri.conf.json's identifier and not the .desktop file's basename, both of which differ
+# here. So StartupWMClass is the only thing holding the association together, in three
+# separately-authored desktop entries, and a wrong value fails silently and only on the
+# user's desktop.
+echo
+APP_ID="$(python3 -c "import json;print(json.load(open('${TAURI_CONF}'))['mainBinaryName'])")"
+note "expected Wayland app_id (= mainBinaryName): ${APP_ID}"
+
+# The .deb/.rpm template uses Tauri's {{exec}} placeholder, which expands to exactly this
+# binary name; asserting the placeholder keeps it correct through a rename.
+DEB_TEMPLATE="apps/bulwark-app/src-tauri/bulwark.desktop"
+if grep -qx 'StartupWMClass={{exec}}' "${DEB_TEMPLATE}"; then
+  ok ".deb/.rpm desktop template ties StartupWMClass to {{exec}}"
+else
+  bad "${DEB_TEMPLATE} must declare StartupWMClass={{exec}} (the Wayland app_id)"
+fi
+
+for f in "packaging/flatpak/com.vietanhdev.bulwark.desktop" "${SNAP_MANIFEST}"; do
+  got="$(sed -n 's/^[[:space:]]*StartupWMClass=//p' "${f}" | head -1)"
+  if [[ "${got}" == "${APP_ID}" ]]; then
+    ok "$(basename "${f}") declares StartupWMClass=${got}"
+  else
+    bad "$(basename "${f}") declares StartupWMClass='${got}', expected '${APP_ID}'"
+    note "GNOME/Wayland will show a generic icon for the window instead of Bulwark's."
+  fi
+done
+
+# Icon sizes. tauri-bundler derives the hicolor directory from each PNG's *actual pixel
+# dimensions*, appending "@2" when the filename ends in @2x — so 128x128@2x.png (really
+# 256px) was installed to 256x256@2/, a scale-2 slot that the spec says holds a 512px
+# image. HiDPI users therefore got a half-resolution icon, and no @2x filename can ever
+# land in a correct directory under that rule. Ship plain sizes only.
+mapfile -t ICONS < <(python3 -c "
+import json
+for i in json.load(open('${TAURI_CONF}'))['bundle']['icon']: print(i)")
+if printf '%s\n' "${ICONS[@]}" | grep -q '@2x'; then
+  bad "${TAURI_CONF} bundle.icon still lists an @2x PNG"
+  note "tauri-bundler sizes the hicolor dir from real pixels and appends @2, so an @2x"
+  note "entry always lands in a scale-2 directory that wants an image twice its size."
+else
+  ok "bundle.icon lists no @2x entry"
+fi
+# 48px is the size GNOME asks for most (dash, alt-tab, window list). Without it the
+# loader downscales the nearest larger icon, which is visibly softer.
+if printf '%s\n' "${ICONS[@]}" | grep -q '48x48\.png'; then
+  ok "bundle.icon ships a native 48x48"
+else
+  bad "${TAURI_CONF} bundle.icon has no 48x48.png — GNOME's most-requested icon size"
+fi
+
 echo
 if [[ ${fail} -eq 0 ]]; then
   echo "packaging consistency: PASS"
