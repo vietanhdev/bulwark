@@ -128,7 +128,7 @@ jobs:
           # the resulting link errors would read like a source bug.
           key: ${{ matrix.arch }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: matrix.gui
         with:
           node-version: 20
