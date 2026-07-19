@@ -1,6 +1,31 @@
 # Snap Store — classic confinement request for `bulwark`
 
-Post this in the **Store requests** category:
+> ⚠️ **Read this before posting. On the published criteria and two close
+> precedents, this request is likely to be refused, and the draft below argues on
+> the wrong axis.**
+>
+> The [review policy](https://snapcraft.io/docs/reference/administration/reviewing-classic-confinement-snaps/)
+> decides by **supported category**, and its *not-supported* list names all three
+> of Bulwark's requirements: *"access to /etc"*, *"direct access to sudo"*,
+> *"direct access to pkexec"*. There is no security-audit or system-administration
+> category among the supported ones — so the `supported-category` line below names
+> a category that does not exist, and the `reasoning` section argues technical
+> necessity, which is not what reviewers weigh.
+>
+> Both precedents were refused on purely categorical grounds without the technical
+> case being engaged: `cybertection-guardbot` (pkexec + full-filesystem antivirus —
+> Bulwark's exact feature pair) and `sentinelscan` (a read-only Ubuntu security
+> scanner — Bulwark feature for feature, pointed at the `system-backup` interface
+> instead).
+>
+> Filing anyway is still reasonable: it costs one forum post and about two weeks to
+> a first response, and a definitive determination beats inferring from precedent.
+> But expect a refusal, rewrite the two sections named above before posting, and do
+> not build product plans on approval. Fuller write-up in `packaging/README.md`.
+
+Post this in the **`classic-confinement` subcategory** of Store requests, using
+that subcategory's template — a malformed post is auto-bounced by
+`store-requests-bot` with no human review:
 <https://forum.snapcraft.io/c/store-requests/19>
 
 Title suggestion: **Classic confinement request for bulwark**
