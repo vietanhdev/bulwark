@@ -1,6 +1,6 @@
 ---
 title: Download
-description: Download Bulwark for Linux — desktop app (.deb, .rpm, AppImage, Snap, Flatpak) and CLI (.deb, .rpm, PPA, tarball).
+description: Download Bulwark for Linux — desktop app (.deb, .rpm, AppImage) and CLI (.deb, .rpm, PPA, AUR, COPR, tarball).
 ---
 
 <script setup>
@@ -99,24 +99,19 @@ chmod +x bulwark-desktop-*-x86_64.AppImage
 ./bulwark-desktop-*-x86_64.AppImage
 ```
 
-### Snap
+### Snap and Flatpak — not currently available
 
-```bash
-sudo snap install bulwark --classic
-```
+Bulwark is **not** published on the Snap Store or Flathub, and installing it from
+either is not possible today. Both stores sandbox applications, and both restrict
+the host access a security auditor needs: Flathub's inclusion policy excludes
+system utilities used on the host, and the Snap Store's classic-confinement
+criteria exclude reading `/etc` and using `pkexec` — which is how Bulwark's
+privileged scans work.
 
-Classic confinement is required: Bulwark elevates privileged scans via `pkexec`
-and reads system files under `/etc`, which a strict sandbox would block.
-
-### Flatpak
-
-```bash
-flatpak install flathub com.vietanhdev.bulwark
-flatpak run com.vietanhdev.bulwark
-```
-
-The Flatpak is sandboxed — it reads host config read-only for unprivileged scans.
-Privileged (root) scans are available in the `.deb`/`.rpm`/AppImage/Snap builds.
+Packaging for both exists in the repository and builds correctly, so this may
+change. Until it does, use the `.deb`, `.rpm`, AppImage or PPA above. Those are
+unconfined, so they run the complete product: privileged scans, host ClamAV
+integration and all.
 
 ## CLI
 

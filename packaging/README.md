@@ -22,16 +22,36 @@ Layout:
 The GUI's privileged path is `pkexec bulwark scan --privileged` plus reading host
 `/etc`. How much of that survives depends entirely on the sandbox:
 
-| Channel | Sandbox | Privileged scan | Read host `/etc` |
-|---|---|---|---|
-| `.deb`/`.rpm`/AppImage | none | ✅ works | ✅ |
-| Snap **classic** | none (approval-gated) | ✅ works | ✅ |
-| Snap strict | yes | ❌ | interfaces only |
-| **Flatpak** | yes (no opt-out) | ⚠️ only via `flatpak-spawn --host` + host CLI + app-code change | ✅ with `--filesystem=host:ro` |
+| Channel | Sandbox | Privileged scan | Read host `/etc` | Store will accept it? |
+|---|---|---|---|---|
+| `.deb`/`.rpm`/AppImage | none | ✅ works | ✅ | n/a — self-hosted |
+| PPA / AUR / COPR (CLI) | none | ✅ works | ✅ | ✅ already published |
+| Snap **classic** | none | ✅ works | ✅ | ❌ **likely refused** — see below |
+| Snap strict | yes | ❌ | `system-backup` (paths move under `/var/lib/snapd/hostfs`) | ✅ but degraded |
+| **Flatpak** | yes (no opt-out) | ⚠️ `flatpak-spawn --host` + host CLI | ✅ with `--filesystem=host:ro` | ❌ **likely refused** — see below |
 
 Flatpak is the widest-reach GUI channel but the most constrained — it can never be
-unconfined. Ship it knowing privileged scanning is a documented follow-up, not a
-day-one feature.
+unconfined.
+
+**Both sandboxed app stores independently reject this shape of application, and
+that is the single most important fact on this page.** It is not two pieces of bad
+luck; it is one structural fact arrived at twice. An app store built on not
+trusting an app with the host has no natural place for a tool whose entire purpose
+is auditing the host:
+
+- **Flathub inclusion policy:** *"System utilities which are generally used on host
+  will not be accepted"*, and *"Applications that rely on host components […] for
+  core functionality will not be accepted."*
+- **Snap classic confinement policy** lists, verbatim, in its *not supported*
+  section: *"access to /etc (use layouts, system-files)"*, *"direct access to
+  sudo"*, and *"direct access to pkexec"* — Bulwark's three requirements, named
+  individually. There is no security-tool or system-auditor category in the
+  supported list.
+
+So plan distribution around the unconfined channels, which already deliver the
+complete product. Treat the two store channels as speculative, and never promise a
+feature there that the sandbox cannot deliver — a scanner that silently cannot see
+what it audits is a worse outcome than no package at all.
 
 ---
 
@@ -176,17 +196,55 @@ sudo snap install lxd && sudo lxd init --auto   # snapcraft's default build back
 snapcraft                                        # produces bulwark_0.7.0_amd64.snap
 ```
 
-### Classic confinement requires approval
+### Classic confinement requires approval, and will probably not be granted
 
-Because the snap is `confinement: classic`, you cannot just push it to a stable
-channel. The flow is:
+Read this before investing in the snap channel. `confinement: classic` cannot be
+pushed to a stable channel without manual approval from the Snap Store review
+board, and the published criteria go against Bulwark.
+
+The [review policy](https://snapcraft.io/docs/reference/administration/reviewing-classic-confinement-snaps/)
+lists supported categories (compilers, debug tools, IDEs, programming languages,
+terminal emulators, juju/kubernetes helpers, cloud agents) — no security-tool or
+system-auditor category exists. Its *not supported* list names all three of
+Bulwark's requirements individually:
+
+> - "access to /etc (use layouts, system-files)"
+> - "direct access to sudo (modify program to check if root and alert user)"
+> - "direct access to pkexec (modify program; note a polkit backend is planned but
+>   not roadmapped)"
+
+**Two precedents, both close analogues.** `cybertection-guardbot` requested classic
+for VPN management via `pkexec` plus antivirus scanning across the full filesystem
+— Bulwark's exact feature pair — and was rejected: *"Classic confinement is
+reserved for specific categories […] As 'cybertection-guardbot' doesn't fall into
+these categories, we cannot approve the request."* Note the reasoning is purely
+categorical; the technical justification was never engaged with, so a better-argued
+request does not help. `sentinelscan`, a read-only Ubuntu security scanner doing
+SSH hardening, firewall and permission checks — Bulwark feature for feature — got
+*"this tool doesnt qualify for the classic snap and doesnt fit into any existing
+category"*, with a pointer to the `system-backup` interface instead.
+
+Unlike Flathub, the Snap Store has **no AI-content policy** — the ToS, the policy
+forum category and the snapcraft docs say nothing about LLMs or generated content.
+That removes one obstacle but not this one.
+
+The flow, if you file anyway (worth doing: a forum post plus ~2 weeks to first
+response is cheap, and a definitive `#reject` beats inferring from precedent):
 
 1. Register the name once: `snapcraft register bulwark`.
-2. Request classic confinement on the forum
-   (<https://forum.snapcraft.io/c/store-requests>), explaining that Bulwark is a
-   host security auditor that must run `pkexec` and read system files — a strict
-   sandbox defeats its purpose. Approval is manual and case-by-case.
-3. After approval: `snapcraft upload --release=stable bulwark_0.7.0_amd64.snap`.
+2. Request classic confinement in the `classic-confinement` **subcategory** of
+   <https://forum.snapcraft.io/c/store-requests>, **using its template** — a
+   malformed post is auto-bounced by `store-requests-bot` with no human review.
+   Argue against the supported-category list, not from technical need: the category
+   list is the axis reviewers actually decide on.
+3. After approval: `snapcraft upload --release=stable bulwark_0.8.9_amd64.snap`.
+
+**If it is refused**, the only strict-confinement path is the `system-backup`
+interface (read-only host filesystem, the reviewer-endorsed answer for exactly this
+use case). It relocates everything under `/var/lib/snapd/hostfs`, so every collector
+path in `bulwark-core` would need a prefix the CLI build must not inherit — a real
+core change, not a packaging tweak. `pkexec` has no strict path at all today, and
+host ClamAV is unreachable. That is the same degraded shape as the Flatpak.
 
 Until approval, you can still test locally without a store round-trip:
 ```bash
@@ -325,31 +383,85 @@ Finally: fork `flathub/flathub` (**uncheck** "copy the master branch only"), bra
 off `new-pr`, copy the staged files in, and open the PR against the **`new-pr` base
 branch** — not `master`.
 
-#### The two permissions Flathub will argue with
+#### The three permissions Flathub will argue with
 
-`appstream` passes clean. `manifest` reports two errors that are *not* bugs to
+`appstream` passes clean. `manifest` reports three errors, none of them bugs to
 silently paper over:
 
 | Linter error | Status |
 |---|---|
-| `finish-args-host-ro-filesystem-access` | **Needs a Flathub exception.** `--filesystem=host:ro` is the product: an auditor that can't read the host's `/etc` has nothing to audit. Request the exception in the PR with that justification — don't drop the permission to make the linter quiet, that ships a scanner which silently sees nothing. |
-| `finish-args-unnecessary-xdg-data-bulwark-create-access` | **Unresolved — needs a live sandbox test.** The linter calls `--filesystem=xdg-data/bulwark:create` redundant because the app already gets a writable `~/.var/app/<id>/data`. But it was added for a real, observed failure ("attempt to write a readonly database") caused by `--filesystem=host:ro`. Removing it blind risks reintroducing that. Build, run a scan in the sandbox, and confirm the history persists *before* deciding. |
+| `finish-args-host-ro-filesystem-access` | **Needs an exception.** `--filesystem=host:ro` is the product: an auditor that cannot read the host's `/etc` has nothing to audit. Never drop it to quiet the linter — that ships a scanner which silently sees nothing. |
+| `finish-args-flatpak-spawn-access` | **Needs an exception, and there is a precedent against it.** It exists for host `clamscan` and `flatpak-spawn --host pkexec` privileged scans. See below. |
+| `finish-args-own-name-org.com_vietanhdev_bulwark.SingleInstance` | **Needs an exception.** Buys only window re-focus on relaunch — the weakest of the three, and the obvious one to drop. See below. |
 
-`--talk-name=org.freedesktop.Flatpak` was **removed**: it exists for `flatpak-spawn
---host pkexec` privileged scans, and that code path isn't implemented. The linter
-errors on it, and asking reviewers for a sandbox escape the code never exercises is a
-straightforward way to fail review. Add it back in the same change that implements
-privileged scanning.
+**The bus-name error is not the one the app-id rename fixed, and this is easy to get
+wrong.** `tauri-plugin-single-instance` builds its name as `org.` + identifier with
+dots and dashes turned into underscores, so the app owns
+`org.com_vietanhdev_bulwark.SingleInstance` — which begins `org.`, not
+`com.vietanhdev.bulwark`, and so sits outside the app-id prefix no matter what the
+identifier says. Renaming away from `com.vietanhnv.bulwark` was still necessary for
+consistency, but it did not clear this error and cannot. Note that
+`scripts/check-packaging-consistency.sh` reports this name `ok`: it verifies the name
+agrees with the identifier, not that Flathub will accept it. Different question.
+
+**The `pkexec` path has been refused before.** flatpak-builder-lint#1037 (OneKey),
+from a Flathub maintainer: *"You aren't going to get an exception for launching
+pkexec on host. […] this is not a target usecase and there is no guarantee that
+pkexec exists on host in which case this breaks."* That is exactly Bulwark's
+privileged-scan architecture, so treat `flatpak-spawn` as unlikely rather than
+merely contested.
+
+#### The exceptions policy has an LLM clause, and it targets these exact permissions
+
+Before submitting, read Flathub's linter-exceptions policy in full. Verbatim:
+
+> Please do not use LLMs in any way to handle exceptions PRs. The exception can be
+> permanently denied in that case. **Certain exceptions that enable breaking out of
+> the Flatpak sandbox including but not limited to home, host, flatpak-spawn,
+> arbitrary bus name access will not be granted if there are signs of LLM usage in
+> the software** or in the exception PR.
+
+All three of Bulwark's lint errors are in that named list, and the test is "signs of
+LLM usage **in the software**", not merely in the PR text. This is a stricter rule
+than the general generative-AI policy in the submission requirements, and unlike
+that one it carries no mature-project carve-out. The stated penalty is *permanent*
+denial, which matters for sequencing: asking for all three at once and being refused
+may foreclose a later, narrower request. If the Flatpak is pursued at all, narrow
+the ask first — dropping single-instance and `flatpak-spawn` leaves `host:ro` alone,
+which is both the most defensible and the only one without a precedent against it.
+
+For context on the odds: of 400 submission PRs closed in the six weeks to
+2026-07-19, 265 (66%) were tagged `AI Slop` and 40 were accepted.
+
+#### Process notes that cost real time
+
+- **Never close and reopen a submission PR to fix something** — force-push the branch
+  instead. From a maintainer on #9018: *"Imagine if everyone close a PR because they
+  forgot something instead of updating it (force push always fine)."* Repeated
+  reopening earns a `spam` label and, after roughly three attempts, an account block.
+- **The checklist is parsed mechanically and closes the PR in seconds.** #9392 was
+  auto-closed 21 seconds after opening with *"Diagnostics: Checklist(s) not completed
+  or missing"* — no human ever saw it. Keep the template intact, tick every box, and
+  put the description where the template says. The bot's own recovery instruction is
+  to **comment on the closed PR**, not to open a new one.
+- **A green test build proves nothing.** Several 2026-07 submissions built
+  successfully and were rejected anyway.
+- **Do not request an AI review on the PR.** The policy says so explicitly, and a
+  Copilot review was requested on #9392 before anyone noticed.
+- **The PR description, checklist answers and every review reply must be written by a
+  human.** `packaging/flatpak/flathub-submission-facts.md` (untracked, deliberately)
+  holds the checkable technical detail to draw on — it is a fact sheet, not prose to
+  paste.
 
 #### Still outstanding
 
-- **Domain verification.** Flathub may require a token at
-  `https://vietanhdev.com/.well-known/org.flathub.VerifiedApps.txt`. Only the domain
-  owner can place it — note the app-id domain is `vietanhdev.com`, while the app's
-  homepage is `bulwark.nrl.ai`.
 - **A full offline build from the generated manifest** has not been run. The dev
   manifest is validated end-to-end, but the `type: git` source has only been linted,
   not built.
+
+Domain verification is **done**: `https://vietanhdev.com/.well-known/org.flathub.VerifiedApps.txt`
+returns 200 (via a 308 to `www`). Note the app-id domain is `vietanhdev.com` while
+the homepage is `bulwark.nrl.ai`; both are controlled by the maintainer.
 
 ---
 
@@ -500,6 +612,24 @@ The `[Session Bus Policy]` and `[Context]` sections are the ground truth for wha
 installed build actually has. A manifest edit that never made it into the installed
 build looks exactly like a fix that did not work — and if you are also testing by hand,
 you will conclude the fix is wrong and go looking for a different one.
+
+**The snap has the same trap in a different costume.** A stale snap mount namespace
+keeps serving the old layout, so a corrected `snapcraft.yaml` reads as ineffective
+even though it built and installed fine — structurally identical to trap 1 above, and
+it bites hardest on the WebKitGTK child-process error the `layout:` bind exists to
+fix. Clear it before concluding a fix did not work:
+
+```bash
+sudo /usr/lib/snapd/snap-discard-ns bulwark
+```
+
+**Tauri's official snap docs ship no `environment:` block.** Following
+<https://v2.tauri.app/distribute/snapcraft/> verbatim omits
+`WEBKIT_DISABLE_DMABUF_RENDERER` and `WEBKIT_DISABLE_COMPOSITING_MODE` entirely.
+Neither is wanted by default here (see the long comment in the Flatpak manifest —
+they cost real rendering performance and were *not* the cause of the blank window),
+but they are the documented workarounds if a driver ever renders nothing, and their
+absence from the upstream doc means a blank-window hunt will not find them there.
 
 **Capturing app output.** The app's stdout is awkward to capture from a wrapper script.
 Writing it inside the sandbox works reliably:
