@@ -1207,10 +1207,27 @@ fn login_defs_backup_dir(home: &str) -> PathBuf {
 
 fn print_sysctl_changes(report: &bulwark_core::SysctlHardeningReport, indent: &str) {
     for c in &report.changes {
+        // Say plainly which rows outlive a reboot and which are this-boot-only. A persisted key
+        // and a live-only interface write are genuinely different promises to the user.
+        let scope = if c.persisted {
+            "saved + applied now"
+        } else {
+            "applied now (new interfaces inherit from conf.default)"
+        };
         println!(
-            "{indent}{} = {} (currently {})",
+            "{indent}{} = {} (currently {}) — {scope}",
             c.key, c.desired, c.current
         );
+        if !c.interfaces.is_empty() {
+            println!(
+                "{indent}    {} interface(s): {}",
+                c.interfaces.len(),
+                c.interfaces.join(", ")
+            );
+        }
+    }
+    for k in &report.stale_persisted_keys {
+        println!("{indent}stale entry to remove: {k}");
     }
 }
 

@@ -59,7 +59,11 @@ export interface SysctlChange {
   current: string;
   desired: string;
   why: string;
-  status: { status: "would_set" | "set" | "set_but_not_live" };
+  status: { status: "would_set" | "set" | "set_but_not_live" | "failed"; reason?: string };
+  /** Written to /etc/sysctl.d so it survives a reboot. False rows are live-only. */
+  persisted: boolean;
+  /** For the aggregated per-interface row: the interfaces it covers. */
+  interfaces?: string[];
 }
 
 export interface SysctlHardeningReport {
@@ -69,6 +73,7 @@ export interface SysctlHardeningReport {
   backup_path: string | null;
   verified: boolean | null;
   note: string | null;
+  stale_persisted_keys?: string[];
 }
 
 export interface BannerResult {
@@ -164,7 +169,14 @@ export function flattenChanges(r: CombinedFixReport | null | undefined): FlatCha
     out.push({ key: `sshd:${c.keyword}`, label: c.keyword, detail: `${c.current} → ${c.desired}` });
   }
   for (const c of r.sysctl?.changes ?? []) {
-    out.push({ key: `sysctl:${c.key}`, label: c.key, detail: `${c.current} → ${c.desired}` });
+    // A live-only row covers N interfaces at once; say so rather than showing a bare key that
+    // looks like it names a single one.
+    const count = c.interfaces?.length ?? 0;
+    out.push({
+      key: `sysctl:${c.key}`,
+      label: count > 0 ? `${c.key} (${count} interfaces)` : c.key,
+      detail: c.persisted ? `${c.current} → ${c.desired}` : `→ ${c.desired}, this boot`,
+    });
   }
   for (const b of bannerChanges(r.banner)) {
     out.push({ key: `banner:${b.path}`, label: b.path, detail: "write warning banner" });
@@ -193,7 +205,11 @@ export function fixNotes(r: CombinedFixReport | null | undefined): string[] {
   if (r.sysctl?.note) notes.push(r.sysctl.note);
   if (r.login_defs?.note) notes.push(r.login_defs.note);
   if (r.sysctl?.applied) {
-    notes.push("Kernel settings were written to /etc/sysctl.d, so they survive a reboot.");
+    notes.push(
+      "Kernel settings were written to /etc/sysctl.d so they survive a reboot. Only the stable " +
+        "'all' and 'default' scopes are saved — individual interfaces are set on the running " +
+        "kernel now, and new ones inherit the safe value from 'default'.",
+    );
   }
   if (r.sshd?.applied) notes.push("Reload sshd for the new config to take effect.");
   for (const e of r.errors ?? []) notes.push(e);
