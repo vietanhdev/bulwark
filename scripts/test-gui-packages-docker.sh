@@ -175,19 +175,28 @@ VERDICT='
   # 2. A real, mapped, sensibly-sized window exists. `import -window root` will happily
   #    screenshot a desktop with no window on it, so assert the window itself. Also catches a
   #    window that maps at 0x0 or 1x1, which renders "content" that no user can see.
-  WID="$(xdotool search --name "Bulwark" 2>/dev/null | head -1)"
+  # Pick the LARGEST matching window, never the first. There is no window manager under Xvfb,
+  # and GTK maps small helper/utility windows that carry the same name — so `head -1` reliably
+  # selected a 10x10 helper and reported a perfectly healthy UI as unusably small. Area is the
+  # honest discriminator: the real window is the big one.
+  WIDS="$(xdotool search --name "Bulwark" 2>/dev/null || true)"
+  WID=""; BESTA=0; W=0; H=0
+  for w in ${WIDS}; do
+    GW="$(xdotool getwindowgeometry --shell "${w}" 2>/dev/null | sed -n "s/^WIDTH=//p")"
+    GH="$(xdotool getwindowgeometry --shell "${w}" 2>/dev/null | sed -n "s/^HEIGHT=//p")"
+    [ -n "${GW}" ] && [ -n "${GH}" ] || continue
+    A=$(( GW * GH ))
+    echo "  candidate window ${w}: ${GW}x${GH}"
+    if [ "${A}" -gt "${BESTA}" ]; then BESTA="${A}"; WID="${w}"; W="${GW}"; H="${GH}"; fi
+  done
   if [ -n "${WID}" ]; then
-    GEO="$(xdotool getwindowgeometry "${WID}" 2>/dev/null | tr "\n" " ")"
-    echo "window: id=${WID} ${GEO}"
-    W="$(xdotool getwindowgeometry --shell "${WID}" 2>/dev/null | sed -n "s/^WIDTH=//p")"
-    H="$(xdotool getwindowgeometry --shell "${WID}" 2>/dev/null | sed -n "s/^HEIGHT=//p")"
-    if [ "${W:-0}" -lt 400 ] || [ "${H:-0}" -lt 300 ]; then
-      echo "FAIL: window is ${W}x${H} — too small to be a usable UI"; fail=1
+    echo "window: id=${WID} ${W}x${H} (largest of $(echo "${WIDS}" | wc -w) named windows)"
+    if [ "${W}" -lt 400 ] || [ "${H}" -lt 300 ]; then
+      echo "FAIL: largest window is only ${W}x${H} — too small to be a usable UI"; fail=1
     fi
   else
     echo "FAIL: no window titled Bulwark is mapped on the display"
     fail=1
-    WID=""
   fi
 
   # Prefer a shot of the window itself; fall back to the root so the pixel checks still run
@@ -218,15 +227,23 @@ VERDICT='
     if [ -f /tmp/baseline.png ]; then
       import -window root /tmp/shot_root.png 2>/dev/null || true
       if [ -f /tmp/shot_root.png ]; then
-        DIFF="$(compare -metric AE /tmp/baseline.png /tmp/shot_root.png null: 2>&1 || true)"
-        echo "pixels changed vs the pre-launch display: ${DIFF}"
-        # AE = count of differing pixels, so this is an integer and an exact-zero test is
-        # meaningful. Anything non-numeric means compare failed and the check is inconclusive.
-        case "${DIFF}" in
-          ""|*[!0-9]*) echo "WARN: could not measure the pre/post difference (${DIFF})" ;;
-          0)           echo "FAIL: display is pixel-identical to before launch — nothing was drawn"; fail=1 ;;
-          *)           echo "OK: ${DIFF} pixels changed after launch" ;;
-        esac
+        RAW="$(compare -metric AE /tmp/baseline.png /tmp/shot_root.png null: 2>&1 || true)"
+        # `compare` prints the metric as "1023970 (0.999969)" — the absolute count followed by
+        # a normalised value — and switches to scientific notation for large counts. Treating
+        # the whole string as one number made every run report "could not measure", i.e. the
+        # check silently never ran. Take the first field and compare numerically in awk, which
+        # handles both plain integers and 5.41485e+10.
+        DIFF="${RAW%% *}"
+        echo "pixels changed vs the pre-launch display: ${RAW}"
+        if echo "${DIFF}" | grep -qE "^[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$"; then
+          if awk -v d="${DIFF}" "BEGIN{exit !(d>0)}"; then
+            echo "OK: ${DIFF} pixels changed after launch"
+          else
+            echo "FAIL: display is pixel-identical to before launch — nothing was drawn"; fail=1
+          fi
+        else
+          echo "WARN: could not measure the pre/post difference (${RAW})"
+        fi
       fi
     fi
 
