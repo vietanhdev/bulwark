@@ -148,5 +148,5 @@ grammar and testing expectations.
 
 ## License
 
-Apache-2.0 — see [`LICENSE`](LICENSE). Contributions are covered by a lightweight CLA;
+Apache-2.0 — see [`LICENSE`](LICENSE). Contributions are accepted under those same terms, with no separate CLA, signature or bot required;
 see [`CONTRIBUTING.md`](CONTRIBUTING.md).

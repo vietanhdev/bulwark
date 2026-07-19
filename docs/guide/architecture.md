@@ -374,7 +374,7 @@ now refuse.
 
 Reframed as rule-set and scan-performance growth, since there's no multi-tenant traffic.
 
-- **Current load:** single host, 57 v1 rules.
+- **Current load:** single host, 65 rules.
 - **Expected load:** community-contributed rules could grow into the hundreds over time — Lynis's own documentation describes "hundreds" of individual tests, a directionally useful reference ceiling.
 - **Breaking point:** naively re-running a collector for every rule that references it duplicates work once dozens of rules share one collector (e.g. many SSH rules all reading `sshd_config`).
 - **Scale-out plan:** not distributed — collectors are memoized per scan run (collect once, evaluate N rules against the cached fact), and independent collectors run concurrently.
@@ -556,7 +556,7 @@ Uninstalling via the package manager removes the binary only. The local SQLite f
 
 *Also not part of the standard template — added when the rule/collector model was extended to be OS-aware, since it changes how every future rule and collector gets authored, not just one feature.*
 
-Every rule and collector in v0.1 was implicitly Linux-only. This section documents the extension that makes "implicitly" explicit and adds a second, orthogonal axis on top of it — without changing behavior for any of the 57 original rules by default.
+Every rule and collector in v0.1 was implicitly Linux-only. This section documents the extension that makes "implicitly" explicit and adds a second, orthogonal axis on top of it — without changing behavior for any of the original rules by default.
 
 ### Two axes, not one
 
@@ -580,7 +580,7 @@ Both axes are enforced in `engine::run_scan`, via a `Profile { os, needs }` pass
 - Rules are filtered before anything else: `rule.os.contains(&profile.os) && (rule.profiles.is_empty() || rule.profiles.iter().any(|p| profile.needs.contains(p)))`.
 - Collectors get a second, independent gate: `Collector::supported_os()` (default `[linux]`) is checked before `is_applicable()`/`collect()` are ever called — so a macOS-only collector's `collect()` is structurally unreachable on a Linux host, not just conventionally skipped by a well-behaved rule author. Defense in depth: even a rule that's mistagged can't cause a collector to run facts-gathering code for the wrong OS.
 
-`Profile::default()` (host OS, no opted-in needs) reproduces the exact pre-profile scan behavior bit-for-bit on a Linux host, which is why this shipped with zero regressions against the existing 57-rule test suite.
+`Profile::default()` (host OS, no opted-in needs) reproduces the exact pre-profile scan behavior bit-for-bit on a Linux host, which is why this shipped with zero regressions against the existing rule test suite.
 
 ### What's real today, and what's a skeleton
 

@@ -63,7 +63,7 @@ what it audits is a worse outcome than no package at all.
 | Ubuntu PPA (CLI) | yes | yes | Launchpad, from `Architecture: any` |
 | AUR (CLI) | yes | yes | the user, from the `PKGBUILD` |
 | COPR (CLI) | yes | yes | COPR, per enabled chroot |
-| Flathub (GUI) | yes | **not yet** | Flathub, from the Flatpak manifest |
+| Flathub (GUI) | yes | declared, unbuilt | Flathub, from the Flatpak manifest |
 | Snap Store (GUI) | yes | no | blocked on classic approval anyway |
 
 Nothing in the source is arch-specific, so widening a channel is a metadata change
@@ -77,9 +77,18 @@ reason the rows are not all identical:
   their infrastructure to a build we have not run. Flathub in particular builds every
   arch named in `only-arches` from the Flatpak manifest's own offline sources — a
   different build system, runtime and input set from our `.deb`. A GUI arch proven by
-  our pipeline is therefore *not* proven there, which is why that cell stays "not yet"
-  until a real aarch64 `flatpak-builder` run has succeeded. Claiming it early converts
-  an untested target into a failed submission.
+  our pipeline is therefore *not* proven there.
+
+**Flathub's aarch64 entry is the one row in this table that is a promise rather than
+a result**, and it is worth being blunt about that. As of 0.9.0 `only-arches` lists
+both arches, so Flathub will attempt an aarch64 build. What supports it: the release
+pipeline builds, installs and launch-tests the aarch64 GUI natively, and the offline
+sources this submission ships already carry the arm64 native bindings that build needs
+(`node-sources.json` includes `@rolldown/binding-linux-arm64-gnu`; the cargo sources
+are arch-neutral). What does not: **no `flatpak-builder --arch=aarch64` run has ever
+completed.** If that build fails on Flathub's infrastructure, narrow `only-arches`
+back to `x86_64` in `scripts/flatpak-gen-flathub-manifest.sh` rather than leaving a
+failing architecture in a live submission.
 
 `scripts/check-packaging-consistency.sh` enforces this table's left-hand columns
 against `release.yml`'s build matrix, so an arch added to the release and forgotten
@@ -270,7 +279,7 @@ response is cheap, and a definitive `#reject` beats inferring from precedent):
    malformed post is auto-bounced by `store-requests-bot` with no human review.
    Argue against the supported-category list, not from technical need: the category
    list is the axis reviewers actually decide on.
-3. After approval: `snapcraft upload --release=stable bulwark_0.8.9_amd64.snap`.
+3. After approval: `snapcraft upload --release=stable bulwark_0.9.0_amd64.snap`.
 
 **If it is refused**, the only strict-confinement path is the `system-backup`
 interface (read-only host filesystem, the reviewer-endorsed answer for exactly this
@@ -559,19 +568,25 @@ is granted classic. Two one-time steps, in order:
 
 ## Version bumps
 
-`scripts/bump-version.sh` currently updates the six in-tree version declarations
-but **not** these packaging files. When cutting a release that will be published
-here, also update:
+`scripts/bump-version.sh` sets **ten** in-tree version declarations, and the packaging
+files here are among them — `snap/snapcraft.yaml`, the AUR `PKGBUILD` and `.SRCINFO`,
+and the COPR spec all get written by the script. Do not hand-edit them; run the script.
 
-- `snap/snapcraft.yaml` → `version:`
-- `packaging/flatpak/com.vietanhdev.bulwark.metainfo.xml` → add a `<release>`, and
-  re-run `scripts/flatpak-gen-sources.sh` if lockfiles changed.
-- The PPA source version is derived automatically from `[workspace.package]`
-  version by `scripts/build-ppa-source.sh`, so it needs no manual edit.
+Two things it deliberately does not do:
 
-If PPA/snap publishing becomes routine, add `snap/snapcraft.yaml` to the file list
-in `scripts/bump-version.sh` so a bump keeps it in sync (that list is the single
-source of truth for what a bump touches).
+- **`packaging/flatpak/com.vietanhdev.bulwark.metainfo.xml`** — the script *checks* the
+  newest `<release>` matches and **fails** until you add one, but never writes it. That
+  block is a changelog Flathub renders on the store page, so it is refused rather than
+  faked. Write the entry by hand, then re-run `--check`.
+- **`scripts/flatpak-gen-sources.sh`** — re-run it yourself if the lockfiles changed.
+
+The PPA source version is derived from `[workspace.package]` by
+`scripts/build-ppa-source.sh`, so it needs no edit at all.
+
+If a new file starts carrying the version, add it to the file list in
+`scripts/bump-version.sh` — that list is the single source of truth for what a bump
+touches, and `scripts/check-packaging-consistency.sh` runs `--check` in CI so drift
+shows up even when somebody edits a version directly.
 
 ## Arch AUR + Fedora COPR (CLI only)
 

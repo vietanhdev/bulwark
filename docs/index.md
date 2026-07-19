@@ -23,7 +23,7 @@ hero:
 
 <section class="bw-stats" aria-label="Bulwark at a glance">
   <div class="bw-stat">
-    <span class="bw-stat-num">79</span>
+    <span class="bw-stat-num">85</span>
     <span class="bw-stat-label">built-in checks</span>
   </div>
   <div class="bw-stat">

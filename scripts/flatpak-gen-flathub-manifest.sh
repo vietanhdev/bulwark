@@ -102,13 +102,24 @@ cp "${SRC_DIR}/cargo-sources.json" "${SRC_DIR}/node-sources.json" "${OUT_DIR}/"
 # way TrguiNG does. Copying the files would work but diverges from every reviewed example
 # and forks a tree upstream maintains. The branch-prep step below adds it properly.
 
-# x86_64 only, deliberately. Flathub BUILDS every arch listed here, so claiming
-# aarch64 without having built it once turns an untested target into a failing
-# submission. Everything shipped so far (PPA, AUR, COPR, GitHub releases) is
-# x86_64; add aarch64 here once an aarch64 build has actually been proven.
+# Both arches, from 0.9.0 on. Flathub BUILDS every arch listed here on its own
+# infrastructure, so this list is a promise rather than a preference.
+#
+# What backs the aarch64 entry: the release pipeline builds, installs and
+# launch-tests the aarch64 GUI natively on arm64 runners (release.yml's
+# verify-install and verify-gui-launch matrices), and the offline sources this
+# submission ships carry the arm64 native bindings that build needs —
+# node-sources.json includes @rolldown/binding-linux-arm64-gnu, and the cargo
+# sources are arch-neutral.
+#
+# What does NOT back it, and is worth stating plainly: no aarch64
+# `flatpak-builder` run has completed. Flathub builds from these offline sources
+# inside the GNOME runtime, which is a different build system from the .deb
+# pipeline that was proven. If the aarch64 build fails on Flathub, drop it back
+# to x86_64 here rather than leaving a failing arch in the submission.
 cat >"${OUT_DIR}/flathub.json" <<'JSON'
 {
-  "only-arches": ["x86_64"]
+  "only-arches": ["x86_64", "aarch64"]
 }
 JSON
 
