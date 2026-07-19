@@ -118,7 +118,7 @@ jobs:
           echo "version=${CARGO_VERSION}" >> "$GITHUB_OUTPUT"
           echo "Building version ${CARGO_VERSION}"
 
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
