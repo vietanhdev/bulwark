@@ -125,3 +125,6 @@ apps/bulwark-app/.playwright/
 # They stay on disk locally; regenerate the template with
 #   gh api repos/flathub/flathub/contents/.github/pull_request_template.md -q .content | base64 -d
 packaging/flatpak/*.md
+
+# Local research docs
+/research
