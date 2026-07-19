@@ -317,7 +317,7 @@ jobs:
           - { image: "fedora:41",    pkg: rpm, gui: false, arch: aarch64, deb_arch: arm64, runner: ubuntu-24.04-arm }
     name: verify (${{ matrix.image }}, ${{ matrix.arch }})
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: bulwark-linux-${{ matrix.arch }}
           path: dist
@@ -439,7 +439,7 @@ jobs:
           - { arch: aarch64, multiarch: aarch64-linux-gnu, runner: ubuntu-24.04-arm }
     name: verify-appimage (${{ matrix.arch }})
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: bulwark-linux-${{ matrix.arch }}
           path: dist
@@ -513,7 +513,7 @@ jobs:
     name: verify-gui-launch (${{ matrix.arch }})
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: bulwark-linux-${{ matrix.arch }}
           path: build/relassets
@@ -539,7 +539,7 @@ jobs:
           set -euo pipefail
           echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           # Every arch the build matrix produced, flattened into one dist/. Using a pattern
           # rather than naming the arches means adding a third one to the build matrix needs no
