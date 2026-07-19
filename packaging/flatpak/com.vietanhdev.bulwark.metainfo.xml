@@ -108,6 +108,20 @@
   </branding>
 
   <releases>
+    <release version="0.10.0" date="2026-07-19">
+      <description>
+        <p>One-click fixes for common problems, and a view of how your machine measures up against PCI DSS, HIPAA and ISO 27001.</p>
+        <ul>
+          <li>Findings that Bulwark knows how to repair now carry a Fix button, and a Fix All button repairs everything safe to change at once</li>
+          <li>Every fix shows exactly what it would change and waits for you to confirm — nothing is altered on the first click, and the original is backed up</li>
+          <li>New repairs for network kernel settings, login password ageing policy, and the legal warning banner</li>
+          <li>Leaked secrets found in AI assistant files can now be redacted one at a time, instead of only all at once</li>
+          <li>New compliance view maps each check to the PCI DSS, HIPAA and ISO 27001 controls it answers to, and scores only what was actually assessed — a check that could not run is reported as unassessed rather than counted as a pass</li>
+          <li>Fixed the application icon not appearing correctly on GNOME, and sharpened it on high-resolution displays</li>
+          <li>Calmer highlighting when moving the pointer down a long list of checks</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.9.0" date="2026-07-19">
       <description>
         <p>Bulwark now runs on 64-bit ARM machines as well as x86_64.</p>

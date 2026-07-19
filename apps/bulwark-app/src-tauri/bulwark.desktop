@@ -4,6 +4,12 @@ Categories={{categories}}
 Comment={{comment}}
 {{/if}}
 Exec={{exec}}
+# Load-bearing, and it is only correct by coincidence of {{exec}} == the binary
+# name. GTK advertises the *binary name* as the Wayland app_id (measured with
+# WAYLAND_DEBUG=1: xdg_toplevel.set_app_id("bulwark-app")), not tauri.conf.json's
+# identifier and not this file's basename ("bulwark"). GNOME matches a window to
+# its desktop entry on that string, so if this ever stops equalling the app_id
+# the window loses its icon in the dash, alt-tab and the window list.
 StartupWMClass={{exec}}
 Icon={{icon}}
 Name=Bulwark

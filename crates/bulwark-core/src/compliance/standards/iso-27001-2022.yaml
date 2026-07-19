@@ -1,0 +1,88 @@
+# ISO/IEC 27001:2022 Annex A — partial technical mapping.
+#
+# Control *identifiers* only. Annex A control text is copyrighted by ISO/IEC and is deliberately
+# not reproduced here; every `title` below is a short paraphrase written for this project.
+id: iso-27001-2022
+name: ISO/IEC 27001:2022
+version: "2022"
+source_url: https://www.iso.org/standard/27001
+catalog_size: 93
+scope_note: >
+  Annex A defines 93 controls across four themes (organizational, people, physical,
+  technological). Bulwark maps only technological controls with a Linux host-configuration
+  component. Organizational and people controls — policy, roles, supplier relationships,
+  awareness, screening — and all physical controls cannot be observed by a host scanner and are
+  excluded. ISO 27001 certification is additionally a management-system audit (Clauses 4-10)
+  that no scanner assesses at all; nothing here constitutes evidence of certification.
+controls:
+  - id: A.8.2
+    title: Privileged access rights are restricted and controlled
+    rules: [BLWK-PRIV-001, BLWK-PRIV-002, BLWK-SSH-002, BLWK-KERNEL-003]
+
+  - id: A.8.3
+    title: Access to information is restricted per policy
+    rules: [BLWK-FS-001, BLWK-FS-002]
+
+  - id: A.8.5
+    title: Secure authentication technologies are enforced
+    rules:
+      - BLWK-SSH-001
+      - BLWK-SSH-003
+      - BLWK-SSH-008
+      - BLWK-SSH-011
+      - BLWK-SSH-012
+      - BLWK-ACCT-002
+      - BLWK-ACCT-003
+      - BLWK-ACCT-004
+
+  - id: A.8.7
+    title: Protection against malware
+    rules: [BLWK-AV-001, BLWK-AV-002, BLWK-ROOTKIT-001]
+
+  - id: A.8.9
+    title: Configuration management
+    rules:
+      - BLWK-KERNEL-001
+      - BLWK-KERNEL-002
+      - BLWK-KERNEL-004
+      - BLWK-KERNEL-005
+      - BLWK-KERNEL-006
+      - BLWK-KERNEL-007
+      - BLWK-KERNEL-008
+      - BLWK-KERNEL-009
+      - BLWK-KERNEL-010
+      - BLWK-KERNEL-011
+      - BLWK-KERNEL-012
+      - BLWK-KERNEL-013
+      - BLWK-KERNEL-020
+      - BLWK-KERNEL-021
+      - BLWK-ACCT-005
+      - BLWK-BANN-001
+
+  - id: A.8.15
+    title: Logging of activities, exceptions and faults
+    rules: [BLWK-LOG-001, BLWK-LOG-003, BLWK-EVASION-001]
+
+  - id: A.8.16
+    title: Monitoring activities for anomalous behaviour
+    rules: [BLWK-LOG-002, BLWK-ROOTKIT-001, BLWK-PERSIST-001, BLWK-PERSIST-002, BLWK-ACCT-001]
+
+  - id: A.8.20
+    title: Networks security
+    rules:
+      - BLWK-KERNEL-014
+      - BLWK-KERNEL-015
+      - BLWK-KERNEL-016
+      - BLWK-KERNEL-017
+      - BLWK-KERNEL-018
+      - BLWK-KERNEL-019
+      - BLWK-NET-001
+      - BLWK-NET-002
+
+  - id: A.8.21
+    title: Security of network services
+    rules: [BLWK-SSH-004, BLWK-SSH-005, BLWK-SSH-006, BLWK-SSH-007, BLWK-SSH-009, BLWK-SSH-010]
+
+  - id: A.8.32
+    title: Change management / integrity of the deployed configuration
+    rules: [BLWK-FIM-001, BLWK-FIM-002, BLWK-FIM-003, BLWK-FIM-004, BLWK-FIM-005, BLWK-FIM-006]

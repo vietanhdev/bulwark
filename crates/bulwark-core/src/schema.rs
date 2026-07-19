@@ -26,6 +26,10 @@ diesel::table! {
         collector_errors -> Text,
         privileged_skipped -> Text,
         total_findings -> BigInt,
+        // JSON array of the rule IDs that demonstrably ran in this scan. Added by
+        // 2026-07-19-000000_scan_rules_evaluated; '[]' on every row written before it, which
+        // reads as "no evidence kept" rather than "nothing ran clean". See that migration.
+        rules_evaluated -> Text,
     }
 }
 

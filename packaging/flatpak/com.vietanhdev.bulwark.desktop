@@ -7,4 +7,9 @@ Terminal=false
 Type=Application
 Categories=System;Security;Utility;
 Keywords=security;hardening;audit;scanner;
-StartupWMClass=bulwark
+# The GTK/Wayland app_id the window actually advertises is the binary name
+# (measured with WAYLAND_DEBUG=1: xdg_toplevel.set_app_id("bulwark-app")), NOT
+# the Flatpak app-id and NOT the .desktop basename. GNOME matches a window to
+# its desktop entry on that string, so this must stay "bulwark-app" or the
+# window falls back to a generic icon.
+StartupWMClass=bulwark-app

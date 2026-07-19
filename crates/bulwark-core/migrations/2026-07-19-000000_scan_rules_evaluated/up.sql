@@ -1,0 +1,28 @@
+-- Persist `ScanRun::rules_evaluated` — the set of rule IDs that demonstrably ran in a scan.
+--
+-- The field has existed on the domain model since the finding lifecycle was built, but it only
+-- ever lived in memory: `persist_and_reconcile` consumed it during the transaction and then threw
+-- it away. That was sufficient while its only consumer was reconciliation, which happens inside
+-- the same call that produced the scan.
+--
+-- It stops being sufficient the moment anything wants to answer a question about a *past* scan,
+-- and compliance scoring is exactly that: `compliance::evaluate` refuses to score a control unless
+-- one of its mapped rules is in this set, because a skipped collector proves nothing and counting
+-- "we couldn't look" as "passing" would make an unprivileged scan score *higher* than a privileged
+-- one. The GUI reads its state from the database on open (that is what `dashboard_snapshot`
+-- exists for), so without this column the only way to render a compliance score from stored state
+-- would be to substitute "every known rule id" — the precise failure the compliance module's docs
+-- name as the single most damaging bug it could have. Persisting the real set is the honest fix;
+-- the alternative is fabricating it.
+--
+-- Stored as a JSON array of strings, matching how `rule_load_errors`, `collector_errors` and
+-- `privileged_skipped` already travel in this table — legible to anyone who opens the database
+-- with `sqlite3`, which this schema deliberately optimises for.
+--
+-- The default is '[]', and that default is load-bearing rather than incidental. Rows written
+-- before this migration genuinely do not record which rules ran, and there is no way to recover
+-- it after the fact. An empty set makes every control `NotAssessed` and the score `None`, which
+-- renders as "not assessed yet" — the honest reading of a scan whose evidence was never kept.
+-- Any other default would invent evidence. Backfilling with the current rule pack would be
+-- exactly the lie described above.
+ALTER TABLE scan_runs ADD COLUMN rules_evaluated TEXT NOT NULL DEFAULT '[]';

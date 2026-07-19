@@ -1,6 +1,7 @@
 pub mod ai_scan;
 pub mod av_scan;
 pub mod collectors;
+pub mod compliance;
 pub mod condition;
 pub mod engine;
 pub mod logs;
@@ -35,8 +36,11 @@ pub use logs::{
 };
 pub use models::{Fact, Finding, FindingStatus, OperatingSystem, Rule, ScanRun, Severity};
 pub use remediation::{
-    etc_permission_targets, harden_sshd_config, ssh_permission_targets, tighten_permissions,
-    PermOutcome, PermReport, PermResult, PermTarget, SshdChange, SshdChangeStatus,
-    SshdHardeningReport,
+    etc_permission_targets, fix_capability, harden_login_defs, harden_sshd_config, harden_sysctl,
+    rules_for_kind, safe_fix_capabilities, ssh_permission_targets, tighten_permissions,
+    write_banners, BannerOutcome, BannerReport, BannerResult, CombinedFixReport, FixCapability,
+    FixKind, LoginDefsChange, LoginDefsChangeStatus, LoginDefsReport, PermOutcome, PermReport,
+    PermResult, PermTarget, SshdChange, SshdChangeStatus, SshdHardeningReport, SysctlChange,
+    SysctlChangeStatus, SysctlHardeningReport, DEFAULT_BANNER, FIX_CAPABILITIES,
 };
 pub use store::{AiScanSnapshot, LatestScanMeta, ScanRunSummary, Store};

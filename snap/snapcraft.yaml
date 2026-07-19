@@ -1,7 +1,7 @@
 name: bulwark
 title: Bulwark
 base: core24
-version: '0.9.0'   # set by scripts/bump-version.sh (checked by scripts/check-packaging-consistency.sh)
+version: '0.10.0'   # set by scripts/bump-version.sh (checked by scripts/check-packaging-consistency.sh)
 summary: Linux security misconfiguration & intrusion scanner (GUI)
 description: |
   Bulwark scans a Linux host for security misconfigurations and intrusion
@@ -152,11 +152,19 @@ parts:
         cp -r "$CRAFT_PART_SRC/$d" "$CRAFT_PART_INSTALL/bin/$d"
       done
 
-      # Desktop entry + icon.
-      install -D -m0644 "$CRAFT_PART_SRC/apps/bulwark-app/src-tauri/icons/128x128.png" \
-        "$CRAFT_PART_INSTALL/usr/share/icons/hicolor/128x128/apps/bulwark.png"
-      install -D -m0644 /dev/stdin \
-        "$CRAFT_PART_INSTALL/usr/share/applications/bulwark.desktop" <<'DESKTOP'
+      # Desktop entry + icon. Every hicolor size is shipped rather than only 128:
+      # GNOME asks for 48px constantly (dash, alt-tab, window list) and a 48
+      # downscaled from 128 is visibly softer than one authored at 48.
+      for s in 16 24 32 48 64 128 256 512; do
+        install -D -m0644 "$CRAFT_PART_SRC/apps/bulwark-app/src-tauri/icons/${s}x${s}.png" \
+          "$CRAFT_PART_INSTALL/usr/share/icons/hicolor/${s}x${s}/apps/bulwark.png"
+      done
+      # The heredoc body is indented to stay inside this YAML block scalar, so the
+      # leading spaces are stripped before writing: a .desktop line that starts
+      # with whitespace is an error to desktop-file-validate (GLib tolerates it,
+      # so it was invisible until something validated the file).
+      sed 's/^ *//' <<'DESKTOP' | install -D -m0644 /dev/stdin \
+        "$CRAFT_PART_INSTALL/usr/share/applications/bulwark.desktop"
       [Desktop Entry]
       Name=Bulwark
       Comment=Linux security misconfiguration & intrusion scanner
@@ -165,6 +173,11 @@ parts:
       Terminal=false
       Type=Application
       Categories=System;Security;
+      # The GTK/Wayland app_id the window advertises is the binary name
+      # (measured with WAYLAND_DEBUG=1: xdg_toplevel.set_app_id("bulwark-app")),
+      # not this file's basename. GNOME matches window -> desktop entry on that
+      # string; without this line the window gets a generic icon.
+      StartupWMClass=bulwark-app
       DESKTOP
 
 # NOTE on polkit: the standalone .deb/.rpm install polkit/com.bulwark.policy so

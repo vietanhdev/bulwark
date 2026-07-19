@@ -39,4 +39,10 @@ paths = [
   '''crates/bulwark-core/src/remediation/permissions\.rs''',
   '''crates/bulwark-core/tests/remediation_e2e\.rs''',
   '''crates/bulwarkctl/tests/fix_cli\.rs''',
+
+  # The GUI's fix commands. Same reason as `remediation/permissions.rs` above: proving that a fix
+  # *preview* writes nothing requires a fixture the permission fixer will actually classify as a
+  # private key, which means a `BEGIN OPENSSH PRIVATE KEY` header. The body is the single
+  # character `x` — structurally a key, materially nothing.
+  '''apps/bulwark-app/src-tauri/src/remediation\.rs''',
 ]

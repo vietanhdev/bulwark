@@ -7,6 +7,8 @@ import { PageShell, SectionLabel } from "@/components/PageShell";
 import { StatusHero, type ProtectionStatus } from "@/components/StatusHero";
 import { type Finding } from "@/components/FindingCard";
 import { CategoryFindings, groupFindingsByCategory } from "@/components/CategoryFindings";
+import { FixAllButton } from "@/components/FixActions";
+import { useFixCapabilities } from "@/lib/fixes";
 import { SEVERITY_ORDER, SeverityDot, railStyle, severityLabel, type Severity } from "@/components/Severity";
 import { type View } from "@/components/Sidebar";
 import { computeHardeningIndex, type HardeningIndex } from "@/lib/hardening";
@@ -287,6 +289,10 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
   // opened this page for — but a machine with issues across many subsystems can collapse the ones
   // it has already dealt with.
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
+  const fixCapabilities = useFixCapabilities();
+  // Only offer the bulk fix when at least one issue on screen actually has a fixer — otherwise the
+  // button previews an empty change set, which reads as a broken feature rather than an honest one.
+  const anyFixable = visibleFindings.some((f) => fixCapabilities.has(f.rule_id));
   const toggleCategory = (category: string) =>
     setCollapsedCategories((prev) => {
       const next = new Set(prev);
@@ -759,6 +765,12 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
             </div>
           )}
 
+          {anyFixable && (
+            <div className="mb-4">
+              <FixAllButton onFixed={runScan} />
+            </div>
+          )}
+
           <div className="flex flex-col gap-6">
             {groupedFindings.map(({ category, items, worst }) => (
               <CategoryFindings
@@ -769,7 +781,12 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
                 streamed={streamed}
                 collapsed={collapsedCategories.has(category)}
                 onToggle={() => toggleCategory(category)}
-                actions={{ onIgnoreType: ignoreType, onRecheck: runScan }}
+                actions={{
+                  onIgnoreType: ignoreType,
+                  onRecheck: runScan,
+                  fixCapabilities,
+                  onFixed: runScan,
+                }}
               />
             ))}
           </div>

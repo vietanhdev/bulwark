@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { PageShell, SectionLabel } from "@/components/PageShell";
 import { CategoryFindings, groupFindingsByCategory } from "@/components/CategoryFindings";
+import { FixAllButton } from "@/components/FixActions";
+import { useFixCapabilities } from "@/lib/fixes";
 import { type Finding } from "@/components/FindingCard";
 import { SEVERITY_ORDER } from "@/components/Severity";
 import { useRevision } from "@/lib/revision";
@@ -72,6 +74,7 @@ export function ComplianceView() {
   const [privilegedRunDone, setPrivilegedRunDone] = useState(false);
   const [streamed, setStreamed] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const fixCapabilities = useFixCapabilities();
 
   useEffect(() => {
     invoke<RuleSummary[]>("rules_list")
@@ -273,6 +276,12 @@ export function ComplianceView() {
             </div>
           )}
 
+          {findings.some((f) => fixCapabilities.has(f.rule_id)) && (
+            <div className="mb-4">
+              <FixAllButton onFixed={runScan} />
+            </div>
+          )}
+
           <div className="flex flex-col gap-6">
             {grouped.map(({ category, items, worst }) => (
               <CategoryFindings
@@ -283,7 +292,12 @@ export function ComplianceView() {
                 streamed={streamed}
                 collapsed={collapsed.has(category)}
                 onToggle={() => toggle(category)}
-                actions={{ onIgnoreType: ignoreType, onRecheck: runScan }}
+                actions={{
+                  onIgnoreType: ignoreType,
+                  onRecheck: runScan,
+                  fixCapabilities,
+                  onFixed: runScan,
+                }}
               />
             ))}
           </div>

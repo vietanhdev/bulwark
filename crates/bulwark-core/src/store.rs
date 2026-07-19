@@ -24,7 +24,7 @@ use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel::sqlite::SqliteConnection;
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 
 /// The migrations, compiled into the binary. Nothing at runtime needs the `diesel` CLI or a
@@ -76,6 +76,10 @@ struct ScanRunRow {
     collector_errors: String,
     privileged_skipped: String,
     total_findings: i64,
+    /// JSON array of the rule IDs that demonstrably ran. Read back by
+    /// [`Store::latest_rules_evaluated`] so compliance scoring can be computed from stored state
+    /// without inventing the set — see the migration that added it.
+    rules_evaluated: String,
 }
 
 impl ScanRunRow {
@@ -97,6 +101,7 @@ impl ScanRunRow {
             // dashboard show right now", this column is about "what did this point in time look
             // like", which is what the History view needs.
             total_findings: scan.findings.len() as i64,
+            rules_evaluated: serde_json::to_string(&scan.rules_evaluated)?,
         })
     }
 }
@@ -999,6 +1004,25 @@ impl Store {
         .transpose()
     }
 
+    /// The rule IDs the most recent scan demonstrably evaluated.
+    ///
+    /// `None` means no scan has ever been recorded. An empty set is a *different* answer: a scan
+    /// exists but kept no record of what ran — either it genuinely evaluated nothing, or it was
+    /// written before the `rules_evaluated` column existed. Callers must keep those two apart
+    /// from "every rule ran and passed", which is why this returns the set verbatim and refuses
+    /// to substitute a default. [`crate::compliance::evaluate`] turns an empty set into
+    /// `NotAssessed` everywhere and a `None` score, which is the honest rendering of no evidence.
+    pub fn latest_rules_evaluated(&mut self) -> anyhow::Result<Option<BTreeSet<String>>> {
+        let row: Option<String> = scan_runs::table
+            .order(scan_runs::started_at.desc())
+            .select(scan_runs::rules_evaluated)
+            .first(&mut self.conn)
+            .optional()?;
+
+        row.map(|json| Ok(serde_json::from_str::<BTreeSet<String>>(&json)?))
+            .transpose()
+    }
+
     /// The most recent `limit` scan runs, newest first — backs the History timeline. Its
     /// `total_findings` is what that specific scan produced, not a live re-derived count, so the
     /// trend stays accurate even as later runs reconcile finding rows onto themselves.
@@ -1722,6 +1746,7 @@ mod tests {
                 collector_errors: "[]".into(),
                 privileged_skipped: "[]".into(),
                 total_findings: 0,
+                rules_evaluated: "[]".into(),
             })
             .execute(&mut store.conn)
             .unwrap();
@@ -2060,6 +2085,96 @@ mod tests {
         assert_eq!(store.count_log_scan_runs().unwrap(), 0);
         assert!(store.latest_ai_scan().unwrap().is_none());
         assert!(store.get_setting("anything").unwrap().is_none());
+    }
+
+    /// The append-only rule from AGENTS.md, exercised rather than trusted: a database that predates
+    /// the `rules_evaluated` column must come forward with every existing row intact.
+    ///
+    /// The old state is produced by reverting the migration on a real database rather than by
+    /// hand-writing an old schema, so the test cannot drift away from what the migration actually
+    /// does.
+    #[test]
+    fn adding_rules_evaluated_preserves_existing_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("upgrade.db");
+        let mut store = Store::open(&db_path).unwrap();
+        store.persist_and_reconcile(&sample_scan()).unwrap();
+
+        // Wind back to the schema as it stood before this migration.
+        store.conn.revert_last_migration(MIGRATIONS).unwrap();
+        assert!(
+            !store.is_schema_current().unwrap(),
+            "the revert must actually have taken the database off the current schema, or this \
+             test proves nothing"
+        );
+        assert!(
+            diesel::sql_query("SELECT rules_evaluated FROM scan_runs")
+                .execute(&mut store.conn)
+                .is_err(),
+            "the column must genuinely be absent in the pre-migration state"
+        );
+
+        // Now upgrade, exactly as a user's existing database would on next launch.
+        store.conn.run_pending_migrations(MIGRATIONS).unwrap();
+        assert!(store.is_schema_current().unwrap());
+
+        assert_eq!(
+            store.count_scan_runs().unwrap(),
+            1,
+            "the pre-existing scan run must survive the upgrade"
+        );
+        assert_eq!(
+            store.open_findings().unwrap().len(),
+            1,
+            "the pre-existing findings must survive the upgrade"
+        );
+
+        // And the load-bearing part: a row that predates the column carries no evidence, not
+        // fabricated evidence. An empty set makes every mapped control NotAssessed rather than
+        // silently passing — see the migration's own comment.
+        let evaluated = store.latest_rules_evaluated().unwrap().unwrap();
+        assert!(
+            evaluated.is_empty(),
+            "a pre-migration row must back-fill to *no* evidence; anything else invents a scan \
+             result that was never recorded, and compliance scoring would read it as passing"
+        );
+    }
+
+    #[test]
+    fn rules_evaluated_round_trips_through_the_database() {
+        // The whole point of the column: the set a scan reported must be readable back later,
+        // because the GUI computes compliance from stored state rather than from a live scan.
+        let mut store = Store::open_in_memory().unwrap();
+        assert!(
+            store.latest_rules_evaluated().unwrap().is_none(),
+            "no scan recorded is None, distinct from a scan that evaluated nothing"
+        );
+
+        let mut scan = sample_scan();
+        scan.rules_evaluated = vec!["BLWK-SSH-001".into(), "BLWK-KERNEL-016".into()];
+        store.persist_and_reconcile(&scan).unwrap();
+
+        let back = store.latest_rules_evaluated().unwrap().unwrap();
+        assert_eq!(
+            back,
+            ["BLWK-KERNEL-016".to_string(), "BLWK-SSH-001".to_string()]
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+        );
+    }
+
+    /// A scan whose collectors were all skipped must persist as *no* evidence, and must stay
+    /// distinguishable from "never scanned". Conflating the two is how an unprivileged scan would
+    /// end up scoring higher than a privileged one.
+    #[test]
+    fn a_scan_that_evaluated_nothing_is_stored_as_empty_not_absent() {
+        let mut store = Store::open_in_memory().unwrap();
+        let mut scan = sample_scan();
+        scan.rules_evaluated = vec![];
+        store.persist_and_reconcile(&scan).unwrap();
+
+        let back = store.latest_rules_evaluated().unwrap();
+        assert_eq!(back, Some(BTreeSet::new()));
     }
 
     #[test]

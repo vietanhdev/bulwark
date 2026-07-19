@@ -1,5 +1,5 @@
 mod authorized_keys;
-mod banners;
+pub(crate) mod banners;
 mod clamav;
 mod cron;
 pub mod file_integrity;

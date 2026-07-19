@@ -53,6 +53,52 @@ interface SuppressionEvent {
   at: string;
 }
 
+/** How binding a control is. Only HIPAA draws this distinction; see `compliance::Obligation`. */
+type Obligation = "standard" | "required" | "addressable";
+
+type ControlStatus = "pass" | "fail" | "not_assessed";
+
+interface ControlResult {
+  control_id: string;
+  title: string;
+  obligation: Obligation | null;
+  status: ControlStatus;
+  assessed_rules: string[];
+  failing_rules: string[];
+}
+
+interface StandardReport {
+  standard_id: string;
+  name: string;
+  version: string;
+  source_url: string;
+  scope_note: string;
+  /** null when nothing was assessed — deliberately not 0, which would read as total failure. */
+  score: number | null;
+  assessed: number;
+  passing: number;
+  failing: number;
+  not_assessed: number;
+  mapped_controls: number;
+  catalog_size: number | null;
+  controls: ControlResult[];
+}
+
+interface RuleControlRef {
+  standard_id: string;
+  standard_name: string;
+  control_id: string;
+  control_title: string;
+  obligation: Obligation | null;
+}
+
+interface ComplianceView {
+  scanned: boolean;
+  evidence_missing: boolean;
+  reports: StandardReport[];
+  rule_controls: Record<string, RuleControlRef[]>;
+}
+
 const categoryLabel = (c: string) => c.replace(/-/g, " ");
 
 const FRAMEWORK_LABELS: Record<string, string> = {
@@ -60,9 +106,21 @@ const FRAMEWORK_LABELS: Record<string, string> = {
   ATTACK: "MITRE ATT&CK",
 };
 
+/** Splits a reference like `CIS-5.2.1` into its issuing body. A string hack, and it stays one on
+ *  purpose: these two are *coverage annotations* carried on the rules themselves, not standards
+ *  Bulwark scores. The real, editorially-owned mappings live in `bulwark-core::compliance` and
+ *  arrive through `compliance_report` fully typed. */
 const frameworkOf = (reference: string) => {
   const prefix = reference.split("-")[0];
   return FRAMEWORK_LABELS[prefix] ?? prefix;
+};
+
+/** "Addressable" is the one that most needs saying out loud: it does not mean optional. */
+const OBLIGATION_NOTE: Record<Obligation, string> = {
+  standard: "A standard in its own right — mandatory, with no required/addressable split.",
+  required: "An implementation specification that must be implemented.",
+  addressable:
+    "Must be implemented, or an equivalent alternative implemented and the reasoning documented. Not optional — a failure here is a prompt to produce that documentation, not automatically a violation.",
 };
 
 export function RulesView() {
@@ -94,6 +152,10 @@ export function RulesView() {
   const [reasonDrafts, setReasonDrafts] = useState<Record<string, string>>({});
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyRule, setBusyRule] = useState<string | null>(null);
+  // The real compliance mapping, scored in core against the stored scan's `rules_evaluated` set.
+  // Kept separate from `frameworks` below: that one is the rules' own CIS/ATT&CK annotations
+  // (coverage), this one is a scored claim about someone else's standard.
+  const [compliance, setCompliance] = useState<ComplianceView | null>(null);
 
   useEffect(() => {
     invoke<RuleSummary[]>("rules_list")
@@ -120,6 +182,9 @@ export function RulesView() {
         setSkippedCollectors(new Set(snap.meta.privileged_collectors_skipped));
       }
     });
+    invoke<ComplianceView>("compliance_report")
+      .then(setCompliance)
+      .catch((e) => setError(String(e)));
     loadSuppressions();
   }, [revision, loadSuppressions]);
 
@@ -185,10 +250,9 @@ export function RulesView() {
       .map(([framework, controls]) => ({
         framework,
         controls: controls.sort((a, b) => a.reference.localeCompare(b.reference)),
-        passing: controls.filter((c) => !openRuleIds.has(c.rule.id)).length,
       }))
       .sort((a, b) => a.framework.localeCompare(b.framework));
-  }, [rules, openRuleIds]);
+  }, [rules]);
 
   const filtered = useMemo(() => {
     if (!rules) return null;
@@ -295,18 +359,35 @@ export function RulesView() {
                 )}
               </div>
 
+              {/* The scored standards. Separate section from the CIS/ATT&CK coverage map below,
+                  and deliberately so — these three carry a percentage and those two must not. */}
+              <div>
+                <SectionLabel>Compliance standards</SectionLabel>
+                <ComplianceStandards view={compliance} />
+              </div>
+
+              <div>
+                <SectionLabel>Control coverage</SectionLabel>
+                {/* No aggregate ratio here, unlike the standards above. CIS's non-member terms
+                    forbid representing a particular level of compliance, so CIS appears as a
+                    mapping — these rules answer to these control IDs — and never as a score.
+                    MITRE ATT&CK isn't a compliance standard at all; it's a technique taxonomy. */}
+                <p className="mb-3 max-w-3xl text-xs leading-relaxed text-muted-foreground">
+                  Which framework control each rule answers to, and whether this host currently passes that
+                  rule. This is a coverage map, not a compliance assessment: no score is derived from it.
+                </p>
+              </div>
+
               <div className="grid grid-cols-1 gap-x-5 gap-y-6 lg:grid-cols-2">
-                {frameworks.map(({ framework, controls, passing }) => (
+                {frameworks.map(({ framework, controls }) => (
                   <div key={framework}>
                     <h2 className="mb-2 flex items-baseline justify-between gap-2">
                       <span className="font-mono text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
                         {framework}
                       </span>
-                      {hasScanned && (
-                        <span className="font-mono text-[11px] tabular-nums text-muted-foreground/70">
-                          {passing}/{controls.length} passing
-                        </span>
-                      )}
+                      <span className="font-mono text-[11px] tabular-nums text-muted-foreground/70">
+                        {controls.length} mapped
+                      </span>
                     </h2>
                     <div className="overflow-hidden rounded-lg border border-border bg-card">
                       {controls.map(({ reference, rule }, i) => {
@@ -463,7 +544,19 @@ export function RulesView() {
                                     )}
                                   />
                                   <span className="min-w-0 flex-1">
-                                    <span className="block truncate text-sm font-medium">{r.title}</span>
+                                    {/* Weight 400, not 500. The font stack is healthy — the
+                                    webfont loads, the variable `wght` axis is honoured, and
+                                    nothing is synthesised (500 and `font-synthesis: none`
+                                    measure identically in both WebKit and Chromium). The
+                                    problem was the authored weight itself: Ubuntu Sans already
+                                    runs sturdy at 400, and setting *every* title in a 50+ row
+                                    two-column list to 500 left the page with no typographic
+                                    hierarchy at all — a wall of semibold in which nothing is
+                                    emphasised because everything is. Emphasis on this row is
+                                    carried by the severity rail, the severity label and the
+                                    colour contrast against the muted mono ID beneath; the
+                                    title does not need to shout as well. */}
+                                    <span className="block truncate text-sm">{r.title}</span>
                                     <span className="mt-0.5 flex items-center gap-1.5">
                                       <span className="font-mono text-[11px] text-muted-foreground">
                                         {r.id}
@@ -502,6 +595,29 @@ export function RulesView() {
                                       {r.explain.trim()}
                                     </p>
                                     <CommandBlock command={r.fix} className="mt-2.5 bg-card" />
+                                    {/* Which standards this one rule is evidence for. Answers the
+                                    question an auditor actually asks — "why does this check
+                                    matter to me?" — without making the reader cross-reference the
+                                    Compliance tab by hand. */}
+                                    {(compliance?.rule_controls[r.id]?.length ?? 0) > 0 && (
+                                      <div className="mt-2.5 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                                        <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground/70">
+                                          serves
+                                        </span>
+                                        {compliance!.rule_controls[r.id].map((c) => (
+                                          <span
+                                            key={`${c.standard_id}-${c.control_id}`}
+                                            title={`${c.standard_name} — ${c.control_title}${
+                                              c.obligation ? ` (${OBLIGATION_NOTE[c.obligation]})` : ""
+                                            }`}
+                                            className="rounded-sm bg-muted px-1 font-mono text-[10px] text-muted-foreground"
+                                          >
+                                            {c.standard_name} {c.control_id}
+                                            {c.obligation === "addressable" && " ·  addressable"}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    )}
                                     <p className="mt-2 font-mono text-[10px] text-muted-foreground/70">
                                       collector: {r.collector}
                                     </p>
@@ -528,6 +644,196 @@ export function RulesView() {
         </>
       )}
     </PageShell>
+  );
+}
+
+/// The three scored standards (PCI DSS, HIPAA, ISO 27001), each with its score, the denominator
+/// that score is over, and the scope the number does *not* cover.
+///
+/// The rule this component exists to enforce: **a score is never rendered without its
+/// denominator and its scope in the same glance.** "PCI DSS 87%" on its own is a claim this
+/// project cannot support — these standards are largely administrative and a host scanner can
+/// only ever speak to a slice of them. So the percentage, the assessed count it is over, the
+/// mapped/total control coverage and the scope note are one visual unit; there is no code path
+/// that shows the first without the rest.
+function ComplianceStandards({ view }: { view: ComplianceView | null }) {
+  if (!view) return <p className="text-xs text-muted-foreground">Loading compliance mapping…</p>;
+
+  if (!view.scanned) {
+    return (
+      <Callout tone="info">
+        No scan on record yet, so no control can be scored. A control is only assessed when a rule mapped to
+        it demonstrably ran — until then every control is “not assessed”, which is not the same as passing.
+        Run a scan to populate this.
+      </Callout>
+    );
+  }
+
+  if (view.evidence_missing) {
+    return (
+      <Callout tone="warning">
+        The most recent scan kept no record of which rules actually ran, so nothing here can be scored. (Scans
+        recorded before this version didn't store that set, and a scan whose collectors were all skipped
+        genuinely has none.) The control mapping is shown below without a score — inventing one would mean
+        treating “we couldn't look” as “this passes”. Run a new scan to score it.
+      </Callout>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      {view.reports.map((r) => (
+        <StandardCard key={r.standard_id} report={r} />
+      ))}
+    </div>
+  );
+}
+
+function StandardCard({ report: r }: { report: StandardReport }) {
+  const [open, setOpen] = useState(false);
+  const failing = r.controls.filter((c) => c.status === "fail");
+  const shown = open ? r.controls : failing;
+
+  return (
+    <div className="rounded-lg border border-border bg-card">
+      <div className="flex flex-wrap items-start justify-between gap-4 px-5 py-4">
+        <div className="min-w-0">
+          <h3 className="text-sm font-medium">
+            {r.name}{" "}
+            <span className="font-mono text-[11px] font-normal text-muted-foreground">{r.version}</span>
+          </h3>
+          {/* The denominator, always. `score` is a fraction of *assessed* controls, and
+              `assessed` is itself a fraction of what's mapped, which is a fraction of the
+              standard. Every one of those steps is stated. */}
+          <p className="mt-1 text-xs text-muted-foreground">
+            {r.score === null ? (
+              <>No control assessed — nothing to score.</>
+            ) : (
+              <>
+                {r.passing} of {r.assessed} assessed controls passing
+                {r.not_assessed > 0 && <> · {r.not_assessed} not assessed</>}
+              </>
+            )}
+            {" · "}
+            {r.mapped_controls} control{r.mapped_controls === 1 ? "" : "s"} mapped
+            {r.catalog_size !== null && <> of {r.catalog_size} in the standard</>}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-baseline gap-1.5">
+          {r.score === null ? (
+            <span className="text-sm text-muted-foreground">not assessed</span>
+          ) : (
+            <>
+              <span className="font-mono text-2xl tabular-nums">{r.score}%</span>
+              <span className="text-[11px] text-muted-foreground">of assessed</span>
+            </>
+          )}
+        </div>
+      </div>
+
+      <p className="border-t border-border bg-muted/30 px-5 py-3 text-xs leading-relaxed text-muted-foreground">
+        <span className="font-medium text-foreground">Scope. </span>
+        {r.scope_note}{" "}
+        <a
+          href={r.source_url}
+          target="_blank"
+          rel="noreferrer noopener"
+          className="underline underline-offset-2"
+        >
+          Source
+        </a>
+      </p>
+
+      {r.controls.length > 0 && (
+        <>
+          <div className="border-t border-border">
+            {shown.map((c, i) => (
+              <ControlRow key={c.control_id} control={c} first={i === 0} />
+            ))}
+            {shown.length === 0 && (
+              <p className="px-5 py-3 text-xs text-muted-foreground">
+                No mapped control is currently failing.
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="w-full border-t border-border px-5 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/40 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+          >
+            {open
+              ? "Show only failing controls"
+              : `Show all ${r.mapped_controls} mapped controls (${r.passing} passing, ${r.not_assessed} not assessed)`}
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+/// One control row. A failing *addressable* control must not read the same as a failing required
+/// one — under 45 CFR §164.306(d) an addressable specification may be met by a documented
+/// equivalent — so the obligation is rendered next to the status rather than left implicit.
+function ControlRow({ control: c, first }: { control: ControlResult; first: boolean }) {
+  const tone: Record<ControlStatus, Severity | "resolved"> = {
+    pass: "resolved",
+    fail: "high",
+    not_assessed: "info",
+  };
+  return (
+    <div
+      style={railStyle(tone[c.status])}
+      className={cn("rail flex items-start gap-2.5 py-2.5 pr-4", !first && "border-t border-border")}
+    >
+      <span
+        className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center"
+        style={{ color: `var(--sev-${tone[c.status]}-fg)` }}
+        aria-hidden
+      >
+        {c.status === "pass" ? (
+          <Check className="h-3.5 w-3.5" strokeWidth={3} />
+        ) : c.status === "fail" ? (
+          <X className="h-3.5 w-3.5" strokeWidth={3} />
+        ) : (
+          <span className="h-1.5 w-1.5 rounded-full bg-current" />
+        )}
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          <span className="font-mono text-[11px] text-muted-foreground">{c.control_id}</span>
+          <span className="text-sm">{c.title}</span>
+          {c.obligation && <ObligationBadge obligation={c.obligation} />}
+        </p>
+        {c.status === "not_assessed" && (
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            No mapped rule ran in the last scan — this control is excluded from the score rather than counted
+            as passing.
+          </p>
+        )}
+        {c.status === "fail" && (
+          <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">
+            failing: {c.failing_rules.join(", ")}
+          </p>
+        )}
+        {c.status === "fail" && c.obligation === "addressable" && (
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            Addressable: implement this, or document an equivalent alternative and why it's reasonable. Not
+            automatically a violation.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ObligationBadge({ obligation }: { obligation: Obligation }) {
+  return (
+    <span
+      title={OBLIGATION_NOTE[obligation]}
+      className="rounded-sm bg-muted px-1 font-mono text-[10px] text-muted-foreground"
+    >
+      {obligation}
+    </span>
   );
 }
 

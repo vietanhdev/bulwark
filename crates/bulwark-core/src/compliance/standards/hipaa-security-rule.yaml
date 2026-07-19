@@ -1,0 +1,68 @@
+# HIPAA Security Rule (45 CFR Part 164, Subpart C) — partial technical mapping.
+#
+# Unlike ISO 27001 and PCI DSS, this text is US federal regulation and therefore public domain,
+# so control titles here may quote the regulation's own wording.
+id: hipaa-security-rule
+name: HIPAA Security Rule
+version: "45 CFR 164 Subpart C"
+source_url: https://www.ecfr.gov/current/title-45/subtitle-A/subchapter-C/part-164/subpart-C
+scope_note: >
+  Bulwark assesses Linux host configuration only, and only a subset of the Technical Safeguards
+  (§164.312) plus two Administrative Safeguards with a host-observable component. The Security
+  Rule's Administrative (§164.308), Physical (§164.310) and Organizational (§164.314, §164.316)
+  safeguards — risk analysis, workforce training, business associate agreements, contingency
+  planning, documented policy — are out of scope for any host scanner and are not counted here.
+  Each control below carries its `obligation` per §164.306(c)-(d), because the distinction is
+  legally load-bearing: standards are unconditionally mandatory, while the Required/Addressable
+  split applies only to implementation specifications beneath them. An "addressable" failure is a
+  prompt to implement an equivalent alternative and document why — not automatically a violation.
+  Note also that encryption is nowhere Required in this rule: §164.312(a)(2)(iv) and (e)(2)(ii)
+  are both addressable.
+controls:
+  - id: 164.308(a)(1)(ii)(D)
+    title: Information system activity review
+    obligation: required
+    rules: [BLWK-LOG-001, BLWK-LOG-002, BLWK-LOG-003, BLWK-EVASION-001]
+
+  - id: 164.308(a)(5)(ii)(B)
+    title: Protection from malicious software
+    obligation: addressable
+    rules: [BLWK-AV-001, BLWK-AV-002, BLWK-ROOTKIT-001, BLWK-ACCT-001]
+
+  - id: 164.312(a)(1)
+    title: Access control
+    obligation: standard
+    rules: [BLWK-PRIV-001, BLWK-PRIV-002, BLWK-FS-001, BLWK-FS-002, BLWK-KERNEL-003, BLWK-SSH-006]
+
+  - id: 164.312(a)(2)(i)
+    title: Unique user identification
+    obligation: required
+    rules: [BLWK-SSH-002]
+
+  - id: 164.312(b)
+    title: Audit controls
+    obligation: standard
+    rules: [BLWK-LOG-001, BLWK-LOG-003]
+
+  - id: 164.312(c)(1)
+    title: Integrity
+    obligation: standard
+    rules: [BLWK-FIM-001, BLWK-FIM-002, BLWK-FIM-003, BLWK-FIM-004, BLWK-FIM-005, BLWK-FIM-006]
+
+  - id: 164.312(d)
+    title: Person or entity authentication
+    obligation: standard
+    rules:
+      - BLWK-SSH-001
+      - BLWK-SSH-003
+      - BLWK-SSH-008
+      - BLWK-SSH-011
+      - BLWK-SSH-012
+      - BLWK-ACCT-002
+      - BLWK-ACCT-003
+      - BLWK-ACCT-004
+
+  - id: 164.312(e)(1)
+    title: Transmission security
+    obligation: standard
+    rules: [BLWK-SSH-004, BLWK-SSH-005, BLWK-SSH-007, BLWK-SSH-009, BLWK-SSH-010, BLWK-NET-001]

@@ -1,0 +1,93 @@
+# PCI DSS v4.0.1 — partial technical mapping.
+#
+# v4.0 was retired 31 Dec 2024; v4.0.1 is the only active version. None of the twelve controls
+# mapped below changed between v4.0 and v4.0.1 (verified against the official Summary of Changes).
+#
+# Control *identifiers* only. PCI DSS requirement text is copyrighted by the PCI Security
+# Standards Council and is deliberately not reproduced here; every `title` below is a short
+# paraphrase written for this project, not a quotation.
+id: pci-dss-4.0
+name: PCI DSS
+version: "4.0.1"
+source_url: https://www.pcisecuritystandards.org/document_library/
+scope_note: >
+  Bulwark assesses Linux host configuration only. PCI DSS is an organizational standard whose
+  scope includes network segmentation, cardholder-data flows, physical security, vendor
+  management and written policy — none of which a host scanner can observe. A passing score
+  here means "the host-config controls Bulwark can check are satisfied on this machine", not
+  that the environment is PCI DSS compliant. Only a QSA can make the latter determination.
+controls:
+  - id: "2.2.1"
+    title: Configuration standards are applied to system components
+    rules: [BLWK-KERNEL-003, BLWK-ACCT-005, BLWK-BANN-001]
+
+  - id: "2.2.4"
+    title: Unnecessary services, protocols and daemons are disabled
+    rules: [BLWK-KERNEL-020, BLWK-KERNEL-021, BLWK-NET-001, BLWK-NET-002]
+
+  - id: "2.2.6"
+    title: System security parameters are configured to prevent misuse
+    rules:
+      - BLWK-KERNEL-001
+      - BLWK-KERNEL-002
+      - BLWK-KERNEL-004
+      - BLWK-KERNEL-005
+      - BLWK-KERNEL-006
+      - BLWK-KERNEL-007
+      - BLWK-KERNEL-008
+      - BLWK-KERNEL-009
+      - BLWK-KERNEL-010
+      - BLWK-KERNEL-011
+      - BLWK-KERNEL-012
+      - BLWK-KERNEL-013
+      - BLWK-KERNEL-014
+      - BLWK-KERNEL-015
+      - BLWK-KERNEL-016
+      - BLWK-KERNEL-017
+      - BLWK-KERNEL-018
+      - BLWK-KERNEL-019
+
+  - id: "2.2.7"
+    title: Non-console administrative access is encrypted
+    rules:
+      - BLWK-SSH-001
+      - BLWK-SSH-003
+      - BLWK-SSH-004
+      - BLWK-SSH-005
+      - BLWK-SSH-006
+      - BLWK-SSH-007
+      - BLWK-SSH-008
+      - BLWK-SSH-009
+      - BLWK-SSH-010
+
+  - id: "5.2.1"
+    title: An anti-malware solution is deployed
+    rules: [BLWK-AV-001]
+
+  - id: "5.3.1"
+    title: Anti-malware definitions are kept current
+    rules: [BLWK-AV-002]
+
+  - id: "8.2.1"
+    title: Privileged access is individually attributable, not shared
+    rules: [BLWK-SSH-002, BLWK-PRIV-001]
+
+  - id: "8.3.1"
+    title: Strong authentication is enforced for all access
+    rules: [BLWK-SSH-001, BLWK-SSH-003, BLWK-SSH-011, BLWK-SSH-012]
+
+  - id: "8.3.6"
+    title: Password strength and rotation parameters are enforced
+    rules: [BLWK-ACCT-002, BLWK-ACCT-003, BLWK-ACCT-004]
+
+  - id: "10.2.1"
+    title: Audit logs are enabled and record security-relevant events
+    rules: [BLWK-LOG-001, BLWK-LOG-003, BLWK-EVASION-001, BLWK-ACCT-001]
+
+  - id: "10.3.2"
+    title: Audit logs are protected from unauthorised modification
+    rules: [BLWK-LOG-002, BLWK-FS-001, BLWK-FS-002]
+
+  - id: "11.5.2"
+    title: A change-detection mechanism monitors critical files
+    rules: [BLWK-FIM-001, BLWK-FIM-002, BLWK-FIM-003, BLWK-FIM-004, BLWK-FIM-005, BLWK-FIM-006]

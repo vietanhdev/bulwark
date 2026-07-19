@@ -120,12 +120,19 @@ enum FixAction {
     EtcPerms {
         #[arg(long)]
         apply: bool,
+        /// Emit the machine-readable report instead of the human one. This is what the GUI's
+        /// privileged fix path parses back out of `pkexec bulwark fix …`.
+        #[arg(long)]
+        json: bool,
     },
     /// Harden /etc/ssh/sshd_config to clear the SSH rule findings (X11/TCP forwarding off,
     /// MaxAuthTries, ...). Needs root when applying; keeps a backup and validates with `sshd -t`.
     Sshd {
         #[arg(long)]
         apply: bool,
+        /// Emit the machine-readable report instead of the human one.
+        #[arg(long)]
+        json: bool,
         /// Also apply the two lockout-risky directives (PasswordAuthentication no, PermitRootLogin
         /// no). ONLY do this once you have confirmed key-based login works — it can lock you out of
         /// a password-only host.
@@ -136,11 +143,46 @@ enum FixAction {
         #[arg(long, value_name = "PATH")]
         config: Option<PathBuf>,
     },
+    /// Persist kernel network hardening to /etc/sysctl.d/ (ICMP redirects off, martian logging
+    /// on) and reload. Needs root when applying. Writes a durable drop-in, not just /proc/sys.
+    Sysctl {
+        #[arg(long)]
+        apply: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Replace the distro-default /etc/issue and /etc/issue.net with a legal warning banner.
+    /// Needs root when applying; never overwrites a banner someone already customised.
+    Banner {
+        #[arg(long)]
+        apply: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Set password-aging policy in /etc/login.defs (PASS_MAX_DAYS, PASS_MIN_DAYS). Needs root
+    /// when applying; backs the file up and replaces directives in place rather than appending.
+    LoginDefs {
+        #[arg(long)]
+        apply: bool,
+        #[arg(long)]
+        json: bool,
+        /// Operate on this file instead of /etc/login.defs (for testing).
+        #[arg(long, value_name = "PATH")]
+        config: Option<PathBuf>,
+    },
     /// Apply the safe subset in one pass: ~/.ssh perms, /etc perms (if root), and non-lockout sshd
     /// hardening (if root). Never touches the lockout-risky auth directives or key passphrases.
     All {
         #[arg(long)]
         apply: bool,
+        /// Emit the machine-readable report instead of the human one.
+        #[arg(long)]
+        json: bool,
+        /// Skip the user-scoped `~/.ssh` part and run only the fixes that need root. The GUI uses
+        /// this: it must not run the `~/.ssh` fixer under `pkexec`, because pkexec resets `HOME` to
+        /// root's, which would silently tighten `/root/.ssh` and leave the real user's untouched.
+        #[arg(long)]
+        root_only: bool,
     },
 }
 
@@ -817,7 +859,8 @@ fn remote_db_path(spec: &str) -> anyhow::Result<PathBuf> {
 
 fn run_fix(action: FixAction) -> anyhow::Result<()> {
     use bulwark_core::{
-        etc_permission_targets, harden_sshd_config, ssh_permission_targets, tighten_permissions,
+        etc_permission_targets, harden_login_defs, harden_sshd_config, harden_sysctl,
+        ssh_permission_targets, tighten_permissions, write_banners, CombinedFixReport,
     };
 
     let home = std::env::var("HOME").context("HOME not set")?;
@@ -858,6 +901,44 @@ fn run_fix(action: FixAction) -> anyhow::Result<()> {
                 }
             }
 
+            match harden_sysctl(
+                &bulwark_core::rules_for_kind(bulwark_core::FixKind::Sysctl),
+                &sysctl_backup_dir(&home),
+                false,
+            ) {
+                Ok(r) => {
+                    println!(
+                        "\n• fix sysctl      kernel network knobs — {} setting(s) to persist (needs root to apply)",
+                        r.pending_count()
+                    );
+                    print_sysctl_changes(&r, "    ");
+                }
+                Err(e) => println!("\n• fix sysctl      unavailable: {e}"),
+            }
+
+            let banner_report = write_banners(&banner_backup_dir(&home), false);
+            println!(
+                "\n• fix banner      login warning banners — {} file(s) to write (needs root to apply)",
+                banner_report.pending_count()
+            );
+            print_banner_changes(&banner_report, "    ");
+
+            match harden_login_defs(
+                &bulwark_core::rules_for_kind(bulwark_core::FixKind::LoginDefs),
+                None,
+                &login_defs_backup_dir(&home),
+                false,
+            ) {
+                Ok(r) => {
+                    println!(
+                        "\n• fix login-defs  password aging policy — {} directive(s) to set (needs root to apply)",
+                        r.pending_count()
+                    );
+                    print_login_defs_changes(&r, "    ");
+                }
+                Err(e) => println!("\n• fix login-defs  unavailable: {e}"),
+            }
+
             println!("\nOther fixes (their own commands, need interactive input):");
             println!("    ssh protect     add one passphrase to every unencrypted ~/.ssh key");
             println!("    ai redact       remove leaked secrets from AI-assistant context files");
@@ -876,7 +957,7 @@ fn run_fix(action: FixAction) -> anyhow::Result<()> {
             report_perm_summary(&report, apply);
         }
 
-        FixAction::EtcPerms { apply } => {
+        FixAction::EtcPerms { apply, json } => {
             if apply && !engine::is_running_as_root() {
                 anyhow::bail!(
                     "fix etc-perms --apply changes root-owned files — re-run as: \
@@ -884,12 +965,21 @@ fn run_fix(action: FixAction) -> anyhow::Result<()> {
                 );
             }
             let report = tighten_permissions(&etc_permission_targets(), apply);
-            print_perm_report(&report, apply, "");
-            report_perm_summary(&report, apply);
+            if json {
+                print_fix_json(&CombinedFixReport {
+                    etc_perms: Some(report),
+                    applied: apply,
+                    ..Default::default()
+                })?;
+            } else {
+                print_perm_report(&report, apply, "");
+                report_perm_summary(&report, apply);
+            }
         }
 
         FixAction::Sshd {
             apply,
+            json,
             include_auth,
             config,
         } => {
@@ -908,20 +998,117 @@ fn run_fix(action: FixAction) -> anyhow::Result<()> {
                 );
             }
             let report = harden_sshd_config(config.as_deref(), &backup_dir, apply, include_auth)?;
-            print_sshd_report(&report, apply);
+            if json {
+                print_fix_json(&CombinedFixReport {
+                    sshd: Some(report),
+                    applied: apply,
+                    ..Default::default()
+                })?;
+            } else {
+                print_sshd_report(&report, apply);
+            }
         }
 
-        FixAction::All { apply } => {
+        FixAction::Sysctl { apply, json } => {
+            if apply && !engine::is_running_as_root() {
+                anyhow::bail!(
+                    "fix sysctl --apply writes /etc/sysctl.d — re-run as: \
+                     sudo bulwarkctl fix sysctl --apply"
+                );
+            }
+            let report = bulwark_core::harden_sysctl(
+                &bulwark_core::rules_for_kind(bulwark_core::FixKind::Sysctl),
+                &sysctl_backup_dir(&home),
+                apply,
+            )?;
+            if json {
+                print_fix_json(&CombinedFixReport {
+                    sysctl: Some(report),
+                    applied: apply,
+                    ..Default::default()
+                })?;
+            } else {
+                print_sysctl_report(&report, apply);
+            }
+        }
+
+        FixAction::Banner { apply, json } => {
+            if apply && !engine::is_running_as_root() {
+                anyhow::bail!(
+                    "fix banner --apply writes /etc/issue — re-run as: \
+                     sudo bulwarkctl fix banner --apply"
+                );
+            }
+            let report = bulwark_core::write_banners(&banner_backup_dir(&home), apply);
+            if json {
+                print_fix_json(&CombinedFixReport {
+                    banner: Some(report),
+                    applied: apply,
+                    ..Default::default()
+                })?;
+            } else {
+                print_banner_report(&report, apply);
+            }
+        }
+
+        FixAction::LoginDefs {
+            apply,
+            json,
+            config,
+        } => {
+            if apply && config.is_none() && !engine::is_running_as_root() {
+                anyhow::bail!(
+                    "fix login-defs --apply edits /etc/login.defs — re-run as: \
+                     sudo bulwarkctl fix login-defs --apply"
+                );
+            }
+            let report = bulwark_core::harden_login_defs(
+                &bulwark_core::rules_for_kind(bulwark_core::FixKind::LoginDefs),
+                config.as_deref(),
+                &login_defs_backup_dir(&home),
+                apply,
+            )?;
+            if json {
+                print_fix_json(&CombinedFixReport {
+                    login_defs: Some(report),
+                    applied: apply,
+                    ..Default::default()
+                })?;
+            } else {
+                print_login_defs_report(&report, apply);
+            }
+        }
+
+        FixAction::All {
+            apply,
+            json,
+            root_only,
+        } => {
             let is_root = engine::is_running_as_root();
+            if json {
+                return run_fix_all_json(&ssh_dir, &backup_dir, apply, root_only, is_root);
+            }
             println!(
                 "Running the safe autofix set{}:\n",
                 if apply { " (applying)" } else { " (preview)" }
             );
 
-            // 1. ~/.ssh perms — always available (user-scoped).
-            let ssh_targets = ssh_permission_targets(&ssh_dir);
+            // 1. ~/.ssh perms — always available (user-scoped), unless the caller asked for only
+            // the root-scoped fixes (see --root-only on why the GUI needs that).
+            let ssh_targets = if root_only {
+                Vec::new()
+            } else {
+                ssh_permission_targets(&ssh_dir)
+            };
             if ssh_targets.is_empty() {
-                println!("[ssh-perms] no ~/.ssh directory — skipped");
+                println!(
+                    "[ssh-perms] {}",
+                    if root_only {
+                        "skipped (--root-only)"
+                    } else {
+                        "no ~/.ssh directory — skipped"
+                    }
+                );
             } else {
                 let r = tighten_permissions(&ssh_targets, apply);
                 println!("[ssh-perms] {} change(s)", r.changes());
@@ -957,6 +1144,40 @@ fn run_fix(action: FixAction) -> anyhow::Result<()> {
                 }
             }
 
+            // 4. The remaining root-scoped, non-lockout fixers.
+            if apply && !is_root {
+                println!("\n[sysctl/banner/login.defs] need root — skipped (re-run with sudo)");
+            } else {
+                match bulwark_core::harden_sysctl(
+                    &bulwark_core::rules_for_kind(bulwark_core::FixKind::Sysctl),
+                    &sysctl_backup_dir(&home),
+                    apply,
+                ) {
+                    Ok(r) => {
+                        println!("\n[sysctl] {} setting(s)", r.pending_count());
+                        print_sysctl_changes(&r, "    ");
+                    }
+                    Err(e) => println!("\n[sysctl] skipped: {e}"),
+                }
+
+                let b = bulwark_core::write_banners(&banner_backup_dir(&home), apply);
+                println!("\n[banner] {} file(s)", b.pending_count());
+                print_banner_changes(&b, "    ");
+
+                match bulwark_core::harden_login_defs(
+                    &bulwark_core::rules_for_kind(bulwark_core::FixKind::LoginDefs),
+                    None,
+                    &login_defs_backup_dir(&home),
+                    apply,
+                ) {
+                    Ok(r) => {
+                        println!("\n[login.defs] {} directive(s)", r.pending_count());
+                        print_login_defs_changes(&r, "    ");
+                    }
+                    Err(e) => println!("\n[login.defs] skipped: {e}"),
+                }
+            }
+
             if !apply {
                 println!(
                     "\nPreview only. Re-run with --apply (and sudo for the root-owned fixes)."
@@ -969,6 +1190,185 @@ fn run_fix(action: FixAction) -> anyhow::Result<()> {
             );
         }
     }
+    Ok(())
+}
+
+/// Backup directories for the file-rewriting fixers. All under the user's own data dir, next to
+/// the sshd-config backups the sshd fixer already writes there.
+fn sysctl_backup_dir(home: &str) -> PathBuf {
+    PathBuf::from(home).join(".local/share/bulwark/sysctl-backups")
+}
+fn banner_backup_dir(home: &str) -> PathBuf {
+    PathBuf::from(home).join(".local/share/bulwark/banner-backups")
+}
+fn login_defs_backup_dir(home: &str) -> PathBuf {
+    PathBuf::from(home).join(".local/share/bulwark/login-defs-backups")
+}
+
+fn print_sysctl_changes(report: &bulwark_core::SysctlHardeningReport, indent: &str) {
+    for c in &report.changes {
+        println!(
+            "{indent}{} = {} (currently {})",
+            c.key, c.desired, c.current
+        );
+    }
+}
+
+fn print_sysctl_report(report: &bulwark_core::SysctlHardeningReport, apply: bool) {
+    if report.changes.is_empty() {
+        println!("Kernel network settings are already hardened. Nothing to do.");
+        return;
+    }
+    println!(
+        "{} setting(s) {} in {}:",
+        report.changes.len(),
+        if apply {
+            "written to"
+        } else {
+            "would be written to"
+        },
+        report.conf_path
+    );
+    print_sysctl_changes(report, "    ");
+    if let Some(b) = &report.backup_path {
+        println!("Previous file backed up to {b}");
+    }
+    if let Some(n) = &report.note {
+        println!("note: {n}");
+    }
+    if !apply {
+        println!("\nPreview only. Re-run with --apply (as root) to write them.");
+    }
+}
+
+fn print_banner_changes(report: &bulwark_core::BannerReport, indent: &str) {
+    use bulwark_core::BannerOutcome;
+    for r in &report.results {
+        match &r.outcome {
+            BannerOutcome::WouldWrite => println!("{indent}would write {} ({})", r.path, r.label),
+            BannerOutcome::Written => println!("{indent}wrote {} ({})", r.path, r.label),
+            BannerOutcome::Failed { reason } => println!("{indent}FAILED {}: {reason}", r.path),
+            _ => {}
+        }
+    }
+}
+
+fn print_banner_report(report: &bulwark_core::BannerReport, apply: bool) {
+    if report.pending_count() == 0 {
+        println!("Both login banners are already custom warnings. Nothing to do.");
+        return;
+    }
+    print_banner_changes(report, "");
+    if !apply {
+        println!("\nPreview only. Re-run with --apply (as root) to write them.");
+    }
+}
+
+fn print_login_defs_changes(report: &bulwark_core::LoginDefsReport, indent: &str) {
+    for c in &report.changes {
+        println!("{indent}{} {} (currently {})", c.key, c.desired, c.current);
+    }
+}
+
+fn print_login_defs_report(report: &bulwark_core::LoginDefsReport, apply: bool) {
+    if report.changes.is_empty() {
+        println!("Password-aging policy is already within the rule thresholds. Nothing to do.");
+        return;
+    }
+    println!(
+        "{} directive(s) {} in {}:",
+        report.changes.len(),
+        if apply { "set" } else { "to set" },
+        report.config_path
+    );
+    print_login_defs_changes(report, "    ");
+    if let Some(b) = &report.backup_path {
+        println!("Original backed up to {b}");
+    }
+    if let Some(n) = &report.note {
+        println!("note: {n}");
+    }
+    if !apply {
+        println!("\nPreview only. Re-run with --apply (as root) to set them.");
+    }
+}
+
+/// The machine-readable form of `fix all`. Kept separate from the human path so the printed report
+/// and the JSON one can never half-agree: this runs the same fixers and emits exactly one JSON
+/// document on stdout, which is what the GUI deserializes back out of `pkexec`.
+///
+/// `root_only` drops the user-scoped `~/.ssh` pass — mandatory when invoked under `pkexec`, whose
+/// `HOME` is root's, not the invoking user's. The lockout-risky sshd auth directives are **never**
+/// included here; they stay behind `fix sshd --include-auth`, an explicit per-issue decision.
+fn run_fix_all_json(
+    ssh_dir: &Path,
+    backup_dir: &Path,
+    apply: bool,
+    root_only: bool,
+    is_root: bool,
+) -> anyhow::Result<()> {
+    use bulwark_core::{
+        etc_permission_targets, harden_sshd_config, ssh_permission_targets, tighten_permissions,
+        CombinedFixReport,
+    };
+
+    let mut report = CombinedFixReport {
+        applied: apply,
+        ..Default::default()
+    };
+
+    if !root_only {
+        let targets = ssh_permission_targets(ssh_dir);
+        if !targets.is_empty() {
+            report.ssh_perms = Some(tighten_permissions(&targets, apply));
+        }
+    }
+
+    // Applying either root-scoped fixer without root would fail per-file; refuse up front so the
+    // caller gets one clear reason rather than a report full of permission-denied rows.
+    if apply && !is_root {
+        anyhow::bail!(
+            "fix all --apply changes root-owned files — re-run as: sudo bulwarkctl fix all --apply"
+        );
+    }
+    report.etc_perms = Some(tighten_permissions(&etc_permission_targets(), apply));
+    match harden_sshd_config(None, backup_dir, apply, false) {
+        Ok(r) => report.sshd = Some(r),
+        // A missing sshd_config is not an error — but it must be *reported*, never dropped.
+        Err(e) => report.sshd_error = Some(e.to_string()),
+    }
+
+    let home = std::env::var("HOME").unwrap_or_default();
+    // Every one of these is in the safe (non-lockout) set — see the reasoning per capability in
+    // `bulwark_core::FIX_CAPABILITIES`.
+    match bulwark_core::harden_sysctl(
+        &bulwark_core::rules_for_kind(bulwark_core::FixKind::Sysctl),
+        &sysctl_backup_dir(&home),
+        apply,
+    ) {
+        Ok(r) => report.sysctl = Some(r),
+        Err(e) => report.errors.push(format!("sysctl: {e}")),
+    }
+    report.banner = Some(bulwark_core::write_banners(
+        &banner_backup_dir(&home),
+        apply,
+    ));
+    match bulwark_core::harden_login_defs(
+        &bulwark_core::rules_for_kind(bulwark_core::FixKind::LoginDefs),
+        None,
+        &login_defs_backup_dir(&home),
+        apply,
+    ) {
+        Ok(r) => report.login_defs = Some(r),
+        Err(e) => report.errors.push(format!("login.defs: {e}")),
+    }
+
+    print_fix_json(&report)
+}
+
+/// Emit a fix report as one JSON document on stdout.
+fn print_fix_json(report: &bulwark_core::CombinedFixReport) -> anyhow::Result<()> {
+    println!("{}", serde_json::to_string(report)?);
     Ok(())
 }
 

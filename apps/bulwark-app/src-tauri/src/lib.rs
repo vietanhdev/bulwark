@@ -209,7 +209,7 @@ fn resolve_privileged_rules_dir(app: &tauri::AppHandle) -> Result<PathBuf, Strin
 /// format (the desktop `.deb`/`.rpm` and the single-file AppImage alike). The `target/` walk
 /// survives *only* under `debug_assertions`, purely so `cargo tauri dev` can find the freshly
 /// built CLI; it is compiled out of every shipped build.
-fn resolve_cli_binary() -> Result<PathBuf, String> {
+pub(crate) fn resolve_cli_binary() -> Result<PathBuf, String> {
     if let Ok(exe) = std::env::current_exe() {
         // Canonicalize the executable's own directory so a symlinked launcher can't point the
         // sidecar lookup at an attacker-controlled directory.
@@ -610,6 +610,123 @@ async fn fim_baseline() -> Result<usize, String> {
     .map_err(|e| e.to_string())?
 }
 
+/// One control a rule serves, flattened for the frontend.
+///
+/// `rules_to_controls` returns bare `(standard_id, control_id)` pairs, which is the right shape
+/// for the core's own drift test but not enough to render: a UI showing `hipaa-security-rule /
+/// 164.312(a)(2)(iv)` and nothing else is worse than showing nothing. The standard's display name
+/// and — for HIPAA — the control's obligation are joined in here so the frontend never has to
+/// re-derive a legal distinction from an ID string.
+#[derive(Serialize)]
+struct RuleControlRef {
+    standard_id: String,
+    standard_name: String,
+    control_id: String,
+    control_title: String,
+    /// `standard` | `required` | `addressable`, or absent for standards that draw no such
+    /// distinction. An addressable failure is a prompt to document an equivalent alternative, not
+    /// automatically a violation, so the UI must be able to tell them apart.
+    obligation: Option<bulwark_core::compliance::Obligation>,
+}
+
+/// What the "All checks → Compliance" tab renders.
+#[derive(Serialize)]
+struct ComplianceView {
+    /// False when no scan has ever been recorded. The mapping is still returned — it is useful
+    /// reference material on its own — but nothing may be scored.
+    scanned: bool,
+    /// True when a scan exists but recorded *no* evidence of which rules ran. Two ways to get
+    /// here: a database written before `rules_evaluated` was persisted, or a scan whose collectors
+    /// were all skipped. Either way every control is `not_assessed` and every score is `null`, and
+    /// the UI says so rather than showing a number.
+    evidence_missing: bool,
+    reports: Vec<bulwark_core::compliance::StandardReport>,
+    /// rule id -> the controls it serves. Keyed by rule so the rule catalog can annotate a row
+    /// without scanning every standard.
+    rule_controls: std::collections::BTreeMap<String, Vec<RuleControlRef>>,
+}
+
+/// Scores the embedded compliance standards against the most recent stored scan.
+///
+/// **The evidence set is read from the database, never reconstructed.** `compliance::evaluate`
+/// only scores a control when one of its mapped rules is in the scan's `rules_evaluated` set, and
+/// the reason that matters is spelled out in the compliance module's own docs: an unprivileged
+/// scan skips most collectors, so if "we could not look" counted as passing then seeing *less*
+/// would score *higher*. Substituting "every rule in the pack" here would do exactly that. It is
+/// available — `rules_list` is right there — which is precisely why this is worth stating.
+///
+/// That set was in-memory-only until the `2026-07-19-000000_scan_rules_evaluated` migration; a
+/// database predating it reports an empty set, which surfaces as `evidence_missing` and no score
+/// at all rather than as a clean bill of health.
+///
+/// Suppressed findings count as open, matching the hardening index: accepting a risk is not fixing
+/// it, and a suppressed rule must not read as a passing control.
+#[tauri::command]
+async fn compliance_report() -> Result<ComplianceView, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let rule_controls = {
+            let mut map: std::collections::BTreeMap<String, Vec<RuleControlRef>> =
+                std::collections::BTreeMap::new();
+            let standards = bulwark_core::compliance::all_standards();
+            for (rule_id, refs) in bulwark_core::compliance::rules_to_controls() {
+                let entries = refs
+                    .into_iter()
+                    .filter_map(|(standard_id, control_id)| {
+                        let standard = standards.iter().find(|s| s.id == standard_id)?;
+                        let control = standard.controls.iter().find(|c| c.id == control_id)?;
+                        Some(RuleControlRef {
+                            standard_id: standard.id.clone(),
+                            standard_name: standard.name.clone(),
+                            control_id: control.id.clone(),
+                            control_title: control.title.clone(),
+                            obligation: control.obligation,
+                        })
+                    })
+                    .collect();
+                map.insert(rule_id, entries);
+            }
+            map
+        };
+
+        let db_path = db_path()?;
+        if !db_path.exists() {
+            return Ok(ComplianceView {
+                scanned: false,
+                evidence_missing: false,
+                reports: Vec::new(),
+                rule_controls,
+            });
+        }
+        let mut store = Store::open(&db_path).map_err(|e| e.to_string())?;
+
+        let evaluated = store.latest_rules_evaluated().map_err(|e| e.to_string())?;
+        let Some(evaluated) = evaluated else {
+            return Ok(ComplianceView {
+                scanned: false,
+                evidence_missing: false,
+                reports: Vec::new(),
+                rule_controls,
+            });
+        };
+
+        let open_rule_ids: std::collections::BTreeSet<String> = store
+            .open_findings()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|f| f.rule_id)
+            .collect();
+
+        Ok(ComplianceView {
+            scanned: true,
+            evidence_missing: evaluated.is_empty(),
+            reports: bulwark_core::compliance::evaluate_all(&evaluated, &open_rule_ids),
+            rule_controls,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Lists the loaded rule pack for the Rules view — reuses `engine::load_rules` directly
 /// rather than re-parsing YAML in the frontend; rules that failed to load are omitted here
 /// (the same load errors already surface via `scan_start`'s `collectorError`/scan flow).
@@ -982,6 +1099,7 @@ pub fn run() {
             scan_cancel,
             scan_privileged,
             rules_list,
+            compliance_report,
             rule_suppress,
             rule_unsuppress,
             suppressions_list,
@@ -1005,7 +1123,10 @@ pub fn run() {
             ai_security::ai_settings_get,
             ai_security::ai_settings_set,
             ssh_protect::ssh_protect_keys,
+            remediation::fix_capabilities,
             remediation::fix_ssh_permissions,
+            remediation::fix_rule,
+            remediation::fix_all,
             reveal::open_flagged_file
         ])
         .run(tauri::generate_context!())
