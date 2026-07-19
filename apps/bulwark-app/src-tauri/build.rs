@@ -42,8 +42,24 @@ fn stage_cli_sidecar() {
     let dest = binaries_dir.join(format!("bulwark-{triple}"));
     let _ = std::fs::create_dir_all(&binaries_dir);
 
-    // The workspace target dir is `<workspace>/target`; from `apps/bulwark-app/src-tauri` that's
-    // three levels up.
+    // Where the workspace target dir actually is. `CARGO_TARGET_DIR` (or `build.target-dir`,
+    // which cargo exports through the same variable) wins when set; otherwise it is
+    // `<workspace>/target`, three levels up from `apps/bulwark-app/src-tauri`.
+    //
+    // Honouring the override is not hypothetical tidiness. This used to hardcode the relative
+    // path, so any build with `CARGO_TARGET_DIR` set — a shared target dir, sccache-style CI
+    // caching, `cargo install --target-dir` — looked in a directory the CLI had never been
+    // built into, found nothing, and fell through to the zero-byte placeholder below. The GUI
+    // then bundled a 0-byte `bulwark` sidecar and shipped: it builds, installs, launches, and
+    // fails only when a user clicks "Run privileged checks", because the binary `pkexec` is
+    // pointed at is empty. The single `cargo:warning` guarding that is invisible in CI logs.
+    //
+    // A cross-compile has the same shape and is worth naming, since aarch64 support made it
+    // reachable: with `--target <triple>` cargo puts artifacts under `target/<triple>/<profile>`,
+    // NOT `target/<profile>`, so the lookup below would miss the CLI it just built and stage a
+    // placeholder — or, worse, find a stale HOST-arch `target/release/bulwarkctl` and stage that,
+    // producing a bundle whose sidecar cannot execute on the machine it ships to. That is why
+    // release.yml builds each architecture natively on its own runner instead of cross-compiling.
     //
     // Stage the CLI from **the profile currently being built**, falling back to the other only if
     // that one doesn't exist yet. This used to unconditionally prefer `release`, which was a real
@@ -53,16 +69,27 @@ fn stage_cli_sidecar() {
     // it*. Every `cargo test --workspace` then ran the old binary — which is exactly how
     // `tests/ai_cli.rs` caught this, failing with "unrecognized subcommand 'ai'" against a CLI
     // that demonstrably had the subcommand.
-    let workspace_target = manifest_dir.join("..").join("..").join("..").join("target");
+    let workspace_target = match std::env::var_os("CARGO_TARGET_DIR") {
+        Some(dir) => PathBuf::from(dir),
+        None => manifest_dir.join("..").join("..").join("..").join("target"),
+    };
     let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
     let preferred: [&str; 2] = if profile == "release" {
         ["release", "debug"]
     } else {
         ["debug", "release"]
     };
+    // Under `--target <triple>` artifacts live in `target/<triple>/<profile>`; without it, in
+    // `target/<profile>`. Check the triple-qualified path FIRST so a cross-build never falls
+    // back to a stale host-arch binary sitting in the unqualified one.
     let source = preferred
         .iter()
-        .map(|p| workspace_target.join(p).join("bulwarkctl"))
+        .flat_map(|p| {
+            [
+                workspace_target.join(&triple).join(p).join("bulwarkctl"),
+                workspace_target.join(p).join("bulwarkctl"),
+            ]
+        })
         .find(|p| p.is_file());
 
     if let Some(src) = source {

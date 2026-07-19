@@ -59,10 +59,25 @@ echo ">> built ${SRPM##*/}"
 
 command -v copr-cli >/dev/null || { echo "ERROR: copr-cli not installed (pip install --user copr-cli)" >&2; exit 1; }
 
-# Target every currently-active Fedora x86_64 chroot rather than a hardcoded
-# list, which silently goes stale every six months when Fedora branches.
-mapfile -t CHROOTS < <(copr-cli list-chroots | grep -E '^fedora-([0-9]+)-x86_64$' | sort -V | tail -3)
-[[ ${#CHROOTS[@]} -gt 0 ]] || { echo "ERROR: no active fedora x86_64 chroots found" >&2; exit 1; }
+# Target every currently-active Fedora chroot rather than a hardcoded list, which silently
+# goes stale every six months when Fedora branches.
+#
+# Selected PER ARCHITECTURE, and that structure is load-bearing rather than stylistic: the
+# obvious one-liner — widening the regex to (x86_64|aarch64) and keeping `tail -3` — takes the
+# last three chroots of the COMBINED list, which is three aarch64 chroots and no x86_64 one at
+# all (aarch64 sorts after x86_64 within the same release). That would silently stop publishing
+# the primary architecture while still exiting 0. Take the newest three of each arch instead.
+#
+# The arch list must stay in step with ExclusiveArch in packaging/copr/bulwarkctl.spec: a chroot
+# for an arch the spec excludes is a build that fails, and an arch in the spec with no chroot
+# here is simply never built.
+COPR_ARCHES=(x86_64 aarch64)
+CHROOTS=()
+for a in "${COPR_ARCHES[@]}"; do
+  mapfile -t arch_chroots < <(copr-cli list-chroots | grep -E "^fedora-([0-9]+)-${a}$" | sort -V | tail -3)
+  [[ ${#arch_chroots[@]} -gt 0 ]] || { echo "ERROR: no active fedora ${a} chroots found" >&2; exit 1; }
+  CHROOTS+=("${arch_chroots[@]}")
+done
 echo ">> chroots: ${CHROOTS[*]}"
 
 # `copr-cli list` prints "Name: <project>" plus an indented block, not a bare name, so a

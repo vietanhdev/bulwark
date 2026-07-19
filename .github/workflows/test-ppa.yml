@@ -25,14 +25,33 @@ permissions:
 
 jobs:
   install-from-ppa:
-    runs-on: ubuntu-24.04
-    # Clean container of the target series (Ubuntu images carry codename tags).
+    # Both architectures, each on its own native runner. The PPA is dual-arch by virtue of
+    # `Architecture: any` in debian/control — Launchpad builds every arch the series enables —
+    # but that had never been *verified*: this workflow only ever installed the amd64 build, so
+    # the arm64 half of a channel the download page advertises was an untested claim. It is
+    # also the failure most likely to go unnoticed, because Launchpad reports per-arch build
+    # results by email rather than failing anything here.
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # A series that published one arch but not the other should say which one broke.
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64,  runner: ubuntu-24.04 }
+          - { arch: aarch64, runner: ubuntu-24.04-arm }
+    name: install-from-ppa (${{ matrix.arch }})
+    # Clean container of the target series (Ubuntu images carry codename tags, and are
+    # multi-arch, so this resolves to the runner's architecture).
     container: ubuntu:${{ github.event.inputs.series || 'resolute' }}
     steps:
       - name: Add the PPA and install bulwarkctl
         run: |
           set -eux
           export DEBIAN_FRONTEND=noninteractive
+          # Guard against the container silently resolving to the wrong arch: apt would then
+          # install a package that runs fine and prove nothing about the arch under test.
+          test "$(uname -m)" = "${{ matrix.arch }}" || {
+            echo "::error::expected ${{ matrix.arch }} but this runner is $(uname -m)"; exit 1; }
           apt-get update
           apt-get install -y --no-install-recommends software-properties-common ca-certificates
           add-apt-repository -y ppa:vietanhng/bulwark
@@ -54,4 +73,4 @@ jobs:
           grep -q '"rules_loaded"' /tmp/scan.json
           grep -q '"rules_loaded": *0' /tmp/scan.json && { echo "::error::scan loaded 0 rules"; exit 1; } || true
           bulwarkctl fix list | grep -i "Available autofixes" >/dev/null && echo "fix preview OK"
-          echo "PPA package installs and runs on ${{ github.event.inputs.series || 'resolute' }} ✅"
+          echo "PPA package installs and runs on ${{ github.event.inputs.series || 'resolute' }} (${{ matrix.arch }}) ✅"

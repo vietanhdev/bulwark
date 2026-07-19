@@ -17,7 +17,7 @@
 # project rather than of this file, so it does not travel with the spec — anyone
 # recreating the project must set it again.
 Name:           bulwarkctl
-Version:        0.8.9
+Version:        0.9.0
 Release:        1%{?dist}
 Summary:        Linux host security and misconfiguration scanner (CLI)
 
@@ -33,7 +33,11 @@ BuildRequires:  gcc
 # weak deps by default, so a normal install still pulls it in.
 Recommends:     clamav
 
-ExclusiveArch:  x86_64
+# Both architectures build from this spec unchanged: no arch-specific code, and the only
+# native dependency (libsqlite3-sys) compiles vendored SQLite C. Widening this alone is not
+# enough to actually ship aarch64 — COPR builds only the chroots the project has enabled, so
+# scripts/publish-copr.sh must select the aarch64 chroots too.
+ExclusiveArch:  x86_64 aarch64
 
 # Disable LTO, which Fedora enables by default. libsqlite3-sys builds SQLite from
 # source (the workspace enables its `bundled` feature), so the cc crate would
@@ -80,6 +84,9 @@ find %{buildroot}%{_datadir}/bulwark -type d -exec chmod 0755 {} +
 %{_datadir}/bulwark/
 
 %changelog
+* Sun Jul 19 2026 Viet Anh Nguyen <vietanh.dev@gmail.com> - 0.9.0-1
+- Build for aarch64 in addition to x86_64.
+
 * Sat Jul 18 2026 Viet Anh Nguyen <vietanh.dev@gmail.com> - 0.8.8-1
 - Report a missing ClamAV plainly instead of a collector error in sandboxed builds.
 

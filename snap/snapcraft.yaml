@@ -1,7 +1,7 @@
 name: bulwark
 title: Bulwark
 base: core24
-version: '0.8.9'   # set by scripts/bump-version.sh (checked by scripts/check-packaging-consistency.sh)
+version: '0.9.0'   # set by scripts/bump-version.sh (checked by scripts/check-packaging-consistency.sh)
 summary: Linux security misconfiguration & intrusion scanner (GUI)
 description: |
   Bulwark scans a Linux host for security misconfigurations and intrusion
@@ -17,6 +17,21 @@ description: |
 license: Apache-2.0
 grade: stable
 confinement: classic     # NOT strict: pkexec + host /etc access are load-bearing (see README)
+
+# Declared, not incidental. Without this key snapcraft builds for the host arch only, so the
+# snap was amd64-only purely because publish-snap.yml happens to say `runs-on: ubuntu-24.04` —
+# an architecture decision recorded nowhere, enforced by nothing, and silently reversible by an
+# unrelated edit to a workflow. Stating it makes the restriction reviewable, and gives
+# scripts/check-packaging-consistency.sh something to assert against.
+#
+# amd64 only, deliberately: this snap needs `confinement: classic`, which requires manual Snap
+# Store approval that has not been granted (and, per packaging/README.md, is unlikely to be —
+# the criteria name /etc, sudo and pkexec in the not-supported list). Adding arm64 would
+# multiply the build matrix for a channel that publishes nothing today. The build itself is now
+# arch-clean — the Node tarball below follows CRAFT_ARCH_BUILD_FOR — so adding `arm64:` here is
+# a one-line change if the channel ever opens.
+platforms:
+  amd64:
 
 # tauri-plugin-single-instance claims a session-bus name at startup, and a sandbox
 # blocks any name the manifest does not declare. In the Flatpak this produced a bare
@@ -92,10 +107,22 @@ parts:
 
       # core24's Node is 18; the frontend build (vite/rolldown) needs >=20.12
       # (it imports styleText from node:util). Fetch an official Node 22 build.
+      #
+      # The Node tarball is the ONE prebuilt binary this build downloads, so it is the one
+      # place that can silently hardcode an architecture — rustup's installer detects the host
+      # on its own. It used to fetch -linux-x64 unconditionally, which was invisible while the
+      # only builder was amd64 and would have failed with a bare "cannot execute binary file"
+      # the moment anyone built on arm. Derive it from the arch snapcraft is building FOR.
       NODE_VER=22.12.0
-      curl -fsSL "https://nodejs.org/dist/v${NODE_VER}/node-v${NODE_VER}-linux-x64.tar.xz" \
+      case "${CRAFT_ARCH_BUILD_FOR:-$(dpkg --print-architecture)}" in
+        amd64)  NODE_ARCH=x64 ;;
+        arm64)  NODE_ARCH=arm64 ;;
+        armhf)  NODE_ARCH=armv7l ;;
+        *) echo "unsupported build arch: ${CRAFT_ARCH_BUILD_FOR:-unknown}" >&2; exit 1 ;;
+      esac
+      curl -fsSL "https://nodejs.org/dist/v${NODE_VER}/node-v${NODE_VER}-linux-${NODE_ARCH}.tar.xz" \
         | tar -xJ -C "$CRAFT_PART_BUILD"
-      export PATH="$CRAFT_PART_BUILD/node-v${NODE_VER}-linux-x64/bin:$PATH"
+      export PATH="$CRAFT_PART_BUILD/node-v${NODE_VER}-linux-${NODE_ARCH}/bin:$PATH"
       node --version
 
       cd "$CRAFT_PART_SRC/apps/bulwark-app"
