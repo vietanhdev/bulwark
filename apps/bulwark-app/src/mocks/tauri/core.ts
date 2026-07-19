@@ -312,17 +312,55 @@ function mockSysctl(apply: boolean, ruleId: string) {
     conf_path: "/etc/sysctl.d/99-bulwark-hardening.conf",
     // Every scope, not just `all` — the real fixer writes per interface because the kernel folds
     // them together.
-    changes: ["all", "default", "eth0"].map((scope) => ({
-      key: `net.ipv4.conf.${scope}.${field}`,
-      current,
-      desired,
-      why: `${field} (${ruleId})`,
-      status,
-    })),
+    // Mirrors the real planner: only the stable scopes are persisted, and the live per-interface
+    // work is one aggregated row. `log_martians` is raised, so conf.all alone is sufficient.
+    changes:
+      desired === "1"
+        ? [
+            {
+              key: `net.ipv4.conf.all.${field}`,
+              current,
+              desired,
+              why: `${field} (${ruleId})`,
+              status,
+              persisted: true,
+              interfaces: [],
+            },
+          ]
+        : [
+            {
+              key: `net.ipv4.conf.all.${field}`,
+              current,
+              desired,
+              why: `${field} (${ruleId})`,
+              status,
+              persisted: true,
+              interfaces: [],
+            },
+            {
+              key: `net.ipv4.conf.default.${field}`,
+              current,
+              desired,
+              why: `${field} (${ruleId})`,
+              status,
+              persisted: true,
+              interfaces: [],
+            },
+            {
+              key: `net.ipv4.conf.<interface>.${field}`,
+              current: `${current} on 3 live interfaces`,
+              desired,
+              why: `${field} (${ruleId}) — applied to the running kernel only`,
+              status,
+              persisted: false,
+              interfaces: ["docker0", "wlp9s0", "veth0a1b2c3"],
+            },
+          ],
     applied: apply,
     backup_path: null,
     verified: apply ? true : null,
     note: null,
+    stale_persisted_keys: [],
   };
 }
 
