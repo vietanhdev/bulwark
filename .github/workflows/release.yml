@@ -30,7 +30,31 @@ jobs:
     # (actions/runner-images#14254), and the day it disappears, a `runs-on: ubuntu-22.04` build
     # would silently start emitting `libc6 (>= 2.39)` packages. Pinning the image instead of the
     # runner makes that entire class of event a non-issue.
-    runs-on: ubuntu-24.04
+    #
+    # ---- Architecture ----
+    # Two arches, built NATIVELY on their own runner rather than cross-compiled. GitHub's
+    # `ubuntu-24.04-arm` runners are free for public repositories, which makes native the cheap
+    # option as well as the correct one — and cross-compiling would walk straight into a real
+    # trap in this repo: src-tauri/build.rs stages the CLI sidecar from `target/<profile>/`, the
+    # HOST target dir, so a `--target aarch64-...` build would silently stage an x86_64 binary
+    # under an aarch64 triple's name. `ubuntu:22.04` is a multi-arch image, so the glibc floor
+    # above is pinned identically on both.
+    #
+    # Both arches build the GUI as well as the CLI. That is only defensible because the aarch64
+    # GUI goes through the same gate as the x86_64 one: verify-gui-launch installs the real
+    # package on that arch, starts the real binary under Xvfb, and screenshots it. This project
+    # has already shipped a GUI that passed every structural check and could not draw a window,
+    # so "it built on aarch64" is explicitly NOT the bar — "it drew a window on aarch64" is.
+    # If that job cannot be made to pass, set `gui: false` here rather than publishing anyway.
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # One arch failing should name that arch, not cancel its sibling and hide the blast radius.
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64,  deb_arch: amd64, runner: ubuntu-24.04,     gui: true }
+          - { arch: aarch64, deb_arch: arm64, runner: ubuntu-24.04-arm, gui: true }
+    name: build (${{ matrix.arch }})
     container:
       image: ubuntu:22.04
     # Inside a bare container GitHub runs `run:` steps under `sh` (dash), which has no
@@ -52,14 +76,25 @@ jobs:
           set -euo pipefail
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl file git pkg-config build-essential \
+            libssl-dev rpm xz-utils
+          # The GTK/WebKit stack is needed only to build the GUI, and is a slow install that
+          # bulwark-core and bulwarkctl link none of. Both arches currently set gui: true, so
+          # this branch is not skipped today — it exists so that setting gui: false for an arch
+          # (the documented fallback if its GUI cannot be made to launch) actually makes that
+          # arch's build cheaper and independent of the GTK stack, rather than still hinging on
+          # an apt install it has no use for.
+          #
           # xdg-utils provides /usr/bin/xdg-open, which Tauri's AppImage bundler embeds into the
           # bundle (the app opens URLs/files via it at runtime). The bare image lacks it, and its
           # absence fails only the AppImage step — after the .deb and .rpm have already built — so
           # it must be installed here, not discovered at bundle time.
-          apt-get install -y --no-install-recommends \
-            ca-certificates curl file git pkg-config build-essential \
-            libssl-dev libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev patchelf rpm xz-utils xdg-utils
+          if [ "${{ matrix.gui }}" = "true" ]; then
+            apt-get install -y --no-install-recommends \
+              libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+              librsvg2-dev patchelf xdg-utils
+          fi
           # Checkout runs as root over a workspace owned by the runner uid; without this git
           # refuses with "detected dubious ownership" and the build fails before it starts.
           git config --global --add safe.directory "${GITHUB_WORKSPACE}"
@@ -87,8 +122,14 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          # Explicit, even though the action already folds the matrix into its key: an x86_64
+          # cache restored into an aarch64 build would poison target/ with foreign objects, and
+          # the resulting link errors would read like a source bug.
+          key: ${{ matrix.arch }}
 
       - uses: actions/setup-node@v4
+        if: matrix.gui
         with:
           node-version: 20
           cache: npm
@@ -98,6 +139,7 @@ jobs:
         run: cargo install cargo-deb cargo-generate-rpm --locked
 
       - name: Install frontend dependencies
+        if: matrix.gui
         working-directory: apps/bulwark-app
         run: npm ci
 
@@ -115,7 +157,7 @@ jobs:
           # the binary — bulwarkctl resolves /usr/share/bulwark/rules when installed, so a
           # bare binary with no rules is useless on its own.
           V="${{ steps.version.outputs.version }}"
-          STAGE="bulwarkctl-${V}-x86_64-linux"
+          STAGE="bulwarkctl-${V}-${{ matrix.arch }}-linux"
           mkdir -p "${STAGE}"
           cp target/release/bulwarkctl "${STAGE}/"
           cp -r rules "${STAGE}/"
@@ -125,6 +167,7 @@ jobs:
       # ---- GUI (bulwark-app) ----
       # Produces .deb, .rpm and .AppImage in target/release/bundle/ (bundle.targets = "all").
       - name: Build and bundle GUI
+        if: matrix.gui
         working-directory: apps/bulwark-app
         # Tauri's AppImage bundler shells out to `linuxdeploy`, which is itself an AppImage — and
         # an AppImage mounts itself with FUSE, which does not exist inside a container. Without
@@ -140,11 +183,16 @@ jobs:
         run: |
           set -euo pipefail
           V="${{ steps.version.outputs.version }}"
+          A="${{ matrix.arch }}"
+          DA="${{ matrix.deb_arch }}"
           mkdir -p dist
 
-          cp target/debian/bulwarkctl_${V}-1_amd64.deb        "dist/bulwarkctl_${V}_amd64.deb"
-          cp target/generate-rpm/bulwarkctl-${V}-1.x86_64.rpm "dist/bulwarkctl-${V}.x86_64.rpm"
-          cp bulwarkctl-${V}-x86_64-linux.tar.gz              "dist/"
+          # cargo-deb and cargo-generate-rpm both infer the architecture from the build host and
+          # neither declares one in Cargo.toml, so these names follow the matrix rather than
+          # needing any metadata change: amd64/x86_64 on one runner, arm64/aarch64 on the other.
+          cp target/debian/bulwarkctl_${V}-1_${DA}.deb   "dist/bulwarkctl_${V}_${DA}.deb"
+          cp target/generate-rpm/bulwarkctl-${V}-1.${A}.rpm "dist/bulwarkctl-${V}.${A}.rpm"
+          cp bulwarkctl-${V}-${A}-linux.tar.gz           "dist/"
 
           # Match by version+arch, not a hardcoded name. The GUI's productName is lowercase
           # `bulwark` (so install paths are FHS-conventional: /usr/lib/bulwark, bulwark.desktop),
@@ -152,14 +200,23 @@ jobs:
           # bundles after productName; globbing on the stable version+arch suffix keeps this step
           # working regardless of that name, and the copies below give every asset the public
           # `bulwark-desktop-*` name the download page links to.
-          cp "$(ls target/release/bundle/deb/*_${V}_amd64.deb)"           "dist/bulwark-desktop_${V}_amd64.deb"
-          cp "$(ls target/release/bundle/rpm/*-${V}-1.x86_64.rpm)"        "dist/bulwark-desktop-${V}.x86_64.rpm"
-          cp "$(ls target/release/bundle/appimage/*_${V}_amd64.AppImage)" "dist/bulwark-desktop-${V}-x86_64.AppImage"
+          if [ "${{ matrix.gui }}" = "true" ]; then
+            cp "$(ls target/release/bundle/deb/*_${V}_${DA}.deb)"  "dist/bulwark-desktop_${V}_${DA}.deb"
+            cp "$(ls target/release/bundle/rpm/*-${V}-1.${A}.rpm)" "dist/bulwark-desktop-${V}.${A}.rpm"
+            # The AppImage glob deliberately does NOT pin an arch token. Tauri's bundlers do not
+            # agree on the spelling — the .deb gets Debian's `arm64`, the .rpm gets rpm's
+            # `aarch64`, and the AppImage has used both across versions. Guessing wrong here
+            # fails the release late, after everything has already compiled. Each build job
+            # produces exactly one AppImage, so version alone identifies it unambiguously; the
+            # copy below is what gives it the canonical arch name the download page links to.
+            cp "$(ls target/release/bundle/appimage/*_${V}_*.AppImage)" "dist/bulwark-desktop-${V}-${A}.AppImage"
+          fi
 
-          cd dist
-          sha256sum * > SHA256SUMS
-          echo "--- release assets ---"
-          ls -la
+          # NB: no SHA256SUMS here. Each arch builds in its own job, so a per-job checksum file
+          # would cover only that arch's assets and the two would collide when the release job
+          # merges them. It is generated once, over the merged dist, in the release job.
+          echo "--- release assets (${A}) ---"
+          ls -la dist
 
       # Fails the build rather than shipping a package whose contents are wrong. `cargo deb`
       # succeeding only proves the metadata parsed — it says nothing about whether the rule
@@ -168,6 +225,8 @@ jobs:
         run: |
           set -euo pipefail
           V="${{ steps.version.outputs.version }}"
+          A="${{ matrix.arch }}"
+          DA="${{ matrix.deb_arch }}"
 
           check_rules() {
             local label="$1" count="$2"
@@ -179,21 +238,38 @@ jobs:
           }
 
           check_rules "CLI .deb" \
-            "$(dpkg-deb --contents dist/bulwarkctl_${V}_amd64.deb | grep -c '\.yaml$')"
+            "$(dpkg-deb --contents dist/bulwarkctl_${V}_${DA}.deb | grep -c '\.yaml$')"
           check_rules "CLI .rpm" \
-            "$(rpm -qlp dist/bulwarkctl-${V}.x86_64.rpm 2>/dev/null | grep -c '\.yaml$')"
-          check_rules "GUI .deb" \
-            "$(dpkg-deb --contents dist/bulwark-desktop_${V}_amd64.deb | grep -c '\.yaml$')"
+            "$(rpm -qlp dist/bulwarkctl-${V}.${A}.rpm 2>/dev/null | grep -c '\.yaml$')"
+          if [ "${{ matrix.gui }}" = "true" ]; then
+            check_rules "GUI .deb" \
+              "$(dpkg-deb --contents dist/bulwark-desktop_${V}_${DA}.deb | grep -c '\.yaml$')"
+          fi
 
           # The CLI binary must actually run — a package that installs a binary the target
           # distro can't execute is worse than no package.
-          dpkg-deb --contents dist/bulwarkctl_${V}_amd64.deb | grep -q 'usr/bin/bulwarkctl'
+          dpkg-deb --contents dist/bulwarkctl_${V}_${DA}.deb | grep -q 'usr/bin/bulwarkctl'
           echo "OK: CLI .deb ships /usr/bin/bulwarkctl"
+
+          # The packaged binary must be built FOR the arch the filename claims. cargo-deb infers
+          # the arch from the build host, so a misconfigured runner would produce a package that
+          # is internally consistent and still wrong for everyone who downloads it — apt would
+          # install it happily and every invocation would die with "Exec format error".
+          case "${A}" in
+            x86_64)  want="x86-64" ;;
+            aarch64) want="ARM aarch64" ;;
+            *)       echo "::error::unknown arch ${A}"; exit 1 ;;
+          esac
+          got="$(file -b target/release/bulwarkctl)"
+          case "${got}" in
+            *"${want}"*) echo "OK: bulwarkctl is a ${want} binary, matching the ${A} package name" ;;
+            *)           echo "::error::built binary is '${got}' but is being packaged as ${A}"; exit 1 ;;
+          esac
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: bulwark-linux-x86_64
+          name: bulwark-linux-${{ matrix.arch }}
           path: dist/*
           retention-days: 14
 
@@ -210,25 +286,40 @@ jobs:
   # .deb becomes uninstallable on that release, and this matrix goes red on the release *before*
   # users find out. Tauri v2 has no GTK4 backend to migrate to, so the fallback at that point is
   # the AppImage — which is why it is smoke-tested here too rather than merely uploaded.
+  #
+  # Each arch verifies on its OWN native runner rather than under qemu on an x86_64 one. An
+  # emulated smoke test proves the binary decodes, not that it runs on the hardware users have,
+  # and qemu-user papers over exactly the low-level differences (unaligned access, page size,
+  # atomics) worth catching. Native aarch64 runners are free for public repos, so there is no
+  # reason to accept the weaker signal.
   verify-install:
     needs: linux
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     strategy:
       # Every distro reports independently. One red cell should name the distro that broke, not
       # cancel its siblings and leave the blast radius unknown.
       fail-fast: false
       matrix:
         include:
-          - { image: "ubuntu:22.04", pkg: deb, gui: true }
-          - { image: "ubuntu:24.04", pkg: deb, gui: true }
-          - { image: "ubuntu:26.04", pkg: deb, gui: true }
-          - { image: "debian:12", pkg: deb, gui: true }
-          - { image: "fedora:41", pkg: rpm, gui: false }
-    name: verify (${{ matrix.image }})
+          - { image: "ubuntu:22.04", pkg: deb, gui: true,  arch: x86_64,  deb_arch: amd64, runner: ubuntu-24.04 }
+          - { image: "ubuntu:24.04", pkg: deb, gui: true,  arch: x86_64,  deb_arch: amd64, runner: ubuntu-24.04 }
+          - { image: "ubuntu:26.04", pkg: deb, gui: true,  arch: x86_64,  deb_arch: amd64, runner: ubuntu-24.04 }
+          - { image: "debian:12",    pkg: deb, gui: true,  arch: x86_64,  deb_arch: amd64, runner: ubuntu-24.04 }
+          - { image: "fedora:41",    pkg: rpm, gui: false, arch: x86_64,  deb_arch: amd64, runner: ubuntu-24.04 }
+          # Identical distro coverage on aarch64. Deliberately not a reduced set: the whole point
+          # of the arm64 rows is to catch a distro/arch interaction (a WebKit or glibc difference
+          # that exists only on arm64), and a thinner matrix would be most likely to miss exactly
+          # that. fedora is rpm/CLI-only on both arches for the same reason it always was.
+          - { image: "ubuntu:22.04", pkg: deb, gui: true,  arch: aarch64, deb_arch: arm64, runner: ubuntu-24.04-arm }
+          - { image: "ubuntu:24.04", pkg: deb, gui: true,  arch: aarch64, deb_arch: arm64, runner: ubuntu-24.04-arm }
+          - { image: "ubuntu:26.04", pkg: deb, gui: true,  arch: aarch64, deb_arch: arm64, runner: ubuntu-24.04-arm }
+          - { image: "debian:12",    pkg: deb, gui: true,  arch: aarch64, deb_arch: arm64, runner: ubuntu-24.04-arm }
+          - { image: "fedora:41",    pkg: rpm, gui: false, arch: aarch64, deb_arch: arm64, runner: ubuntu-24.04-arm }
+    name: verify (${{ matrix.image }}, ${{ matrix.arch }})
     steps:
       - uses: actions/download-artifact@v7
         with:
-          name: bulwark-linux-x86_64
+          name: bulwark-linux-${{ matrix.arch }}
           path: dist
 
       - name: Install and smoke-test on ${{ matrix.image }}
@@ -276,7 +367,7 @@ jobs:
               apt-get update -qq
               # `apt-get install ./file.deb` (not `dpkg -i`) so that unsatisfiable dependencies
               # FAIL here instead of leaving a half-configured package the way dpkg would.
-              apt-get install -y -qq /dist/bulwarkctl_*_amd64.deb
+              apt-get install -y -qq /dist/bulwarkctl_*_${{ matrix.deb_arch }}.deb
               bulwarkctl --version
               smoke
 
@@ -284,7 +375,7 @@ jobs:
                 # The GUI cannot be launched in a headless container, but the two things that
                 # actually break across distro versions can both be checked without a display:
                 # whether its Depends resolve, and whether every .so it links against is present.
-                apt-get install -y -qq /dist/bulwark-desktop_*_amd64.deb
+                apt-get install -y -qq /dist/bulwark-desktop_*_${{ matrix.deb_arch }}.deb
                 echo "OK: GUI .deb dependencies resolve on ${{ matrix.image }}"
 
                 # apt resolving the Depends line only proves the packages Tauri *declared* exist.
@@ -324,7 +415,7 @@ jobs:
                 echo "OK: desktop launcher displays as Bulwark"
               fi
             else
-              dnf install -y -q /dist/bulwarkctl-*.x86_64.rpm
+              dnf install -y -q /dist/bulwarkctl-*.${{ matrix.arch }}.rpm
               bulwarkctl --version
               smoke
             fi
@@ -339,17 +430,30 @@ jobs:
   # --appimage-extract exercises the payload without it.
   verify-appimage:
     needs: linux
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64,  multiarch: x86_64-linux-gnu,  runner: ubuntu-24.04 }
+          - { arch: aarch64, multiarch: aarch64-linux-gnu, runner: ubuntu-24.04-arm }
+    name: verify-appimage (${{ matrix.arch }})
     steps:
       - uses: actions/download-artifact@v7
         with:
-          name: bulwark-linux-x86_64
+          name: bulwark-linux-${{ matrix.arch }}
           path: dist
 
       - name: Extract and link-check the AppImage on Ubuntu 26.04
+        env:
+          # The bundled-library search path is per-arch: an AppImage lays its libs out under the
+          # GNU multiarch triple, so a hardcoded x86_64-linux-gnu would find NOTHING on aarch64
+          # and the check would then report every bundled library as missing — a red job that
+          # says "bundling regression" when the truth is "the test looked in the wrong place".
+          MULTIARCH: ${{ matrix.multiarch }}
         run: |
           set -euo pipefail
-          docker run --rm -v "$PWD/dist:/dist:ro" ubuntu:26.04 bash -euo pipefail -c '
+          docker run --rm -e MULTIARCH -v "$PWD/dist:/dist:ro" ubuntu:26.04 bash -euo pipefail -c '
             set -x
             export DEBIAN_FRONTEND=noninteractive
             apt-get update -qq
@@ -372,7 +476,7 @@ jobs:
             # missing IS a real bundling regression: a webkit / GTK / pango / cairo / glib dep the
             # AppImage failed to carry. webkit is deliberately never apt-installed here, so such a
             # regression cannot be masked by a host copy.
-            export LD_LIBRARY_PATH="$(find /tmp/squashfs-root -type d -name lib -o -type d -name "x86_64-linux-gnu" | tr "\n" ":")"
+            export LD_LIBRARY_PATH="$(find /tmp/squashfs-root -type d -name lib -o -type d -name "${MULTIARCH}" | tr "\n" ":")"
 
             host_provided="lib(GL|GLX|GLdispatch|GLESv2|OpenGL|EGL|glapi|drm|gbm|X11|X11-xcb|xcb|xcb-[a-z0-9]+|Xext|Xrender|Xfixes|Xi|Xcursor|Xdamage|Xcomposite|Xrandr|Xinerama|Xtst|Xss|xshmfence|wayland-[a-z]+|harfbuzz|fontconfig|freetype|expat|fribidi)\.so"
             missing=$(ldd "${BIN}" | grep "not found" | grep -vE "${host_provided}" || true)
@@ -392,17 +496,31 @@ jobs:
   # before it draws a window (a dlopen panic for a library the runtime lacks) or come up
   # silently degraded (its own rules resolver finding nothing, disabling monitoring). The only
   # assertion that catches that is running the thing and reading what it prints.
+  #
+  # Runs per-arch on that arch's OWN native runner. This job starts a real WebKit GUI, so
+  # emulation is not an option: under qemu-user it would be minutes-per-frame slow and would
+  # fail on graphics paths no real user touches, making a red result meaningless. Native arm64
+  # runners make the honest version of this test the cheap one too.
   verify-gui-launch:
     needs: linux
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64,  runner: ubuntu-24.04 }
+          - { arch: aarch64, runner: ubuntu-24.04-arm }
+    name: verify-gui-launch (${{ matrix.arch }})
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v7
         with:
-          name: bulwark-linux-x86_64
+          name: bulwark-linux-${{ matrix.arch }}
           path: build/relassets
 
       - name: Launch-test the GUI .deb, .rpm and AppImage
+        env:
+          ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
           # Artifact filenames carry the version; the script globs for them.
@@ -423,8 +541,27 @@ jobs:
 
       - uses: actions/download-artifact@v7
         with:
-          name: bulwark-linux-x86_64
+          # Every arch the build matrix produced, flattened into one dist/. Using a pattern
+          # rather than naming the arches means adding a third one to the build matrix needs no
+          # edit here — and, more importantly, a build job that silently stopped producing
+          # artifacts cannot be papered over by a name that still resolves.
+          pattern: bulwark-linux-*
+          merge-multiple: true
           path: dist
+
+      # Generated here, not per build job: each of those sees only its own arch, so two partial
+      # SHA256SUMS files would collide on merge and whichever landed last would silently omit
+      # half the release. One file, written once, over everything that is actually shipping.
+      - name: Checksum the merged assets
+        run: |
+          set -euo pipefail
+          cd dist
+          rm -f SHA256SUMS
+          sha256sum -- * > SHA256SUMS
+          echo "--- release assets ---"
+          ls -la
+          echo "--- SHA256SUMS ---"
+          cat SHA256SUMS
 
       # Only on a real tag. A workflow_dispatch run stops at the artifact upload above, so the
       # whole pipeline — including the install matrix — can be rehearsed without creating a
@@ -440,28 +577,37 @@ jobs:
           body: |
             ## Install
 
+            Every artifact ships for **x86_64 and arm64**. Pick the one matching `uname -m`
+            (`x86_64` → amd64/x86_64 assets, `aarch64` → arm64/aarch64 assets).
+
             **Desktop app (GUI)** — Debian/Ubuntu:
             ```bash
-            sudo dpkg -i bulwark-desktop_${{ steps.version.outputs.version }}_amd64.deb
+            sudo dpkg -i bulwark-desktop_${{ steps.version.outputs.version }}_amd64.deb   # x86_64
+            sudo dpkg -i bulwark-desktop_${{ steps.version.outputs.version }}_arm64.deb   # arm64
             ```
             Fedora/RHEL:
             ```bash
-            sudo rpm -i bulwark-desktop-${{ steps.version.outputs.version }}.x86_64.rpm
+            sudo rpm -i bulwark-desktop-${{ steps.version.outputs.version }}.x86_64.rpm    # x86_64
+            sudo rpm -i bulwark-desktop-${{ steps.version.outputs.version }}.aarch64.rpm   # arm64
             ```
-            Any distro (portable, no install):
+            Any distro (portable, no install) — swap `x86_64` for `aarch64` on arm64:
             ```bash
             chmod +x bulwark-desktop-${{ steps.version.outputs.version }}-x86_64.AppImage
             ./bulwark-desktop-${{ steps.version.outputs.version }}-x86_64.AppImage
             ```
 
-            **CLI (headless / over SSH)** — Debian/Ubuntu:
+            **CLI (headless / over SSH)** — available for **x86_64 and arm64**. Debian/Ubuntu:
             ```bash
+            # x86_64
             sudo dpkg -i bulwarkctl_${{ steps.version.outputs.version }}_amd64.deb
+            # arm64 (Raspberry Pi, Ampere, Graviton, Apple-silicon VMs)
+            sudo dpkg -i bulwarkctl_${{ steps.version.outputs.version }}_arm64.deb
             bulwarkctl scan
             ```
             Fedora/RHEL:
             ```bash
-            sudo rpm -i bulwarkctl-${{ steps.version.outputs.version }}.x86_64.rpm
+            sudo rpm -i bulwarkctl-${{ steps.version.outputs.version }}.x86_64.rpm    # x86_64
+            sudo rpm -i bulwarkctl-${{ steps.version.outputs.version }}.aarch64.rpm   # arm64
             ```
 
             Verify your download against `SHA256SUMS`:
@@ -472,3 +618,7 @@ jobs:
             Built on Ubuntu 22.04 (glibc 2.35), then installed and scan-tested in a clean container
             on **Ubuntu 22.04, 24.04 and 26.04, Debian 12, and Fedora 41** before this release was
             cut — every one of those is a gate on the release, not a claim.
+
+            The arm64 artifacts are built, installed, and — for the desktop app — actually
+            launched and screenshotted on **native arm64 runners**, not under emulation. A GUI
+            that cannot draw a window fails the release on either architecture.

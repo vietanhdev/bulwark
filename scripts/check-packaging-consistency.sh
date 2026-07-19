@@ -165,6 +165,137 @@ else
   bad "version declarations disagree — run scripts/bump-version.sh --check"
 fi
 
+# --- 5. architectures in lockstep ----------------------------------------------------
+# The same failure shape as the version drift above, one axis over. Every distro channel
+# declares its own supported architectures, in its own syntax, in a different file — and
+# nothing compared them, so widening one and forgetting another was a silent no-op. The
+# symptom is not a build error: AUR/COPR simply never build the arch for the users who
+# needed it, and nobody finds out because a package that was never built cannot fail.
+#
+# release.yml's build matrix is the single source of truth, because it is the thing that
+# actually produces artifacts. Adding an arch there and forgetting these files is now a
+# red check rather than a discovery months later.
+RELEASE_WF=".github/workflows/release.yml"
+
+read -r CLI_ARCHES GUI_ARCHES <<<"$(python3 - "${RELEASE_WF}" <<'PY'
+import sys, yaml
+wf = yaml.safe_load(open(sys.argv[1]))
+inc = wf["jobs"]["linux"]["strategy"]["matrix"]["include"]
+cli = sorted(e["arch"] for e in inc)
+gui = sorted(e["arch"] for e in inc if e.get("gui"))
+print(",".join(cli), ",".join(gui))
+PY
+)"
+[[ -n "${CLI_ARCHES}" ]] || { echo "ERROR: could not read the build matrix from ${RELEASE_WF}" >&2; exit 1; }
+
+echo
+echo "architectures declared by the release build matrix:"
+note "CLI: ${CLI_ARCHES}"
+note "GUI: ${GUI_ARCHES}"
+echo
+
+# Normalise an arbitrary whitespace/quote-separated arch list to a sorted comma list, so a
+# reordering or a quoting-style change is not reported as drift.
+norm_arches() { tr -d "'\"" | tr ' \t' '\n' | sed '/^$/d' | sort -u | paste -sd, -; }
+
+cmp_arches() {
+  local label="$1" got="$2" want="$3"
+  if [[ "${got}" == "${want}" ]]; then
+    ok "${label} declares ${got}"
+  else
+    bad "${label} declares '${got}' but the release matrix builds '${want}'"
+    note "An arch the release builds but this channel omits is simply never shipped there;"
+    note "an arch it claims but the release never builds is a package that cannot exist."
+  fi
+}
+
+# AUR: bash array, e.g. arch=('x86_64' 'aarch64')
+PKGBUILD_ARCHES="$(sed -n "s/^arch=(\(.*\))$/\1/p" packaging/aur/PKGBUILD | norm_arches)"
+cmp_arches "AUR PKGBUILD" "${PKGBUILD_ARCHES}" "${CLI_ARCHES}"
+
+# .SRCINFO is GENERATED from the PKGBUILD by `makepkg --printsrcinfo`, and is what the AUR
+# actually reads. Editing the PKGBUILD without regenerating it is the single most common AUR
+# packaging mistake: the PKGBUILD looks right and the AUR keeps serving the old metadata.
+SRCINFO_ARCHES="$(sed -n 's/^[[:space:]]*arch = //p' packaging/aur/.SRCINFO | norm_arches)"
+cmp_arches ".SRCINFO" "${SRCINFO_ARCHES}" "${CLI_ARCHES}"
+if [[ "${SRCINFO_ARCHES}" != "${PKGBUILD_ARCHES}" ]]; then
+  note "regenerate it: cd packaging/aur && makepkg --printsrcinfo > .SRCINFO"
+fi
+
+# COPR: rpm spec, space-separated after the tag.
+SPEC_ARCHES="$(sed -n 's/^ExclusiveArch:[[:space:]]*//p' packaging/copr/bulwarkctl.spec | norm_arches)"
+cmp_arches "COPR spec ExclusiveArch" "${SPEC_ARCHES}" "${CLI_ARCHES}"
+
+# Flathub ships the GUI, so it tracks the GUI arch list rather than the CLI one — but it is
+# checked as a SUBSET, not for equality, and the asymmetry is the point.
+#
+# Flathub BUILDS every arch named in only-arches, on its own infrastructure, from the Flatpak
+# manifest's own offline cargo/node sources. Our release pipeline proving that the .deb GUI
+# builds and launches on aarch64 therefore does NOT prove the Flatpak will: different build
+# system, different runtime, different inputs. Claiming an arch there before one has actually
+# been built turns an untested target into a failed submission.
+#
+# So: naming an arch Flathub that the release does not build is a hard error (that package
+# cannot exist), while omitting one is a legitimate per-channel decision — reported, so it
+# stays a visible choice rather than something quietly forgotten.
+# The PPA is the one channel that is dual-arch without declaring either arch by name:
+# Launchpad builds whatever the series enables, driven by `Architecture: any`. That is correct,
+# but only while it stays `any` — narrowing it to `amd64` would silently stop producing arm64
+# builds with nothing else in the repo changing. Assert the mechanism rather than a list.
+PPA_CONTROL="packaging/ppa/debian/control"
+if grep -qE '^Architecture:[[:space:]]*any[[:space:]]*$' "${PPA_CONTROL}"; then
+  ok "PPA debian/control is Architecture: any (Launchpad builds every enabled arch)"
+else
+  bad "PPA debian/control is not 'Architecture: any'"
+  note "Launchpad derives the PPA's architectures from this field alone. Anything narrower"
+  note "silently stops producing builds for the arches the download page advertises."
+fi
+
+# The snap declares its arches explicitly so the restriction is reviewable. Checked for
+# *presence and subset*, not equality: the snap is deliberately amd64-only (classic confinement
+# is unapproved, so the channel publishes nothing), but it must never claim an arch the release
+# does not build a GUI for. Without a platforms: key snapcraft silently builds host-arch-only,
+# which is how this was an undeclared decision for as long as it was.
+SNAP_ARCHES="$(python3 - "${SNAP_MANIFEST}" <<'PY'
+import sys, yaml
+m = yaml.safe_load(open(sys.argv[1]))
+p = m.get("platforms") or {}
+# snapcraft spells Debian arch names here; map to the uname spelling the matrix uses.
+xlate = {"amd64": "x86_64", "arm64": "aarch64", "armhf": "arm"}
+print(",".join(sorted(xlate.get(k, k) for k in p)))
+PY
+)"
+if [[ -z "${SNAP_ARCHES}" ]]; then
+  bad "snapcraft.yaml declares no platforms: key — its architecture is an accident of the runner"
+else
+  snap_extra=""
+  for a in ${SNAP_ARCHES//,/ }; do
+    case ",${GUI_ARCHES}," in *",${a},"*) ;; *) snap_extra="${snap_extra} ${a}" ;; esac
+  done
+  if [[ -n "${snap_extra}" ]]; then
+    bad "snapcraft.yaml claims${snap_extra}, which the release does not build a GUI for"
+  else
+    ok "snapcraft.yaml declares ${SNAP_ARCHES} (a subset of the built ${GUI_ARCHES})"
+  fi
+fi
+
+FLATHUB_GEN="scripts/flatpak-gen-flathub-manifest.sh"
+FLATHUB_ARCHES="$(sed -n 's/.*"only-arches":[[:space:]]*\[\(.*\)\].*/\1/p' "${FLATHUB_GEN}" | tr -d ',' | norm_arches)"
+flathub_extra=""
+for a in ${FLATHUB_ARCHES//,/ }; do
+  case ",${GUI_ARCHES}," in *",${a},"*) ;; *) flathub_extra="${flathub_extra} ${a}" ;; esac
+done
+if [[ -n "${flathub_extra}" ]]; then
+  bad "Flathub only-arches claims${flathub_extra}, which the release does not build a GUI for"
+elif [[ "${FLATHUB_ARCHES}" == "${GUI_ARCHES}" ]]; then
+  ok "Flathub only-arches (GUI) declares ${FLATHUB_ARCHES}"
+else
+  ok "Flathub only-arches (GUI) declares ${FLATHUB_ARCHES} — a subset of the built ${GUI_ARCHES}"
+  note "Not drift by itself: Flathub builds each declared arch itself, from the Flatpak"
+  note "manifest's own offline sources, so a GUI arch proven elsewhere is not proven there."
+  note "Widen it once a real aarch64 flatpak-builder run has succeeded."
+fi
+
 echo
 if [[ ${fail} -eq 0 ]]; then
   echo "packaging consistency: PASS"

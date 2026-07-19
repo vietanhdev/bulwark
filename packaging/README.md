@@ -55,6 +55,39 @@ what it audits is a worse outcome than no package at all.
 
 ---
 
+## Architectures per channel
+
+| Channel | x86_64 | aarch64 / arm64 | Who builds it |
+|---|---|---|---|
+| GitHub release (CLI + GUI) | yes | yes | us, natively, one runner per arch |
+| Ubuntu PPA (CLI) | yes | yes | Launchpad, from `Architecture: any` |
+| AUR (CLI) | yes | yes | the user, from the `PKGBUILD` |
+| COPR (CLI) | yes | yes | COPR, per enabled chroot |
+| Flathub (GUI) | yes | **not yet** | Flathub, from the Flatpak manifest |
+| Snap Store (GUI) | yes | no | blocked on classic approval anyway |
+
+Nothing in the source is arch-specific, so widening a channel is a metadata change
+rather than a port. What differs is **who does the building**, and that is the whole
+reason the rows are not all identical:
+
+- Where *we* build (GitHub releases), the arch is proven — built, installed, and for
+  the GUI actually launched and screenshotted on native arm64 hardware.
+- Where the *user* builds (AUR), declaring an arch costs nothing and risks nothing.
+- Where a *third party* builds (Flathub, COPR, Launchpad), declaring an arch commits
+  their infrastructure to a build we have not run. Flathub in particular builds every
+  arch named in `only-arches` from the Flatpak manifest's own offline sources — a
+  different build system, runtime and input set from our `.deb`. A GUI arch proven by
+  our pipeline is therefore *not* proven there, which is why that cell stays "not yet"
+  until a real aarch64 `flatpak-builder` run has succeeded. Claiming it early converts
+  an untested target into a failed submission.
+
+`scripts/check-packaging-consistency.sh` enforces this table's left-hand columns
+against `release.yml`'s build matrix, so an arch added to the release and forgotten
+here is a red CI check. Flathub is checked as a subset — omitting an arch is a
+decision, claiming one the release never builds is an error.
+
+---
+
 ## Why not just upload the `cargo deb` `.deb`?
 
 A PPA does not accept a pre-built binary `.deb`. Launchpad's build farm compiles

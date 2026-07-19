@@ -34,13 +34,29 @@ const version = computed(() => release.value?.tag_name ?? null);
 function find(pred) {
   return release.value?.assets?.find((a) => pred(a.name)) ?? null;
 }
+
+// Every predicate below pins an ARCHITECTURE suffix, and that is load-bearing rather than
+// tidiness. `find` returns the FIRST asset matching the predicate, and the release now carries
+// both x86_64 and arm64 builds — so a predicate like `startsWith("bulwarkctl") && endsWith(".deb")`
+// matches both and hands whichever GitHub happens to list first. The failure is silent and
+// user-side: the page looks right, the download works, and the package refuses to install with
+// "package architecture (arm64) does not match system (amd64)". Never loosen these.
 const is = {
-  guiDeb: (n) => n.startsWith("bulwark-desktop") && n.endsWith(".deb"),
-  guiRpm: (n) => n.startsWith("bulwark-desktop") && n.endsWith(".rpm"),
-  guiAppImage: (n) => n.endsWith(".AppImage"),
-  cliDeb: (n) => n.startsWith("bulwarkctl") && n.endsWith(".deb"),
-  cliRpm: (n) => n.startsWith("bulwarkctl") && n.endsWith(".rpm"),
-  cliTarball: (n) => n.endsWith(".tar.gz"),
+  guiDeb: (n) => n.startsWith("bulwark-desktop") && n.endsWith("_amd64.deb"),
+  guiRpm: (n) => n.startsWith("bulwark-desktop") && n.endsWith(".x86_64.rpm"),
+  guiAppImage: (n) => n.endsWith("-x86_64.AppImage"),
+
+  guiDebArm: (n) => n.startsWith("bulwark-desktop") && n.endsWith("_arm64.deb"),
+  guiRpmArm: (n) => n.startsWith("bulwark-desktop") && n.endsWith(".aarch64.rpm"),
+  guiAppImageArm: (n) => n.endsWith("-aarch64.AppImage"),
+
+  cliDeb: (n) => n.startsWith("bulwarkctl") && n.endsWith("_amd64.deb"),
+  cliRpm: (n) => n.startsWith("bulwarkctl") && n.endsWith(".x86_64.rpm"),
+  cliTarball: (n) => n.startsWith("bulwarkctl") && n.endsWith("-x86_64-linux.tar.gz"),
+
+  cliDebArm: (n) => n.startsWith("bulwarkctl") && n.endsWith("_arm64.deb"),
+  cliRpmArm: (n) => n.startsWith("bulwarkctl") && n.endsWith(".aarch64.rpm"),
+  cliTarballArm: (n) => n.startsWith("bulwarkctl") && n.endsWith("-aarch64-linux.tar.gz"),
 };
 
 // Always yields a working link: the direct asset once a release exists, the releases page
@@ -66,7 +82,11 @@ function size(pred) {
   <template v-else>Looking up the latest release…</template>
 </p>
 
-Linux, x86_64. Built on Ubuntu 22.04 (glibc 2.35), so it runs on **Ubuntu 22.04+, Debian 12+, and Fedora 36+**. Every release is installed and scan-tested in a clean container on Ubuntu 22.04, 24.04 and 26.04, Debian 12, and Fedora 41 before it ships — including the current Ubuntu LTS.
+Linux, **x86_64 and arm64**. Built on Ubuntu 22.04 (glibc 2.35), so it runs on **Ubuntu 22.04+, Debian 12+, and Fedora 36+**. Every release is installed and scan-tested in a clean container on Ubuntu 22.04, 24.04 and 26.04, Debian 12, and Fedora 41 before it ships — including the current Ubuntu LTS. The arm64 builds are compiled and tested on native arm64 machines, not emulated, and the desktop app is launched and screenshotted on both architectures before release.
+
+::: tip Which one do I need?
+Run `uname -m`. `x86_64` (also called amd64) is a typical desktop, laptop or cloud VM; `aarch64` (also called arm64) is a Raspberry Pi 4/5, an Ampere or AWS Graviton server, or a Linux VM on Apple silicon. The download buttons below give you x86_64 — arm64 links are in the code blocks beneath each one.
+:::
 
 ## Desktop app
 
@@ -89,15 +109,20 @@ The GUI: dashboard, ClamAV scanning with real-time protection, compliance view, 
 
 ```bash
 # Debian / Ubuntu
-sudo dpkg -i bulwark-desktop_*_amd64.deb
+sudo dpkg -i bulwark-desktop_*_amd64.deb        # x86_64
+sudo dpkg -i bulwark-desktop_*_arm64.deb        # arm64
 
 # Fedora / RHEL
-sudo rpm -i bulwark-desktop-*.x86_64.rpm
+sudo rpm -i bulwark-desktop-*.x86_64.rpm        # x86_64
+sudo rpm -i bulwark-desktop-*.aarch64.rpm       # arm64
 
 # AppImage — portable, nothing to install
-chmod +x bulwark-desktop-*-x86_64.AppImage
+chmod +x bulwark-desktop-*-x86_64.AppImage      # x86_64 (arm64: -aarch64.AppImage)
 ./bulwark-desktop-*-x86_64.AppImage
 ```
+
+Direct arm64 downloads:
+<span v-if="find(is.guiDebArm)"><a :href="url(is.guiDebArm)">.deb</a> · </span><span v-if="find(is.guiRpmArm)"><a :href="url(is.guiRpmArm)">.rpm</a> · </span><a :href="url(is.guiAppImageArm)">AppImage</a>
 
 ### Snap and Flatpak — not currently available
 
@@ -134,9 +159,17 @@ headless box. Same engine and same rule pack as the GUI.
 </div>
 
 ```bash
-sudo dpkg -i bulwarkctl_*_amd64.deb   # or: sudo rpm -i bulwarkctl-*.x86_64.rpm
+# x86_64
+sudo dpkg -i bulwarkctl_*_amd64.deb    # or: sudo rpm -i bulwarkctl-*.x86_64.rpm
+
+# arm64
+sudo dpkg -i bulwarkctl_*_arm64.deb    # or: sudo rpm -i bulwarkctl-*.aarch64.rpm
+
 bulwarkctl scan
 ```
+
+Direct arm64 downloads:
+<span v-if="find(is.cliDebArm)"><a :href="url(is.cliDebArm)">.deb</a> · </span><span v-if="find(is.cliRpmArm)"><a :href="url(is.cliRpmArm)">.rpm</a> · </span><a :href="url(is.cliTarballArm)">tarball</a>
 
 ### Ubuntu PPA
 

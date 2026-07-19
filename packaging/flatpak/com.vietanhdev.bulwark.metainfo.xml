@@ -108,6 +108,17 @@
   </branding>
 
   <releases>
+    <release version="0.9.0" date="2026-07-19">
+      <description>
+        <p>Bulwark now runs on 64-bit ARM machines as well as x86_64.</p>
+        <ul>
+          <li>Desktop app and command-line scanner are both available for arm64, so Bulwark runs on a Raspberry Pi, an Ampere or Graviton server, or a Linux VM on Apple silicon</li>
+          <li>Every arm64 package is built, installed and launched on real arm64 hardware before release — not emulated</li>
+          <li>The desktop app is now checked for a window that genuinely renders its interface, rather than only for starting without an error</li>
+          <li>Fixed a packaging fault that could bundle an unusable copy of the command-line scanner inside the desktop app, breaking privileged scans</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.8.9" date="2026-07-19">
       <description>
         <p>Store listing corrections. No changes to the application itself.</p>

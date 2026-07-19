@@ -71,15 +71,27 @@ jobs:
       - name: Validate the bundled rule pack
         run: cargo run -p bulwarkctl -- rules validate rules/
 
-  # Source-level compile + test of the non-GUI crates across several Linux distros, so a
-  # glibc / toolchain / libc-behaviour difference is caught on every push — not only when the
-  # release job install-tests the packaged artifacts. Deliberately spread across Debian (stable,
-  # old glibc), Fedora (dnf, newer) and Arch (rolling, newest) rather than three Ubuntu points.
+  # Source-level compile + test of the non-GUI crates across several Linux distros AND both
+  # supported CPU architectures, so a glibc / toolchain / libc-behaviour difference is caught on
+  # every push — not only when the release job install-tests the packaged artifacts. Deliberately
+  # spread across Debian (stable, old glibc), Fedora (dnf, newer) and Arch (rolling, newest)
+  # rather than three Ubuntu points.
   #
   # bulwark-app (Tauri/webkit) is excluded: its cross-distro story is the *packaged* GUI, which
   # release.yml's verify-install matrix already installs and link-checks on five distros. The CLI
   # and core need nothing but a C compiler — SQLite is vendored (libsqlite3-sys "bundled") and
   # there is no OpenSSL — so every image here installs the same tiny toolchain and nothing else.
+  #
+  # ---- Architecture ----
+  # aarch64 runs on a native `ubuntu-24.04-arm` runner (free for public repos), not under qemu.
+  # Emulation would prove the code decodes, not that it runs on the hardware users have, and
+  # qemu-user papers over precisely the differences worth catching here — unaligned access,
+  # page size, atomics ordering. This is the job that makes an aarch64-only regression a red PR
+  # check instead of a discovery at release time.
+  #
+  # NOT a full cross product, on purpose: there is no official `archlinux` image for arm64 (Arch
+  # Linux ARM is a separate distribution with its own images), so Arch is x86_64-only here. Adding
+  # it to the aarch64 list would fail on the image pull, not on anything about Bulwark.
   test-distros:
     strategy:
       # One red cell should name the distro that broke, not cancel its siblings.
@@ -89,11 +101,13 @@ jobs:
           # libc6-dev explicitly: with --no-install-recommends, Debian's `gcc` does NOT pull it
           # (only Recommends), so the C runtime objects (Scrt1.o/crti.o) and -lc go missing and
           # every link fails. Fedora/Arch pull their libc-dev as a hard dep, hence gcc alone works.
-          - { image: "debian:12", install: "apt-get update && apt-get install -y --no-install-recommends curl gcc libc6-dev git ca-certificates" }
-          - { image: "fedora:41", install: "dnf install -y -q gcc git which" }
-          - { image: "archlinux:latest", install: "pacman -Sy --noconfirm gcc git curl" }
-    name: test (${{ matrix.image }})
-    runs-on: ubuntu-24.04
+          - { image: "debian:12", arch: x86_64, runner: ubuntu-24.04, install: "apt-get update && apt-get install -y --no-install-recommends curl gcc libc6-dev git ca-certificates" }
+          - { image: "fedora:41", arch: x86_64, runner: ubuntu-24.04, install: "dnf install -y -q gcc git which" }
+          - { image: "archlinux:latest", arch: x86_64, runner: ubuntu-24.04, install: "pacman -Sy --noconfirm gcc git curl" }
+          - { image: "debian:12", arch: aarch64, runner: ubuntu-24.04-arm, install: "apt-get update && apt-get install -y --no-install-recommends curl gcc libc6-dev git ca-certificates" }
+          - { image: "fedora:41", arch: aarch64, runner: ubuntu-24.04-arm, install: "dnf install -y -q gcc git which" }
+    name: test (${{ matrix.image }}, ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     container:
       image: ${{ matrix.image }}
     # A bare container runs `run:` steps under sh (dash), which has no `set -o pipefail`; pin bash.
@@ -117,6 +131,20 @@ jobs:
           set -euo pipefail
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
           echo "${HOME}/.cargo/bin" >> "${GITHUB_PATH}"
+
+      # Without this the arch axis is unfalsifiable: if the arm runner label were wrong, dropped,
+      # or silently substituted, every "aarch64" cell would quietly re-test x86_64 and still go
+      # green. Assert the machine is what the matrix says before trusting anything it reports.
+      - name: Confirm this really is ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          actual="$(uname -m)"
+          host="$(rustc -vV | sed -n 's/^host: //p')"
+          echo "uname -m: ${actual} / rustc host: ${host}"
+          if [ "${actual}" != "${{ matrix.arch }}" ]; then
+            echo "::error::matrix says ${{ matrix.arch }} but this runner is ${actual} — the arch axis is not testing what it claims"
+            exit 1
+          fi
 
       - name: cargo test (workspace minus the GUI)
         run: cargo test --workspace --exclude bulwark-app
