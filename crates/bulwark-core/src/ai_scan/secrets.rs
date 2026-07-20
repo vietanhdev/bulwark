@@ -1030,7 +1030,8 @@ pub fn redact_text_in(path: Option<&str>, text: &str) -> (String, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{Rng, SeedableRng};
+    use rand::distr::Distribution;
+    use rand::SeedableRng;
     use std::collections::BTreeSet;
 
     const ALNUM: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -1186,7 +1187,10 @@ mod tests {
                 // Sample bytes, not a `String`: `rand_regex`'s `String` sampler *panics* on a
                 // non-UTF-8 draw, and with Unicode off that is routine. Bytes plus a `from_utf8`
                 // check turn a crash into "try the next seed".
-                let bytes: Vec<u8> = rand::rngs::StdRng::seed_from_u64(seed).sample(gen);
+                // rand 0.10 removed `Rng::sample`; sampling now runs the other way round, from
+                // the distribution given an rng.
+                let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+                let bytes: Vec<u8> = gen.sample(&mut rng);
                 let sample = String::from_utf8(bytes).ok()?;
                 self.verifier.is_match(&sample).then_some(sample)
             })
