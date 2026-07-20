@@ -34,6 +34,6 @@ tempfile = "3"
 # Generates a random string that matches a given regex — the same trick gitleaks uses (`reggen`) to
 # build a true positive for every rule from the rule's own pattern, so the test corpus stays in sync
 # with the rule pack and no secret-shaped literal is ever committed. Test-only, never shipped.
-rand = "0.8"
-rand_regex = "0.17"
+rand = "0.10"
+rand_regex = "0.19"
 regex-syntax = "0.8.11"
