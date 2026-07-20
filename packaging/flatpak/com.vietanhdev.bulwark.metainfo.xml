@@ -108,6 +108,15 @@
   </branding>
 
   <releases>
+    <release version="0.10.1" date="2026-07-20">
+      <description>
+        <p>A maintenance release. There are no changes to how Bulwark behaves — it updates bundled dependencies and build tooling only.</p>
+        <ul>
+          <li>Updated the bundled monospace typeface</li>
+          <li>Updated internal build and test dependencies</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.10.0" date="2026-07-19">
       <description>
         <p>One-click fixes for common problems, and a view of how your machine measures up against PCI DSS, HIPAA and ISO 27001.</p>
