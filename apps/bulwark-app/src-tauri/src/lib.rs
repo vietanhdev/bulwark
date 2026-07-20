@@ -1013,12 +1013,27 @@ pub fn run() {
                 match w.url() {
                     Ok(url) => {
                         println!("[bulwark] webview url: {url}");
+                        // Only an error in a *release* build. Under `cargo tauri dev` an http URL
+                        // is the whole point — the frontend is served by vite and the window
+                        // renders fine — so firing here unconditionally logged ERROR on every
+                        // normal dev run and asserted something plainly false ("the window will
+                        // be empty"). A guard that cries wolf on every run trains everyone to
+                        // skim past ERROR lines, which is exactly how the Flatpak's real startup
+                        // panic went unnoticed. The `webview url:` line above stays unconditional,
+                        // so scripts/test-gui-packages-docker.sh still has its assertion.
                         if url.scheme() == "http" || url.scheme() == "https" {
-                            eprintln!(
-                                "[bulwark] ERROR: this build loads the UI from {url} — a DEV \
-                                 build. A packaged build must embed the frontend (build with \
-                                 --features custom-protocol). The window will be empty."
-                            );
+                            if cfg!(debug_assertions) {
+                                println!(
+                                    "[bulwark] dev build: UI served from {url} by the dev server."
+                                );
+                            } else {
+                                eprintln!(
+                                    "[bulwark] ERROR: this release build loads the UI from {url} \
+                                     rather than embedding it. A packaged build must embed the \
+                                     frontend (build with --features custom-protocol). The window \
+                                     will be empty."
+                                );
+                            }
                         }
                     }
                     Err(e) => eprintln!("[bulwark] warning: couldn't read the webview url: {e}"),
