@@ -29,7 +29,7 @@ options=('!lto')
 # Bulwark prints a distro-aware install hint when it is absent.
 optdepends=('clamav: antivirus scanning support')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('3e5c6308c6f0f55d930656f8eb1d1c31b6473944885df2f7a58be60937d35713')
+sha256sums=('f746759a0c0a0d70a8377c864c3dccae5c7e8d45bf846348fcf56fc27ebb7263')
 
 prepare() {
   cd "bulwark-$pkgver"
