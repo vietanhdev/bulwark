@@ -51,7 +51,7 @@ jobs:
           components: clippy, rustfmt
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       # webkit2gtk + friends, needed to compile bulwark-app's Tauri backend on Linux.
       - name: Install Tauri Linux dependencies
@@ -219,7 +219,7 @@ jobs:
           toolchain: stable
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Run e2e fixture tests
         run: cargo test -p bulwarkctl --test e2e -- --ignored --test-threads=1
