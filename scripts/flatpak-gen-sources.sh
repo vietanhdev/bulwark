@@ -5,8 +5,9 @@
 #
 # Flatpak (like Launchpad) builds with NO network, so both cargo and npm deps must
 # be declared up front. This uses the upstream flatpak-builder-tools generators.
-# Run it whenever Cargo.lock or package-lock.json changes, and DO commit the two
-# generated JSON files (they're what makes the offline build reproducible).
+# Run it whenever Cargo.lock or package-lock.json changes. The generated JSON
+# files are gitignored in this repo; CI regenerates them from the committed lockfiles.
+# They are copied into the separate Flathub submission alongside its manifest.
 #
 # Requires network + python3. The generators pull their own python deps; if they
 # fail on imports, `pipx install` them or run inside a venv (see errors below).
@@ -57,5 +58,5 @@ PYTHONPATH="$TOOLS_DIR/node" python3 -m flatpak_node_generator npm \
 echo
 echo "Wrote:"
 ls -lh "$OUT/cargo-sources.json" "$OUT/node-sources.json" 2>/dev/null | awk '{print "  " $5, $NF}'
-echo "Commit these two files. Then build with:"
-echo "  flatpak-builder --user --install --force-clean build-dir packaging/flatpak/com.vietanhnv.bulwark.yaml"
+echo "Generated files are gitignored here. Build with:"
+echo "  scripts/flatpak-build-local.sh"

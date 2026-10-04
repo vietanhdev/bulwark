@@ -1076,6 +1076,8 @@ fn is_pre_orm_database(path: &Path) -> anyhow::Result<bool> {
         .ok_or_else(|| anyhow::anyhow!("database path is not valid UTF-8"))?;
     let mut conn = SqliteConnection::establish(url)?;
 
+    // Diesel generates `name: name` here; Rust 1.99 reports the lint at this derive.
+    #[allow(clippy::redundant_field_names)]
     #[derive(QueryableByName)]
     struct TableName {
         #[diesel(sql_type = diesel::sql_types::Text)]
