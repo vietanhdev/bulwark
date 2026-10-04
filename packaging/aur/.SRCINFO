@@ -11,6 +11,6 @@ pkgbase = bulwarkctl
 	optdepends = clamav: antivirus scanning support
 	options = !lto
 	source = bulwarkctl-0.10.2.tar.gz::https://github.com/vietanhdev/bulwark/archive/refs/tags/v0.10.2.tar.gz
-	sha256sums = 35328178d4e9c6ed46f35b6f9cd1470c4b7ed886695b02f799665bf8f6f7d837
+	sha256sums = 355a9bb98eb64751052692859bcbe6c70fe13133c7bebb3d39f7a4dcd8a9a8dc
 
 pkgname = bulwarkctl
