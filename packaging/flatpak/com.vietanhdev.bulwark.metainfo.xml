@@ -62,27 +62,27 @@
 
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.8.8/docs/public/screenshots/overview.png</image>
+      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.10.2/docs/public/screenshots/overview.png</image>
       <caption>A safety score with findings ranked by severity</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.8.8/docs/public/screenshots/agent-security.png</image>
+      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.10.2/docs/public/screenshots/agent-security.png</image>
       <caption>Checking AI coding assistants for leaked secrets</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.8.8/docs/public/screenshots/compliance.png</image>
+      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.10.2/docs/public/screenshots/compliance.png</image>
       <caption>Hardening checks grouped by category</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.8.8/docs/public/screenshots/antivirus.png</image>
+      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.10.2/docs/public/screenshots/antivirus.png</image>
       <caption>Virus scanning with live progress</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.8.8/docs/public/screenshots/rules.png</image>
+      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.10.2/docs/public/screenshots/rules.png</image>
       <caption>Every check explained in plain language</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.8.8/docs/public/screenshots/settings.png</image>
+      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.10.2/docs/public/screenshots/settings.png</image>
       <caption>Appearance and automatic re-check frequency</caption>
     </screenshot>
   </screenshots>
@@ -108,6 +108,17 @@
   </branding>
 
   <releases>
+    <release version="0.10.2" date="2026-10-04">
+      <description>
+        <p>A maintenance release with updated desktop and scanner dependencies.</p>
+        <ul>
+          <li>Updated React and React DOM together for the desktop interface</li>
+          <li>Updated the command-line parser, database library, and JSON and pattern-matching dependencies</li>
+          <li>Updated development dependencies to address previously reported security advisories</li>
+          <li>Restored compatibility with Rust 1.99 build checks</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.10.1" date="2026-07-20">
       <description>
         <p>A maintenance release. There are no changes to how Bulwark behaves — it updates bundled dependencies and build tooling only.</p>

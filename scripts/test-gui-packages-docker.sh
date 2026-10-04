@@ -82,7 +82,8 @@ TARGETS=("$@")
 )
 
 # Xvfb + software rendering: containers have no GPU, and WebKitGTK's DMA-BUF renderer
-# and its own sandbox both fail without one. These mirror what a headless CI runner needs;
+# needs the legacy overrides below on older runtimes. Fedora WebKitGTK 2.54+ uses its
+# default software-rendering path instead (see RPM_GUI_ENV). These are headless CI settings;
 # they are test-harness settings, not something the app requires on a real desktop.
 GUI_ENV='
   # xdotool/compare/pgrep join the guard because the checks that depend on them are hard
@@ -107,6 +108,21 @@ GUI_ENV='
   # alone cannot tell "the app painted a UI" from "Xvfb has a noisy default root"; comparing
   # against this does, and it stays valid if the app is restyled.
   import -window root /tmp/baseline.png 2>/dev/null || true
+'
+
+# WebKitGTK 2.54 replaced the old compositor/software-rendering path. The legacy
+# overrides above produce an alive but blank webview on Fedora 44; neither override
+# alone fixes it. Use the default renderer for that runtime, still backed by Mesa
+# software rendering. Query the RPM runtime, not the distro release or the host:
+# an AppImage carries a different WebKit and must retain its own legacy settings.
+RPM_GUI_ENV='
+  WEBKIT_VERSION="$(rpm -q --queryformat "%{VERSION}" webkit2gtk4.1)" || exit 90
+  IFS=. read -r WEBKIT_MAJOR WEBKIT_MINOR WEBKIT_PATCH <<< "${WEBKIT_VERSION}"
+  echo "Fedora WebKitGTK runtime: ${WEBKIT_VERSION}"
+  if [ "${WEBKIT_MAJOR}" -gt 2 ] || { [ "${WEBKIT_MAJOR}" -eq 2 ] && [ "${WEBKIT_MINOR}" -ge 54 ]; }; then
+    unset WEBKIT_DISABLE_COMPOSITING_MODE WEBKIT_DISABLE_DMABUF_RENDERER
+    echo "Using the default WebKitGTK software-rendering path"
+  fi
 '
 
 # Shared verdict logic. Reads the app log and decides pass/fail. Kept in one place so
@@ -340,6 +356,7 @@ for spec in "${TARGETS[@]}"; do
         dnf install -y -q /a/${RPM} >/dev/null 2>&1 \
           || { echo 'FAIL: dnf install failed'; exit 1; }
         ${GUI_ENV}
+        ${RPM_GUI_ENV}
         bulwark-app >/tmp/app.log 2>&1 &
         APP_PID=\$!
         sleep ${SETTLE}

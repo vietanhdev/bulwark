@@ -1,6 +1,6 @@
 pkgbase = bulwarkctl
 	pkgdesc = Linux host security and misconfiguration scanner (CLI)
-	pkgver = 0.10.1
+	pkgver = 0.10.2
 	pkgrel = 1
 	url = https://github.com/vietanhdev/bulwark
 	arch = x86_64
@@ -10,7 +10,7 @@ pkgbase = bulwarkctl
 	depends = gcc-libs
 	optdepends = clamav: antivirus scanning support
 	options = !lto
-	source = bulwarkctl-0.10.1.tar.gz::https://github.com/vietanhdev/bulwark/archive/refs/tags/v0.10.1.tar.gz
+	source = bulwarkctl-0.10.2.tar.gz::https://github.com/vietanhdev/bulwark/archive/refs/tags/v0.10.2.tar.gz
 	sha256sums = 35328178d4e9c6ed46f35b6f9cd1470c4b7ed886695b02f799665bf8f6f7d837
 
 pkgname = bulwarkctl
