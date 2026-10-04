@@ -679,6 +679,15 @@ they cost real rendering performance and were *not* the cause of the blank windo
 but they are the documented workarounds if a driver ever renders nothing, and their
 absence from the upstream doc means a blank-window hunt will not find them there.
 
+**Headless Fedora launch tests depend on the WebKit runtime.** WebKitGTK 2.54
+[reworked software rendering and switched compositors](https://webkitgtk.org/2026/09/16/webkitgtk-2.54-highlights.html).
+The 0.10.2 release rehearsal found that either legacy rendering override above
+leaves the Fedora 44 RPM blank under Xvfb. With both unset, the same RPM renders
+its full interface using Mesa software rendering. The launch harness queries
+`webkit2gtk4.1` and uses that default path for 2.54+, retaining the old settings
+for earlier runtimes and for the separately bundled AppImage. Its process,
+pixel, OCR and clean-shutdown assertions are unchanged.
+
 **Capturing app output.** The app's stdout is awkward to capture from a wrapper script.
 Writing it inside the sandbox works reliably:
 
