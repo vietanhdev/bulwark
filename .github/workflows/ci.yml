@@ -4,7 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
+# Only the owner may start jobs; triggering_actor also covers owner-initiated reruns.
 jobs:
   # Seconds-long static checks over the sandboxed packaging manifests. Deliberately first
   # and dependency-free: the bug that motivated it (an undeclared single-instance D-Bus
@@ -12,6 +14,7 @@ jobs:
   # empty window — findable only by installing and looking. A grep would have caught it
   # before the first build.
   packaging:
+    if: github.triggering_actor == 'vietanhdev'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -24,7 +27,7 @@ jobs:
   # any change to the snap or the app closes that gap; publishing stays manual.
   snap-build:
     runs-on: ubuntu-24.04
-    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    if: github.triggering_actor == 'vietanhdev'
     steps:
       - uses: actions/checkout@v7
       - name: Build snap
@@ -40,6 +43,7 @@ jobs:
           test "$n" -gt 0
 
   test:
+    if: github.triggering_actor == 'vietanhdev'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -93,6 +97,7 @@ jobs:
   # Linux ARM is a separate distribution with its own images), so Arch is x86_64-only here. Adding
   # it to the aarch64 list would fail on the image pull, not on anything about Bulwark.
   test-distros:
+    if: github.triggering_actor == 'vietanhdev'
     strategy:
       # One red cell should name the distro that broke, not cancel its siblings.
       fail-fast: false
@@ -152,6 +157,7 @@ jobs:
   # Fails the build on a known-vulnerable or yanked dependency (RustSec advisory DB). Kept as its
   # own job so an advisory shows up as a distinct red check rather than being buried in `test`.
   audit:
+    if: github.triggering_actor == 'vietanhdev'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -182,6 +188,7 @@ jobs:
             --ignore RUSTSEC-2025-0098
 
   changes:
+    if: github.triggering_actor == 'vietanhdev'
     runs-on: ubuntu-24.04
     outputs:
       rules_or_collectors: ${{ steps.filter.outputs.rules_or_collectors }}
@@ -208,7 +215,7 @@ jobs:
   # GitHub's hosted runners go through an already-root dockerd, not user-namespace tricks.
   e2e:
     needs: changes
-    if: github.event_name == 'push' || needs.changes.outputs.rules_or_collectors == 'true'
+    if: github.triggering_actor == 'vietanhdev' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || needs.changes.outputs.rules_or_collectors == 'true')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -225,6 +232,7 @@ jobs:
         run: cargo test -p bulwarkctl --test e2e -- --ignored --test-threads=1
 
   frontend:
+    if: github.triggering_actor == 'vietanhdev'
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -244,6 +252,7 @@ jobs:
   # needed, so it runs on a plain runner. Node 22 because the vite/rolldown frontend build needs
   # >=20.12. The mock dev server is started automatically by playwright.config.ts's webServer.
   frontend-e2e:
+    if: github.triggering_actor == 'vietanhdev'
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -272,6 +281,7 @@ jobs:
   # at client render time — so nothing else catches "Syntax error in text" before a human loads the
   # page. Runs before/independently of the Vercel deploy, on every push and PR.
   docs-diagrams:
+    if: github.triggering_actor == 'vietanhdev'
     runs-on: ubuntu-24.04
     defaults:
       run:
