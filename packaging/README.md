@@ -333,7 +333,7 @@ flatpak install -y flathub org.gnome.Sdk//50 \
 
 # 1. Generate the offline cargo/node source manifests (needs network).
 scripts/flatpak-gen-sources.sh          # -> packaging/flatpak/{cargo,node}-sources.json
-git add packaging/flatpak/*-sources.json   # commit them; they pin the offline build
+# These generated files are gitignored here; CI regenerates them from the lockfiles.
 
 # 2. Build. Use the helper — a raw `flatpak-builder` from the repo root would copy
 #    the whole working tree (multi-GB target/ + node_modules) into the sandbox and,

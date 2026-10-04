@@ -1067,6 +1067,8 @@ fn prepare(conn: &mut SqliteConnection) -> anyhow::Result<()> {
 /// True when `path` holds a database written before the store moved to Diesel: it has Bulwark's
 /// tables but not Diesel's migration bookkeeping. Schema introspection, like `PRAGMA`, is not
 /// something the typed DSL models — it's a question *about* the schema rather than a query over it.
+// Diesel generates `name: name` inside this function; Rust 1.99 flags that initializer.
+#[allow(clippy::redundant_field_names)]
 fn is_pre_orm_database(path: &Path) -> anyhow::Result<bool> {
     if !path.exists() {
         return Ok(false);

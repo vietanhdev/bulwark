@@ -15,8 +15,10 @@ on:
 permissions:
   contents: write   # only used when release_tag is set, to upload the asset
 
+# Only the owner may start jobs; triggering_actor also covers owner-initiated reruns.
 jobs:
   publish-flatpak:
+    if: github.triggering_actor == 'vietanhdev'
     runs-on: ubuntu-24.04
     steps:
       # Shallow checkout: the manifest's `type: dir` copies the repo into the
@@ -145,7 +147,7 @@ jobs:
 
       - name: Attach bundle to release
         if: ${{ github.event.inputs.release_tag != '' }}
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ github.event.inputs.release_tag }}
           files: bulwark.flatpak

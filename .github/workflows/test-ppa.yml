@@ -23,8 +23,10 @@ on:
 permissions:
   contents: read
 
+# Only the owner may start jobs; triggering_actor also covers owner-initiated reruns.
 jobs:
   install-from-ppa:
+    if: github.triggering_actor == 'vietanhdev'
     # Both architectures, each on its own native runner. The PPA is dual-arch by virtue of
     # `Architecture: any` in debian/control — Launchpad builds every arch the series enables —
     # but that had never been *verified*: this workflow only ever installed the amd64 build, so

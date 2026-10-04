@@ -15,8 +15,10 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
 
+# Only the owner may start jobs; triggering_actor also covers owner-initiated reruns.
 jobs:
   linux:
+    if: github.triggering_actor == 'vietanhdev'
     # The oldest glibc the build links against becomes the oldest distro the artifacts can run
     # on, so that floor is a release-visible decision — not an incidental property of whichever
     # image GitHub happens to point a label at. `cargo deb`'s `depends = "$auto"` reads the floor
@@ -118,10 +120,10 @@ jobs:
           echo "version=${CARGO_VERSION}" >> "$GITHUB_OUTPUT"
           echo "Building version ${CARGO_VERSION}"
 
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # stable
         with:
           toolchain: stable
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           # Explicit, even though the action already folds the matrix into its key: an x86_64
           # cache restored into an aarch64 build would poison target/ with foreign objects, and
@@ -293,6 +295,7 @@ jobs:
   # atomics) worth catching. Native aarch64 runners are free for public repos, so there is no
   # reason to accept the weaker signal.
   verify-install:
+    if: github.triggering_actor == 'vietanhdev'
     needs: linux
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -429,6 +432,7 @@ jobs:
   # rather than executed because AppImage's runtime needs FUSE, which a container doesn't have —
   # --appimage-extract exercises the payload without it.
   verify-appimage:
+    if: github.triggering_actor == 'vietanhdev'
     needs: linux
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -502,6 +506,7 @@ jobs:
   # fail on graphics paths no real user touches, making a red result meaningless. Native arm64
   # runners make the honest version of this test the cheap one too.
   verify-gui-launch:
+    if: github.triggering_actor == 'vietanhdev'
     needs: linux
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -528,6 +533,7 @@ jobs:
           scripts/test-gui-packages-docker.sh
 
   release:
+    if: github.triggering_actor == 'vietanhdev'
     needs: [linux, verify-install, verify-appimage, verify-gui-launch]
     runs-on: ubuntu-24.04
     steps:
@@ -568,7 +574,7 @@ jobs:
       # public release.
       - name: Publish GitHub Release
         if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: dist/*
           draft: true

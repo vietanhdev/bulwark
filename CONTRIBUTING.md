@@ -39,3 +39,12 @@ Opening a PR is your agreement to the terms above.
 
 This isn't a substitute for legal advice; if a contribution is tied to your employer's IP policy
 or you have any doubt about your right to grant the above, check before submitting.
+
+## CI access
+
+GitHub Actions jobs run only when initiated by `vietanhdev`. Pull requests and
+pushes from Dependabot or other contributors skip the jobs. The owner can choose
+**Re-run all jobs** on a skipped run to validate it, or use **Run workflow** on the
+CI workflow and select a branch. The check uses `github.triggering_actor`, so an
+owner-initiated rerun is allowed even when the original event came from a bot.
+Release, publishing and scheduled PPA checks use the same restriction.

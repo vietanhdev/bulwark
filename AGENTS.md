@@ -37,6 +37,8 @@ cargo deb -p bulwarkctl --no-build       # requires `cargo install cargo-deb`
 cargo generate-rpm -p crates/bulwarkctl  # requires `cargo install cargo-generate-rpm`
 ```
 
+GitHub Actions jobs run only when `github.triggering_actor == 'vietanhdev'`, including manual builds, publishing and reruns. Dependabot and other accounts skip all jobs; the owner can select **Re-run all jobs** to validate a bot/contributor PR. CI also supports `workflow_dispatch` for an owner-triggered run on a selected branch.
+
 CI (`.github/workflows/ci.yml`) runs fmt-check, clippy `-D warnings`, `cargo test --workspace`, `rules validate rules/`, and a frontend typecheck — run all of these locally before considering a change done.
 
 ### Releases
