@@ -111,7 +111,7 @@ export const findings: Finding[] = [
   {
     id: "f-ai-001",
     rule_id: "BLWK-AI-001",
-    severity: "critical",
+    severity: "high",
     title: "Anthropic API key exposed in AI context",
     explanation:
       "An Anthropic API key was found in a Claude Code session transcript. Anything written into an " +

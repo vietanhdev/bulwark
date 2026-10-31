@@ -294,12 +294,13 @@ fn scan_persists_and_the_findings_survive_into_the_database() {
 
 /// Regression guard for the false-positive fix: the low-confidence generic `KEY=value` heuristic
 /// must NOT be reported (it fired on every `.env` line, hashes, and ids), while a real,
-/// structurally-identifiable provider key still is. Every `BLWK-AI-001` finding must be critical.
+/// structurally-identifiable provider key still is. Every `BLWK-AI-001` finding must be high
+/// (the provider-key severity; generic heuristic hits would be medium).
 #[test]
 fn generic_env_values_are_not_reported_but_a_real_provider_key_is() {
     let home = tempfile::tempdir().unwrap();
     let proj = home.path().join("Projects/svc");
-    // A real provider key in agent memory — must be found (high-confidence, critical).
+    // A real provider key in agent memory — must be found (high-confidence, high severity).
     write(
         &home
             .path()
@@ -334,7 +335,7 @@ fn generic_env_values_are_not_reported_but_a_real_provider_key_is() {
     for f in findings {
         if f["rule_id"] == "BLWK-AI-001" {
             assert_eq!(
-                f["severity"], "critical",
+                f["severity"], "high",
                 "no low-confidence generic AI-001 findings may remain: {f}"
             );
         }

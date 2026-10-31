@@ -968,11 +968,13 @@ pub fn scan_text_high_confidence_in(path: Option<&str>, text: &str) -> Vec<Secre
     out
 }
 
-/// Severity for a secret hit: a structurally-identifiable provider key is Critical (a live
-/// credential, one paste away from account takeover); a heuristic `generic-*` hit is Medium.
+/// Severity for a secret hit: a structurally-identifiable provider key is High (a real credential
+/// that should be rotated, but sitting in a local file the user owns rather than exposed to the
+/// network, so it does not rank with an attacker-reachable hole); a heuristic `generic-*` hit is
+/// Medium.
 pub fn severity_for(m: &SecretMatch) -> Severity {
     if m.high_conf {
-        Severity::Critical
+        Severity::High
     } else {
         Severity::Medium
     }
