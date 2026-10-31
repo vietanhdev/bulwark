@@ -23,11 +23,18 @@ export function splitFixText(text: string): FixSegment[] {
   return out;
 }
 
+/** The app package installs its CLI as `bulwark` (the standalone CLI package's `bulwarkctl` would
+ *  clash with it), and rule text is shared with that CLI package. Commands shown in the app use the
+ *  name that exists wherever the app is installed. */
+export function forThisInstall(text: string): string {
+  return text.replace(/\bbulwarkctl\b/g, "bulwark");
+}
+
 const COMMAND_START =
-  /^(sudo|chmod|chown|systemctl|ssh-keygen|ssh-add|git|gh|docker|aws|apt|dnf|pacman|ufw|sysctl|rm|mv|cp|echo|bulwarkctl|clamscan|freshclam|passwd|usermod)\b/;
+  /^(sudo|chmod|chown|systemctl|ssh-keygen|ssh-add|git|gh|docker|aws|apt|dnf|pacman|ufw|sysctl|rm|mv|cp|echo|bulwark|bulwarkctl|clamscan|freshclam|passwd|usermod)\b/;
 
 /** True when the whole fix is a single command rather than instructions (e.g. a remediation
- *  string that is just `sudo bulwarkctl fim baseline --privileged`). */
+ *  string that is just `sudo bulwark fim baseline --privileged`). */
 export function isBareCommand(text: string): boolean {
   const t = text.trim();
   return COMMAND_START.test(t) && !/[.!?]\s+[A-Z]/.test(t) && !t.includes("'");
@@ -37,7 +44,7 @@ export function isBareCommand(text: string): boolean {
  *  collapsed root-cause row. The full steps, with copyable commands, are one click away. */
 export function recommendation(text: string): string {
   // Structured fixes put the goal on their first line; older ones are one paragraph.
-  const firstLine = text.trim().split("\n")[0] ?? "";
+  const firstLine = forThisInstall(text).trim().split("\n")[0] ?? "";
   const flat = firstLine.replace(/\s+/g, " ").trim();
   const first = flat.split(/(?<=[.!?])\s+(?=[A-Z(])/)[0] ?? flat;
   return first.replace(/(^|[\s(])'([^']+?)'(?=$|[\s).,;:!?])/g, "$1$2");

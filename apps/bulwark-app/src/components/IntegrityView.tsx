@@ -116,7 +116,7 @@ export function IntegrityView() {
               <code className="font-mono">/etc/sudoers</code> can only be read by root, so baselining them has
               to happen from the CLI:
             </p>
-            <CommandBlock command="sudo bulwarkctl fim baseline --privileged" className="mt-2.5" />
+            <CommandBlock command="sudo bulwark fim baseline --privileged" className="mt-2.5" />
           </div>
         </section>
 

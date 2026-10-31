@@ -1,5 +1,5 @@
 import { CommandBlock, CopyButton } from "@/components/ui/copy-button";
-import { isBareCommand, splitFixText } from "@/lib/fix-text";
+import { forThisInstall, isBareCommand, splitFixText } from "@/lib/fix-text";
 import { cn } from "@/lib/utils";
 
 /** Plain text with each quoted command or config line as an inline code chip you can copy. */
@@ -40,6 +40,7 @@ export function FixSteps({
   className?: string;
   heading?: string;
 }) {
+  text = forThisInstall(text);
   if (!text.trim()) return null;
   if (isBareCommand(text)) return <CommandBlock command={text.trim()} className={className} />;
 
