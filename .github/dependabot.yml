@@ -1,4 +1,8 @@
 version: 2
+# One grouped pull request per ecosystem per month, instead of one per dependency per week. The
+# maintainer reviews and folds these into a release; CI runs on them only when the owner triggers
+# it (CONTRIBUTING.md § CI access). Security updates are a separate repository setting and still
+# arrive as soon as an advisory is published.
 updates:
   # Keeps the SHA-pinned GitHub Actions current: Dependabot bumps the pinned commit (and its
   # trailing version comment) when the upstream action releases, so pinning doesn't mean going
@@ -6,14 +10,23 @@ updates:
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: weekly
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
 
   - package-ecosystem: cargo
     directory: "/"
     schedule:
-      interval: weekly
+      interval: monthly
+    groups:
+      cargo:
+        patterns: ["*"]
 
   - package-ecosystem: npm
     directory: "/apps/bulwark-app"
     schedule:
-      interval: weekly
+      interval: monthly
+    groups:
+      npm:
+        patterns: ["*"]
