@@ -252,7 +252,7 @@ pub fn load_rules(dir: &Path) -> (Vec<LoadedRule>, Vec<RuleLoadError>) {
 /// True when running with an effective UID of 0 — the CLI's `--privileged` flag is only
 /// honored under `sudo` (architecture doc §4 ADR-0004: no `pkexec` self-elevation from the CLI).
 pub fn is_running_as_root() -> bool {
-    unsafe { libc::geteuid() == 0 }
+    crate::platform::is_root()
 }
 
 /// Runs every applicable collector at most once (memoized by name), evaluates every loaded
@@ -466,6 +466,15 @@ pub(crate) fn host_fingerprint() -> String {
 
 #[cfg(test)]
 mod tests {
+    /// Engine tests use Linux-tagged fixture collectors, so they ask for a Linux profile explicitly;
+    /// `Profile::default()` means "this host" and would skip them all on macOS or Windows.
+    fn linux_profile() -> Profile {
+        Profile {
+            os: Some(OperatingSystem::Linux),
+            needs: vec![],
+        }
+    }
+
     use super::*;
     use std::io::Write;
 
@@ -544,7 +553,7 @@ references: [CIS-5.2.10]
         let collectors: Vec<Box<dyn Collector>> =
             vec![Box::new(FixedCollector { rows: vec![fact] })];
 
-        let scan = run_scan(tmp.path(), &collectors, false, &Profile::default());
+        let scan = run_scan(tmp.path(), &collectors, false, &linux_profile());
         assert_eq!(scan.rules_loaded, 1);
         assert!(scan.rule_load_errors.is_empty());
         assert_eq!(scan.findings.len(), 1);
@@ -597,7 +606,7 @@ references: [CIS-5.2.10]
             ],
         })];
 
-        let scan = run_scan(&rules_dir, &collectors, false, &Profile::default());
+        let scan = run_scan(&rules_dir, &collectors, false, &linux_profile());
         let found: Vec<_> = scan
             .findings
             .iter()
@@ -707,14 +716,14 @@ fix: "f"
         let collectors: Vec<Box<dyn Collector>> =
             vec![Box::new(PrivilegedFixedCollector { rows: vec![fact] })];
 
-        let unprivileged = run_scan(tmp.path(), &collectors, false, &Profile::default());
+        let unprivileged = run_scan(tmp.path(), &collectors, false, &linux_profile());
         assert_eq!(unprivileged.privileged_collectors_skipped, vec!["sudoers"]);
         assert!(
             unprivileged.findings.is_empty(),
             "a skipped collector must not silently pass as clean"
         );
 
-        let privileged = run_scan(tmp.path(), &collectors, true, &Profile::default());
+        let privileged = run_scan(tmp.path(), &collectors, true, &linux_profile());
         assert!(privileged.privileged_collectors_skipped.is_empty());
         assert_eq!(privileged.findings.len(), 1);
     }
@@ -749,10 +758,7 @@ fix: "f"
             vec![Box::new(FixedCollector { rows: vec![fact] })];
 
         // Cancelled before the first collector runs.
-        let scan =
-            run_scan_cancellable(tmp.path(), &collectors, false, &Profile::default(), &|| {
-                true
-            });
+        let scan = run_scan_cancellable(tmp.path(), &collectors, false, &linux_profile(), &|| true);
         assert!(scan.cancelled);
         assert!(scan.findings.is_empty());
         assert!(
@@ -762,7 +768,7 @@ fix: "f"
         );
 
         // The same scan, allowed to finish, does find the issue.
-        let full = run_scan(tmp.path(), &collectors, false, &Profile::default());
+        let full = run_scan(tmp.path(), &collectors, false, &linux_profile());
         assert!(!full.cancelled);
         assert_eq!(full.findings.len(), 1);
         assert_eq!(full.rules_evaluated, vec!["BLWK-SSH-001"]);
@@ -798,7 +804,7 @@ fix: "f"
         let collectors: Vec<Box<dyn Collector>> =
             vec![Box::new(FixedCollector { rows: vec![fact] })];
 
-        let scan = run_scan(tmp.path(), &collectors, false, &Profile::default());
+        let scan = run_scan(tmp.path(), &collectors, false, &linux_profile());
 
         assert!(scan.findings.is_empty());
         assert_eq!(
@@ -958,6 +964,7 @@ fix: "f"
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn is_running_as_root_matches_the_real_euid() {
         // Test runners are essentially never root — exercises the function against the
@@ -994,7 +1001,7 @@ fix: "f"
 "#,
         );
         let collectors: Vec<Box<dyn Collector>> = vec![Box::new(FailingCollector)];
-        let scan = run_scan(tmp.path(), &collectors, false, &Profile::default());
+        let scan = run_scan(tmp.path(), &collectors, false, &linux_profile());
         assert!(scan.findings.is_empty());
         assert_eq!(scan.collector_errors.len(), 1);
         assert_eq!(scan.collector_errors[0].collector, "sshd_config");
@@ -1006,6 +1013,7 @@ fix: "f"
     /// A rule file that's listed by the directory walk but fails to *read* (permission
     /// revoked between listing and open, a race any real filesystem can hit) must be
     /// reported the same way a malformed-YAML file is — never silently dropped.
+    #[cfg(unix)]
     #[test]
     fn an_unreadable_rule_file_is_reported_not_silently_dropped() {
         use std::os::unix::fs::PermissionsExt;

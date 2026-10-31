@@ -2,6 +2,7 @@
 //! CLI and GUI call. The unit tests inside `remediation/` prove each helper in isolation; these
 //! prove the full "detect → fix → resolved" loop: a fix, applied, actually leaves the host in a
 //! state where the very issue it targeted no longer holds.
+#![cfg(unix)]
 
 use bulwark_core::{harden_sshd_config, ssh_permission_targets, tighten_permissions};
 use std::fs;

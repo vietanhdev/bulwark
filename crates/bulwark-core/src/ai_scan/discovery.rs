@@ -72,6 +72,9 @@ pub enum ArtifactKind {
     DotEnv,
     /// Codex `config.toml` — TOML settings with its own sandbox/approval keys.
     CodexConfig,
+    /// An agent's persistent memory (`~/.claude/projects/<proj>/memory/*.md`,
+    /// `~/.claude/CLAUDE.md`): notes the agent re-reads every session, so a pasted key lives on.
+    Memory,
 }
 
 /// One discovered thing worth looking at.
@@ -481,6 +484,22 @@ pub fn global_artifacts(home: &Path) -> Vec<Artifact> {
         Transcript,
         None,
     );
+    // Agent memory: per-project memory notes and the global user memory file.
+    collect_dir(
+        &mut out,
+        &home.join(".claude/projects"),
+        "md",
+        ClaudeCode,
+        Memory,
+        None,
+    );
+    push_if_exists(
+        &mut out,
+        home.join(".claude/CLAUDE.md"),
+        ClaudeCode,
+        Memory,
+        None,
+    );
     // User-level subagents / commands / skills — same model-executed instruction surfaces as the
     // per-project ones, and just as capable of hiding an injected directive.
     for sub in ["agents", "commands", "skills"] {
@@ -741,6 +760,7 @@ mod tests {
         assert!(ws.contains(&elsewhere.path().to_path_buf()));
     }
 
+    #[cfg(unix)]
     #[test]
     fn claude_projects_decode_only_yields_real_dirs() {
         let home = tempfile::tempdir().unwrap();

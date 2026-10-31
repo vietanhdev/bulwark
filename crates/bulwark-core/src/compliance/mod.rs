@@ -664,6 +664,21 @@ mod tests {
                  Linux host configuration Bulwark audits",
                 &["BLWK-PERSIST-003", "BLWK-PERSIST-004"],
             ),
+            (
+                "developer-workstation credential, network-exposure and supply-chain checks added \
+                 in 0.11; not yet reviewed against the embedded HIPAA/ISO/PCI controls, so no \
+                 mapping is claimed until that review is done",
+                &[
+                    "BLWK-CRED-001",
+                    "BLWK-CRED-002",
+                    "BLWK-CRED-003",
+                    "BLWK-CRED-004",
+                    "BLWK-NET-003",
+                    "BLWK-NET-004",
+                    "BLWK-PERSIST-005",
+                    "BLWK-ROOTKIT-002",
+                ],
+            ),
         ];
 
         let exempt: BTreeSet<String> = EXEMPT

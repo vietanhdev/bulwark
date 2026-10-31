@@ -259,10 +259,19 @@ fn count_redactions<R: std::io::Read>(path: &str, mut reader: R) -> anyhow::Resu
 /// The backup path for `path` under `backup_dir`: its components joined by `_`, suffixed `.bak`,
 /// with a numeric suffix on collision so an earlier backup is never overwritten.
 fn backup_target(path: &Path, backup_dir: &Path) -> PathBuf {
-    let stem = path
+    // Flatten the whole path into ONE file name. Every separator and every character Windows forbids
+    // in a name is replaced: on Windows a name starting with `C:` is a drive prefix, and
+    // `backup_dir.join("C:_Users_…")` resolves against drive C's current directory instead of
+    // `backup_dir`, so the backup of a secret silently landed outside the owner-only backup folder.
+    let stem: String = path
         .to_string_lossy()
-        .trim_start_matches('/')
-        .replace(['/', '\\'], "_");
+        .trim_start_matches(['/', '\\'])
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            c => c,
+        })
+        .collect();
     let mut candidate = backup_dir.join(format!("{stem}.bak"));
     let mut n = 1;
     while candidate.exists() {
@@ -347,6 +356,24 @@ fn create_temp_exclusive(tmp: &Path) -> std::io::Result<std::fs::File> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backup_names_stay_inside_the_backup_dir_for_windows_style_paths() {
+        let dir = Path::new("backups");
+        for original in [
+            r"C:\Users\me\.claude\projects\p\memory\notes.md",
+            r"\\server\share\notes.md",
+            "/home/me/.claude/projects/p/memory/notes.md",
+        ] {
+            let target = backup_target(Path::new(original), dir);
+            assert_eq!(target.parent(), Some(dir), "{original} -> {target:?}");
+            let name = target.file_name().unwrap().to_string_lossy().into_owned();
+            assert!(
+                !name.contains([':', '/', '\\']),
+                "backup name must be a single plain file name: {name}"
+            );
+        }
+    }
 
     fn anthropic_key() -> String {
         format!("sk-ant-api03-{}AA", "a".repeat(93))

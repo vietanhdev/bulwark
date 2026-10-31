@@ -1,0 +1,18 @@
+id: BLWK-PERSIST-005
+title: A Python startup hook runs code in every Python process
+category: persistence
+severity: medium
+collector: python_startup_hooks
+# executes_code is omitted when a .pth couldn't be read, so an unreadable hook is a collector error.
+# The LiteLLM payload name is handled by BLWK-ROOTKIT-002 at critical severity.
+condition: executes_code == true and known_benign == false and malicious_name == false
+explain: >
+  {{ python_startup_hooks.path }} runs code every time Python starts in this environment, before your own
+  program and even if you never import the package that added it. Some tools use this legitimately, but
+  it is also how the poisoned LiteLLM 1.107.0 package stole credentials in October 2026.
+fix: |
+  Check where this file came from, and remove it if you don't recognise it.
+  1. Find the package that installed it: 'pip show -f <package>' lists a package's files.
+  2. If you recognise it, ignore this issue with the package name as the reason.
+  3. If you don't, uninstall that package and rotate any secrets this Python environment could read.
+references: [ATTACK-T1546.018, ATTACK-T1195.001]

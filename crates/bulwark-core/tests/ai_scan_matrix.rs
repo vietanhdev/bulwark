@@ -6,6 +6,7 @@
 
 use bulwark_core::ai_scan::{scan, AiScanOptions};
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
@@ -69,6 +70,7 @@ fn a_transcript_mentioning_the_official_base_url_is_silent() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn a_credentials_store_is_not_secret_scanned() {
     let home = tempfile::tempdir().unwrap();
@@ -150,29 +152,22 @@ fn an_unpinned_mcp_launcher_fires_003_but_a_pinned_one_does_not() {
 }
 
 #[test]
-fn a_real_secret_in_a_dotenv_is_caught_but_not_redactable() {
-    // This test previously asserted the *opposite* — that a `.env` secret is redactable — and that
-    // assertion was the data-loss bug written down as intent. A `.env` is a functional secrets file:
-    // redaction rewrites it in place, which breaks the project and destroys the key. The secret is
-    // still caught and reported (so the user rotates it); it just must never be offered for the
-    // destructive rewrite. See `kind_allows_redaction`.
+fn a_project_dotenv_is_not_secret_scanned() {
+    // A `.env` exists to hold live secrets. Reporting every working key in it as a "leak" gave users
+    // findings they could not act on, and redacting it was a data-loss bug. Since 0.11 secret
+    // detection runs only on agent sessions and memory, so a `.env` produces no secret finding and
+    // can never be offered for redaction.
     let home = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
-    // A live-shaped AWS access key id with real token entropy (not the AWS doc EXAMPLE value, which
-    // is deliberately allowlisted). This hits the high-confidence `aws-access-token` rule.
     workspace_with_env(ws.path(), "AWS_ACCESS_KEY_ID=AKIAQRSTUVWXYZ234567\n");
     let findings = run(home.path(), &[ws.path()]);
-    let secret = findings
+    assert!(
+        !fired_in(&findings, "BLWK-AI-001", ".env"),
+        "a .env must not be secret-scanned: {findings:?}"
+    );
+    assert!(findings
         .iter()
-        .find(|f| f.rule_id == "BLWK-AI-001" && f.file.contains(".env"));
-    assert!(
-        secret.is_some(),
-        "a real AWS key in .env must still fire AI-001: {findings:?}"
-    );
-    assert!(
-        !secret.unwrap().redactable,
-        "a secret in a .env must NOT be redactable — rewriting it destroys the working config"
-    );
+        .all(|f| !(f.file.contains(".env") && f.redactable)));
 }
 
 #[test]

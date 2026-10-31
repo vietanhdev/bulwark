@@ -301,6 +301,7 @@ mod tests {
         assert!(parse_hash_lines(text).is_empty());
     }
 
+    #[cfg(unix)]
     #[test]
     fn detects_a_modified_file_against_a_real_baseline() {
         let tmp = tempfile::tempdir().unwrap();
@@ -327,6 +328,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn detects_a_deleted_baselined_file() {
         let tmp = tempfile::tempdir().unwrap();

@@ -23,6 +23,9 @@ fn write(path: &Path, contents: &str) {
     std::fs::write(path, contents).unwrap();
 }
 
+/// An agent memory file inside the fixture home (Claude Code keeps per-project memory here).
+const MEMORY_NOTES: &str = ".claude/projects/-home-u-api/memory/notes.md";
+
 /// Builds a `$HOME` containing one workspace that has both a leaked secret and a dangerous agent
 /// config, which is the shape of the finding set the tests below assert on.
 fn fixture_home() -> tempfile::TempDir {
@@ -36,10 +39,11 @@ fn fixture_home() -> tempfile::TempDir {
             fake_anthropic_key()
         ),
     );
-    // The same key inside the agent folder — this is where redaction is allowed to rewrite. The
-    // root CLAUDE.md above is reported but must be left untouched.
+    // The same key in the agent's memory — secret detection runs only on agent sessions and memory,
+    // and this is where redaction is allowed to rewrite. The project-root CLAUDE.md above is not
+    // secret-scanned at all and must be left untouched.
     write(
-        &proj.join(".claude/commands/notes.md"),
+        &home.path().join(MEMORY_NOTES),
         &format!(
             "# Command notes\n\nUse key {} when calling the API.\n",
             fake_anthropic_key()
@@ -94,7 +98,16 @@ fn ai_scan_finds_a_leaked_secret_and_dangerous_config() {
 
     assert!(
         rule_ids.contains(&"BLWK-AI-001"),
-        "the pasted API key must be found: {rule_ids:?}"
+        "the API key in agent memory must be found: {rule_ids:?}"
+    );
+    assert!(
+        !report["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["rule_id"] == "BLWK-AI-001"
+                && f["file"].as_str().unwrap_or("").ends_with("CLAUDE.md")),
+        "a project-root CLAUDE.md is not secret-scanned"
     );
     assert!(
         rule_ids.contains(&"BLWK-AI-002"),
@@ -138,8 +151,8 @@ fn a_clean_workspace_produces_no_findings_and_exits_zero() {
 #[test]
 fn redact_is_a_dry_run_unless_apply_is_passed() {
     let home = fixture_home();
-    // The redactable secret lives inside the agent folder; the dry run must not touch it.
-    let target = home.path().join("Projects/api/.claude/commands/notes.md");
+    // The redactable secret lives in agent memory; the dry run must not touch it.
+    let target = home.path().join(MEMORY_NOTES);
     let before = std::fs::read_to_string(&target).unwrap();
 
     let out = ai(home.path(), &["redact"]);
@@ -162,8 +175,8 @@ fn redact_is_a_dry_run_unless_apply_is_passed() {
 #[test]
 fn redact_apply_removes_the_secret_keeps_the_prose_and_backs_up() {
     let home = fixture_home();
-    // Redaction rewrites the agent-folder file...
-    let target = home.path().join("Projects/api/.claude/commands/notes.md");
+    // Redaction rewrites the agent memory file...
+    let target = home.path().join(MEMORY_NOTES);
     // ...but must leave the project-root CLAUDE.md untouched (reported, not rewritten).
     let root_md = home.path().join("Projects/api/CLAUDE.md");
     let root_before = std::fs::read_to_string(&root_md).unwrap();
@@ -286,9 +299,11 @@ fn scan_persists_and_the_findings_survive_into_the_database() {
 fn generic_env_values_are_not_reported_but_a_real_provider_key_is() {
     let home = tempfile::tempdir().unwrap();
     let proj = home.path().join("Projects/svc");
-    // A real provider key in a memory file — must be found (high-confidence, critical).
+    // A real provider key in agent memory — must be found (high-confidence, critical).
     write(
-        &proj.join("CLAUDE.md"),
+        &home
+            .path()
+            .join(".claude/projects/-home-u-svc/memory/notes.md"),
         &format!("project notes — key {}\n", fake_anthropic_key()),
     );
     // Generic KEY=value lines in a .env with high-entropy but structureless values. The old generic
@@ -313,8 +328,8 @@ fn generic_env_values_are_not_reported_but_a_real_provider_key_is() {
         findings
             .iter()
             .any(|f| f["rule_id"] == "BLWK-AI-001"
-                && f["file"].as_str().unwrap().ends_with("CLAUDE.md")),
-        "the real Anthropic key in CLAUDE.md must be found"
+                && f["file"].as_str().unwrap().ends_with("notes.md")),
+        "the real Anthropic key in agent memory must be found"
     );
     for f in findings {
         if f["rule_id"] == "BLWK-AI-001" {
@@ -335,6 +350,7 @@ fn generic_env_values_are_not_reported_but_a_real_provider_key_is() {
 /// End-to-end for `bulwarkctl ssh protect`: a real unencrypted key under a synthetic `$HOME/.ssh`
 /// becomes passphrase-protected, an already-encrypted one is left alone, and the passphrase is fed
 /// over stdin (never argv). Gated on `ssh-keygen` being present so it's a no-op where it isn't.
+#[cfg(unix)]
 #[test]
 fn ssh_protect_encrypts_an_unencrypted_key_over_the_cli() {
     use std::io::Write;

@@ -30,7 +30,6 @@ use crate::collectors::sshd::{parse_sshd_config_with, resolve_include_glob};
 use crate::models::Fact;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 const MAIN_CONFIG: &str = "/etc/ssh/sshd_config";
@@ -353,12 +352,14 @@ fn harden_with(
             .unwrap_or("sshd_config")
     ));
     std::fs::write(&backup_path, &original)?;
-    std::fs::set_permissions(&backup_path, std::fs::Permissions::from_mode(0o600))?;
+    crate::platform::set_file_mode(&backup_path, 0o600)?;
 
     // Preserve the original file's mode across the rewrite.
-    let orig_mode = std::fs::metadata(path)?.permissions().mode() & 0o7777;
+    let orig_mode = crate::platform::file_mode(&std::fs::metadata(path)?)
+        .ok_or_else(|| anyhow::anyhow!("file modes are not supported on this platform"))?
+        & 0o7777;
     std::fs::write(path, &new_content)?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(orig_mode))?;
+    crate::platform::set_file_mode(path, orig_mode)?;
 
     // Validate with `sshd -t` when asked (real system config only) and available; roll back on
     // failure so we never leave a config that would stop sshd from starting.
@@ -367,7 +368,7 @@ fn harden_with(
         Some(false) => {
             // Restore and report a failure rather than a false success.
             std::fs::write(path, &original)?;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(orig_mode))?;
+            crate::platform::set_file_mode(path, orig_mode)?;
             anyhow::bail!(
                 "the hardened config failed `sshd -t` validation — reverted {} from the backup, no \
                  changes were kept",
@@ -499,6 +500,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn apply_inserts_block_and_is_idempotent() {
         let dir = tempfile::tempdir().unwrap();
@@ -533,6 +535,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn backup_matches_the_original_before_change() {
         let dir = tempfile::tempdir().unwrap();

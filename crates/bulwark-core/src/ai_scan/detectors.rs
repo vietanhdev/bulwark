@@ -52,7 +52,7 @@ pub const CATALOG: &[RuleMeta] = &[
     RuleMeta {
         id: "BLWK-AI-001",
         title: "A secret is exposed in AI assistant context",
-        fix: "Remove the secret from the file (Bulwark can redact it for you) and rotate the credential — assume anything pasted into agent context or a transcript is compromised.",
+        fix: "Remove the key from the file and replace it with a new one. Anything pasted into an AI chat should be treated as leaked.\n1. Use \"Remove secret from this file\" below. Bulwark backs up the original first.\n2. Create a new key with the provider and delete the old one.\n3. Next time, keep keys in a password manager (Bitwarden, 1Password, KeePassXC) and pass them to tools as environment variables, for example with 'op run' or 'bws run', instead of pasting them into the chat.",
         severity: Info,
         references: &["ATTACK-T1552.001"],
     },
@@ -66,7 +66,7 @@ pub const CATALOG: &[RuleMeta] = &[
     RuleMeta {
         id: "BLWK-AI-003",
         title: "An MCP server runs an unpinned package from a registry",
-        fix: "Pin the MCP server package to an exact version (e.g. @scope/pkg@1.2.3 instead of -y latest) and vet the publisher — an unpinned npx/uvx server silently runs whatever the registry serves next, with your tool permissions.",
+        fix: "Pin the MCP server to an exact version so it can't change without you knowing.\n1. Replace the \"@latest\" or unversioned package with an exact version, for example @scope/pkg@1.2.3.\n2. Check that the publisher is one you trust.\n3. Update it deliberately, the way you update other dependencies.",
         severity: High,
         references: &["ATTACK-T1195.001"],
     },
@@ -150,7 +150,7 @@ pub const CATALOG: &[RuleMeta] = &[
     RuleMeta {
         id: "BLWK-AI-015",
         title: "An AI credential file is readable by other users",
-        fix: "chmod 600 this file. A plaintext token store that's group- or world-readable is readable by every other account (and every other process) on the host.",
+        fix: "Make the file private so only you can read it.\n1. Run chmod 600 on this file.\n2. If the tool supports it, let it keep the token in your computer's keychain instead (macOS Keychain, GNOME Keyring or KWallet, Windows Credential Manager).",
         severity: Medium,
         references: &["ATTACK-T1552.001"],
     },
@@ -171,7 +171,7 @@ pub const CATALOG: &[RuleMeta] = &[
     RuleMeta {
         id: "BLWK-AI-018",
         title: "An MCP server connects to a remote endpoint with a plaintext token",
-        fix: "Confirm you trust this remote MCP endpoint, and move its credential out of the config into an environment variable or secret store. A remote (non-localhost) MCP server sees every request the agent makes to it, and a token written inline is exposed to anything that can read the config.",
+        fix: "Take the token out of the config file and give it to the tool when it runs.\n1. Replace the token with a reference to an environment variable, for example '${API_TOKEN}' in Claude Code's .mcp.json.\n2. Keep the token in a password manager and supply it at launch, for example with 'op run' or 'bws run'.\n3. Rotate the token that was in the file, since anyone who cloned the repository could have it.\n4. Make sure you trust this remote server: it sees every request your AI agent sends to it.",
         severity: High,
         references: &["ATTACK-T1552.001", "ATTACK-T1071.001"],
     },

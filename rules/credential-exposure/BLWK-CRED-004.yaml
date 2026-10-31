@@ -1,0 +1,19 @@
+id: BLWK-CRED-004
+title: A credential file can be read by other users
+category: credential-exposure
+severity: medium
+collector: credential_stores
+# git_config rows carry no readable_by_others field; the kind guard keeps them out cleanly.
+condition: kind != "git_config" and readable_by_others == true
+explain: >
+  {{ credential_stores.path }} holds a login token for a tool ({{ credential_stores.kind }}), and other users or
+  programs on this computer can read it (permissions {{ credential_stores.mode }}). Token files should be
+  readable by you alone.
+fix: |
+  Make the file private, then keep the token somewhere safer if the tool allows it.
+  1. Run 'chmod 600 {{ credential_stores.path }}' so only you can read it.
+  2. Move the token into a password manager and pass it to the tool when it runs: for example 'op run' (1Password) or 'bws run' (Bitwarden).
+  3. For npm, write '//registry.npmjs.org/:_authToken=${NPM_TOKEN}' in .npmrc so the file holds no secret.
+  4. For PyPI, let twine read the token from your keychain: 'pip install keyring'.
+  If other people use this computer, rotate the token too.
+references: [CIS-6.1, ATTACK-T1552.001]

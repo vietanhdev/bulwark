@@ -1,0 +1,18 @@
+id: BLWK-CRED-002
+title: Git stores passwords and tokens in plain text
+category: credential-exposure
+severity: high
+collector: credential_stores
+condition: (kind == "git_credentials" and stored_entries > 0) or (kind == "git_config" and helper_store == true)
+explain: >
+  Git is saving your passwords and access tokens in a plain text file ({{ credential_stores.path }}).
+  Any program running as you can read it, and a GitHub token usually lets someone push code to your
+  repositories or publish packages in your name.
+fix: |
+  Let Git keep your tokens in your computer's keychain instead of a plain file.
+  1. For GitHub, run 'gh auth setup-git'. Git then uses the GitHub CLI's login, which is stored in your keychain.
+  2. For other Git hosts, install Git Credential Manager. It works on Linux, macOS and Windows and uses the system keychain.
+  3. Stop using the plain-file store: 'git config --global --unset credential.helper'.
+  4. Delete ~/.git-credentials and revoke the tokens it contained, in case they were already copied.
+  Even better: use SSH keys for Git, protected by a passphrase or a hardware key.
+references: [ATTACK-T1552.001]

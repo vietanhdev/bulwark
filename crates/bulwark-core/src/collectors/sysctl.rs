@@ -213,6 +213,7 @@ impl Collector for SysctlKernelCollector {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn is_applicable_when_proc_sys_kernel_exists() {
         // This test runs on a real Linux CI/dev box, so /proc/sys/kernel genuinely exists —
@@ -289,6 +290,7 @@ mod tests {
         assert!(fact.contains_key("ptrace_scope"));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn collects_the_expanded_hardening_keys_from_a_real_kernel() {
         // Every WATCHED key here is world-readable on a stock Linux kernel (unlike
