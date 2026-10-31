@@ -64,6 +64,7 @@ function pagesNeedingCards() {
     "guide/architecture.md",
     "guide/agent-security.md",
     "guide/remediation.md",
+    "checks/index.md",
   ];
   for (const f of readdirSync(join(DOCS, "articles")).sort()) {
     if (f.endsWith(".md")) pages.push(`articles/${f}`);
@@ -125,7 +126,7 @@ function readPage(relPath) {
   }
 
   return {
-    slug: relPath === "index.md" ? "home" : basename(relPath, ".md"),
+    slug: relPath === "index.md" ? "home" : relPath === "checks/index.md" ? "checks" : basename(relPath, ".md"),
     title,
     subtitle,
   };
@@ -138,21 +139,21 @@ const esc = (s) =>
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 
-/** The card template. Bulwark brand: aubergine shield with an orange check, heavy title, angled
-    aubergine-tinted wedge. */
+/** The card template. Bulwark brand: the aqua battlement shield, heavy graphite title, angled
+    aqua-tinted wedge. */
 function cardHtml({ title, subtitle }) {
   return `<!doctype html><html><head><meta charset="utf-8"><style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     width: 1200px; height: 630px; position: relative; overflow: hidden;
-    background: #faf7f8;
+    background: #f8f9fa;
     font-family: "Roboto", "Inter", "Liberation Sans", sans-serif;
     -webkit-font-smoothing: antialiased;
   }
-  /* The angled wedge on the right edge — aubergine, heavily tinted. */
+  /* The angled wedge on the right edge — aqua, heavily tinted. */
   .wedge {
     position: absolute; top: 0; right: 0; width: 420px; height: 630px;
-    background: #f0dbe6;
+    background: #d9f1ef;
     clip-path: polygon(58% 0, 100% 0, 100% 100%, 100% 100%, 22% 100%);
   }
   /* Fixed text column, vertically centred between the brand mark and the footer. This is why
@@ -161,26 +162,27 @@ function cardHtml({ title, subtitle }) {
   .inner { position: relative; padding: 84px 0 0 90px; width: 880px; }
   .brand { display: flex; align-items: center; gap: 16px; margin-bottom: 58px; }
   .brand svg { width: 42px; height: 42px; display: block; }
-  .brand span { font-size: 33px; font-weight: 700; color: #772953; letter-spacing: -0.01em; }
+  .brand span { font-size: 33px; font-weight: 700; color: #1d6f73; letter-spacing: -0.01em; }
   h1 {
-    font-size: 58px; font-weight: 800; line-height: 1.12; color: #1a0d14;
+    font-size: 58px; font-weight: 800; line-height: 1.12; color: #16191d;
     letter-spacing: -0.022em; max-width: 800px;
   }
   p {
-    margin-top: 26px; font-size: 25px; line-height: 1.42; color: #6b5560;
+    margin-top: 26px; font-size: 25px; line-height: 1.42; color: #555c66;
     max-width: 790px; font-weight: 400;
   }
   .site {
     position: absolute; left: 90px; bottom: 62px;
-    font-size: 20px; font-weight: 700; color: #772953;
+    font-size: 20px; font-weight: 700; color: #1d6f73;
   }
 </style></head><body>
   <div class="wedge"></div>
   <div class="inner">
     <div class="brand">
       <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-        <path d="M50 4 L91 19 V49 C91 73 73 90 50 97 C27 90 9 73 9 49 V19 Z" fill="#772953"/>
-        <path d="M31 51 L44 64 L70 34" fill="none" stroke="#e95420" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+        <defs><linearGradient id="g" x1="0" y1="0" x2="0.35" y2="1"><stop offset="0" stop-color="#5fd4cc"/><stop offset="0.55" stop-color="#1f9a9a"/><stop offset="1" stop-color="#21607f"/></linearGradient></defs>
+        <path d="M12 8 H28 V19 H40 V8 H60 V19 H72 V8 H88 V48 C88 70 72 86 50 94 C28 86 12 70 12 48 Z" fill="url(#g)" stroke="url(#g)" stroke-width="4" stroke-linejoin="round"/>
+        <path d="M32 54 L45 67 L69 41" fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       <span>Bulwark</span>
     </div>

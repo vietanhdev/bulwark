@@ -50,6 +50,9 @@ export function SeverityLabel({ severity, className }: { severity: Severity; cla
       style={{
         background: `var(--sev-${severity}-tint)`,
         color: `var(--sev-${severity}-fg)`,
+        // A hairline ring in the severity colour: barely there on light paper, and on the dark
+        // theme it is what makes the chip read as a crisp label instead of a dark blot.
+        boxShadow: `inset 0 0 0 1px color-mix(in oklch, var(--sev-${severity}) var(--sev-ring), transparent)`,
       }}
     >
       {LABEL[severity]}

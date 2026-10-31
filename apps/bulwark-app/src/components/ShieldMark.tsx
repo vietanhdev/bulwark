@@ -11,7 +11,13 @@ import type { SVGProps } from "react";
 export function ShieldMark(props: SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden {...props}>
-      <path d="M50 4 L91 19 V49 C91 73 73 90 50 97 C27 90 9 73 9 49 V19 Z" fill="currentColor" />
+      <path
+        d="M12 8 H28 V19 H40 V8 H60 V19 H72 V8 H88 V48 C88 70 72 86 50 94 C28 86 12 70 12 48 Z"
+        fill="currentColor"
+        stroke="currentColor"
+        strokeWidth={4}
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }

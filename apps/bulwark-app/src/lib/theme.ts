@@ -11,8 +11,8 @@ export type Chrome = "aubergine" | "teal" | "blue" | "green" | "indigo" | "graph
 
 /** Accent metadata for the picker — label + a representative swatch colour (its light-mode primary). */
 export const ACCENTS: { id: Accent; label: string; swatch: string }[] = [
-  { id: "orange", label: "Orange", swatch: "oklch(0.646 0.19 41)" },
   { id: "aqua", label: "Aqua", swatch: "oklch(0.54 0.09 195)" },
+  { id: "orange", label: "Orange", swatch: "oklch(0.646 0.19 41)" },
   { id: "blue", label: "Blue", swatch: "oklch(0.55 0.16 258)" },
   { id: "green", label: "Green", swatch: "oklch(0.53 0.15 150)" },
   { id: "yellow", label: "Yellow", swatch: "oklch(0.8 0.15 82)" },
@@ -23,12 +23,12 @@ export const ACCENTS: { id: Accent; label: string; swatch: string }[] = [
 
 /** Chrome (sidebar + titlebar) colour options. The swatch is the light-mode `--ink` tint. */
 export const CHROMES: { id: Chrome; label: string; swatch: string }[] = [
+  { id: "graphite", label: "Graphite", swatch: "oklch(0.24 0.006 260)" },
   { id: "aubergine", label: "Aubergine", swatch: "oklch(0.22 0.07 350)" },
   { id: "teal", label: "Teal", swatch: "oklch(0.22 0.055 195)" },
   { id: "blue", label: "Blue", swatch: "oklch(0.23 0.06 258)" },
   { id: "green", label: "Green", swatch: "oklch(0.23 0.055 150)" },
   { id: "indigo", label: "Indigo", swatch: "oklch(0.23 0.07 290)" },
-  { id: "graphite", label: "Graphite", swatch: "oklch(0.24 0.006 260)" },
 ];
 
 // Defaults: a teal accent on a neutral graphite sidebar. Every other hue already means something
