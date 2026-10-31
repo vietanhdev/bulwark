@@ -16,7 +16,7 @@ tool itself, and how to check your own machine.
 Bulwark's [Agent Security](/guide/agent-security) scan exists to answer exactly this question, and
 the checks below map one-to-one onto what it looks for.
 
-![The Agent Security tab: leaked secrets and dangerous agent configuration, each with its CVE reference](/screenshots/agent-security.png)
+![An opened problem in Bulwark: why it matters, the one-click fix, and Details](/screenshots/fix.png)
 
 ## Two different problems
 

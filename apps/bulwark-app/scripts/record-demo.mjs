@@ -49,7 +49,14 @@ await page.addInitScript(() => {
   } catch {}
 });
 await page.goto(BASE_URL, { waitUntil: "networkidle" });
-await page.addStyleTag({ content: "html,body{background:#17121a !important;}" });
+// Record the window edge-to-edge with square corners. The page that embeds the video rounds and
+// clips it (see docs/.vitepress/theme/HeroDemo.vue); baking the window's own rounded corners and
+// a backdrop colour into the frames showed as a mismatched, "cropped" corner on any page
+// background that wasn't exactly that colour.
+await page.addStyleTag({
+  content:
+    ".app-shell{border-radius:0 !important;border:0 !important;} html,body{background:transparent !important;}",
+});
 
 let idx = 0;
 const snap = () => page.screenshot({ path: `${FRAME_DIR}/f${String(idx++).padStart(5, "0")}.png` });
@@ -90,35 +97,35 @@ const clickBtn = (name, exact = false) =>
 // 1. Home, at rest.
 await hold(1200);
 
-// 2. Run a scan — findings stream in.
-await clickBtn("Run 2 scans");
+// 2. Run a scan — problems stream in, grouped by cause.
+await clickBtn("Scan now");
 await hold(3200);
-await scrollBy(360);
-await hold(700);
-await scrollBy(-360);
-await hold(400);
 
-// 3. AI assistants — the differentiator.
-await clickNav("AI assistants");
+// 3. Open a problem: why it matters, the one-click fix, then Details.
+await clickBtn(/ssh private key is not passphrase-protected/i);
 await hold(1400);
-await scrollBy(340);
+await clickBtn(/^add a passphrase$/i);
+await hold(1200);
+await clickBtn(/anthropic api key exposed/i);
+await hold(1300);
+await scrollBy(260);
 await hold(900);
-await scrollBy(-340);
+await scrollBy(-260);
 await hold(300);
 
 // 4. Live theme + colour switching.
 await clickNav("Settings");
 await hold(1000);
-await clickBtn("Green accent");
-await hold(750);
-await clickBtn("Teal sidebar");
-await hold(750);
 await clickBtn("Dark", true);
 await hold(1100);
 await clickBtn("Blue accent");
 await hold(750);
 await clickBtn("Indigo sidebar");
 await hold(950);
+await clickBtn("Aqua accent");
+await hold(600);
+await clickBtn("Graphite sidebar");
+await hold(800);
 
 // 5. Back to a light Home.
 await clickBtn("Light", true);

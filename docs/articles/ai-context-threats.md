@@ -21,7 +21,7 @@ and because the agent is behaving exactly as designed, nothing looks broken whil
 Bulwark's [Agent Security](/guide/agent-security) scan reads this context the way an attacker would,
 and reports what it finds.
 
-![The Agent Security tab: leaked secrets and dangerous agent configuration, each with its reference](/screenshots/agent-security.png)
+![An opened problem in Bulwark: why it matters, the one-click fix, and Details](/screenshots/fix.png)
 
 ## What actually accumulates, and where
 

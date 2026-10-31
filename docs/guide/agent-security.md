@@ -4,18 +4,20 @@ Bulwark scans the AI coding assistants on your machine — Claude Code, Cursor, 
 OpenAI Codex, Gemini CLI, Aider, Continue, Windsurf, Cline/Roo and Amazon Q — for two classes of
 problem that ordinary host scanners don't look for:
 
-1. **Secrets leaked into AI context.** API keys, tokens, and connection strings pasted into a
-   `CLAUDE.md`, an agent's memory, an MCP config, a `.env`, or a session transcript. Anything an
-   assistant can read is one prompt-injection away from being exfiltrated — and transcripts keep
-   a copy on disk long after the conversation.
+1. **Secrets leaked into AI context.** API keys, tokens and connection strings pasted into an
+   assistant's **session transcripts** or **memory** (for Claude Code, `~/.claude/projects/*/*.jsonl`
+   and `~/.claude/projects/*/memory/*.md`). Transcripts keep a copy on disk long after the
+   conversation. Project `.env` files and configs are deliberately *not* secret-scanned here:
+   they are meant to hold secrets, and flagging them buried real leaks under false positives.
 2. **Dangerous agent configuration.** Settings that a prompt injection can turn into code
    execution on your host, grounded in real, published attacks.
 
-It's a first-class **Agent Security** tab in the desktop app — one of the four scanners, alongside
-Compliance, Antivirus and File integrity — and a `bulwarkctl ai` subcommand in the CLI. Its findings
-also roll up into the Overview, which is the one page that accounts for every scanner at once.
+In the desktop app these checks run as part of every **Scan now** and their problems appear on
+Home with everything else (configure extra folders in **Settings → AI assistant checks**). From a
+terminal, `bulwark ai scan` runs only these checks (`bulwarkctl ai scan` with the CLI-only
+package). Each check below links to its own page with the full explanation and fix.
 
-![The Agent Security tab: secrets found in AI assistant context, and dangerous agent configuration, each with its CVE / ATT&CK reference](/screenshots/agent-security.png)
+![An opened problem in Bulwark: why it matters, the one-click fix, and Details](/screenshots/fix.png)
 
 ::: warning A scan reads real secrets. Treat its output accordingly.
 Findings are stored and displayed with the secret **masked** (`sk-a…3f`), never in full, and the
@@ -28,26 +30,26 @@ in this documentation are deliberately generated from fixtures, not from a real 
 
 | Rule | Severity | What it catches | Reference |
 |---|---|---|---|
-| `BLWK-AI-001` | Critical / Medium | A provider secret (Anthropic, OpenAI, GitHub, AWS, …) in an assistant's context, config, or transcript | T1552.001 |
-| `BLWK-AI-002` | Critical | Project-supplied Claude Code **hooks** that run shell on session/tool events | [CVE-2025-59536](https://research.checkpoint.com/2026/rce-and-api-token-exfiltration-through-claude-code-project-files-cve-2025-59536/) |
-| `BLWK-AI-003` | High | An MCP server launched via an **unpinned** `npx`/`uvx` package | T1195.001 |
-| `BLWK-AI-004` | High | An MCP server using **`mcp-remote`** (command-injection ≤ 0.1.15) | [CVE-2025-6514](https://nvd.nist.gov/vuln/detail/CVE-2025-6514) |
-| `BLWK-AI-005` | High | An MCP server wrapped in a **shell interpreter** (`bash -c …`) | T1059.004 |
-| `BLWK-AI-006` | High | A permission allowlist that permits **arbitrary execution** (`Bash(*)`, `Bash(curl:*)`) | T1059 |
-| `BLWK-AI-007` | High | `defaultMode: "bypassPermissions"` — no approval prompts at all | T1059 |
-| `BLWK-AI-008` | High | `enableAllProjectMcpServers` / `enabledMcpjsonServers` auto-enabling a repo's MCP servers | CVE-2025-59536 |
-| `BLWK-AI-009` | Critical | VS Code `chat.tools.autoApprove` ("YOLO mode") | [CVE-2025-53773](https://www.wiz.io/vulnerability-database/cve/cve-2025-53773) |
-| `BLWK-AI-010` | High | VS Code Workspace Trust disabled | T1204.002 |
-| `BLWK-AI-011` | High | A VS Code task set to run on `folderOpen` | T1204.002 |
-| `BLWK-AI-012` | High | Hidden Unicode / bidi controls in an instruction file (the **Rules File Backdoor**) | [Pillar Security](https://www.pillar.security/blog/new-vulnerability-in-github-copilot-and-cursor-how-hackers-can-weaponize-code-agents) |
-| `BLWK-AI-013` | Medium | Prompt-injection-style phrases in an instruction file (heuristic) | T1566 |
-| `BLWK-AI-014` | High | An `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` override to a non-official host | CVE-2025-59536 |
-| `BLWK-AI-015` | Medium | A plaintext credential file readable by group/other | T1552.001 |
-| `BLWK-AI-016` | High | A secret-bearing file in a git repo with no `.gitignore` rule covering it | T1552.001 |
-| `BLWK-AI-017` | High | Codex `approval_policy = "never"` + `sandbox_mode = "danger-full-access"` | T1059 |
-| `BLWK-AI-018` | High | An MCP server connecting to a **remote endpoint with a plaintext token** in its config | T1552.001, T1071.001 |
-| `BLWK-AI-019` | Critical | An MCP server running a **privileged or host-mounting container** (`--privileged`, `-v /var/run/docker.sock`, `-v /:…`) | T1610, T1611 |
-| `BLWK-AI-020` | High | A **filesystem MCP server granted an over-broad root** (`/` or your whole home directory) | T1083 |
+| [`BLWK-AI-001`](/checks/blwk-ai-001) | High / Medium | A provider secret (Anthropic, OpenAI, GitHub, AWS, …) in an assistant's context, config, or transcript | T1552.001 |
+| [`BLWK-AI-002`](/checks/blwk-ai-002) | Critical | Project-supplied Claude Code **hooks** that run shell on session/tool events | [CVE-2025-59536](https://research.checkpoint.com/2026/rce-and-api-token-exfiltration-through-claude-code-project-files-cve-2025-59536/) |
+| [`BLWK-AI-003`](/checks/blwk-ai-003) | High | An MCP server launched via an **unpinned** `npx`/`uvx` package | T1195.001 |
+| [`BLWK-AI-004`](/checks/blwk-ai-004) | High | An MCP server using **`mcp-remote`** (command-injection ≤ 0.1.15) | [CVE-2025-6514](https://nvd.nist.gov/vuln/detail/CVE-2025-6514) |
+| [`BLWK-AI-005`](/checks/blwk-ai-005) | High | An MCP server wrapped in a **shell interpreter** (`bash -c …`) | T1059.004 |
+| [`BLWK-AI-006`](/checks/blwk-ai-006) | High | A permission allowlist that permits **arbitrary execution** (`Bash(*)`, `Bash(curl:*)`) | T1059 |
+| [`BLWK-AI-007`](/checks/blwk-ai-007) | High | `defaultMode: "bypassPermissions"` — no approval prompts at all | T1059 |
+| [`BLWK-AI-008`](/checks/blwk-ai-008) | High | `enableAllProjectMcpServers` / `enabledMcpjsonServers` auto-enabling a repo's MCP servers | CVE-2025-59536 |
+| [`BLWK-AI-009`](/checks/blwk-ai-009) | Critical | VS Code `chat.tools.autoApprove` ("YOLO mode") | [CVE-2025-53773](https://www.wiz.io/vulnerability-database/cve/cve-2025-53773) |
+| [`BLWK-AI-010`](/checks/blwk-ai-010) | High | VS Code Workspace Trust disabled | T1204.002 |
+| [`BLWK-AI-011`](/checks/blwk-ai-011) | High | A VS Code task set to run on `folderOpen` | T1204.002 |
+| [`BLWK-AI-012`](/checks/blwk-ai-012) | High | Hidden Unicode / bidi controls in an instruction file (the **Rules File Backdoor**) | [Pillar Security](https://www.pillar.security/blog/new-vulnerability-in-github-copilot-and-cursor-how-hackers-can-weaponize-code-agents) |
+| [`BLWK-AI-013`](/checks/blwk-ai-013) | Medium | Prompt-injection-style phrases in an instruction file (heuristic) | T1566 |
+| [`BLWK-AI-014`](/checks/blwk-ai-014) | High | An `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` override to a non-official host | CVE-2025-59536 |
+| [`BLWK-AI-015`](/checks/blwk-ai-015) | Medium | A plaintext credential file readable by group/other | T1552.001 |
+| [`BLWK-AI-016`](/checks/blwk-ai-016) | High | A secret-bearing file in a git repo with no `.gitignore` rule covering it | T1552.001 |
+| [`BLWK-AI-017`](/checks/blwk-ai-017) | High | Codex `approval_policy = "never"` + `sandbox_mode = "danger-full-access"` | T1059 |
+| [`BLWK-AI-018`](/checks/blwk-ai-018) | High | An MCP server connecting to a **remote endpoint with a plaintext token** in its config | T1552.001, T1071.001 |
+| [`BLWK-AI-019`](/checks/blwk-ai-019) | Critical | An MCP server running a **privileged or host-mounting container** (`--privileged`, `-v /var/run/docker.sock`, `-v /:…`) | T1610, T1611 |
+| [`BLWK-AI-020`](/checks/blwk-ai-020) | High | A **filesystem MCP server granted an over-broad root** (`/` or your whole home directory) | T1083 |
 
 These are native Rust detectors, not YAML rules — the same reason the ClamAV integration isn't a
 collector. Secret detection needs capturing regexes and redaction spans; the config checks parse
