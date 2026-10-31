@@ -30,3 +30,9 @@ updates:
     groups:
       npm:
         patterns: ["*"]
+    ignore:
+      # typescript-eslint pins its TypeScript peer below the next major (8.x accepts <6.1), so a
+      # TypeScript major bump produces a lockfile `npm ci` cannot install. Take majors by hand once
+      # typescript-eslint supports them.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
