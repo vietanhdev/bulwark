@@ -352,6 +352,31 @@ else
 fi
 
 echo
+echo "CI access: every workflow job runs only for the owner"
+# CONTRIBUTING.md § CI access: jobs start only when vietanhdev triggers them (pushes, PRs and
+# reruns from anyone else, Dependabot included, start nothing). A new job added without the
+# guard would silently reopen that door, so every job in every workflow must carry it.
+for wf in .github/workflows/*.yml; do
+  unguarded=$(awk '
+    /^jobs:/ { injobs = 1; next }
+    injobs && /^[^ #]/ { injobs = 0 }
+    injobs && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ {
+      if (job != "" && !guarded) print job
+      job = $1; sub(/:$/, "", job); guarded = 0; next
+    }
+    injobs && /^    if:.*github\.triggering_actor == .vietanhdev./ { guarded = 1 }
+    END { if (job != "" && !guarded) print job }
+  ' "${wf}")
+  if [[ -z "${unguarded}" ]]; then
+    ok "${wf}: all jobs owner-only"
+  else
+    for j in ${unguarded}; do
+      bad "${wf}: job '${j}' has no \`if: github.triggering_actor == 'vietanhdev'\` guard"
+    done
+  fi
+done
+
+echo
 if [[ ${fail} -eq 0 ]]; then
   echo "packaging consistency: PASS"
 else
