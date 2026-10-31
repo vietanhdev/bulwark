@@ -62,28 +62,28 @@
 
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.10.2/docs/public/screenshots/overview.png</image>
-      <caption>A safety score with findings ranked by severity</caption>
+      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.11.0/docs/public/screenshots/overview.png</image>
+      <caption>Problems to fix, grouped by cause and ranked by severity</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.10.2/docs/public/screenshots/agent-security.png</image>
-      <caption>Checking AI coding assistants for leaked secrets</caption>
+      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.11.0/docs/public/screenshots/fix.png</image>
+      <caption>Each problem explains why it matters and offers a one-click fix</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.10.2/docs/public/screenshots/compliance.png</image>
-      <caption>Hardening checks grouped by category</caption>
+      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.11.0/docs/public/screenshots/overview-dark.png</image>
+      <caption>Dark mode</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.10.2/docs/public/screenshots/antivirus.png</image>
+      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.11.0/docs/public/screenshots/antivirus.png</image>
       <caption>Virus scanning with live progress</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.10.2/docs/public/screenshots/rules.png</image>
-      <caption>Every check explained in plain language</caption>
+      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.11.0/docs/public/screenshots/rules.png</image>
+      <caption>Every check, searchable, with CIS and MITRE ATT&amp;CK coverage</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.10.2/docs/public/screenshots/settings.png</image>
-      <caption>Appearance and automatic re-check frequency</caption>
+      <image>https://raw.githubusercontent.com/vietanhdev/bulwark/v0.11.0/docs/public/screenshots/settings.png</image>
+      <caption>Light or dark, with your choice of accent and sidebar colour</caption>
     </screenshot>
   </screenshots>
 
@@ -100,14 +100,29 @@
 
   <!-- Flathub rejects brand colours that are white, black or near-grey: they must be
        colourful and must differ between the two schemes. The previous pair (#fbeee7 /
-       #2a1a1c) was near-white and near-black. Both below are tints of the app's own
-       accent, #E95420 (styles.css). -->
+       #2a1a1c) was near-white and near-black. Both below are tints of the app's
+       default aqua accent (lib/theme.ts). -->
   <branding>
-    <color type="primary" scheme_preference="light">#ffd3bd</color>
-    <color type="primary" scheme_preference="dark">#7a2d10</color>
+    <color type="primary" scheme_preference="light">#b8ebe6</color>
+    <color type="primary" scheme_preference="dark">#145a5c</color>
   </branding>
 
   <releases>
+    <release version="0.11.0" date="2026-10-31">
+      <description>
+        <p>One clear list of problems, new credential and supply-chain checks, and a calmer design.</p>
+        <ul>
+          <li>Findings are grouped by what they protect, and each problem shows once with its recommendation; details open on click</li>
+          <li>AI assistant checks are part of Checkups and look for keys leaked into agent sessions and memory only</li>
+          <li>New checks for long-lived AWS keys, plaintext Git and Docker credentials, readable token files, services open to the network, a missing firewall, Python startup hooks and the LiteLLM 1.107.0 compromise</li>
+          <li>Fix steps are written in plain words with copyable commands, and leaked secrets can be removed from a finding</li>
+          <li>Add a passphrase to every unprotected SSH key straight from the finding</li>
+          <li>A new logo and new default colours: aqua on graphite, with a deeper, clearer dark theme; red, orange, blue and green stay reserved for severity</li>
+          <li>Every check now has its own page on bulwark.nrl.ai with the full explanation and fix, linked from each problem's Details</li>
+          <li>A key found in an AI assistant's session is now rated High rather than Critical</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.10.2" date="2026-10-04">
       <description>
         <p>A maintenance release with updated desktop and scanner dependencies.</p>

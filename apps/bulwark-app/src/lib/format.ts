@@ -8,8 +8,28 @@ const ACRONYMS: Record<string, string> = {
   mcp: "MCP",
 };
 
-/** `ssh-remote-access` → `SSH Remote Access`. */
+/** What each rule category is about, in the words a person would use. The slugs are the rule
+ *  directory names, which describe the taxonomy rather than the thing being protected. */
+const FRIENDLY: Record<string, string> = {
+  "accounts-services": "Accounts and services",
+  "agent-security": "AI assistants",
+  "credential-exposure": "Stored passwords and keys",
+  "defense-evasion": "Tampering and hiding",
+  "file-integrity": "Changed system files",
+  "filesystem-permissions": "File permissions",
+  "kernel-hardening": "Kernel settings",
+  "logging-auditing": "Logging",
+  "network-egress": "Network exposure",
+  persistence: "Programs that start on their own",
+  "privilege-escalation": "Administrator access",
+  "rootkit-malware": "Malware",
+  "ssh-remote-access": "SSH remote access",
+};
+
+/** `network-egress` → `Network exposure`; unknown slugs fall back to `ssh-remote-access` →
+ *  `SSH Remote Access` style title-casing. */
 export function categoryLabel(category: string): string {
+  if (FRIENDLY[category]) return FRIENDLY[category];
   return category
     .split("-")
     .map((word) => ACRONYMS[word] ?? word.charAt(0).toUpperCase() + word.slice(1))

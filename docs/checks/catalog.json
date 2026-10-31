@@ -1,0 +1,1530 @@
+{
+ "groups": [
+  {
+   "id": "secrets",
+   "title": "Secrets & credentials",
+   "blurb": "Tokens and keys in plain text, unprotected SSH keys, keys leaked into AI sessions."
+  },
+  {
+   "id": "supply-chain",
+   "title": "Supply chain",
+   "blurb": "Packages, startup hooks and MCP servers that can run code on this machine."
+  },
+  {
+   "id": "network",
+   "title": "Exposed services",
+   "blurb": "Dev databases and services other machines can reach, and the firewall."
+  },
+  {
+   "id": "ai-agents",
+   "title": "AI coding agents",
+   "blurb": "Hooks, permissions and auto-approve settings a prompt injection could abuse."
+  },
+  {
+   "id": "remote-access",
+   "title": "SSH",
+   "blurb": "How this machine accepts SSH logins."
+  },
+  {
+   "id": "intrusion",
+   "title": "Compromise indicators",
+   "blurb": "Malware, suspicious startup programs, tampering and changed system files."
+  },
+  {
+   "id": "hardening",
+   "title": "OS hardening",
+   "blurb": "Kernel settings, file permissions, accounts and logging."
+  }
+ ],
+ "checks": [
+  {
+   "id": "BLWK-ACCT-001",
+   "title": "Cron entry runs a downloader piped to a shell",
+   "category": "accounts-services",
+   "severity": "critical",
+   "explain": "A cron entry's command (\"{{ cron_entries.command }}\", scheduled \"{{ cron_entries.schedule }}\" via {{ cron_entries.source }}) pipes a downloaded script straight into a shell. This pattern hides what actually runs, changes on the attacker's schedule, and leaves nothing on disk to inspect between runs.",
+   "fix": "Review the cron entry, and if unrecognized, remove it and download/inspect the script manually before deciding whether it's legitimate.",
+   "references": [
+    "ATTACK-T1053.003"
+   ],
+   "collector": "cron_entries",
+   "condition": "command matches \"(curl|wget).*\\|\\s*(ba)?sh\\b\"",
+   "source": "rules/accounts-services/BLWK-ACCT-001.yaml",
+   "group": "hardening",
+   "slug": "blwk-acct-001"
+  },
+  {
+   "id": "BLWK-ACCT-002",
+   "title": "Password maximum age is excessively long",
+   "category": "accounts-services",
+   "severity": "low",
+   "explain": "PASS_MAX_DAYS in /etc/login.defs is {{ login_defs.pass_max_days }} — passwords never expire in any practical sense, so a leaked credential stays valid indefinitely.",
+   "fix": "Set 'PASS_MAX_DAYS 90' (or your organization's policy) in /etc/login.defs.",
+   "references": [
+    "CIS-6.2.1"
+   ],
+   "collector": "login_defs",
+   "condition": "pass_max_days > 365",
+   "source": "rules/accounts-services/BLWK-ACCT-002.yaml",
+   "group": "hardening",
+   "slug": "blwk-acct-002"
+  },
+  {
+   "id": "BLWK-ACCT-003",
+   "title": "Password minimum age is zero",
+   "category": "accounts-services",
+   "severity": "low",
+   "explain": "PASS_MIN_DAYS in /etc/login.defs is 0 — a user forced to rotate a leaked password can immediately change it right back to the old (compromised) one, defeating the point of the forced rotation.",
+   "fix": "Set 'PASS_MIN_DAYS 1' (or your organization's policy) in /etc/login.defs.",
+   "references": [
+    "CIS-6.2.1"
+   ],
+   "collector": "login_defs",
+   "condition": "pass_min_days == 0",
+   "source": "rules/accounts-services/BLWK-ACCT-003.yaml",
+   "group": "hardening",
+   "slug": "blwk-acct-003"
+  },
+  {
+   "id": "BLWK-ACCT-004",
+   "title": "Password hashing rounds are not explicitly configured",
+   "category": "accounts-services",
+   "severity": "low",
+   "explain": "This host hashes passwords with SHA-512/256 (ENCRYPT_METHOD), but SHA_CRYPT_MIN_ROUNDS isn't set in /etc/login.defs, so new passwords get whatever the system's compiled-in default hashing cost is rather than a deliberately chosen one — fine until you actually need to raise the cost to keep pace with faster cracking hardware, at which point \"never configured\" means nobody has ever checked.",
+   "fix": "Set 'SHA_CRYPT_MIN_ROUNDS 5000' (or higher, per current guidance) in /etc/login.defs.",
+   "references": [
+    "CIS-6.2.2"
+   ],
+   "collector": "login_defs",
+   "condition": "sha_crypt_applies == true and sha_crypt_min_rounds_configured == false",
+   "source": "rules/accounts-services/BLWK-ACCT-004.yaml",
+   "group": "hardening",
+   "slug": "blwk-acct-004"
+  },
+  {
+   "id": "BLWK-ACCT-005",
+   "title": "Default UMASK is not explicitly configured",
+   "category": "accounts-services",
+   "severity": "low",
+   "explain": "No default umask is configured — neither an explicit UMASK line in /etc/login.defs nor a pam_umask entry in /etc/pam.d. Without a deliberate value, new files created by shells that don't set their own umask fall back to whatever the system default happens to be — commonly 022, which leaves new files group/world-readable by default rather than requiring an explicit opt-in to share them.",
+   "fix": "Set 'UMASK 027' (or your organization's policy) in /etc/login.defs, or add pam_umask to the session stack.",
+   "references": [
+    "CIS-6.2.3"
+   ],
+   "collector": "login_defs",
+   "condition": "umask_configured == false",
+   "source": "rules/accounts-services/BLWK-ACCT-005.yaml",
+   "group": "hardening",
+   "slug": "blwk-acct-005"
+  },
+  {
+   "id": "BLWK-CRED-001",
+   "title": "A long-lived AWS access key is stored on disk",
+   "category": "credential-exposure",
+   "severity": "high",
+   "explain": "Your AWS access key is saved in a plain file ({{ credential_stores.path }}, {{ credential_stores.long_lived_keys }} key(s)). These keys never expire, so whoever copies the file can use your AWS account, and run up your bill, until you notice. That is exactly what a poisoned Python package did in October 2026: LiteLLM 1.107.0 read these files on every developer machine that installed it.",
+   "fix": "Sign in to AWS with sessions that expire on their own, instead of a key that works forever.\n1. Run 'aws configure sso' once to connect the AWS CLI to IAM Identity Center.\n2. Start each work session with 'aws sso login'. The session expires after a few hours.\n3. In the AWS console, deactivate and delete the old access key.\n4. Remove the key from {{ credential_stores.path }}.\nCan't use Identity Center? Keep the key in a password manager (1Password, Bitwarden or KeePassXC) and let the AWS CLI fetch it when needed with 'credential_process'.",
+   "references": [
+    "ATTACK-T1552.001",
+    "ATTACK-T1078.004"
+   ],
+   "collector": "credential_stores",
+   "condition": "kind == \"aws_credentials\" and long_lived_keys > 0",
+   "source": "rules/credential-exposure/BLWK-CRED-001.yaml",
+   "group": "secrets",
+   "slug": "blwk-cred-001"
+  },
+  {
+   "id": "BLWK-CRED-002",
+   "title": "Git stores passwords and tokens in plain text",
+   "category": "credential-exposure",
+   "severity": "high",
+   "explain": "Git is saving your passwords and access tokens in a plain text file ({{ credential_stores.path }}). Any program running as you can read it, and a GitHub token usually lets someone push code to your repositories or publish packages in your name.",
+   "fix": "Let Git keep your tokens in your computer's keychain instead of a plain file.\n1. For GitHub, run 'gh auth setup-git'. Git then uses the GitHub CLI's login, which is stored in your keychain.\n2. For other Git hosts, install Git Credential Manager. It works on Linux, macOS and Windows and uses the system keychain.\n3. Stop using the plain-file store: 'git config --global --unset credential.helper'.\n4. Delete ~/.git-credentials and revoke the tokens it contained, in case they were already copied.\nEven better: use SSH keys for Git, protected by a passphrase or a hardware key.",
+   "references": [
+    "ATTACK-T1552.001"
+   ],
+   "collector": "credential_stores",
+   "condition": "(kind == \"git_credentials\" and stored_entries > 0) or (kind == \"git_config\" and helper_store == true)",
+   "source": "rules/credential-exposure/BLWK-CRED-002.yaml",
+   "group": "secrets",
+   "slug": "blwk-cred-002"
+  },
+  {
+   "id": "BLWK-CRED-003",
+   "title": "Docker registry logins are stored in the config file",
+   "category": "credential-exposure",
+   "severity": "medium",
+   "explain": "Docker saved {{ credential_stores.inline_auths }} registry login(s) inside {{ credential_stores.path }}. They look scrambled, but it is only base64 encoding, not encryption: anyone who can read the file can decode your username and password or token in seconds.",
+   "fix": "Let Docker keep registry logins in your computer's keychain.\n1. Install Docker's credential helper ('golang-docker-credential-helpers' on Ubuntu; built in on macOS and Windows, and Docker Desktop sets it up for you).\n2. In {{ credential_stores.path }}, set \"credsStore\" to \"secretservice\" (Linux), \"osxkeychain\" (macOS) or \"wincred\" (Windows).\n3. Delete the entries under \"auths\", then run 'docker login' again for each registry.\n4. Rotate any registry token that was stored in the file.",
+   "references": [
+    "ATTACK-T1552.001"
+   ],
+   "collector": "credential_stores",
+   "condition": "kind == \"docker_config\" and inline_auths > 0 and creds_store == false",
+   "source": "rules/credential-exposure/BLWK-CRED-003.yaml",
+   "group": "secrets",
+   "slug": "blwk-cred-003"
+  },
+  {
+   "id": "BLWK-CRED-004",
+   "title": "A credential file can be read by other users",
+   "category": "credential-exposure",
+   "severity": "medium",
+   "explain": "{{ credential_stores.path }} holds a login token for a tool ({{ credential_stores.kind }}), and other users or programs on this computer can read it (permissions {{ credential_stores.mode }}). Token files should be readable by you alone.",
+   "fix": "Make the file private, then keep the token somewhere safer if the tool allows it.\n1. Run 'chmod 600 {{ credential_stores.path }}' so only you can read it.\n2. Move the token into a password manager and pass it to the tool when it runs: for example 'op run' (1Password) or 'bws run' (Bitwarden).\n3. For npm, write '//registry.npmjs.org/:_authToken=${NPM_TOKEN}' in .npmrc so the file holds no secret.\n4. For PyPI, let twine read the token from your keychain: 'pip install keyring'.\nIf other people use this computer, rotate the token too.",
+   "references": [
+    "CIS-6.1",
+    "ATTACK-T1552.001"
+   ],
+   "collector": "credential_stores",
+   "condition": "kind != \"git_config\" and readable_by_others == true",
+   "source": "rules/credential-exposure/BLWK-CRED-004.yaml",
+   "group": "secrets",
+   "slug": "blwk-cred-004"
+  },
+  {
+   "id": "BLWK-EVASION-001",
+   "title": "Shell history recording is suppressed",
+   "category": "defense-evasion",
+   "severity": "medium",
+   "explain": "A shell startup file sets HISTSIZE=0, clears HISTFILE, or unsets it — commands run in that shell leave no trace in history. This is either a deliberate defense-evasion step by an attacker with a shell on the box, or a privacy tweak you made yourself; worth confirming which.",
+   "fix": "If unrecognized, remove the HISTSIZE/HISTFILE override from ~/.bashrc, ~/.zshrc, or ~/.profile.",
+   "references": [
+    "ATTACK-T1070.003"
+   ],
+   "collector": "shell_history_config",
+   "condition": "history_suppressed == true",
+   "source": "rules/defense-evasion/BLWK-EVASION-001.yaml",
+   "group": "intrusion",
+   "slug": "blwk-evasion-001"
+  },
+  {
+   "id": "BLWK-FIM-001",
+   "title": "File modified since baseline: {{ file_integrity.path }}",
+   "category": "file-integrity",
+   "severity": "critical",
+   "explain": "{{ file_integrity.path }} no longer matches its recorded baseline hash. This file is monitored because it directly controls authentication, privilege, or persistence on this host — an unexpected change here is exactly what credential theft, backdoor account creation, or PAM/sudo tampering looks like.",
+   "fix": "Review the file's current contents against what you expect (version control, package manager, or your own memory of the last legitimate change). If the change wasn't yours, treat this as a likely compromise. If it was legitimate, run 'bulwarkctl fim baseline' to record the new state as the baseline.",
+   "references": [
+    "ATTACK-T1098",
+    "ATTACK-T1556"
+   ],
+   "collector": "file_integrity",
+   "condition": "changed == true and currently_present == true",
+   "source": "rules/file-integrity/BLWK-FIM-001.yaml",
+   "group": "intrusion",
+   "slug": "blwk-fim-001"
+  },
+  {
+   "id": "BLWK-FIM-002",
+   "title": "File deleted since baseline: {{ file_integrity.path }}",
+   "category": "file-integrity",
+   "severity": "high",
+   "explain": "{{ file_integrity.path }} was present when the file-integrity baseline was recorded and is now missing. Deleting a security-critical file (rather than modifying it) is also a documented defense-evasion pattern — removing logs, PAM modules, or cron definitions to cover tracks or disable a control.",
+   "fix": "Confirm whether the deletion was intentional (e.g. deliberate service removal). If not, restore the file from a package manager reinstall or backup, then run 'bulwarkctl fim baseline' once the host is back to a known-good state.",
+   "references": [
+    "ATTACK-T1070"
+   ],
+   "collector": "file_integrity",
+   "condition": "changed == true and currently_present == false",
+   "source": "rules/file-integrity/BLWK-FIM-002.yaml",
+   "group": "intrusion",
+   "slug": "blwk-fim-002"
+  },
+  {
+   "id": "BLWK-FIM-003",
+   "title": "Not covered by the file-integrity baseline: {{ file_integrity.path }}",
+   "category": "file-integrity",
+   "severity": "info",
+   "explain": "{{ file_integrity.path }} is present but has no recorded baseline hash, so Bulwark can tell that it exists but not whether it has been tampered with. This fires per-file, on purpose: the previous version keyed on whether a baseline existed *at all*, which meant that once you had baselined anything, a critical file you had never actually recorded — including one added to the watch list later — read as \"verified clean\" rather than \"never checked\". A file nobody ever baselined is not a file known to be good.",
+   "fix": "Run 'bulwarkctl fim baseline' now, while you trust this host, to record a known-good hash for this file (add '--privileged' to also cover /etc/shadow and /etc/sudoers).",
+   "references": [],
+   "collector": "file_integrity",
+   "condition": "in_baseline == false and currently_present == true and unreadable == false",
+   "source": "rules/file-integrity/BLWK-FIM-003.yaml",
+   "group": "intrusion",
+   "slug": "blwk-fim-003"
+  },
+  {
+   "id": "BLWK-FIM-004",
+   "title": "Credential file modified since baseline: {{ file_integrity_privileged.path }}",
+   "category": "file-integrity",
+   "severity": "critical",
+   "explain": "{{ file_integrity_privileged.path }} no longer matches its recorded baseline hash. This is one of the two root-only credential/privilege files Bulwark tracks (/etc/shadow, /etc/sudoers) — a change here is about as direct a signal of credential tampering or privilege-escalation setup as this host can produce.",
+   "fix": "Review the change immediately. If it wasn't yours (a password reset via 'passwd', or a deliberate 'visudo' edit), treat this as a likely compromise. If legitimate, re-run 'sudo bulwarkctl fim baseline --privileged' to record the new known-good state.",
+   "references": [
+    "ATTACK-T1098",
+    "ATTACK-T1548.003"
+   ],
+   "collector": "file_integrity_privileged",
+   "condition": "changed == true and currently_present == true",
+   "source": "rules/file-integrity/BLWK-FIM-004.yaml",
+   "group": "intrusion",
+   "slug": "blwk-fim-004"
+  },
+  {
+   "id": "BLWK-FIM-005",
+   "title": "Credential file deleted since baseline: {{ file_integrity_privileged.path }}",
+   "category": "file-integrity",
+   "severity": "critical",
+   "explain": "{{ file_integrity_privileged.path }} was present at the last baseline and is now missing. A missing /etc/shadow or /etc/sudoers is either severe accidental damage or deliberate tampering — neither leaves this host in a safe state.",
+   "fix": "Restore the file immediately from a package manager reinstall or backup — do not leave this host running without it. Then re-run 'sudo bulwarkctl fim baseline --privileged'.",
+   "references": [
+    "ATTACK-T1070"
+   ],
+   "collector": "file_integrity_privileged",
+   "condition": "changed == true and currently_present == false",
+   "source": "rules/file-integrity/BLWK-FIM-005.yaml",
+   "group": "intrusion",
+   "slug": "blwk-fim-005"
+  },
+  {
+   "id": "BLWK-FIM-006",
+   "title": "Credential file not covered by the baseline: {{ file_integrity_privileged.path }}",
+   "category": "file-integrity",
+   "severity": "low",
+   "explain": "{{ file_integrity_privileged.path }} — one of the two root-only credential/privilege files Bulwark tracks (/etc/shadow, /etc/sudoers) — is present but has no baseline hash, so its integrity is unverifiable. This is the specific gap that made the old logic dangerous: a baseline recorded without '--privileged' never contains these two files, so a later privileged scan would hash them, find them \"not baselined\", and report nothing — the two most security-critical files on the host reading as clean when they had never actually been checked. Rated above info because these two files, unlike an ordinary config, are exactly where credential tampering hides.",
+   "fix": "Run 'sudo bulwarkctl fim baseline --privileged' while you trust this host, to record a known-good hash for /etc/shadow and /etc/sudoers.",
+   "references": [
+    "ATTACK-T1098",
+    "ATTACK-T1548.003"
+   ],
+   "collector": "file_integrity_privileged",
+   "condition": "in_baseline == false and currently_present == true and unreadable == false",
+   "source": "rules/file-integrity/BLWK-FIM-006.yaml",
+   "group": "intrusion",
+   "slug": "blwk-fim-006"
+  },
+  {
+   "id": "BLWK-FIM-007",
+   "title": "Could not verify file integrity: {{ file_integrity.path }}",
+   "category": "file-integrity",
+   "severity": "medium",
+   "explain": "{{ file_integrity.path }} exists and is on the watch list, but Bulwark could not compute its hash this scan (sha256sum unavailable, or the file could not be read), so it cannot say whether the file matches its baseline. This is reported as its own state rather than being folded into \"modified\" — treating \"I couldn't look\" as \"it changed\" would raise a false critical alarm, and treating it as \"unchanged\" would hide a real one. Neither is honest.",
+   "fix": "Check that the file is readable by the scanning user and that 'sha256sum' is installed and on PATH. If a privileged scan is needed to read it, run 'sudo bulwarkctl scan --privileged'.",
+   "references": [],
+   "collector": "file_integrity",
+   "condition": "unreadable == true",
+   "source": "rules/file-integrity/BLWK-FIM-007.yaml",
+   "group": "intrusion",
+   "slug": "blwk-fim-007"
+  },
+  {
+   "id": "BLWK-FIM-008",
+   "title": "Could not verify credential file: {{ file_integrity_privileged.path }}",
+   "category": "file-integrity",
+   "severity": "high",
+   "explain": "{{ file_integrity_privileged.path }} (/etc/shadow or /etc/sudoers) exists but its hash could not be computed this scan, so its integrity is unverifiable. Rated high because on the two most sensitive files Bulwark tracks, an inability to read them is itself worth attention — it can mean a permissions change that a privileged scan should have handled, or something actively interfering with access. It is deliberately not reported as \"modified\": a failure to look is not evidence of a change.",
+   "fix": "Re-run under privilege ('sudo bulwarkctl scan --privileged') so the file is readable, and confirm 'sha256sum' is installed. If it still can't be read as root, investigate why.",
+   "references": [],
+   "collector": "file_integrity_privileged",
+   "condition": "unreadable == true",
+   "source": "rules/file-integrity/BLWK-FIM-008.yaml",
+   "group": "intrusion",
+   "slug": "blwk-fim-008"
+  },
+  {
+   "id": "BLWK-FS-001",
+   "title": "A sensitive system file is world-writable",
+   "category": "filesystem-permissions",
+   "severity": "critical",
+   "explain": "\"{{ file_permissions.path }}\" is world-writable (mode {{ file_permissions.mode_octal }}). Any local user — or any process running as any user — can modify it directly.",
+   "fix": "chmod o-w {{ file_permissions.path }}",
+   "references": [
+    "CIS-6.1",
+    "ATTACK-T1222"
+   ],
+   "collector": "file_permissions",
+   "condition": "world_writable == true",
+   "source": "rules/filesystem-permissions/BLWK-FS-001.yaml",
+   "group": "hardening",
+   "slug": "blwk-fs-001"
+  },
+  {
+   "id": "BLWK-FS-002",
+   "title": "/etc/shadow is world-readable",
+   "category": "filesystem-permissions",
+   "severity": "critical",
+   "explain": "/etc/shadow (mode {{ file_permissions.mode_octal }}) is readable by any local user. It holds every account's password hash — world-readable turns any local foothold into an offline password-cracking opportunity against every account on the box.",
+   "fix": "chmod 640 /etc/shadow (or your distro's default — verify with 'stat /etc/shadow' on a known-good system).",
+   "references": [
+    "CIS-6.1.2",
+    "ATTACK-T1003.008"
+   ],
+   "collector": "file_permissions",
+   "condition": "path == \"/etc/shadow\" and world_readable == true",
+   "source": "rules/filesystem-permissions/BLWK-FS-002.yaml",
+   "group": "hardening",
+   "slug": "blwk-fs-002"
+  },
+  {
+   "id": "BLWK-KERNEL-001",
+   "title": "ptrace scope allows tracing sibling processes",
+   "category": "kernel-hardening",
+   "severity": "medium",
+   "explain": "ptrace is unrestricted: kernel.yama.ptrace_scope is 0 (or the Yama LSM isn't loaded at all, which the collector reports the same way, since without Yama there is no restriction to begin with). Any process can attach to and read the memory of any other process owned by the same user — including credential-scraping via /proc/<pid>/mem, a documented credential-access technique.",
+   "fix": "Set 'kernel.yama.ptrace_scope=1' via /etc/sysctl.d/ and run 'sysctl --system'.",
+   "references": [
+    "ATTACK-T1003.007"
+   ],
+   "collector": "sysctl_kernel",
+   "condition": "ptrace_scope == 0",
+   "source": "rules/kernel-hardening/BLWK-KERNEL-001.yaml",
+   "group": "hardening",
+   "slug": "blwk-kernel-001"
+  },
+  {
+   "id": "BLWK-KERNEL-002",
+   "title": "Kernel pointers are exposed to unprivileged users",
+   "category": "kernel-hardening",
+   "severity": "low",
+   "explain": "kernel.kptr_restrict is 0 — kernel pointer addresses in /proc are readable by any user, making kernel-exploit development easier (defeats KASLR for local attackers).",
+   "fix": "Set 'kernel.kptr_restrict=1' (or 2) via /etc/sysctl.d/ and run 'sysctl --system'.",
+   "references": [
+    "CIS-1.5.3"
+   ],
+   "collector": "sysctl_kernel",
+   "condition": "kptr_restrict == 0",
+   "source": "rules/kernel-hardening/BLWK-KERNEL-002.yaml",
+   "group": "hardening",
+   "slug": "blwk-kernel-002"
+  },
+  {
+   "id": "BLWK-KERNEL-003",
+   "title": "No mandatory access control framework is enforcing",
+   "category": "kernel-hardening",
+   "severity": "medium",
+   "explain": "Neither AppArmor nor SELinux has any profile in enforcing mode. Without MAC, a compromised service runs with the full privileges of its process owner instead of being confined to what it actually needs. The 'enforcement_known' guard matters: AppArmor's profile list is readable only with CAP_MAC_ADMIN, so an unprivileged scan on a host where AppArmor is loaded cannot see whether it's enforcing. That is reported as undetermined, not as a finding — claiming \"no MAC\" because we lack the privilege to look would be alarming and wrong.",
+   "fix": "On Debian/Ubuntu: 'sudo aa-enforce /etc/apparmor.d/*' for the profiles you want enforced, or install apparmor-profiles.",
+   "references": [
+    "CIS-1.4"
+   ],
+   "collector": "mac_status",
+   "condition": "any_mac_enforcing == false and enforcement_known == true",
+   "source": "rules/kernel-hardening/BLWK-KERNEL-003.yaml",
+   "group": "hardening",
+   "slug": "blwk-kernel-003"
+  },
+  {
+   "id": "BLWK-KERNEL-004",
+   "title": "Address space layout randomization is disabled or partial",
+   "category": "kernel-hardening",
+   "severity": "high",
+   "explain": "kernel.randomize_va_space is {{ sysctl_kernel.randomize_va_space }}, not 2 (full ASLR). ASLR randomizes where the stack, heap, and shared libraries load in memory — without it (or with only partial randomization), memory-corruption exploits become dramatically easier to write reliably.",
+   "fix": "Set 'kernel.randomize_va_space=2' via /etc/sysctl.d/ and run 'sysctl --system'.",
+   "references": [
+    "CIS-1.5.1",
+    "ATTACK-T1055"
+   ],
+   "collector": "sysctl_kernel",
+   "condition": "randomize_va_space != 2",
+   "source": "rules/kernel-hardening/BLWK-KERNEL-004.yaml",
+   "group": "hardening",
+   "slug": "blwk-kernel-004"
+  },
+  {
+   "id": "BLWK-KERNEL-005",
+   "title": "Magic SysRq key is fully enabled",
+   "category": "kernel-hardening",
+   "severity": "medium",
+   "explain": "kernel.sysrq exposes dangerous SysRq functions to anyone with keyboard or console access (physical, or a hijacked serial/BMC console). A value of 1 enables every function; a value above 1 is a bitmask, and this fires when that mask still includes the memory-dump bit (0x08, leaks kernel memory) or the signal bit (0x40, SIGKILL any process) — so a widened mask like 510 is caught, not just a plain 1, which the old exact-match condition missed.",
+   "fix": "Set 'kernel.sysrq=176' (Ubuntu's restricted default) or '0' via /etc/sysctl.d/ and run 'sysctl --system'.",
+   "references": [
+    "CIS-1.5.4"
+   ],
+   "collector": "sysctl_kernel",
+   "condition": "sysrq == 1 or (sysrq > 1 and sysrq_dump_or_signal == true)",
+   "source": "rules/kernel-hardening/BLWK-KERNEL-005.yaml",
+   "group": "hardening",
+   "slug": "blwk-kernel-005"
+  },
+  {
+   "id": "BLWK-KERNEL-006",
+   "title": "Unprivileged users can load BPF programs into the kernel",
+   "category": "kernel-hardening",
+   "severity": "high",
+   "explain": "kernel.unprivileged_bpf_disabled is 0 — any local user can load BPF programs into the kernel without CAP_SYS_ADMIN. The BPF verifier has been the source of numerous local privilege-escalation CVEs; this setting is what determines whether that class of bug is reachable by an unprivileged attacker at all.",
+   "fix": "Set 'kernel.unprivileged_bpf_disabled=1' via /etc/sysctl.d/ and run 'sysctl --system'.",
+   "references": [
+    "CIS-1.5.2",
+    "ATTACK-T1068"
+   ],
+   "collector": "sysctl_kernel",
+   "condition": "unprivileged_bpf_disabled == 0",
+   "source": "rules/kernel-hardening/BLWK-KERNEL-006.yaml",
+   "group": "hardening",
+   "slug": "blwk-kernel-006"
+  },
+  {
+   "id": "BLWK-KERNEL-007",
+   "title": "perf_event_paranoid allows unprivileged kernel profiling",
+   "category": "kernel-hardening",
+   "severity": "medium",
+   "explain": "kernel.perf_event_paranoid is {{ sysctl_kernel.perf_event_paranoid }}, below 2 — the perf_event_open() syscall is a documented side-channel and kernel-address-disclosure vector, and several real privilege-escalation exploits have used it once accessible to unprivileged users.",
+   "fix": "Set 'kernel.perf_event_paranoid=2' (or higher) via /etc/sysctl.d/ and run 'sysctl --system'.",
+   "references": [
+    "CIS-1.5.5"
+   ],
+   "collector": "sysctl_kernel",
+   "condition": "perf_event_paranoid < 2",
+   "source": "rules/kernel-hardening/BLWK-KERNEL-007.yaml",
+   "group": "hardening",
+   "slug": "blwk-kernel-007"
+  },
+  {
+   "id": "BLWK-KERNEL-008",
+   "title": "kexec can load an unsigned, arbitrary kernel image",
+   "category": "kernel-hardening",
+   "severity": "low",
+   "explain": "kernel.kexec_load_disabled is 0 — a process with sufficient privilege can use kexec to load and immediately switch execution to a completely different, unverified kernel image, bypassing secure boot and any measured-boot chain entirely, to survive a reboot with a backdoored kernel. This fires only when kernel lockdown is off: with Secure Boot enabled the kernel runs in lockdown 'integrity' mode, which already refuses an unsigned kexec image regardless of this flag, so the flag is defense-in-depth there rather than a gap — and the rule stays quiet. Rated low because loading a kexec image already requires CAP_SYS_BOOT (root); this hardens against a post-compromise persistence step.",
+   "fix": "Set 'kernel.kexec_load_disabled=1' via /etc/sysctl.d/ and run 'sysctl --system'. Note this disables kdump/crash-dump capture and 'systemctl kexec'; and once it is set to 1 at runtime it cannot be returned to 0 without a reboot (the sysctl.d drop-in itself re-applies every boot).",
+   "references": [
+    "ATTACK-T1601"
+   ],
+   "collector": "sysctl_kernel",
+   "condition": "kexec_load_disabled == 0 and lockdown == \"none\"",
+   "source": "rules/kernel-hardening/BLWK-KERNEL-008.yaml",
+   "group": "hardening",
+   "slug": "blwk-kernel-008"
+  },
+  {
+   "id": "BLWK-KERNEL-009",
+   "title": "Core dumps of setuid processes are not restricted",
+   "category": "kernel-hardening",
+   "severity": "medium",
+   "explain": "fs.suid_dumpable is 1 (\"debuggable\") — a crashed setuid/setgid process dumps core as a file the invoking (unprivileged) user can read, which can leak secrets that were in that process's memory (keys, passwords, tokens) to a lower-privileged user. This is distinct from the safer \"0\" (no dump) or \"2\" (routed through a controlled dump handler like systemd-coredump/apport) settings.",
+   "fix": "Set 'fs.suid_dumpable=0' via /etc/sysctl.d/ and run 'sysctl --system'.",
+   "references": [
+    "CIS-1.5.6",
+    "ATTACK-T1003"
+   ],
+   "collector": "sysctl_kernel",
+   "condition": "suid_dumpable == 1",
+   "source": "rules/kernel-hardening/BLWK-KERNEL-009.yaml",
+   "group": "hardening",
+   "slug": "blwk-kernel-009"
+  },
+  {
+   "id": "BLWK-KERNEL-010",
+   "title": "Hardlink creation protection is disabled",
+   "category": "kernel-hardening",
+   "severity": "medium",
+   "explain": "fs.protected_hardlinks is 0 — any user can create a hardlink to a file they don't own (e.g. a setuid binary or a file another process will later run as root), a classic TOCTOU/race primitive for local privilege escalation.",
+   "fix": "Set 'fs.protected_hardlinks=1' via /etc/sysctl.d/ and run 'sysctl --system'.",
+   "references": [
+    "CIS-1.5.7",
+    "ATTACK-T1068"
+   ],
+   "collector": "sysctl_kernel",
+   "condition": "protected_hardlinks == 0",
+   "source": "rules/kernel-hardening/BLWK-KERNEL-010.yaml",
+   "group": "hardening",
+   "slug": "blwk-kernel-010"
+  },
+  {
+   "id": "BLWK-KERNEL-011",
+   "title": "Symlink following protection is disabled",
+   "category": "kernel-hardening",
+   "severity": "medium",
+   "explain": "fs.protected_symlinks is 0 — a process can follow a symlink in a world-writable sticky directory (like /tmp) even when it doesn't own the link, a long-standing local-privilege-escalation and file-clobbering primitive.",
+   "fix": "Set 'fs.protected_symlinks=1' via /etc/sysctl.d/ and run 'sysctl --system'.",
+   "references": [
+    "CIS-1.5.8",
+    "ATTACK-T1068"
+   ],
+   "collector": "sysctl_kernel",
+   "condition": "protected_symlinks == 0",
+   "source": "rules/kernel-hardening/BLWK-KERNEL-011.yaml",
+   "group": "hardening",
+   "slug": "blwk-kernel-011"
+  },
+  {
+   "id": "BLWK-KERNEL-012",
+   "title": "FIFO creation protection in sticky directories is disabled",
+   "category": "kernel-hardening",
+   "severity": "low",
+   "explain": "fs.protected_fifos is 0 — a process can write to a FIFO it doesn't own inside a world-writable sticky directory, which has been used to intercept or tamper with data another (possibly privileged) process expects to read back.",
+   "fix": "Set 'fs.protected_fifos=1' (or 2 for stricter mode) via /etc/sysctl.d/ and run 'sysctl --system'.",
+   "references": [
+    "CIS-1.5.9"
+   ],
+   "collector": "sysctl_kernel",
+   "condition": "protected_fifos == 0",
+   "source": "rules/kernel-hardening/BLWK-KERNEL-012.yaml",
+   "group": "hardening",
+   "slug": "blwk-kernel-012"
+  },
+  {
+   "id": "BLWK-KERNEL-013",
+   "title": "Regular-file creation protection in sticky directories is disabled",
+   "category": "kernel-hardening",
+   "severity": "low",
+   "explain": "fs.protected_regular is 0 — a process can open a regular file it doesn't own inside a world-writable sticky directory in write mode, the same class of interception/tampering risk as the FIFO case but for plain files.",
+   "fix": "Set 'fs.protected_regular=1' (or 2 for stricter mode) via /etc/sysctl.d/ and run 'sysctl --system'.",
+   "references": [
+    "CIS-1.5.9"
+   ],
+   "collector": "sysctl_kernel",
+   "condition": "protected_regular == 0",
+   "source": "rules/kernel-hardening/BLWK-KERNEL-013.yaml",
+   "group": "hardening",
+   "slug": "blwk-kernel-013"
+  },
+  {
+   "id": "BLWK-KERNEL-014",
+   "title": "ICMP redirects are accepted",
+   "category": "kernel-hardening",
+   "severity": "medium",
+   "explain": "net.ipv4.conf.all.accept_redirects is 1 — this host will update its routing table based on unauthenticated ICMP redirect packets from anyone on the local network, a classic man-in-the-middle primitive for redirecting traffic through an attacker-controlled host.",
+   "fix": "Set 'net.ipv4.conf.all.accept_redirects=0' via /etc/sysctl.d/ and run 'sysctl --system'.",
+   "references": [
+    "CIS-3.2.1",
+    "ATTACK-T1557"
+   ],
+   "collector": "sysctl_kernel",
+   "condition": "accept_redirects == 1",
+   "source": "rules/kernel-hardening/BLWK-KERNEL-014.yaml",
+   "group": "hardening",
+   "slug": "blwk-kernel-014"
+  },
+  {
+   "id": "BLWK-KERNEL-015",
+   "title": "IP source routing is enabled",
+   "category": "kernel-hardening",
+   "severity": "medium",
+   "explain": "net.ipv4.conf.all.accept_source_route is 1 — this host accepts packets that specify their own route, letting a remote attacker bypass normal routing/firewall path assumptions and spoof traffic as if it originated from a trusted internal address.",
+   "fix": "Set 'net.ipv4.conf.all.accept_source_route=0' via /etc/sysctl.d/ and run 'sysctl --system'.",
+   "references": [
+    "CIS-3.2.2"
+   ],
+   "collector": "sysctl_kernel",
+   "condition": "accept_source_route == 1",
+   "source": "rules/kernel-hardening/BLWK-KERNEL-015.yaml",
+   "group": "hardening",
+   "slug": "blwk-kernel-015"
+  },
+  {
+   "id": "BLWK-KERNEL-016",
+   "title": "This host sends ICMP redirects",
+   "category": "kernel-hardening",
+   "severity": "low",
+   "explain": "net.ipv4.conf.all.send_redirects is 1 — a non-router host has no legitimate reason to send ICMP redirects, and leaving this on is unnecessary route-manipulation surface.",
+   "fix": "Set 'net.ipv4.conf.all.send_redirects=0' via /etc/sysctl.d/ and run 'sysctl --system' (skip this if the host is intentionally acting as a router).",
+   "references": [
+    "CIS-3.2.1"
+   ],
+   "collector": "sysctl_kernel",
+   "condition": "send_redirects == 1",
+   "source": "rules/kernel-hardening/BLWK-KERNEL-016.yaml",
+   "group": "hardening",
+   "slug": "blwk-kernel-016"
+  },
+  {
+   "id": "BLWK-KERNEL-017",
+   "title": "Martian packet logging is disabled",
+   "category": "kernel-hardening",
+   "severity": "low",
+   "explain": "net.ipv4.conf.all.log_martians is 0 — packets with impossible/spoofed source addresses (no route back to the claimed source) are silently dropped instead of logged, losing an early signal of spoofing or scanning activity on the network.",
+   "fix": "Set 'net.ipv4.conf.all.log_martians=1' via /etc/sysctl.d/ and run 'sysctl --system'.",
+   "references": [
+    "CIS-3.2.3"
+   ],
+   "collector": "sysctl_kernel",
+   "condition": "log_martians == 0",
+   "source": "rules/kernel-hardening/BLWK-KERNEL-017.yaml",
+   "group": "hardening",
+   "slug": "blwk-kernel-017"
+  },
+  {
+   "id": "BLWK-KERNEL-018",
+   "title": "Reverse-path filtering is disabled",
+   "category": "kernel-hardening",
+   "severity": "medium",
+   "explain": "net.ipv4.conf.all.rp_filter is 0 — the kernel will forward packets whose source address couldn't possibly have arrived via the interface they came in on, which is exactly the condition IP spoofing depends on. (A value of 1 or 2 — strict or loose mode — is fine; this only fires when filtering is fully off.)",
+   "fix": "Set 'net.ipv4.conf.all.rp_filter=2' (loose mode) via /etc/sysctl.d/ and run 'sysctl --system'. Use '1' (strict) only on single-homed hosts — strict reverse-path filtering drops legitimate traffic on multi-homed servers and any asymmetric-routing setup, which is exactly the server class most likely to be affected, so loose is the safe default that still blocks spoofing.",
+   "references": [
+    "CIS-3.2.4"
+   ],
+   "collector": "sysctl_kernel",
+   "condition": "rp_filter == 0",
+   "source": "rules/kernel-hardening/BLWK-KERNEL-018.yaml",
+   "group": "hardening",
+   "slug": "blwk-kernel-018"
+  },
+  {
+   "id": "BLWK-KERNEL-019",
+   "title": "TCP SYN cookies are disabled",
+   "category": "kernel-hardening",
+   "severity": "medium",
+   "explain": "net.ipv4.tcp_syncookies is 0 — this host's TCP stack has no fallback protection against a SYN-flood connection-table exhaustion denial of service.",
+   "fix": "Set 'net.ipv4.tcp_syncookies=1' via /etc/sysctl.d/ and run 'sysctl --system'.",
+   "references": [
+    "CIS-3.1.1"
+   ],
+   "collector": "sysctl_kernel",
+   "condition": "tcp_syncookies == 0",
+   "source": "rules/kernel-hardening/BLWK-KERNEL-019.yaml",
+   "group": "hardening",
+   "slug": "blwk-kernel-019"
+  },
+  {
+   "id": "BLWK-KERNEL-020",
+   "title": "Kernel module not blacklisted: {{ module_blacklist.module }}",
+   "category": "kernel-hardening",
+   "severity": "low",
+   "explain": "The '{{ module_blacklist.module }}' kernel module isn't blacklisted in /etc/modprobe.d/, meaning it can still be auto-loaded on demand — simply by an unprivileged process opening a socket of that family. All four of these network protocol modules (dccp, sctp, rds, tipc) have a documented history of local-privilege-escalation vulnerabilities reachable exactly that way, and essentially no host actually uses them. usb-storage is deliberately NOT covered here — it's a different threat (physical-media exfiltration/BadUSB, not remote exploitation) and the remediation is destructive on a workstation, so it lives in BLWK-KERNEL-021 behind the server profile.",
+   "fix": "If '{{ module_blacklist.module }}' isn't actually needed on this host, add 'install {{ module_blacklist.module }} /bin/true' to a file under /etc/modprobe.d/ (e.g. /etc/modprobe.d/blacklist-rare.conf) and run 'update-initramfs -u'.",
+   "references": [
+    "CIS-1.1.1"
+   ],
+   "collector": "module_blacklist",
+   "condition": "blacklisted == false and loadable == true and module != \"usb-storage\"",
+   "source": "rules/kernel-hardening/BLWK-KERNEL-020.yaml",
+   "group": "hardening",
+   "slug": "blwk-kernel-020"
+  },
+  {
+   "id": "BLWK-KERNEL-021",
+   "title": "Kernel module not blacklisted: usb-storage",
+   "category": "kernel-hardening",
+   "severity": "low",
+   "explain": "The 'usb-storage' module isn't blacklisted, so plugging in a USB mass-storage device on this host will auto-mount it. On a server — especially one in a rack you don't physically control, like a colo or a branch office — that's a data-exfiltration and BadUSB path that needs no credentials and leaves little trace: someone with thirty seconds of physical access walks away with the disk contents. This rule is scoped to the server profile on purpose. The same advice on a laptop or desktop is actively harmful — it breaks every USB stick, external drive, and SD reader the user owns, to defend against an attacker who by definition already has their hands on the machine. Split out of BLWK-KERNEL-020 for exactly that reason.",
+   "fix": "On a server with no legitimate need for USB storage, add 'install usb-storage /bin/true' to a file under /etc/modprobe.d/ (e.g. /etc/modprobe.d/blacklist-usb-storage.conf) and run 'update-initramfs -u'. Do NOT apply this to a workstation — you will break all removable media on it.",
+   "references": [
+    "CIS-1.1.1"
+   ],
+   "collector": "module_blacklist",
+   "condition": "blacklisted == false and loadable == true and module == \"usb-storage\"",
+   "source": "rules/kernel-hardening/BLWK-KERNEL-021.yaml",
+   "group": "hardening",
+   "slug": "blwk-kernel-021"
+  },
+  {
+   "id": "BLWK-BANN-001",
+   "title": "No custom legal warning banner is set (/etc/{{ banners.file }})",
+   "category": "logging-auditing",
+   "severity": "info",
+   "explain": "/etc/{{ banners.file }} still contains the distro's default auto-generated content (OS name and getty templating codes), not a deliberate legal warning. In some jurisdictions, a clear \"unauthorized access is prohibited\" banner is what establishes that someone connecting without authorization was actually warned — the default OS-identification banner doesn't do that, and also unnecessarily advertises the exact OS version to anyone who connects. Scoped to the server profile: a login banner's function is legal, not technical — it establishes that access was unauthorized, which matters for a multi-user remote system. On a personal desktop it protects nothing, and /etc/issue.net is read only by sshd, so on a host that doesn't run sshd it is inert text in a file nobody opens.",
+   "fix": "Replace the contents of /etc/issue (local login) and /etc/issue.net (remote login) with a warning banner, not OS version info.",
+   "references": [
+    "CIS-1.7.1"
+   ],
+   "collector": "banners",
+   "condition": "is_default == true",
+   "source": "rules/logging-auditing/BLWK-BANN-001.yaml",
+   "group": "hardening",
+   "slug": "blwk-bann-001"
+  },
+  {
+   "id": "BLWK-LOG-001",
+   "title": "auditd is not installed",
+   "category": "logging-auditing",
+   "severity": "medium",
+   "explain": "No auditd binary was found. Without it, there's no kernel-level record of privileged syscalls (file access, exec, permission changes) — the trail that makes a break-in reviewable after the fact instead of just a guess.",
+   "fix": "Install auditd (e.g. 'apt install auditd') and enable it with 'systemctl enable --now auditd'.",
+   "references": [
+    "CIS-4.1"
+   ],
+   "collector": "logging",
+   "condition": "auditd_present == false",
+   "source": "rules/logging-auditing/BLWK-LOG-001.yaml",
+   "group": "hardening",
+   "slug": "blwk-log-001"
+  },
+  {
+   "id": "BLWK-LOG-002",
+   "title": "System logs are not forwarded off-box",
+   "category": "logging-auditing",
+   "severity": "low",
+   "explain": "rsyslog has no remote forwarding rule configured — logs only exist locally. Anyone with root on this machine can edit or delete them, so local-only logging can't be trusted as evidence of what a root-level attacker did. A workstation has no central syslog to ship to, so this is scoped to the server profile; the point of off-box logs is that an attacker who roots the machine can't erase the record of how they got in, which only means something where someone is actually doing IR.",
+   "fix": "Add a forwarding rule to /etc/rsyslog.conf (e.g. '*.* @@logs.example.com:514') pointing at a log destination this machine doesn't control.",
+   "references": [],
+   "collector": "logging",
+   "condition": "rsyslog_forwards_remote == false",
+   "source": "rules/logging-auditing/BLWK-LOG-002.yaml",
+   "group": "hardening",
+   "slug": "blwk-log-002"
+  },
+  {
+   "id": "BLWK-LOG-003",
+   "title": "Kernel-level process accounting is not installed",
+   "category": "logging-auditing",
+   "severity": "low",
+   "explain": "Neither 'accton' nor 'lastcomm' is present, so there's no kernel-level record of every process that ran on this host, who ran it, and how long it took — a different, harder- to-tamper-with data source than shell history or application logs, since it's written by the kernel itself rather than by the process being recorded.",
+   "fix": "Install process accounting (e.g. 'apt install acct') and enable it with 'systemctl enable --now acct'.",
+   "references": [
+    "CIS-4.6"
+   ],
+   "collector": "process_accounting",
+   "condition": "installed == false",
+   "source": "rules/logging-auditing/BLWK-LOG-003.yaml",
+   "group": "hardening",
+   "slug": "blwk-log-003"
+  },
+  {
+   "id": "BLWK-NET-001",
+   "title": "A VNC/remote-desktop port is listening",
+   "category": "network-egress",
+   "severity": "high",
+   "explain": "Port {{ listening_ports.port }} is listening on {{ listening_ports.listen_address }} — a standard VNC (5900-range) or noVNC/websockify (6080) port, reachable from the network. If this wasn't deliberately set up with a password and restricted access, it's a full remote-desktop backdoor. A listener bound only to loopback (127.0.0.1/::1) is deliberately excluded: that's the normal SSH-tunnel / container-published pattern and isn't remotely reachable.",
+   "fix": "If this isn't an intentional remote-desktop setup: stop the service (check 'ps aux' for x11vnc/vncserver/websockify) and remove any systemd unit or cron entry that restarts it.",
+   "references": [
+    "ATTACK-T1219"
+   ],
+   "collector": "listening_ports",
+   "condition": "port in [5900, 5901, 5902, 6080] and loopback_only == false",
+   "source": "rules/network-egress/BLWK-NET-001.yaml",
+   "group": "network",
+   "slug": "blwk-net-001"
+  },
+  {
+   "id": "BLWK-NET-002",
+   "title": "A port commonly used by ngrok's local API is listening",
+   "category": "network-egress",
+   "severity": "medium",
+   "explain": "Port 4040 is listening on {{ listening_ports.listen_address }} — most often ngrok's local web-inspector/API port, present while an ngrok tunnel is active. It's also Apache Spark's default UI port and is used by a few other dev tools, so this isn't conclusive on its own: if you're not running ngrok, check what it is. A loopback-only 4040 (the usual case for both ngrok and Spark) is excluded — this fires only when it's exposed on the network.",
+   "fix": "Check 'ps aux | grep ngrok' and 'systemctl list-units | grep -i ngrok' to find what started it.",
+   "references": [
+    "ATTACK-T1090"
+   ],
+   "collector": "listening_ports",
+   "condition": "port == 4040 and loopback_only == false",
+   "source": "rules/network-egress/BLWK-NET-002.yaml",
+   "group": "network",
+   "slug": "blwk-net-002"
+  },
+  {
+   "id": "BLWK-NET-003",
+   "title": "A database or development service is open to the network",
+   "category": "network-egress",
+   "severity": "high",
+   "explain": "A database or development service is reachable from your network on port {{ listening_ports.port }} (listening on {{ listening_ports.listen_address }}). On home, office or café Wi-Fi, anyone nearby can connect to it, and development services often run without a password. Docker opens ports to the whole network by default.",
+   "fix": "Make the service reachable from this computer only.\n1. For Docker Compose, change the port line from '{{ listening_ports.port }}:{{ listening_ports.port }}' to '127.0.0.1:{{ listening_ports.port }}:{{ listening_ports.port }}' and restart the stack.\n2. For a service installed directly, set its listen or bind address to 127.0.0.1 in its config file.\n3. Need it from another machine? Use an SSH tunnel ('ssh -L {{ listening_ports.port }}:localhost:{{ listening_ports.port }} you@this-machine') or a private network such as Tailscale or WireGuard.",
+   "references": [
+    "ATTACK-T1133",
+    "ATTACK-T1210"
+   ],
+   "collector": "listening_ports",
+   "condition": "listen_address in [\"0.0.0.0\", \"::\"] and port in [1025, 2375, 3306, 5432, 5672, 6379, 8025, 9000, 9001, 9200, 10050, 10051, 11211, 15672, 27017]",
+   "source": "rules/network-egress/BLWK-NET-003.yaml",
+   "group": "network",
+   "slug": "blwk-net-003"
+  },
+  {
+   "id": "BLWK-NET-004",
+   "title": "No host firewall is filtering incoming connections",
+   "category": "network-egress",
+   "severity": "medium",
+   "explain": "No firewall is blocking incoming connections, so every service that listens on the network can be reached from any network you join. A firewall is your safety net for the service you forgot was running.",
+   "fix": "Turn on a firewall that blocks incoming connections by default.\n1. Ubuntu and Debian: 'sudo ufw default deny incoming', then 'sudo ufw enable'.\n2. If you log in to this machine remotely, allow SSH first: 'sudo ufw allow OpenSSH'.\n3. Fedora and RHEL: 'sudo systemctl enable --now firewalld'.\nNote: Docker opens its ports around ufw, so also bind containers to 127.0.0.1.",
+   "references": [
+    "CIS-3.5",
+    "ATTACK-T1133"
+   ],
+   "collector": "host_firewall",
+   "condition": "firewall_active == false and firewall_known == true",
+   "source": "rules/network-egress/BLWK-NET-004.yaml",
+   "group": "network",
+   "slug": "blwk-net-004"
+  },
+  {
+   "id": "BLWK-PERSIST-001",
+   "title": "systemd unit runs a tunneling tool",
+   "category": "persistence",
+   "severity": "high",
+   "explain": "The systemd unit \"{{ systemd_units.unit_name }}\" runs a command referencing a tunneling tool (\"{{ systemd_units.exec_start }}\"). A reverse tunnel that reaches back out through a service like ngrok or cloudflared survives reboots and bypasses inbound firewall rules entirely, since it's an outbound connection — which is why it's both a legitimate way to expose a service and a common attacker persistence pattern. The two look identical from here, so this is high rather than critical: if you deliberately installed cloudflared, autossh, or a similar tunnel, this is expected and you can accept the risk for this rule.",
+   "fix": "If you didn't set this up yourself: 'systemctl disable --now <unit>' and remove the unit file from /etc/systemd/system/, then rotate any credentials the box had access to.",
+   "references": [
+    "ATTACK-T1543.002",
+    "ATTACK-T1090"
+   ],
+   "collector": "systemd_units",
+   "condition": "exec_start matches \"ngrok|cloudflared|serveo|localtunnel|ssh -R\"",
+   "source": "rules/persistence/BLWK-PERSIST-001.yaml",
+   "group": "intrusion",
+   "slug": "blwk-persist-001"
+  },
+  {
+   "id": "BLWK-PERSIST-002",
+   "title": "systemd unit posts to a messaging API on start",
+   "category": "persistence",
+   "severity": "high",
+   "explain": "The systemd unit \"{{ systemd_units.unit_name }}\" shells out to curl against a chat/ messaging API on start (\"{{ systemd_units.exec_start }}\"). This exact pattern is used to notify an attacker (e.g. of a new SSH tunnel URL) every time the service restarts — treat it as exfiltration infrastructure unless you recognize it as your own notification script.",
+   "fix": "Review the unit file under /etc/systemd/system/ and disable it if you didn't create it.",
+   "references": [
+    "ATTACK-T1041",
+    "ATTACK-T1071.001"
+   ],
+   "collector": "systemd_units",
+   "condition": "exec_start contains \"curl\" and exec_start matches \"telegram|discord.com/api/webhooks|slack.com/api\"",
+   "source": "rules/persistence/BLWK-PERSIST-002.yaml",
+   "group": "intrusion",
+   "slug": "blwk-persist-002"
+  },
+  {
+   "id": "BLWK-PERSIST-003",
+   "title": "Unexpected LaunchAgent/LaunchDaemon found",
+   "category": "persistence",
+   "severity": "high",
+   "explain": "The LaunchAgent/LaunchDaemon \"{{ launchd_persistence.label }}\" runs on every login/boot and isn't one this host's baseline recognizes — macOS's equivalent of a rogue systemd unit.",
+   "fix": "Review the plist under ~/Library/LaunchAgents or /Library/Launch{Agents,Daemons} and remove it if you didn't create it.",
+   "references": [
+    "ATTACK-T1543.001"
+   ],
+   "collector": "launchd_persistence",
+   "condition": "recognized == false",
+   "source": "rules/persistence/BLWK-PERSIST-003.yaml",
+   "group": "intrusion",
+   "slug": "blwk-persist-003"
+  },
+  {
+   "id": "BLWK-PERSIST-004",
+   "title": "Unexpected registry Run-key entry found",
+   "category": "persistence",
+   "severity": "high",
+   "explain": "The registry Run-key entry \"{{ windows_run_keys.name }}\" launches \"{{ windows_run_keys.command }}\" on every login and isn't one this host's baseline recognizes — Windows's equivalent of a rogue systemd unit.",
+   "fix": "Review the entry under HKLM/HKCU ...\\CurrentVersion\\Run and remove it if you didn't create it.",
+   "references": [
+    "ATTACK-T1547.001"
+   ],
+   "collector": "windows_run_keys",
+   "condition": "recognized == false",
+   "source": "rules/persistence/BLWK-PERSIST-004.yaml",
+   "group": "intrusion",
+   "slug": "blwk-persist-004"
+  },
+  {
+   "id": "BLWK-PERSIST-005",
+   "title": "A Python startup hook runs code in every Python process",
+   "category": "persistence",
+   "severity": "medium",
+   "explain": "{{ python_startup_hooks.path }} runs code every time Python starts in this environment, before your own program and even if you never import the package that added it. Some tools use this legitimately, but it is also how the poisoned LiteLLM 1.107.0 package stole credentials in October 2026.",
+   "fix": "Check where this file came from, and remove it if you don't recognise it.\n1. Find the package that installed it: 'pip show -f <package>' lists a package's files.\n2. If you recognise it, ignore this issue with the package name as the reason.\n3. If you don't, uninstall that package and rotate any secrets this Python environment could read.",
+   "references": [
+    "ATTACK-T1546.018",
+    "ATTACK-T1195.001"
+   ],
+   "collector": "python_startup_hooks",
+   "condition": "executes_code == true and known_benign == false and malicious_name == false",
+   "source": "rules/persistence/BLWK-PERSIST-005.yaml",
+   "group": "supply-chain",
+   "slug": "blwk-persist-005"
+  },
+  {
+   "id": "BLWK-PRIV-001",
+   "title": "A sudoers entry allows passwordless root",
+   "category": "privilege-escalation",
+   "severity": "high",
+   "explain": "A NOPASSWD sudo rule in {{ sudoers.source }} (\"{{ sudoers.line }}\") lets that user/group run commands as root without re-authenticating — anyone who reaches that account, even briefly, has unrestricted root with no password prompt to slow them down.",
+   "fix": "Review the entry and remove NOPASSWD unless there's a specific, scoped reason for it (e.g. a single monitoring command, not 'ALL').",
+   "references": [
+    "ATTACK-T1548.003"
+   ],
+   "collector": "sudoers",
+   "condition": "nopasswd == true",
+   "source": "rules/privilege-escalation/BLWK-PRIV-001.yaml",
+   "group": "hardening",
+   "slug": "blwk-priv-001"
+  },
+  {
+   "id": "BLWK-PRIV-002",
+   "title": "No GRUB boot loader password is set",
+   "category": "privilege-escalation",
+   "severity": "medium",
+   "explain": "/boot/grub/grub.cfg has no 'password' or 'password_pbkdf2' directive. Anyone with physical or console access to this machine can interrupt the boot menu and edit kernel parameters directly (e.g. appending 'init=/bin/bash' or 'single') to get a root shell without ever needing a valid credential — no OS-level control can prevent this once someone has unrestricted access to the boot menu itself.",
+   "fix": "Set a GRUB password: run 'grub-mkpasswd-pbkdf2' to generate a hash, add 'set superusers=\"root\"' and 'password_pbkdf2 root <hash>' to /etc/grub.d/40_custom, then run 'update-grub'. IMPORTANT: on stock Ubuntu/Debian, 'set superusers' makes GRUB prompt for that password before booting ANY entry — the machine will halt at a password prompt on every reboot, including unattended ones. To keep normal boot automatic and only gate *editing* entries and recovery, append '--unrestricted' to the CLASS list of your default menuentry (edit /etc/grub.d/10_linux, or use a submenu). Test with a reboot you can physically recover from before relying on this on a headless host.",
+   "references": [
+    "CIS-1.4.1",
+    "ATTACK-T1542"
+   ],
+   "collector": "grub_password",
+   "condition": "password_set == false",
+   "source": "rules/privilege-escalation/BLWK-PRIV-002.yaml",
+   "group": "hardening",
+   "slug": "blwk-priv-002"
+  },
+  {
+   "id": "BLWK-AV-001",
+   "title": "ClamAV is not installed",
+   "category": "rootkit-malware",
+   "severity": "low",
+   "explain": "No clamscan binary was found. Bulwark deliberately doesn't reimplement signature-based malware detection (see the project's own non-goals) — it expects ClamAV to cover that ground, so without it this whole category goes unchecked.",
+   "fix": "Install ClamAV (e.g. 'apt install clamav') and run 'freshclam' to fetch signatures.",
+   "references": [],
+   "collector": "clamav_status",
+   "condition": "installed == false",
+   "source": "rules/rootkit-malware/BLWK-AV-001.yaml",
+   "group": "intrusion",
+   "slug": "blwk-av-001"
+  },
+  {
+   "id": "BLWK-AV-002",
+   "title": "ClamAV signature database is stale",
+   "category": "rootkit-malware",
+   "severity": "medium",
+   "explain": "ClamAV's signature database is {{ clamav_status.db_age_days }} days old. An installed but outdated scanner gives a false sense of coverage — it won't catch anything discovered since the last update.",
+   "fix": "Run 'freshclam' (or check that the freshclam timer/service is enabled: 'systemctl status clamav-freshclam').",
+   "references": [],
+   "collector": "clamav_status",
+   "condition": "db_age_days > 14",
+   "source": "rules/rootkit-malware/BLWK-AV-002.yaml",
+   "group": "intrusion",
+   "slug": "blwk-av-002"
+  },
+  {
+   "id": "BLWK-ROOTKIT-001",
+   "title": "A network interface is running in promiscuous mode",
+   "category": "rootkit-malware",
+   "severity": "high",
+   "explain": "{{ network_interfaces.interface }} is in promiscuous mode — it's capturing all traffic on its network segment, not just traffic addressed to this host. This is the defining behavior of a packet sniffer, and is exactly what chkrootkit's own \"sniffer\" test checks for. Bridge ports are excluded: the kernel makes every bridge-enslaved interface promiscuous by design, so a Docker/VM veth being promiscuous means nothing. This interface is not one of those.",
+   "fix": "Run 'ip -d link show {{ network_interfaces.interface }}' and check 'ps aux' for a legitimate reason (tcpdump, Wireshark/tshark). If nothing legitimate explains it, treat this as active traffic interception and investigate immediately.",
+   "references": [
+    "ATTACK-T1040"
+   ],
+   "collector": "network_interfaces",
+   "condition": "promiscuous == true and bridge_port == false",
+   "source": "rules/rootkit-malware/BLWK-ROOTKIT-001.yaml",
+   "group": "intrusion",
+   "slug": "blwk-rootkit-001"
+  },
+  {
+   "id": "BLWK-ROOTKIT-002",
+   "title": "Traces of the LiteLLM 1.107.0 credential stealer were found",
+   "category": "rootkit-malware",
+   "severity": "critical",
+   "explain": "Found a trace of the poisoned LiteLLM 1.107.0 package ({{ supply_chain_iocs.indicator }} at {{ supply_chain_iocs.path }}). That release stole cloud, AI, SSH and browser credentials and installed a backdoor. A lock file in /tmp means the backdoor ran; a .pc_once_ file means the theft already happened.",
+   "fix": "Treat this computer as compromised and change your credentials from a different, clean device.\n1. Disconnect this computer from the network.\n2. From another device, rotate cloud keys, CI tokens, AI API keys and SSH keys, starting with the most powerful.\n3. Uninstall litellm 1.107.0 everywhere (the last safe version is 1.106.2) and delete cook.pth, cook.py and the sitecustomize.py it added.\n4. Rebuild affected Python environments from pinned, verified packages.",
+   "references": [
+    "ATTACK-T1195.001",
+    "ATTACK-T1552.001"
+   ],
+   "collector": "supply_chain_iocs",
+   "condition": "indicator in [\"litellm_loader_lock\", \"litellm_exfil_marker\", \"litellm_cook_pth\"]",
+   "source": "rules/rootkit-malware/BLWK-ROOTKIT-002.yaml",
+   "group": "supply-chain",
+   "slug": "blwk-rootkit-002"
+  },
+  {
+   "id": "BLWK-SSH-001",
+   "title": "SSH password authentication is enabled",
+   "category": "ssh-remote-access",
+   "severity": "high",
+   "explain": "PasswordAuthentication is set to \"{{ sshd.password_authentication }}\" in sshd_config, which allows an attacker to brute-force their way in with a password guess instead of needing a private key. It is the OpenSSH default and a brute-force *exposure* rather than a definite compromise, so it's rated high (aligning with CIS's L1 treatment and with BLWK-SSH-002), not critical.",
+   "fix": "Set 'PasswordAuthentication no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'. IMPORTANT: confirm key-based login works in a SECOND session before you rely on this — if the only working credential is a password and no key is installed, you will lock yourself out on the next login. Existing sessions survive the restart; a new key-authenticated login must succeed first.",
+   "references": [
+    "CIS-5.2.10",
+    "ATTACK-T1110"
+   ],
+   "collector": "sshd_config",
+   "condition": "password_authentication == \"yes\"",
+   "source": "rules/ssh-remote-access/BLWK-SSH-001.yaml",
+   "group": "remote-access",
+   "slug": "blwk-ssh-001"
+  },
+  {
+   "id": "BLWK-SSH-002",
+   "title": "SSH root login is permitted",
+   "category": "ssh-remote-access",
+   "severity": "high",
+   "explain": "PermitRootLogin is set to \"{{ sshd.permit_root_login }}\", allowing direct root logins over SSH. A compromised root password or key is a single step from full system control.",
+   "fix": "Set 'PermitRootLogin no' (or 'prohibit-password' if key-based root access is required) in /etc/ssh/sshd_config.",
+   "references": [
+    "CIS-5.2.8",
+    "ATTACK-T1078"
+   ],
+   "collector": "sshd_config",
+   "condition": "permit_root_login == \"yes\"",
+   "source": "rules/ssh-remote-access/BLWK-SSH-002.yaml",
+   "group": "remote-access",
+   "slug": "blwk-ssh-002"
+  },
+  {
+   "id": "BLWK-SSH-003",
+   "title": "SSH allows empty passwords",
+   "category": "ssh-remote-access",
+   "severity": "critical",
+   "explain": "PermitEmptyPasswords is set to \"{{ sshd.permit_empty_passwords }}\" — any account with a blank password can log in over SSH with no credential at all.",
+   "fix": "Set 'PermitEmptyPasswords no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'.",
+   "references": [
+    "CIS-5.2.11"
+   ],
+   "collector": "sshd_config",
+   "condition": "permit_empty_passwords == \"yes\"",
+   "source": "rules/ssh-remote-access/BLWK-SSH-003.yaml",
+   "group": "remote-access",
+   "slug": "blwk-ssh-003"
+  },
+  {
+   "id": "BLWK-SSH-004",
+   "title": "SSH X11 forwarding is enabled",
+   "category": "ssh-remote-access",
+   "severity": "low",
+   "explain": "X11Forwarding is set to \"{{ sshd.x11_forwarding }}\" in sshd_config. X11 forwarding exposes any local X server to whatever runs on the remote end of the session, and has a history of X11-protocol-level compromise (keystroke injection, screen capture).",
+   "fix": "Set 'X11Forwarding no' in /etc/ssh/sshd_config and run 'systemctl restart sshd', unless remote GUI apps are a deliberate requirement.",
+   "references": [
+    "CIS-5.2.4"
+   ],
+   "collector": "sshd_config",
+   "condition": "x11_forwarding == \"yes\"",
+   "source": "rules/ssh-remote-access/BLWK-SSH-004.yaml",
+   "group": "remote-access",
+   "slug": "blwk-ssh-004"
+  },
+  {
+   "id": "BLWK-SSH-005",
+   "title": "SSH TCP forwarding/tunneling is enabled",
+   "category": "ssh-remote-access",
+   "severity": "medium",
+   "explain": "AllowTcpForwarding is set to \"{{ sshd.allow_tcp_forwarding }}\" in sshd_config. TCP forwarding lets any SSH user open arbitrary local or remote port tunnels through this host — the exact mechanism used to pivot into internal networks or to reach services (like VNC) that are only supposed to be reachable from localhost.",
+   "fix": "Set 'AllowTcpForwarding no' in /etc/ssh/sshd_config, or restrict it per-user with a Match block, unless tunneling is a deliberate requirement.",
+   "references": [
+    "CIS-5.2.5",
+    "ATTACK-T1572"
+   ],
+   "collector": "sshd_config",
+   "condition": "allow_tcp_forwarding == \"yes\"",
+   "source": "rules/ssh-remote-access/BLWK-SSH-005.yaml",
+   "group": "remote-access",
+   "slug": "blwk-ssh-005"
+  },
+  {
+   "id": "BLWK-SSH-006",
+   "title": "SSH permits user-set environment variables",
+   "category": "ssh-remote-access",
+   "severity": "medium",
+   "explain": "PermitUserEnvironment is set to \"{{ sshd.permit_user_environment }}\" in sshd_config, letting an SSH client set arbitrary environment variables for its session (via ~/.ssh/environment or SendEnv) — including ones like LD_PRELOAD that can hijack the behavior of programs the session later runs.",
+   "fix": "Set 'PermitUserEnvironment no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'.",
+   "references": [
+    "CIS-5.2.6"
+   ],
+   "collector": "sshd_config",
+   "condition": "permit_user_environment == \"yes\"",
+   "source": "rules/ssh-remote-access/BLWK-SSH-006.yaml",
+   "group": "remote-access",
+   "slug": "blwk-ssh-006"
+  },
+  {
+   "id": "BLWK-SSH-007",
+   "title": "SSH tun-device (layer 2/3) tunneling is enabled",
+   "category": "ssh-remote-access",
+   "severity": "medium",
+   "explain": "PermitTunnel is set to \"{{ sshd.permit_tunnel }}\" in sshd_config. Unlike ordinary TCP port forwarding, tun-device tunneling gives an SSH client a full virtual network interface into this host's network — a much broader pivot/VPN-like capability that's rarely needed and should be off by default.",
+   "fix": "Set 'PermitTunnel no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'.",
+   "references": [
+    "ATTACK-T1572"
+   ],
+   "collector": "sshd_config",
+   "condition": "permit_tunnel == \"yes\"",
+   "source": "rules/ssh-remote-access/BLWK-SSH-007.yaml",
+   "group": "remote-access",
+   "slug": "blwk-ssh-007"
+  },
+  {
+   "id": "BLWK-SSH-008",
+   "title": "SSH StrictModes is disabled",
+   "category": "ssh-remote-access",
+   "severity": "medium",
+   "explain": "StrictModes is set to \"{{ sshd.strict_modes }}\" in sshd_config. With StrictModes off, sshd no longer verifies that a user's home directory and key files have safe ownership and permissions before trusting them — a world-writable home directory or key file then becomes a usable login bypass instead of a rejected, obviously-broken config.",
+   "fix": "Set 'StrictModes yes' in /etc/ssh/sshd_config and run 'systemctl restart sshd'.",
+   "references": [
+    "CIS-5.2.9"
+   ],
+   "collector": "sshd_config",
+   "condition": "strict_modes == \"no\"",
+   "source": "rules/ssh-remote-access/BLWK-SSH-008.yaml",
+   "group": "remote-access",
+   "slug": "blwk-ssh-008"
+  },
+  {
+   "id": "BLWK-SSH-009",
+   "title": "SSH GatewayPorts exposes forwarded ports to the network",
+   "category": "ssh-remote-access",
+   "severity": "medium",
+   "explain": "GatewayPorts is set to \"{{ sshd.gateway_ports }}\" in sshd_config. By default, a port an SSH client forwards to this host is only reachable from localhost; with GatewayPorts on, it's reachable from anywhere on the network — turning an individual user's ad-hoc SSH tunnel into an accidental (or deliberate) network-wide exposure of whatever it points at.",
+   "fix": "Set 'GatewayPorts no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'.",
+   "references": [
+    "ATTACK-T1090"
+   ],
+   "collector": "sshd_config",
+   "condition": "gateway_ports == \"yes\"",
+   "source": "rules/ssh-remote-access/BLWK-SSH-009.yaml",
+   "group": "remote-access",
+   "slug": "blwk-ssh-009"
+  },
+  {
+   "id": "BLWK-SSH-010",
+   "title": "SSH agent forwarding is enabled",
+   "category": "ssh-remote-access",
+   "severity": "low",
+   "explain": "AllowAgentForwarding is set to \"{{ sshd.allow_agent_forwarding }}\" in sshd_config. Agent forwarding lets anyone with root (or the forwarding user's privileges) on this host make use of the connecting client's SSH agent to authenticate onward as that client, without ever seeing the private key itself — a well-known lateral-movement technique on multi-hop SSH setups.",
+   "fix": "Set 'AllowAgentForwarding no' in /etc/ssh/sshd_config unless agent forwarding is a deliberate requirement.",
+   "references": [
+    "ATTACK-T1563"
+   ],
+   "collector": "sshd_config",
+   "condition": "allow_agent_forwarding == \"yes\"",
+   "source": "rules/ssh-remote-access/BLWK-SSH-010.yaml",
+   "group": "remote-access",
+   "slug": "blwk-ssh-010"
+  },
+  {
+   "id": "BLWK-SSH-011",
+   "title": "SSH allows an excessive number of authentication attempts per connection",
+   "category": "ssh-remote-access",
+   "severity": "low",
+   "explain": "MaxAuthTries is set to {{ sshd.max_auth_tries }} in sshd_config — well above the recommended ceiling of 3-6. A high limit gives an online password-guessing attempt many more tries per TCP connection before being cut off.",
+   "fix": "Set 'MaxAuthTries 3' (or up to 6) in /etc/ssh/sshd_config and run 'systemctl restart sshd'.",
+   "references": [
+    "CIS-5.2.7",
+    "ATTACK-T1110"
+   ],
+   "collector": "sshd_config",
+   "condition": "max_auth_tries > 6",
+   "source": "rules/ssh-remote-access/BLWK-SSH-011.yaml",
+   "group": "remote-access",
+   "slug": "blwk-ssh-011"
+  },
+  {
+   "id": "BLWK-SSH-012",
+   "title": "SSH private key is not passphrase-protected",
+   "category": "ssh-remote-access",
+   "severity": "high",
+   "explain": "Your SSH key {{ ssh_private_keys.path }} has no passphrase. It works like a password that is written down: anyone or any program that copies this one file can log in to every server and Git host that trusts it, with nothing else needed.",
+   "fix": "Lock the key with a passphrase. It takes a minute and your servers need no changes.\n1. In the Bulwark app, open this issue and use \"Add a passphrase\". In a terminal, run 'ssh-keygen -p -f {{ ssh_private_keys.path }}'.\n2. To avoid typing it all the time, load the key once per session with 'ssh-add {{ ssh_private_keys.path }}'.\n3. Delete keys for machines you no longer use.\nStronger options: keep keys in a password manager's SSH agent (Bitwarden, 1Password, KeePassXC), or use a hardware key that cannot be copied at all ('ssh-keygen -t ed25519-sk' with a YubiKey).",
+   "references": [
+    "CIS-5.2",
+    "ATTACK-T1552.004",
+    "ATTACK-T1078"
+   ],
+   "collector": "ssh_private_keys",
+   "condition": "encrypted == false and encryption_known == true",
+   "source": "rules/ssh-remote-access/BLWK-SSH-012.yaml",
+   "group": "secrets",
+   "slug": "blwk-ssh-012",
+   "autofix": "In the app, open the issue and use “Add a passphrase”. From a terminal: `bulwark ssh protect`."
+  },
+  {
+   "id": "BLWK-SSH-013",
+   "title": "SSH private key passphrase status could not be determined",
+   "category": "ssh-remote-access",
+   "severity": "low",
+   "explain": "The file at {{ ssh_private_keys.path }} (format: {{ ssh_private_keys.key_format }}) is a private key, but its encryption header could not be parsed, so Bulwark cannot confirm whether it is passphrase-protected. Rather than guess — and risk reporting a plaintext key as safe — it is surfaced here for you to check by hand. A healthy key does not normally hit this state, so the file may be truncated, corrupted, or in a format this version doesn't fully recognize.",
+   "fix": "Inspect the key directly: 'ssh-keygen -y -f {{ ssh_private_keys.path }}' will prompt for a passphrase if one is set (and error out plainly if the file is malformed). If it is unprotected, add a passphrase with 'ssh-keygen -p -f {{ ssh_private_keys.path }}'. If the file is corrupt or not actually a key you use, remove or restore it.",
+   "references": [
+    "CIS-5.2",
+    "ATTACK-T1552.004"
+   ],
+   "collector": "ssh_private_keys",
+   "condition": "encryption_known == false",
+   "source": "rules/ssh-remote-access/BLWK-SSH-013.yaml",
+   "group": "secrets",
+   "slug": "blwk-ssh-013"
+  },
+  {
+   "id": "BLWK-AI-001",
+   "title": "A secret is exposed in AI assistant context",
+   "category": "ai-agents",
+   "severity": "high",
+   "severityNote": "Depends on the kind of secret found.",
+   "explain": "A provider secret (Anthropic, OpenAI, GitHub, AWS, …) in an assistant's context, config, or transcript.",
+   "fix": "Remove the key from the file and replace it with a new one. Anything pasted into an AI chat should be treated as leaked.\n1. Use \"Remove secret from this file\" below. Bulwark backs up the original first.\n2. Create a new key with the provider and delete the old one.\n3. Next time, keep keys in a password manager (Bitwarden, 1Password, KeePassXC) and pass them to tools as environment variables, for example with 'op run' or 'bws run', instead of pasting them into the chat.",
+   "references": [
+    "ATTACK-T1552.001"
+   ],
+   "collector": "ai_scan",
+   "condition": null,
+   "group": "secrets",
+   "slug": "blwk-ai-001",
+   "autofix": "In the app, open the issue and use “Remove secret from this file”. From a terminal: `bulwark ai redact` (preview), then `bulwark ai redact --apply`."
+  },
+  {
+   "id": "BLWK-AI-002",
+   "title": "Project-supplied Claude Code hooks run shell commands automatically",
+   "category": "ai-agents",
+   "severity": "critical",
+   "explain": "Project-supplied Claude Code hooks that run shell on session/tool events.",
+   "fix": "Remove the hooks block from the repo's .claude/settings.json; keep hooks only in your own trusted user-level settings. Review any repo you didn't author before opening it in Claude Code.",
+   "references": [
+    "CVE-2025-59536",
+    "ATTACK-T1546"
+   ],
+   "collector": "ai_scan",
+   "condition": null,
+   "group": "ai-agents",
+   "slug": "blwk-ai-002"
+  },
+  {
+   "id": "BLWK-AI-003",
+   "title": "An MCP server runs an unpinned package from a registry",
+   "category": "ai-agents",
+   "severity": "high",
+   "explain": "An MCP server launched via an unpinned `npx`/`uvx` package.",
+   "fix": "Pin the MCP server to an exact version so it can't change without you knowing.\n1. Replace the \"@latest\" or unversioned package with an exact version, for example @scope/pkg@1.2.3.\n2. Check that the publisher is one you trust.\n3. Update it deliberately, the way you update other dependencies.",
+   "references": [
+    "ATTACK-T1195.001"
+   ],
+   "collector": "ai_scan",
+   "condition": null,
+   "group": "supply-chain",
+   "slug": "blwk-ai-003"
+  },
+  {
+   "id": "BLWK-AI-004",
+   "title": "An MCP server uses mcp-remote (critical command-injection ≤ 0.1.15)",
+   "category": "ai-agents",
+   "severity": "high",
+   "explain": "An MCP server using `mcp-remote` (command-injection ≤ 0.1.15).",
+   "fix": "Upgrade mcp-remote to ≥ 0.1.16 and pin it. A malicious MCP endpoint could otherwise inject OS commands via the OAuth metadata (CVE-2025-6514).",
+   "references": [
+    "CVE-2025-6514"
+   ],
+   "collector": "ai_scan",
+   "condition": null,
+   "group": "supply-chain",
+   "slug": "blwk-ai-004"
+  },
+  {
+   "id": "BLWK-AI-005",
+   "title": "An MCP server launches via a shell interpreter",
+   "category": "ai-agents",
+   "severity": "high",
+   "explain": "An MCP server wrapped in a shell interpreter (`bash -c …`).",
+   "fix": "Replace a `bash -c`/`sh -c` MCP command with a direct executable + args. Wrapping a server in a shell turns any string in its config into an execution surface.",
+   "references": [
+    "ATTACK-T1059.004"
+   ],
+   "collector": "ai_scan",
+   "condition": null,
+   "group": "supply-chain",
+   "slug": "blwk-ai-005"
+  },
+  {
+   "id": "BLWK-AI-006",
+   "title": "An agent permission allowlist permits arbitrary command execution",
+   "category": "ai-agents",
+   "severity": "high",
+   "explain": "A permission allowlist that permits arbitrary execution (`Bash(*)`, `Bash(curl:*)`).",
+   "fix": "Scope the allowlist: replace Bash(*) / Bash(curl:*) / a bare \"*\" with the specific, read-only commands the agent actually needs. A wildcard exec permission is a prompt-injection's path straight to your shell.",
+   "references": [
+    "ATTACK-T1059"
+   ],
+   "collector": "ai_scan",
+   "condition": null,
+   "group": "ai-agents",
+   "slug": "blwk-ai-006"
+  },
+  {
+   "id": "BLWK-AI-007",
+   "title": "An agent is configured to bypass all permission prompts",
+   "category": "ai-agents",
+   "severity": "high",
+   "explain": "`defaultMode: \"bypassPermissions\"` — no approval prompts at all.",
+   "fix": "Remove defaultMode: \"bypassPermissions\" (and never run with --dangerously-skip-permissions outside a throwaway container). It disables every guardrail between the model and your machine.",
+   "references": [
+    "ATTACK-T1059"
+   ],
+   "collector": "ai_scan",
+   "condition": null,
+   "group": "ai-agents",
+   "slug": "blwk-ai-007"
+  },
+  {
+   "id": "BLWK-AI-008",
+   "title": "Project MCP servers are set to auto-enable without prompting",
+   "category": "ai-agents",
+   "severity": "high",
+   "explain": "`enableAllProjectMcpServers` / `enabledMcpjsonServers` auto-enabling a repo's MCP servers.",
+   "fix": "Remove enableAllProjectMcpServers / enabledMcpjsonServers from committed settings so a repo's own .mcp.json can't run servers before you've reviewed them (CVE-2025-59536).",
+   "references": [
+    "CVE-2025-59536"
+   ],
+   "collector": "ai_scan",
+   "condition": null,
+   "group": "ai-agents",
+   "slug": "blwk-ai-008"
+  },
+  {
+   "id": "BLWK-AI-009",
+   "title": "VS Code chat auto-approve (\"YOLO mode\") is enabled",
+   "category": "ai-agents",
+   "severity": "critical",
+   "explain": "VS Code `chat.tools.autoApprove` (\"YOLO mode\").",
+   "fix": "Remove \"chat.tools.autoApprove\": true from settings.json. It auto-approves every agent tool call, including shell — the exact payload of the wormable Copilot RCE (CVE-2025-53773).",
+   "references": [
+    "CVE-2025-53773"
+   ],
+   "collector": "ai_scan",
+   "condition": null,
+   "group": "ai-agents",
+   "slug": "blwk-ai-009"
+  },
+  {
+   "id": "BLWK-AI-010",
+   "title": "VS Code Workspace Trust is disabled",
+   "category": "ai-agents",
+   "severity": "high",
+   "explain": "VS Code Workspace Trust disabled.",
+   "fix": "Set \"security.workspace.trust.enabled\": true. With trust off, opening a cloned repo can auto-run its tasks/agents with no prompt.",
+   "references": [
+    "ATTACK-T1204.002"
+   ],
+   "collector": "ai_scan",
+   "condition": null,
+   "group": "ai-agents",
+   "slug": "blwk-ai-010"
+  },
+  {
+   "id": "BLWK-AI-011",
+   "title": "A VS Code task runs automatically when the folder is opened",
+   "category": "ai-agents",
+   "severity": "high",
+   "explain": "A VS Code task set to run on `folderOpen`.",
+   "fix": "Remove runOn: \"folderOpen\" (or set task.allowAutomaticTasks: \"off\"). An auto-run task executes on open before you've inspected the repo.",
+   "references": [
+    "ATTACK-T1204.002"
+   ],
+   "collector": "ai_scan",
+   "condition": null,
+   "group": "ai-agents",
+   "slug": "blwk-ai-011"
+  },
+  {
+   "id": "BLWK-AI-012",
+   "title": "An instruction file contains hidden bidirectional Unicode controls",
+   "category": "ai-agents",
+   "severity": "high",
+   "explain": "Hidden Unicode / bidi controls in an instruction file (the Rules File Backdoor).",
+   "fix": "Inspect and strip the bidirectional text-reordering controls (U+202A–202E, U+2066–2069) from this file. They reorder how text renders to a human while the model reads the raw bytes — the Trojan Source / Rules File Backdoor technique for smuggling instructions into an agent.",
+   "references": [
+    "ATTACK-T1027"
+   ],
+   "collector": "ai_scan",
+   "condition": null,
+   "group": "ai-agents",
+   "slug": "blwk-ai-012"
+  },
+  {
+   "id": "BLWK-AI-013",
+   "title": "An instruction file contains prompt-injection style directives",
+   "category": "ai-agents",
+   "severity": "medium",
+   "explain": "Prompt-injection-style phrases in an instruction file (heuristic).",
+   "fix": "Review this file for adversarial instructions (\"ignore previous instructions\", commands to exfiltrate or edit config). Low-confidence heuristic — confirm by reading the flagged line before trusting the file.",
+   "references": [
+    "ATTACK-T1566"
+   ],
+   "collector": "ai_scan",
+   "condition": null,
+   "group": "ai-agents",
+   "slug": "blwk-ai-013"
+  },
+  {
+   "id": "BLWK-AI-014",
+   "title": "An AI config overrides the API base URL to a non-official host",
+   "category": "ai-agents",
+   "severity": "high",
+   "explain": "An `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` override to a non-official host.",
+   "fix": "Remove the ANTHROPIC_BASE_URL / OPENAI_BASE_URL override unless you deliberately run a trusted proxy. Pointed at an attacker host, it ships your API key in the request auth header (CVE-2025-59536).",
+   "references": [
+    "CVE-2025-59536"
+   ],
+   "collector": "ai_scan",
+   "condition": null,
+   "group": "ai-agents",
+   "slug": "blwk-ai-014"
+  },
+  {
+   "id": "BLWK-AI-015",
+   "title": "An AI credential file is readable by other users",
+   "category": "ai-agents",
+   "severity": "medium",
+   "explain": "A plaintext credential file readable by group/other.",
+   "fix": "Make the file private so only you can read it.\n1. Run chmod 600 on this file.\n2. If the tool supports it, let it keep the token in your computer's keychain instead (macOS Keychain, GNOME Keyring or KWallet, Windows Credential Manager).",
+   "references": [
+    "ATTACK-T1552.001"
+   ],
+   "collector": "ai_scan",
+   "condition": null,
+   "group": "secrets",
+   "slug": "blwk-ai-015"
+  },
+  {
+   "id": "BLWK-AI-016",
+   "title": "A secret-bearing AI file is not covered by .gitignore",
+   "category": "ai-agents",
+   "severity": "high",
+   "explain": "A secret-bearing file in a git repo with no `.gitignore` rule covering it.",
+   "fix": "Add this file to .gitignore (and, if it was already committed, git rm --cached it and rotate the credential). Sitting in a git repo without an ignore rule, a secret is one `git add .` away from being pushed — and stays in history forever.",
+   "references": [
+    "ATTACK-T1552.001"
+   ],
+   "collector": "ai_scan",
+   "condition": null,
+   "group": "secrets",
+   "slug": "blwk-ai-016"
+  },
+  {
+   "id": "BLWK-AI-017",
+   "title": "Codex is configured with no approval and full filesystem access",
+   "category": "ai-agents",
+   "severity": "high",
+   "explain": "Codex `approval_policy = \"never\"` + `sandbox_mode = \"danger-full-access\"`.",
+   "fix": "Change approval_policy away from \"never\" or sandbox_mode away from \"danger-full-access\" in ~/.codex/config.toml. Together they let the agent run anything, unprompted, anywhere.",
+   "references": [
+    "ATTACK-T1059"
+   ],
+   "collector": "ai_scan",
+   "condition": null,
+   "group": "ai-agents",
+   "slug": "blwk-ai-017"
+  },
+  {
+   "id": "BLWK-AI-018",
+   "title": "An MCP server connects to a remote endpoint with a plaintext token",
+   "category": "ai-agents",
+   "severity": "high",
+   "explain": "An MCP server connecting to a remote endpoint with a plaintext token in its config.",
+   "fix": "Take the token out of the config file and give it to the tool when it runs.\n1. Replace the token with a reference to an environment variable, for example '${API_TOKEN}' in Claude Code's .mcp.json.\n2. Keep the token in a password manager and supply it at launch, for example with 'op run' or 'bws run'.\n3. Rotate the token that was in the file, since anyone who cloned the repository could have it.\n4. Make sure you trust this remote server: it sees every request your AI agent sends to it.",
+   "references": [
+    "ATTACK-T1552.001",
+    "ATTACK-T1071.001"
+   ],
+   "collector": "ai_scan",
+   "condition": null,
+   "group": "secrets",
+   "slug": "blwk-ai-018"
+  },
+  {
+   "id": "BLWK-AI-019",
+   "title": "An MCP server runs a privileged or host-mounting container",
+   "category": "ai-agents",
+   "severity": "critical",
+   "explain": "An MCP server running a privileged or host-mounting container (`--privileged`, `-v /var/run/docker.sock`, `-v /:…`).",
+   "fix": "Remove --privileged, the Docker socket mount (-v /var/run/docker.sock), and any root-filesystem bind mount (-v /:…) from this MCP server's docker command. Each one hands the container — and thus anything the agent can drive through it — full control of the host.",
+   "references": [
+    "ATTACK-T1610",
+    "ATTACK-T1611"
+   ],
+   "collector": "ai_scan",
+   "condition": null,
+   "group": "supply-chain",
+   "slug": "blwk-ai-019"
+  },
+  {
+   "id": "BLWK-AI-020",
+   "title": "A filesystem MCP server is granted an over-broad root",
+   "category": "ai-agents",
+   "severity": "high",
+   "explain": "A filesystem MCP server granted an over-broad root (`/` or your whole home directory).",
+   "fix": "Scope the filesystem MCP server to the specific project directory it needs instead of / or your whole home directory. A broad root lets a prompt-injected agent read or write anything under it — including SSH keys, browser profiles, and other projects' secrets.",
+   "references": [
+    "ATTACK-T1083"
+   ],
+   "collector": "ai_scan",
+   "condition": null,
+   "group": "ai-agents",
+   "slug": "blwk-ai-020"
+  }
+ ]
+}

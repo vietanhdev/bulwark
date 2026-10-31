@@ -3,17 +3,17 @@ layout: home
 
 hero:
   name: Bulwark
-  text: Security & antivirus for your Linux computer
+  text: Security scanner for developer machines
   tagline: >-
-    Checks your machine's real configuration, scans for viruses, and watches your AI coding
-    assistants — then explains every finding in plain language, with a one-click fix.
+    Finds the keys in plain text, the risky packages and the exposed dev services on your Linux
+    computer, explains each problem in plain language, and fixes most of them in one click.
   actions:
     - theme: brand
       text: Download
       link: /download
     - theme: alt
-      text: Antivirus for Linux
-      link: /articles/linux-antivirus-ubuntu-fedora
+      text: Browse every check
+      link: /checks/
     - theme: alt
       text: View on GitHub
       link: https://github.com/vietanhdev/bulwark
@@ -23,16 +23,16 @@ hero:
 
 <section class="bw-stats" aria-label="Bulwark at a glance">
   <div class="bw-stat">
-    <span class="bw-stat-num">85</span>
+    <span class="bw-stat-num">93</span>
     <span class="bw-stat-label">built-in checks</span>
   </div>
   <div class="bw-stat">
-    <span class="bw-stat-num">11</span>
-    <span class="bw-stat-label">security categories</span>
+    <span class="bw-stat-num">10</span>
+    <span class="bw-stat-label">AI coding assistants covered</span>
   </div>
   <div class="bw-stat">
-    <span class="bw-stat-num">5</span>
-    <span class="bw-stat-label">AI assistants watched</span>
+    <span class="bw-stat-num">1</span>
+    <span class="bw-stat-label">page per check, with the fix</span>
   </div>
   <div class="bw-stat">
     <span class="bw-stat-num">0</span>
@@ -42,21 +42,30 @@ hero:
 
 <section class="bw-section">
 
-<p class="bw-eyebrow">What Bulwark does</p>
+<p class="bw-eyebrow">What Bulwark checks</p>
 
-<h2 class="bw-h2">One scan, your whole machine</h2>
+<h2 class="bw-h2">What attackers look for on a developer machine</h2>
 
-<p class="bw-sub">From SSH keys and sudoers to leaked API keys in your AI assistant's memory — every check runs locally and explains itself in plain language.</p>
+<p class="bw-sub">Stolen keys and poisoned packages are how most developer compromises start. Bulwark looks where those attacks look first, then checks the rest of the system. Everything runs on your computer.</p>
 
 <div class="bw-bento">
   <article class="bw-card bw-card-hero">
-    <div class="bw-card-tag">What sets Bulwark apart</div>
+    <div class="bw-card-tag">New in 0.11</div>
+    <div class="bw-card-icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L20 3M16 7l3 3M14 9l2 2"/></svg>
+    </div>
+    <h3>Secrets, supply chain and exposed services</h3>
+    <p>Long-lived AWS keys, Git and Docker passwords stored in plain text, SSH keys without a passphrase, and credential files other users can read.</p>
+    <p>Python startup hooks and known malicious-package traces, unpinned MCP servers, and dev databases listening on every network interface.</p>
+    <p class="bw-card-meta">Each finding comes with a safer alternative, such as a password manager, a credential helper or a hardware key.</p>
+  </article>
+
+  <article class="bw-card">
     <div class="bw-card-icon">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg>
     </div>
-    <h3>AI coding-assistant security</h3>
-    <p>Scans Claude Code, Cursor, Copilot, Codex and Gemini for secrets leaked into transcripts and memory — and for agent config a prompt injection could turn into code execution: malicious MCP servers, auto-approve "YOLO mode", the Rules File Backdoor.</p>
-    <p class="bw-card-meta">20 checks mapped to real CVEs · opt-in redaction</p>
+    <h3>AI coding assistants</h3>
+    <p>Keys pasted into Claude Code, Cursor, Copilot, Codex or Gemini sessions and memory, and settings a prompt injection could abuse: auto-approve, project hooks, malicious MCP servers.</p>
   </article>
 
   <article class="bw-card">
@@ -64,47 +73,39 @@ hero:
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 00-5.4 5.4l-6 6V21h3.3l6-6a4 4 0 005.4-5.4l-2.3 2.3-2.2-.4-.4-2.2 2.3-2.3z"/></svg>
     </div>
     <h3>One-click fixes</h3>
-    <p>Tighten <code>~/.ssh</code> permissions, harden <code>sshd_config</code>, add a passphrase to every unprotected key, redact leaked secrets — dry-run first, reversible, with a backup.</p>
+    <p>Add a passphrase to every unprotected SSH key, remove a leaked key from a session file, tighten <code>~/.ssh</code> and <code>sshd_config</code>. You preview every change first, and a backup is kept.</p>
+  </article>
+
+  <article class="bw-card">
+    <div class="bw-card-icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h7"/><path d="M17 15l2 2 3-4"/></svg>
+    </div>
+    <h3>Problems, not a wall of findings</h3>
+    <p>Six unprotected keys are one problem with one fix, not six alerts. Each problem shows its cause and what to do, and <a href="/checks/">every check has a page</a> with the full explanation.</p>
   </article>
 
   <article class="bw-card">
     <div class="bw-card-icon">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg>
     </div>
-    <h3>Real virus scanning</h3>
-    <p>Full ClamAV integration with live per-file progress, engine and database age, and a distro-aware install command when it's missing.</p>
-  </article>
-
-  <article class="bw-card">
-    <div class="bw-card-icon">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H8l-4 4V5a2 2 0 012-2h13a2 2 0 012 2z"/><path d="M8 9h8M8 13h5"/></svg>
-    </div>
-    <h3>Plain-language, not jargon</h3>
-    <p>"Your computer needs a little attention" — not a wall of CVE IDs. Every issue is ranked and names the exact file to change, with a Safety score for the whole machine.</p>
-  </article>
-
-  <article class="bw-card">
-    <div class="bw-card-icon">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 0114-5.3L20 8M20 4v4h-4"/><path d="M20 12a8 8 0 01-14 5.3L4 16M4 20v-4h4"/></svg>
-    </div>
-    <h3>Continuous, fully local</h3>
-    <p>A background loop re-scans on a schedule and speaks up only when something new appears. No network calls, ever — your history lives in a local database.</p>
-  </article>
-
-  <article class="bw-card">
-    <div class="bw-card-icon">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>
-    </div>
-    <h3>Scan the fleet over SSH</h3>
-    <p><code>bulwarkctl scan --ssh user@host</code> checks another machine over your existing SSH — keys, agent and jump hosts included. One laptop, every server.</p>
+    <h3>OS hardening and malware</h3>
+    <p>SSH, sudoers, kernel and firewall settings, persistence and rootkit indicators, file-integrity changes, and ClamAV virus scanning with live progress.</p>
   </article>
 
   <article class="bw-card">
     <div class="bw-card-icon">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>
     </div>
-    <h3>Native CLI and desktop app</h3>
-    <p>One Rust engine, two front-doors: a terminal on a headless box, or a themable desktop app. Same rule pack, same local history.</p>
+    <h3>Desktop app and CLI</h3>
+    <p>One Rust engine, two front-doors. Run <code>bulwark scan</code> in a terminal, or <code>bulwark scan --ssh user@host</code> to check a server over your existing SSH.</p>
+  </article>
+
+  <article class="bw-card">
+    <div class="bw-card-icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 0114-5.3L20 8M20 4v4h-4"/><path d="M20 12a8 8 0 01-14 5.3L4 16M4 20v-4h4"/></svg>
+    </div>
+    <h3>Continuous and fully local</h3>
+    <p>A background loop re-checks on a schedule and speaks up only when something new appears. No account, no telemetry, no network calls.</p>
   </article>
 </div>
 
@@ -120,17 +121,17 @@ hero:
   <div class="bw-step">
     <span class="bw-step-num">01</span>
     <h3>Scan</h3>
-    <p>One click runs every check you enable — system configuration, viruses, and your AI coding assistants. No account, no setup.</p>
+    <p>Click Scan now, or run <code>bulwark scan</code>. Configuration, secrets, AI assistants and viruses are all checked in one pass.</p>
   </div>
   <div class="bw-step">
     <span class="bw-step-num">02</span>
     <h3>Understand</h3>
-    <p>Findings are sorted Important → FYI, each named to the exact file or setting, with a Safety score that tells you where the whole machine stands.</p>
+    <p>Problems are grouped by cause and ranked Critical to Low. Each one says why it matters in a sentence, with the full story on its check page.</p>
   </div>
   <div class="bw-step">
     <span class="bw-step-num">03</span>
     <h3>Fix</h3>
-    <p>Apply the safe fixes with a dry-run and a backup, or copy the exact command. Every change is reversible by design.</p>
+    <p>Use the one-click fix when there is one, or follow the numbered steps with copyable commands. Every automatic change is previewed and backed up.</p>
   </div>
 </div>
 
@@ -140,15 +141,15 @@ hero:
 
 <p class="bw-eyebrow">Make it yours</p>
 
-<h2 class="bw-h2">One app, your colours</h2>
+<h2 class="bw-h2">Light, dark, and your colours</h2>
 
-<p class="bw-sub">Light or dark, with an accent and sidebar colour you pick. Bulwark is built to look like part of the desktop it protects — not a visitor.</p>
+<p class="bw-sub">Aqua on graphite by default, with eight accents and six sidebar colours, in light or dark.</p>
 
 <div class="bw-fan">
-  <img src="/screenshots/hero-green.png" alt="Bulwark with a green theme" class="bw-fan-img bw-fan-4" />
-  <img src="/screenshots/hero-blue.png" alt="Bulwark with a blue theme" class="bw-fan-img bw-fan-3" />
-  <img src="/screenshots/hero-teal.png" alt="Bulwark with a teal theme" class="bw-fan-img bw-fan-2" />
-  <img src="/screenshots/hero-aubergine.png" alt="Bulwark with the default aubergine theme" class="bw-fan-img bw-fan-1" />
+  <img src="/screenshots/hero-aubergine.png" alt="Bulwark with an orange accent on an aubergine sidebar" class="bw-fan-img bw-fan-4" />
+  <img src="/screenshots/hero-green.png" alt="Bulwark with a green theme" class="bw-fan-img bw-fan-3" />
+  <img src="/screenshots/hero-blue.png" alt="Bulwark with a blue theme" class="bw-fan-img bw-fan-2" />
+  <img src="/screenshots/hero-graphite.png" alt="Bulwark with the default aqua on graphite theme" class="bw-fan-img bw-fan-1" />
 </div>
 
 </section>
@@ -161,31 +162,31 @@ hero:
 
 <div class="bw-gallery">
   <figure>
-    <img src="/screenshots/overview.png" alt="Home — a plain-language look at how safe this computer is" />
-    <figcaption>Home — your Safety score and what to fix first, in plain language.</figcaption>
+    <img src="/screenshots/overview.png" alt="Home: the problems to fix, grouped by cause and ranked by severity" />
+    <figcaption>Home: what to fix, grouped by cause and ranked by severity.</figcaption>
   </figure>
   <figure>
-    <img src="/screenshots/agent-security.png" alt="AI assistants — secrets and risky agent config" />
-    <figcaption>AI assistants — leaked secrets and risky agent configuration, with redaction.</figcaption>
+    <img src="/screenshots/fix.png" alt="An opened problem: why it matters, a one-click fix, and details" />
+    <figcaption>Open a problem: why it matters, the one-click fix, then the details.</figcaption>
   </figure>
   <figure>
-    <img src="/screenshots/compliance.png" alt="Checkups — configuration findings grouped by subsystem" />
-    <figcaption>Checkups — configuration findings by subsystem, each with the exact fix.</figcaption>
+    <img src="/screenshots/overview-dark.png" alt="Home in dark mode" />
+    <figcaption>Dark mode, following your desktop or set by hand.</figcaption>
   </figure>
   <figure>
-    <img src="/screenshots/settings.png" alt="Settings — theme, accent and sidebar colour pickers" />
-    <figcaption>Settings — theme, accent and sidebar colour, monitoring cadence, SSH tools.</figcaption>
+    <img src="/screenshots/antivirus.png" alt="Virus scan with ClamAV, showing a detected test file" />
+    <figcaption>Virus scan: ClamAV with live progress and folder watching.</figcaption>
   </figure>
 </div>
 
 </section>
 
 <section class="bw-cta" aria-label="Get Bulwark">
-  <h2>Harden your Linux machine in one scan.</h2>
+  <h2>Find the keys and holes attackers look for first.</h2>
   <p>Free, open source, and everything stays on your computer.</p>
   <div class="bw-cta-actions">
     <a class="bw-btn bw-btn-brand" href="/download">Download Bulwark</a>
-    <a class="bw-btn bw-btn-alt" href="https://github.com/vietanhdev/bulwark">View on GitHub</a>
+    <a class="bw-btn bw-btn-alt" href="/checks/">Browse every check</a>
   </div>
 </section>
 
@@ -338,17 +339,17 @@ hero:
   grid-column: 1;
   grid-row: span 2;
   position: relative;
-  border-color: color-mix(in srgb, #db4f1c 30%, var(--vp-c-divider));
+  border-color: color-mix(in srgb, #1f8a8c 30%, var(--vp-c-divider));
   background:
-    radial-gradient(90% 70% at 100% 0%, color-mix(in srgb, #db4f1c 12%, transparent), transparent 70%),
+    radial-gradient(90% 70% at 100% 0%, color-mix(in srgb, #1f8a8c 12%, transparent), transparent 70%),
     var(--vp-c-bg-soft);
 }
 .bw-card-hero .bw-card-icon {
-  color: #c2410c;
-  background: color-mix(in srgb, #db4f1c 15%, transparent);
+  color: var(--vp-c-brand-1);
+  background: color-mix(in srgb, #1f8a8c 15%, transparent);
 }
 .dark .bw-card-hero .bw-card-icon {
-  color: #fb923c;
+  color: var(--vp-c-brand-1);
 }
 .bw-card-hero h3 {
   font-size: 1.4rem;
@@ -362,14 +363,14 @@ hero:
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: #c2410c;
-  background: color-mix(in srgb, #db4f1c 14%, transparent);
+  color: var(--vp-c-brand-1);
+  background: color-mix(in srgb, #1f8a8c 14%, transparent);
   padding: 0.28rem 0.7rem;
   border-radius: 999px;
   margin-bottom: 1rem;
 }
 .dark .bw-card-tag {
-  color: #fdba74;
+  color: var(--vp-c-brand-1);
 }
 /* The two stacked cards after the hero fall into the right column beside the tall hero tile;
    the remaining four flow as two balanced rows underneath. Auto-placement handles the rest. */
@@ -407,6 +408,12 @@ hero:
   color: var(--vp-c-text-2);
 }
 .bw-how .bw-steps { position: relative; }
+.bw-step code {
+  font-size: 0.82em;
+  padding: 0.1em 0.4em;
+  border-radius: 5px;
+  background: var(--vp-c-default-soft);
+}
 
 /* Colours fan (unchanged behaviour, restyled container). */
 .bw-fan {

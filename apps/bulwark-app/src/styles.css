@@ -41,23 +41,23 @@
   --ink-muted: oklch(0.69 0.03 350);
   --ink-border: oklch(1 0 0 / 12%);
 
-  /* Workspace — Yaru paper. A near-neutral warm grey (the teal cast is gone), so the surfaces
-     read as the host desktop's own rather than a custom theme. Card stays pure white. */
-  --background: oklch(0.965 0.004 70);
-  --foreground: oklch(0.2 0.008 60);
+  /* Workspace — near-neutral paper with a faint cool cast, so it sits with the default graphite
+     chrome instead of reading warm beside it. Card stays pure white. */
+  --background: oklch(0.965 0.006 260);
+  --foreground: oklch(0.2 0.01 260);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.2 0.008 60);
+  --card-foreground: oklch(0.2 0.01 260);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.2 0.008 60);
+  --popover-foreground: oklch(0.2 0.01 260);
 
   /* Ubuntu Orange (#E95420) — the default Yaru accent. Drives buttons, the active nav rail,
      links, focus rings. */
   --primary: oklch(0.646 0.19 41);
   --primary-foreground: oklch(0.99 0.02 60);
-  --secondary: oklch(0.95 0.005 70);
-  --secondary-foreground: oklch(0.26 0.008 60);
-  --muted: oklch(0.95 0.005 70);
-  --muted-foreground: oklch(0.5 0.008 60);
+  --secondary: oklch(0.95 0.007 260);
+  --secondary-foreground: oklch(0.26 0.01 260);
+  --muted: oklch(0.95 0.007 260);
+  --muted-foreground: oklch(0.5 0.01 260);
   --accent: oklch(0.95 0.03 55);
   --accent-foreground: oklch(0.45 0.13 42);
   --destructive: oklch(0.585 0.205 27);
@@ -65,8 +65,8 @@
   /* Softened one step (was 0.9) so a card reads as lifted by its shadow rather than boxed in by a
      hard outline — the border is now a hairline that pairs with the elevation instead of competing
      with it. */
-  --border: oklch(0.925 0.005 70);
-  --input: oklch(0.9 0.006 70);
+  --border: oklch(0.925 0.007 260);
+  --input: oklch(0.9 0.008 260);
   --ring: oklch(0.646 0.19 41 / 0.5);
 
   /* Corner radius scale. Bumped from 0.5rem for a softer, more modern feel — this one token
@@ -101,6 +101,7 @@
      the sRGB gamut — an out-of-gamut oklch() gets silently mapped by the browser, which would
      mean the colour you verified is not the colour that ships. Hues are unchanged from the
      original token set; only lightness/chroma moved. */
+  --sev-ring: 22%;
   --sev-critical: oklch(0.585 0.205 27);
   --sev-critical-tint: oklch(0.95 0.025 27);
   --sev-critical-fg: oklch(0.48 0.14 27);
@@ -131,30 +132,29 @@
   --ink-muted: oklch(0.62 0.028 350);
   --ink-border: oklch(1 0 0 / 8%);
 
-  --background: oklch(0.205 0.008 60);
-  --foreground: oklch(0.93 0.006 60);
-  /* Pinned LIGHTNESS: the dark severity triads were solved for contrast against this card's
-     luminance. Hue/chroma moved from teal to warm-neutral to drop the teal cast, but L=0.235 is
-     unchanged, so the rail's 3:1-against-card and the self-contained tint/fg chips still hold
-     (verified with a computed-contrast pass). */
-  --card: oklch(0.235 0.008 60);
-  --card-foreground: oklch(0.93 0.006 60);
-  --popover: oklch(0.235 0.008 60);
-  --popover-foreground: oklch(0.93 0.006 60);
+  --background: oklch(0.175 0.016 252);
+  --foreground: oklch(0.95 0.006 250);
+  /* Night palette: deep blue-slate layers (field 0.175 → card 0.215 → popover 0.24) so depth
+     reads at a glance. The severity triads below were re-solved against this card: every rail
+     clears 3:1 on it and every chip's text clears 4.5:1 on its own tint. */
+  --card: oklch(0.215 0.018 252);
+  --card-foreground: oklch(0.95 0.006 250);
+  --popover: oklch(0.24 0.02 252);
+  --popover-foreground: oklch(0.95 0.006 250);
 
   /* Ubuntu Orange, brightened for the dark canvas; dark text on it for AA. */
   --primary: oklch(0.72 0.16 46);
   --primary-foreground: oklch(0.18 0.03 42);
-  --secondary: oklch(0.28 0.008 60);
-  --secondary-foreground: oklch(0.93 0.006 60);
-  --muted: oklch(0.28 0.008 60);
-  --muted-foreground: oklch(0.66 0.01 60);
+  --secondary: oklch(0.26 0.02 252);
+  --secondary-foreground: oklch(0.95 0.006 250);
+  --muted: oklch(0.25 0.018 252);
+  --muted-foreground: oklch(0.72 0.018 250);
   --accent: oklch(0.32 0.06 45);
-  --accent-foreground: oklch(0.88 0.08 50);
+  --accent-foreground: oklch(0.88 0.07 50);
   --destructive: oklch(0.715 0.178 27);
   --destructive-foreground: oklch(0.16 0.02 27);
-  --border: oklch(1 0 0 / 8%);
-  --input: oklch(1 0 0 / 14%);
+  --border: oklch(0.8 0.03 230 / 9%);
+  --input: oklch(0.8 0.03 230 / 15%);
   --ring: oklch(0.72 0.16 46 / 0.5);
 
   /* Dark elevation: a shadow alone barely registers dark-on-dark, so each layer also carries a
@@ -171,26 +171,27 @@
     0 6px 12px -4px oklch(0 0 0 / 0.6), 0 20px 48px -10px oklch(0 0 0 / 0.7),
     inset 0 1px 0 0 oklch(1 0 0 / 0.06);
   --elevate-inset: inset 0 1px 3px oklch(0 0 0 / 0.4);
-  --layer-border: oklch(1 0 0 / 7%);
+  --layer-border: oklch(0.85 0.04 220 / 8%);
 
-  --sev-critical: oklch(0.715 0.178 27);
-  --sev-critical-tint: oklch(0.31 0.062 27);
-  --sev-critical-fg: oklch(0.86 0.076 27);
-  --sev-high: oklch(0.715 0.175 41);
-  --sev-high-tint: oklch(0.31 0.062 41);
-  --sev-high-fg: oklch(0.86 0.079 41);
-  --sev-medium: oklch(0.715 0.145 70);
-  --sev-medium-tint: oklch(0.31 0.062 70);
-  --sev-medium-fg: oklch(0.86 0.109 70);
-  --sev-low: oklch(0.715 0.15 255);
-  --sev-low-tint: oklch(0.31 0.062 255);
-  --sev-low-fg: oklch(0.86 0.07 255);
-  --sev-info: oklch(0.715 0.022 220);
-  --sev-info-tint: oklch(0.31 0.022 220);
-  --sev-info-fg: oklch(0.86 0.022 220);
-  --sev-resolved: oklch(0.715 0.15 149);
-  --sev-resolved-tint: oklch(0.31 0.062 149);
-  --sev-resolved-fg: oklch(0.86 0.13 149);
+  --sev-ring: 55%;
+  --sev-critical: oklch(0.7 0.19 22);
+  --sev-critical-tint: oklch(0.28 0.08 22);
+  --sev-critical-fg: oklch(0.85 0.08 22);
+  --sev-high: oklch(0.75 0.16 50);
+  --sev-high-tint: oklch(0.29 0.065 50);
+  --sev-high-fg: oklch(0.86 0.085 55);
+  --sev-medium: oklch(0.8 0.15 85);
+  --sev-medium-tint: oklch(0.29 0.055 85);
+  --sev-medium-fg: oklch(0.88 0.12 88);
+  --sev-low: oklch(0.72 0.14 255);
+  --sev-low-tint: oklch(0.28 0.07 258);
+  --sev-low-fg: oklch(0.85 0.075 255);
+  --sev-info: oklch(0.72 0.03 250);
+  --sev-info-tint: oklch(0.27 0.025 250);
+  --sev-info-fg: oklch(0.85 0.025 250);
+  --sev-resolved: oklch(0.76 0.15 158);
+  --sev-resolved-tint: oklch(0.27 0.05 165);
+  --sev-resolved-fg: oklch(0.86 0.11 160);
 }
 
 /* ── Accent variants (Yaru-style) ──────────────────────────────────────────────
@@ -208,9 +209,11 @@
   --accent-foreground: oklch(0.42 0.08 195);
 }
 .dark[data-accent="aqua"] {
-  --primary: oklch(0.74 0.09 195);
-  --primary-foreground: oklch(0.17 0.03 195);
-  --ring: oklch(0.74 0.09 195 / 0.5);
+  --primary: oklch(0.8 0.13 185);
+  --primary-foreground: oklch(0.2 0.035 200);
+  --ring: oklch(0.8 0.13 185 / 0.5);
+  --accent: oklch(0.31 0.045 195);
+  --accent-foreground: oklch(0.88 0.07 195);
 }
 [data-accent="blue"] {
   --primary: oklch(0.55 0.16 258);
@@ -223,6 +226,8 @@
   --primary: oklch(0.7 0.14 258);
   --primary-foreground: oklch(0.17 0.03 258);
   --ring: oklch(0.7 0.14 258 / 0.5);
+  --accent: oklch(0.31 0.045 258);
+  --accent-foreground: oklch(0.88 0.07 258);
 }
 [data-accent="green"] {
   --primary: oklch(0.53 0.15 150);
@@ -235,6 +240,8 @@
   --primary: oklch(0.7 0.16 150);
   --primary-foreground: oklch(0.16 0.03 150);
   --ring: oklch(0.7 0.16 150 / 0.5);
+  --accent: oklch(0.31 0.045 150);
+  --accent-foreground: oklch(0.88 0.07 150);
 }
 [data-accent="pink"] {
   --primary: oklch(0.57 0.19 330);
@@ -247,6 +254,8 @@
   --primary: oklch(0.73 0.16 330);
   --primary-foreground: oklch(0.17 0.03 330);
   --ring: oklch(0.73 0.16 330 / 0.5);
+  --accent: oklch(0.31 0.045 330);
+  --accent-foreground: oklch(0.88 0.07 330);
 }
 [data-accent="aubergine"] {
   --primary: oklch(0.42 0.15 342);
@@ -259,6 +268,8 @@
   --primary: oklch(0.64 0.16 342);
   --primary-foreground: oklch(0.16 0.03 342);
   --ring: oklch(0.64 0.16 342 / 0.5);
+  --accent: oklch(0.31 0.045 342);
+  --accent-foreground: oklch(0.88 0.07 342);
 }
 [data-accent="red"] {
   --primary: oklch(0.54 0.2 27);
@@ -271,6 +282,8 @@
   --primary: oklch(0.68 0.19 27);
   --primary-foreground: oklch(0.16 0.03 27);
   --ring: oklch(0.68 0.19 27 / 0.5);
+  --accent: oklch(0.31 0.045 27);
+  --accent-foreground: oklch(0.88 0.07 27);
 }
 [data-accent="yellow"] {
   --primary: oklch(0.8 0.15 82);
@@ -283,6 +296,8 @@
   --primary: oklch(0.84 0.15 85);
   --primary-foreground: oklch(0.18 0.04 85);
   --ring: oklch(0.84 0.15 85 / 0.5);
+  --accent: oklch(0.31 0.045 85);
+  --accent-foreground: oklch(0.88 0.07 85);
 }
 
 /* ── Chrome colour (sidebar + titlebar) ────────────────────────────────────────
@@ -346,10 +361,10 @@
   --ink-muted: oklch(0.69 0.008 260);
 }
 .dark[data-chrome="graphite"] {
-  --ink: oklch(0.17 0.005 260);
-  --ink-raised: oklch(0.23 0.006 260);
-  --ink-fg: oklch(0.9 0.004 260);
-  --ink-muted: oklch(0.62 0.008 260);
+  --ink: oklch(0.145 0.014 252);
+  --ink-raised: oklch(0.215 0.02 252);
+  --ink-fg: oklch(0.93 0.008 250);
+  --ink-muted: oklch(0.66 0.018 250);
 }
 
 @theme inline {
@@ -428,6 +443,14 @@
   border-radius: 8px;
   overflow: hidden;
   border: 1px solid var(--ink-border);
+}
+
+/* Dark mode gets a faint glow of the accent across the top of the workspace, so the night palette
+   has a light source instead of being a flat field. Light mode stays plain paper. */
+.dark .app-shell main {
+  background:
+    radial-gradient(65% 55% at 55% 0%, color-mix(in oklch, var(--primary) 11%, transparent), transparent 72%),
+    radial-gradient(45% 40% at 100% 0%, color-mix(in oklch, var(--sev-low) 9%, transparent), transparent 70%);
 }
 
 /* ── Defense-in-depth layers ───────────────────────────────────────────────────

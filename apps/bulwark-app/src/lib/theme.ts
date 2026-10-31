@@ -11,8 +11,8 @@ export type Chrome = "aubergine" | "teal" | "blue" | "green" | "indigo" | "graph
 
 /** Accent metadata for the picker — label + a representative swatch colour (its light-mode primary). */
 export const ACCENTS: { id: Accent; label: string; swatch: string }[] = [
-  { id: "orange", label: "Orange", swatch: "oklch(0.646 0.19 41)" },
   { id: "aqua", label: "Aqua", swatch: "oklch(0.54 0.09 195)" },
+  { id: "orange", label: "Orange", swatch: "oklch(0.646 0.19 41)" },
   { id: "blue", label: "Blue", swatch: "oklch(0.55 0.16 258)" },
   { id: "green", label: "Green", swatch: "oklch(0.53 0.15 150)" },
   { id: "yellow", label: "Yellow", swatch: "oklch(0.8 0.15 82)" },
@@ -23,13 +23,20 @@ export const ACCENTS: { id: Accent; label: string; swatch: string }[] = [
 
 /** Chrome (sidebar + titlebar) colour options. The swatch is the light-mode `--ink` tint. */
 export const CHROMES: { id: Chrome; label: string; swatch: string }[] = [
+  { id: "graphite", label: "Graphite", swatch: "oklch(0.24 0.006 260)" },
   { id: "aubergine", label: "Aubergine", swatch: "oklch(0.22 0.07 350)" },
   { id: "teal", label: "Teal", swatch: "oklch(0.22 0.055 195)" },
   { id: "blue", label: "Blue", swatch: "oklch(0.23 0.06 258)" },
   { id: "green", label: "Green", swatch: "oklch(0.23 0.055 150)" },
   { id: "indigo", label: "Indigo", swatch: "oklch(0.23 0.07 290)" },
-  { id: "graphite", label: "Graphite", swatch: "oklch(0.24 0.006 260)" },
 ];
+
+// Defaults: a teal accent on a neutral graphite sidebar. Every other hue already means something
+// here (red important, orange should fix, blue minor, green fixed), so an orange or blue primary
+// button read as a severity. Teal says "action" and nothing else. Ubuntu's orange/aubergine and the
+// other accents remain one click away in Settings.
+export const DEFAULT_ACCENT: Accent = "aqua";
+export const DEFAULT_CHROME: Chrome = "graphite";
 
 const THEME_KEY = "bulwark-theme";
 const ACCENT_KEY = "bulwark-accent";
@@ -45,12 +52,12 @@ export function getStoredTheme(): ThemeMode {
 
 export function getStoredAccent(): Accent {
   const v = localStorage.getItem(ACCENT_KEY) as Accent | null;
-  return v && ACCENTS.some((a) => a.id === v) ? v : "orange";
+  return v && ACCENTS.some((a) => a.id === v) ? v : DEFAULT_ACCENT;
 }
 
 export function getStoredChrome(): Chrome {
   const v = localStorage.getItem(CHROME_KEY) as Chrome | null;
-  return v && CHROMES.some((c) => c.id === v) ? v : "aubergine";
+  return v && CHROMES.some((c) => c.id === v) ? v : DEFAULT_CHROME;
 }
 
 /** Whether the given mode resolves to a dark appearance right now. */

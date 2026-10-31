@@ -1,10 +1,12 @@
 mod authorized_keys;
 pub(crate) mod banners;
 mod clamav;
+mod credential_stores;
 mod cron;
 pub mod file_integrity;
 mod file_permissions;
 mod grub;
+mod host_firewall;
 mod logging;
 mod login_defs;
 mod mac;
@@ -13,6 +15,7 @@ mod module_blacklist;
 mod network_interfaces;
 mod ports;
 mod process_accounting;
+mod python_startup;
 mod shell_history;
 pub(crate) mod ssh_keys;
 pub use ssh_keys::{
@@ -26,7 +29,7 @@ mod windows_persistence;
 
 use crate::models::{Fact, OperatingSystem};
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const LINUX_ONLY: &[OperatingSystem] = &[OperatingSystem::Linux];
 
@@ -44,6 +47,38 @@ pub(crate) fn read_capped(path: &Path) -> std::io::Result<String> {
     let mut buf = Vec::new();
     f.take(MAX_COLLECTOR_READ_BYTES).read_to_end(&mut buf)?;
     Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// Home directories of the people a scan is about. Under a privileged scan `$HOME` is root's, so
+/// the invoking user's home is added too: `SUDO_USER` for sudo, `PKEXEC_UID` for pkexec (how the
+/// GUI elevates). Only directories that exist are returned, deduplicated, in a stable order.
+pub(crate) fn user_homes() -> Vec<PathBuf> {
+    let mut homes: Vec<PathBuf> = Vec::new();
+    if let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty()) {
+        homes.push(PathBuf::from(home));
+    }
+    let passwd = std::fs::read_to_string("/etc/passwd").unwrap_or_default();
+    if let Ok(user) = std::env::var("SUDO_USER") {
+        homes.extend(passwd_home(&passwd, |name, _| name == user));
+    }
+    if let Ok(uid) = std::env::var("PKEXEC_UID") {
+        homes.extend(passwd_home(&passwd, |_, id| id == uid));
+    }
+    let mut out: Vec<PathBuf> = Vec::new();
+    for h in homes {
+        if h.is_dir() && !out.contains(&h) {
+            out.push(h);
+        }
+    }
+    out
+}
+
+/// The home directory of the first `/etc/passwd` entry matching `pred(name, uid)`.
+fn passwd_home(passwd: &str, pred: impl Fn(&str, &str) -> bool) -> Option<PathBuf> {
+    passwd.lines().find_map(|line| {
+        let f: Vec<&str> = line.split(':').collect();
+        (f.len() >= 6 && pred(f[0], f[2])).then(|| PathBuf::from(f[5]))
+    })
 }
 
 /// A collector produces zero or more fact rows describing one slice of host state.
@@ -103,6 +138,10 @@ pub fn all_collectors() -> Vec<Box<dyn Collector>> {
         Box::new(grub::GrubPasswordCollector),
         Box::new(macos_launchd::LaunchdPersistenceCollector),
         Box::new(windows_persistence::WindowsRunKeysCollector),
+        Box::new(credential_stores::CredentialStoresCollector),
+        Box::new(python_startup::PythonStartupHooksCollector),
+        Box::new(python_startup::SupplyChainIocsCollector),
+        Box::new(host_firewall::HostFirewallCollector),
     ]
 }
 
@@ -113,7 +152,7 @@ mod tests {
     #[test]
     fn all_collectors_have_unique_non_empty_names() {
         let collectors = all_collectors();
-        assert_eq!(collectors.len(), 23);
+        assert_eq!(collectors.len(), 27);
         let mut names: Vec<&str> = collectors.iter().map(|c| c.name()).collect();
         names.sort_unstable();
         names.dedup();
@@ -124,5 +163,19 @@ mod tests {
              in engine::run_scan's facts_by_collector map"
         );
         assert!(names.iter().all(|n| !n.is_empty()));
+    }
+
+    #[test]
+    fn passwd_home_matches_by_name_or_uid() {
+        let passwd = "root:x:0:0:root:/root:/bin/bash\nana:x:1000:1000::/home/ana:/bin/zsh\n";
+        assert_eq!(
+            passwd_home(passwd, |n, _| n == "ana"),
+            Some(PathBuf::from("/home/ana"))
+        );
+        assert_eq!(
+            passwd_home(passwd, |_, id| id == "1000"),
+            Some(PathBuf::from("/home/ana"))
+        );
+        assert_eq!(passwd_home(passwd, |_, id| id == "42"), None);
     }
 }

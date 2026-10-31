@@ -1,37 +1,60 @@
-# Bulwark
+<p align="center">
+  <img src="apps/bulwark-app/src-tauri/icons/icon.svg" alt="Bulwark logo: an aqua shield with a battlement top on a graphite tile" width="112" height="112">
+</p>
 
-[![CI](https://github.com/vietanhdev/bulwark/actions/workflows/ci.yml/badge.svg)](https://github.com/vietanhdev/bulwark/actions/workflows/ci.yml)
-[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Docs](https://img.shields.io/badge/docs-bulwark.nrl.ai-007372)](https://bulwark.nrl.ai)
+<h1 align="center">Bulwark</h1>
 
-Security & antivirus for your Linux computer — desktops and servers alike. Bulwark checks a
-machine's real configuration (SSH, sudo, kernel, cron, permissions, persistence), scans for viruses
-with ClamAV, and — the part no other scanner does — watches your **AI coding assistants** (Claude
-Code, Cursor, Copilot, Codex, Gemini) for API keys leaked into transcripts and for agent config a
-prompt injection could turn into code execution. Every finding is in plain language, sorted by how
-much it matters, with a **one-click, reversible fix**. It scans other machines over SSH too.
+<p align="center">
+  <strong>Security scanner for Linux developer machines and servers.</strong><br>
+  Plaintext keys, risky packages, exposed dev services and AI-assistant leaks, explained in plain language and fixed in one click.
+</p>
 
-Built with Tauri v2 + Rust + React. One rule engine, one rule pack, two front-doors: `bulwarkctl`
-(CLI) and the desktop app. Fully local — no telemetry, nothing leaves the machine.
+<p align="center">
+  <a href="https://github.com/vietanhdev/bulwark/actions/workflows/ci.yml"><img src="https://github.com/vietanhdev/bulwark/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License: Apache 2.0"></a>
+  <a href="https://bulwark.nrl.ai"><img src="https://img.shields.io/badge/docs-bulwark.nrl.ai-1f8a8c" alt="Docs"></a>
+  <a href="https://bulwark.nrl.ai/checks/"><img src="https://img.shields.io/badge/checks-93-1f8a8c" alt="93 checks"></a>
+</p>
+
+Bulwark looks where attacks on developer machines start: long-lived cloud keys and Git or Docker
+passwords stored in plain text, SSH keys without a passphrase, Python startup hooks and known
+malicious-package traces, dev databases listening on every network interface, and API keys pasted
+into **AI coding assistant** sessions and memory (Claude Code, Cursor, Copilot, Codex, Gemini and
+more). It also checks SSH, sudo, kernel, persistence and file permissions, and scans for viruses
+with ClamAV.
+
+Problems are grouped by cause and ranked by severity. Each one says why it matters in a sentence
+and offers the fix: one click when Bulwark can do it safely (previewed and backed up), numbered
+steps with copyable commands otherwise. [Every check has its own page](https://bulwark.nrl.ai/checks/)
+with the full explanation. It scans other machines over SSH too.
+
+Built with Tauri v2 + Rust + React. One rule engine, one rule pack, two front-doors: the desktop
+app and the CLI (`bulwark` when installed with the app, `bulwarkctl` from the CLI-only package).
+Fully local — no telemetry, nothing leaves the machine.
 
 ## Demo
 
-![Bulwark in action — run a scan, read plain-language findings, catch an API key leaked into an AI assistant, and theme the app to match your desktop](docs/public/demo.gif)
+![Bulwark in action: run a scan, open a problem and its one-click fix, and switch between light and dark](docs/public/demo.gif)
 
 ## Screenshots
 
-![Overview — the host's verdict, its hardening index, and every finding with a copyable fix](docs/public/screenshots/overview.png)
-![Agent Security — secrets leaked into AI assistant context, and agent config a prompt injection could exploit](docs/public/screenshots/agent-security.png)
-![Antivirus — ClamAV signature scanning and real-time folder watching](docs/public/screenshots/antivirus.png)
-![Compliance — every configuration finding on the host, grouped by subsystem, each with the reason it matters and the exact command to fix it](docs/public/screenshots/compliance.png)
-![Rules — the full rule pack, searchable and filterable by severity, with CIS/MITRE ATT&CK framework coverage in a second tab](docs/public/screenshots/rules.png)
+| | |
+|---|---|
+| ![Home: the problems to fix on this machine, grouped by cause and ranked by severity](docs/public/screenshots/overview.png) | ![An opened problem: why it matters, the one-click fix, and details](docs/public/screenshots/fix.png) |
+| **Home** — problems grouped by cause, ranked by severity | **Fix** — why it matters, the one-click fix, then details |
+| ![Home in dark mode](docs/public/screenshots/overview-dark.png) | ![Virus scan: ClamAV signature status, folder watching, and a finished scan](docs/public/screenshots/antivirus.png) |
+| **Dark mode** — follows your desktop or set by hand | **Virus scan** — ClamAV with live progress and folder watching |
+| ![All checks: the full rule pack, searchable and filterable by severity](docs/public/screenshots/rules.png) | ![Settings: theme, accent and sidebar colour, monitoring, AI assistant checks](docs/public/screenshots/settings.png) |
+| **All checks** — every rule, searchable, with CIS / MITRE ATT&CK coverage | **Settings** — light or dark, eight accents, six sidebar colours |
 
 ## Features
 
-- **65 rules** across 11 categories (SSH/remote access, persistence, network egress, kernel
-  hardening, filesystem permissions, privilege escalation, logging/auditing, accounts/services,
-  defense evasion, rootkit/malware, file integrity), each carrying a severity, a plain-language
-  explanation with live values interpolated in, a one-line fix, and CIS/MITRE ATT&CK references.
+- **73 rules** across 12 categories (credential exposure, SSH/remote access, persistence, network
+  egress, kernel hardening, filesystem permissions, privilege escalation, logging/auditing,
+  accounts/services, defense evasion, rootkit/malware, file integrity), each carrying a severity,
+  a plain-language explanation with live values interpolated in, step-by-step fix, and CIS/MITRE
+  ATT&CK references. Every check, including the 20 AI assistant checks, has its own page at
+  [bulwark.nrl.ai/checks](https://bulwark.nrl.ai/checks/).
 - **AI assistant security** — scans the AI coding assistants on the machine (Claude Code, Cursor,
   Copilot, Codex, Gemini, Aider, Continue, Windsurf, Cline, Amazon Q) for secrets leaked into
   context/memory/transcripts and for dangerous agent configuration a prompt injection could turn

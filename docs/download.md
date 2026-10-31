@@ -90,7 +90,7 @@ Run `uname -m`. `x86_64` (also called amd64) is a typical desktop, laptop or clo
 
 ## Desktop app
 
-The GUI: dashboard, ClamAV scanning with real-time protection, compliance view, and scan history.
+The desktop app: one scan for secrets, packages, exposed services, AI assistants, OS settings and viruses, with one-click fixes. It also installs the command-line tool as `bulwark`.
 
 <div class="dl-grid">
   <a class="dl-card" :href="url(is.guiDeb)">
@@ -108,18 +108,28 @@ The GUI: dashboard, ClamAV scanning with real-time protection, compliance view, 
 </div>
 
 ```bash
-# Debian / Ubuntu
-sudo dpkg -i bulwark-desktop_*_amd64.deb        # x86_64
-sudo dpkg -i bulwark-desktop_*_arm64.deb        # arm64
+# Debian / Ubuntu (apt also installs the libraries the app needs)
+sudo apt install ./bulwark-desktop_*_amd64.deb  # x86_64
+sudo apt install ./bulwark-desktop_*_arm64.deb  # arm64
 
 # Fedora / RHEL
-sudo rpm -i bulwark-desktop-*.x86_64.rpm        # x86_64
-sudo rpm -i bulwark-desktop-*.aarch64.rpm       # arm64
+sudo dnf install ./bulwark-desktop-*.x86_64.rpm   # x86_64
+sudo dnf install ./bulwark-desktop-*.aarch64.rpm  # arm64
 
 # AppImage — portable, nothing to install
 chmod +x bulwark-desktop-*-x86_64.AppImage      # x86_64 (arm64: -aarch64.AppImage)
 ./bulwark-desktop-*-x86_64.AppImage
 ```
+
+Open **Bulwark** from your applications menu and click **Scan now**. The same scan from a
+terminal:
+
+```bash
+bulwark scan        # the desktop package names its CLI `bulwark`
+bulwark ai scan     # only the AI assistant checks
+```
+
+To upgrade, install the newer package the same way; your scan history and settings are kept.
 
 Direct arm64 downloads:
 <span v-if="find(is.guiDebArm)"><a :href="url(is.guiDebArm)">.deb</a> · </span><span v-if="find(is.guiRpmArm)"><a :href="url(is.guiRpmArm)">.rpm</a> · </span><a :href="url(is.guiAppImageArm)">AppImage</a>
@@ -140,8 +150,9 @@ integration and all.
 
 ## CLI
 
-`bulwarkctl` scans from a terminal — no display session, so it works over plain SSH on a
-headless box. Same engine and same rule pack as the GUI.
+For servers and headless machines, the CLI-only package installs `bulwarkctl`: no display
+session needed, so it works over plain SSH. Same engine and same checks as the desktop app.
+(If you installed the desktop app, you already have the CLI as `bulwark`.)
 
 <div class="dl-grid">
   <a class="dl-card" :href="url(is.cliDeb)">
@@ -160,12 +171,14 @@ headless box. Same engine and same rule pack as the GUI.
 
 ```bash
 # x86_64
-sudo dpkg -i bulwarkctl_*_amd64.deb    # or: sudo rpm -i bulwarkctl-*.x86_64.rpm
+sudo apt install ./bulwarkctl_*_amd64.deb    # or: sudo dnf install ./bulwarkctl-*.x86_64.rpm
 
 # arm64
-sudo dpkg -i bulwarkctl_*_arm64.deb    # or: sudo rpm -i bulwarkctl-*.aarch64.rpm
+sudo apt install ./bulwarkctl_*_arm64.deb    # or: sudo dnf install ./bulwarkctl-*.aarch64.rpm
 
-bulwarkctl scan
+bulwarkctl scan                  # checks that need no root
+sudo bulwarkctl scan --privileged   # adds the checks that read root-only files
+bulwarkctl scan --ssh user@host  # scan a server over your existing SSH
 ```
 
 Direct arm64 downloads:

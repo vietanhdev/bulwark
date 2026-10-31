@@ -1,0 +1,18 @@
+id: BLWK-NET-004
+title: No host firewall is filtering incoming connections
+category: network-egress
+severity: medium
+collector: host_firewall
+# firewall_known is true only when the kernel packet filter was actually listed (root), so a scan
+# that couldn't look never reports the firewall as off.
+condition: firewall_active == false and firewall_known == true
+explain: >
+  No firewall is blocking incoming connections, so every service that listens on the network can be
+  reached from any network you join. A firewall is your safety net for the service you forgot was running.
+fix: |
+  Turn on a firewall that blocks incoming connections by default.
+  1. Ubuntu and Debian: 'sudo ufw default deny incoming', then 'sudo ufw enable'.
+  2. If you log in to this machine remotely, allow SSH first: 'sudo ufw allow OpenSSH'.
+  3. Fedora and RHEL: 'sudo systemctl enable --now firewalld'.
+  Note: Docker opens its ports around ufw, so also bind containers to 127.0.0.1.
+references: [CIS-3.5, ATTACK-T1133]

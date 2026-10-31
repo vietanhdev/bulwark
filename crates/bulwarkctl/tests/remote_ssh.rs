@@ -7,6 +7,7 @@
 //! cleaning up a pushed temp dir. We do that by putting a **mock `ssh` and `scp`** on `PATH` that
 //! records every invocation and replays a canned ScanRun for the `scan --json` call, then driving
 //! the real compiled binary against it.
+#![cfg(unix)]
 
 use std::fs;
 use std::path::{Path, PathBuf};

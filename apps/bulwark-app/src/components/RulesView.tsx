@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Ban, Check, ChevronRight, History, RotateCcw, Search, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Callout } from "@/components/ui/callout";
-import { CommandBlock } from "@/components/ui/copy-button";
+import { FixSteps } from "@/components/FixSteps";
 import { PageShell, SectionLabel } from "@/components/PageShell";
 import { HardeningRing } from "@/components/HardeningRing";
 import {
@@ -16,6 +16,7 @@ import {
 } from "@/components/Severity";
 import { computeHardeningIndex } from "@/lib/hardening";
 import { useRevision } from "@/lib/revision";
+import { withPlaceholders } from "@/lib/fix-text";
 import { cn } from "@/lib/utils";
 
 interface RuleSummary {
@@ -423,8 +424,11 @@ export function RulesView() {
                             <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
                               {reference}
                             </span>
-                            <span className="min-w-0 flex-1 truncate text-sm" title={rule.title}>
-                              {rule.title}
+                            <span
+                              className="min-w-0 flex-1 truncate text-sm"
+                              title={withPlaceholders(rule.title)}
+                            >
+                              {withPlaceholders(rule.title)}
                             </span>
                           </div>
                         );
@@ -556,7 +560,9 @@ export function RulesView() {
                                     carried by the severity rail, the severity label and the
                                     colour contrast against the muted mono ID beneath; the
                                     title does not need to shout as well. */}
-                                    <span className="block truncate text-sm">{r.title}</span>
+                                    <span className="block truncate text-sm">
+                                      {withPlaceholders(r.title)}
+                                    </span>
                                     <span className="mt-0.5 flex items-center gap-1.5">
                                       <span className="font-mono text-[11px] text-muted-foreground">
                                         {r.id}
@@ -594,7 +600,7 @@ export function RulesView() {
                                     <p className="text-xs leading-relaxed text-muted-foreground">
                                       {r.explain.trim()}
                                     </p>
-                                    <CommandBlock command={r.fix} className="mt-2.5 bg-card" />
+                                    <FixSteps text={r.fix} className="mt-2.5 bg-card" />
                                     {/* Which standards this one rule is evidence for. Answers the
                                     question an auditor actually asks — "why does this check
                                     matter to me?" — without making the reader cross-reference the

@@ -279,6 +279,7 @@ fn build_finding(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
     use crate::models::Severity;
     use std::io::Cursor;
     use std::path::PathBuf;
@@ -304,6 +305,7 @@ mod tests {
         run_log_scan(&bundled("decoders"), &bundled("log-rules"), &mut src)
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn bundled_pack_loads_and_every_rule_targets_a_real_decoder() {
         let (decoders, derr) = load_decoders(&bundled("decoders"));
@@ -324,6 +326,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn brute_force_burst_fires_ssh_001_once_high() {
         let mut burst = String::new();
@@ -374,6 +377,7 @@ mod tests {
         assert!(scan.findings.is_empty(), "got: {:?}", scan.findings);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn successful_root_login_fires_but_a_normal_user_login_does_not() {
         let scan = scan_bundled(

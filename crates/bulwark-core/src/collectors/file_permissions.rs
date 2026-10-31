@@ -1,7 +1,6 @@
 use super::Collector;
 use crate::models::Fact;
 use serde_json::Value;
-use std::os::unix::fs::PermissionsExt;
 
 pub struct FilePermissionsCollector;
 
@@ -40,8 +39,11 @@ impl Collector for FilePermissionsCollector {
             // A watched path that doesn't exist on this distro (e.g. no /etc/sudoers on a
             // machine that only uses /etc/sudoers.d) is skipped, not an error — existence
             // varies legitimately across distros.
-            if let Ok(meta) = std::fs::metadata(path) {
-                rows.push(describe_mode(path, meta.permissions().mode()));
+            if let Some(mode) = std::fs::metadata(path)
+                .ok()
+                .and_then(|m| crate::platform::file_mode(&m))
+            {
+                rows.push(describe_mode(path, mode));
             }
         }
         Ok(rows)

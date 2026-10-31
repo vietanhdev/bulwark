@@ -42,11 +42,14 @@ const OUT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../../docs/
  */
 const SHOTS = [
   { tab: null, file: "overview.png" }, // Home is the landing view
+  // One problem opened: why it matters, the one-click fix, and Details. Replaces the old separate
+  // AI assistants screen, which is now part of Checkups.
+  { tab: null, file: "fix.png", open: /ssh private key is not passphrase-protected/i },
   { tab: "Checkups", file: "compliance.png" },
   { tab: "Virus scan", file: "antivirus.png", run: "Run a virus scan", settleMs: 8000 },
-  { tab: "AI assistants", file: "agent-security.png" },
   { tab: "All checks", file: "rules.png" },
   { tab: "Settings", file: "settings.png" },
+  { tab: null, file: "overview-dark.png", dark: true },
 ];
 
 const browser = await chromium.launch();
@@ -59,12 +62,13 @@ await page.goto(BASE_URL, { waitUntil: "networkidle" });
 
 const nav = page.locator("nav");
 
-for (const { tab, file, run, settleMs } of SHOTS) {
-  if (tab) {
-    // Scoped to the sidebar, and matched by substring rather than exactly: "Agent Security"
-    // carries a "New" badge, which lands in the button's accessible name.
-    await nav.getByRole("button", { name: tab }).first().click();
-  }
+for (const { tab, file, run, settleMs, open, dark } of SHOTS) {
+  await page.evaluate((d) => document.documentElement.classList.toggle("dark", d), !!dark);
+  // Scoped to the sidebar, and matched by substring rather than exactly.
+  await nav
+    .getByRole("button", { name: tab ?? "Home" })
+    .first()
+    .click();
   // The views fetch through the mocked `invoke`, which simulates latency on purpose. Settle
   // before shooting, or we capture a half-populated page.
   await page.waitForTimeout(1000);
@@ -73,6 +77,11 @@ for (const { tab, file, run, settleMs } of SHOTS) {
     await page.getByRole("button", { name: run, exact: true }).click();
     await page.waitForTimeout(settleMs ?? 5000);
   }
+  if (open) {
+    const row = page.getByRole("button", { name: open }).first();
+    if ((await row.getAttribute("aria-expanded")) !== "true") await row.click();
+    await page.waitForTimeout(400);
+  }
 
   // `omitBackground` captures the transparent page background as alpha rather than filling it
   // white — so the window's rounded corners (`.app-shell` radius, `body` is transparent) read as a
@@ -80,16 +89,16 @@ for (const { tab, file, run, settleMs } of SHOTS) {
   await page.screenshot({ path: resolve(OUT_DIR, file), omitBackground: true });
   console.log(`captured ${file}`);
 }
+await page.evaluate(() => document.documentElement.classList.remove("dark"));
 
 // ── Hero variants ────────────────────────────────────────────────────────────
 // The same Home screen in several sidebar + accent colours, transparent-cornered, so the website
-// hero can fan/stack them to show Bulwark's theming at a glance. Each pairs a sidebar colour with a
-// matching accent so the variants read as distinct at a glance.
+// can fan/stack them to show Bulwark's theming at a glance. The first is the default theme.
 const HERO = [
-  { chrome: "aubergine", accent: "orange" },
-  { chrome: "teal", accent: "aqua" },
+  { chrome: "graphite", accent: "aqua" },
   { chrome: "blue", accent: "blue" },
   { chrome: "green", accent: "green" },
+  { chrome: "aubergine", accent: "orange" },
 ];
 await nav.getByRole("button", { name: "Home" }).first().click();
 await page.waitForTimeout(800);

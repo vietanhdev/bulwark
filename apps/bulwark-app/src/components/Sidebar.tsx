@@ -1,6 +1,5 @@
 import {
   BadgeCheck,
-  Bot,
   FileCheck2,
   LayoutDashboard,
   LineChart,
@@ -11,15 +10,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export type View =
-  | "overview"
-  | "agent-security"
-  | "antivirus"
-  | "integrity"
-  | "rules"
-  | "compliance"
-  | "analytics"
-  | "settings";
+export type View = "overview" | "antivirus" | "integrity" | "rules" | "compliance" | "analytics" | "settings";
 
 interface SidebarProps {
   view: View;
@@ -80,7 +71,6 @@ const GROUPS: { label: string | null; items: NavItem[] }[] = [
       { id: "antivirus", label: "Virus scan", icon: ShieldCheck },
       // The newest pillar, and the one most users won't know to look for — so it carries a "new"
       // badge. A badge, not a colour: see NavItem.badge for why it must not borrow the rail.
-      { id: "agent-security", label: "AI assistants", icon: Bot, badge: "New" },
       { id: "integrity", label: "File changes", icon: FileCheck2 },
     ],
   },

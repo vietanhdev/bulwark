@@ -25,7 +25,7 @@ onMounted(() => {
       playsinline
       preload="auto"
       poster="/screenshots/overview.png"
-      aria-label="Bulwark demo: run a scan, read plain-language findings, catch a leaked API key in an AI assistant, and re-theme the app"
+      aria-label="Bulwark demo: run a scan, open a problem and its one-click fix, and switch between light and dark themes"
     ></video>
   </div>
 </template>
@@ -39,9 +39,15 @@ onMounted(() => {
 .hero-demo {
   width: 100%;
   display: block;
-  border-radius: 8px;
-  background: #17121a;
-  box-shadow: 0 30px 70px -24px rgba(20, 10, 20, 0.5);
+  /* The frames are the window edge to edge; the rounding happens only here. clip-path as well as
+     border-radius, because some engines don't clip a playing <video> to its radius. The hairline
+     ring stands in for the window border so the edge reads on light and dark pages alike. */
+  border-radius: 10px;
+  clip-path: inset(0 round 10px);
+  background: var(--vp-c-bg-soft);
+  outline: 1px solid color-mix(in srgb, var(--vp-c-text-1) 12%, transparent);
+  outline-offset: -1px;
+  box-shadow: 0 30px 70px -24px rgba(15, 20, 25, 0.45);
 }
 :root.dark .hero-demo {
   box-shadow: 0 30px 70px -20px rgba(0, 0, 0, 0.7);

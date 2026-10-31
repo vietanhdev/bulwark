@@ -1,0 +1,17 @@
+id: BLWK-CRED-003
+title: Docker registry logins are stored in the config file
+category: credential-exposure
+severity: medium
+collector: credential_stores
+condition: kind == "docker_config" and inline_auths > 0 and creds_store == false
+explain: >
+  Docker saved {{ credential_stores.inline_auths }} registry login(s) inside {{ credential_stores.path }}. They look
+  scrambled, but it is only base64 encoding, not encryption: anyone who can read the file can decode
+  your username and password or token in seconds.
+fix: |
+  Let Docker keep registry logins in your computer's keychain.
+  1. Install Docker's credential helper ('golang-docker-credential-helpers' on Ubuntu; built in on macOS and Windows, and Docker Desktop sets it up for you).
+  2. In {{ credential_stores.path }}, set "credsStore" to "secretservice" (Linux), "osxkeychain" (macOS) or "wincred" (Windows).
+  3. Delete the entries under "auths", then run 'docker login' again for each registry.
+  4. Rotate any registry token that was stored in the file.
+references: [ATTACK-T1552.001]

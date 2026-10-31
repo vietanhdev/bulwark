@@ -137,6 +137,7 @@ mod tests {
         assert!(!is_bridge_port(&impostor));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn collects_real_interfaces_from_this_machine_excluding_loopback() {
         let rows = NetworkInterfacesCollector.collect().unwrap();

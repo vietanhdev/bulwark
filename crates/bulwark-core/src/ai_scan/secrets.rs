@@ -968,11 +968,13 @@ pub fn scan_text_high_confidence_in(path: Option<&str>, text: &str) -> Vec<Secre
     out
 }
 
-/// Severity for a secret hit: a structurally-identifiable provider key is Critical (a live
-/// credential, one paste away from account takeover); a heuristic `generic-*` hit is Medium.
+/// Severity for a secret hit: a structurally-identifiable provider key is High (a real credential
+/// that should be rotated, but sitting in a local file the user owns rather than exposed to the
+/// network, so it does not rank with an attacker-reachable hole); a heuristic `generic-*` hit is
+/// Medium.
 pub fn severity_for(m: &SecretMatch) -> Severity {
     if m.high_conf {
-        Severity::Critical
+        Severity::High
     } else {
         Severity::Medium
     }
@@ -1465,12 +1467,11 @@ mod tests {
         ))
         .expect("the vendored false-positive corpus must be valid TOML");
 
-        // The one rule whose upstream fixtures we knowingly fail. gitleaks' own allowlist for
-        // `curl-auth-header` is commented out in their source, so they carry the same false
-        // positives; ours additionally predates their current regex. Listed rather than quietly
-        // filtered, and the assertions below cut both ways — a *new* false positive fails, and so
-        // does a gap that has silently been fixed, so this list cannot rot.
-        const KNOWN_GAPS: &[&str] = &["curl-auth-header"];
+        // Rules whose upstream fixtures we knowingly fail. Empty since `curl-auth-header` started
+        // requiring 16+ character token values (its upstream false positives were short demo
+        // values). Kept as a list, and the assertions below cut both ways — a *new* false positive
+        // fails, and so does a gap that has silently been fixed, so this list cannot rot.
+        const KNOWN_GAPS: &[&str] = &[];
 
         let mut checked = 0;
         let mut violations = Vec::new();

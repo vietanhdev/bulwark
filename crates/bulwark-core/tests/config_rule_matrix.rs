@@ -412,3 +412,187 @@ fn av_db_stale_002_but_quiet_when_not_installed() {
         "BLWK-AV-002"
     ));
 }
+
+fn s(v: &str) -> Value {
+    Value::String(v.into())
+}
+
+#[test]
+fn cred_aws_long_lived_key_001() {
+    assert_matrix(
+        "credential_stores",
+        "BLWK-CRED-001",
+        &[
+            ("kind", s("aws_credentials")),
+            ("long_lived_keys", Value::from(2)),
+        ],
+        &[
+            ("kind", s("aws_credentials")),
+            ("long_lived_keys", Value::from(0)),
+        ],
+    );
+    // A row of another kind never reaches the key count (and so never raises MissingField).
+    assert!(!fires(
+        "credential_stores",
+        vec![fact(&[
+            ("kind", s("npmrc")),
+            ("readable_by_others", Value::Bool(false))
+        ])],
+        "BLWK-CRED-001",
+    ));
+}
+
+#[test]
+fn cred_git_plaintext_store_002() {
+    assert_matrix(
+        "credential_stores",
+        "BLWK-CRED-002",
+        &[
+            ("kind", s("git_config")),
+            ("helper_store", Value::Bool(true)),
+        ],
+        &[
+            ("kind", s("git_config")),
+            ("helper_store", Value::Bool(false)),
+        ],
+    );
+    assert_matrix(
+        "credential_stores",
+        "BLWK-CRED-002",
+        &[
+            ("kind", s("git_credentials")),
+            ("stored_entries", Value::from(1)),
+        ],
+        &[
+            ("kind", s("git_credentials")),
+            ("stored_entries", Value::from(0)),
+        ],
+    );
+}
+
+#[test]
+fn cred_docker_inline_auth_003() {
+    assert_matrix(
+        "credential_stores",
+        "BLWK-CRED-003",
+        &[
+            ("kind", s("docker_config")),
+            ("inline_auths", Value::from(1)),
+            ("creds_store", Value::Bool(false)),
+        ],
+        &[
+            ("kind", s("docker_config")),
+            ("inline_auths", Value::from(1)),
+            ("creds_store", Value::Bool(true)),
+        ],
+    );
+}
+
+#[test]
+fn cred_readable_token_file_004() {
+    assert_matrix(
+        "credential_stores",
+        "BLWK-CRED-004",
+        &[
+            ("kind", s("npmrc")),
+            ("readable_by_others", Value::Bool(true)),
+        ],
+        &[
+            ("kind", s("npmrc")),
+            ("readable_by_others", Value::Bool(false)),
+        ],
+    );
+    assert!(!fires(
+        "credential_stores",
+        vec![fact(&[
+            ("kind", s("git_config")),
+            ("helper_store", Value::Bool(true))
+        ])],
+        "BLWK-CRED-004",
+    ));
+}
+
+#[test]
+fn net_dev_service_on_all_interfaces_003() {
+    assert_matrix(
+        "listening_ports",
+        "BLWK-NET-003",
+        &[
+            ("port", Value::from(5432)),
+            ("listen_address", s("0.0.0.0")),
+        ],
+        &[
+            ("port", Value::from(5432)),
+            ("listen_address", s("127.0.0.1")),
+        ],
+    );
+    // A bind to one specific interface (a VPN address) is a deliberate choice.
+    assert!(!fires(
+        "listening_ports",
+        vec![fact(&[
+            ("port", Value::from(5432)),
+            ("listen_address", s("100.64.1.2"))
+        ])],
+        "BLWK-NET-003",
+    ));
+    assert!(fires(
+        "listening_ports",
+        vec![fact(&[
+            ("port", Value::from(6379)),
+            ("listen_address", s("::"))
+        ])],
+        "BLWK-NET-003",
+    ));
+}
+
+#[test]
+fn net_no_firewall_004_requires_a_known_answer() {
+    assert_matrix(
+        "host_firewall",
+        "BLWK-NET-004",
+        &[
+            ("firewall_active", Value::Bool(false)),
+            ("firewall_known", Value::Bool(true)),
+        ],
+        &[
+            ("firewall_active", Value::Bool(true)),
+            ("firewall_known", Value::Bool(true)),
+        ],
+    );
+    assert!(!fires(
+        "host_firewall",
+        vec![fact(&[
+            ("firewall_active", Value::Bool(false)),
+            ("firewall_known", Value::Bool(false)),
+        ])],
+        "BLWK-NET-004",
+    ));
+}
+
+#[test]
+fn persist_python_startup_hook_005() {
+    assert_matrix(
+        "python_startup_hooks",
+        "BLWK-PERSIST-005",
+        &[
+            ("executes_code", Value::Bool(true)),
+            ("known_benign", Value::Bool(false)),
+            ("malicious_name", Value::Bool(false)),
+        ],
+        &[
+            ("executes_code", Value::Bool(true)),
+            ("known_benign", Value::Bool(true)),
+            ("malicious_name", Value::Bool(false)),
+        ],
+    );
+}
+
+#[test]
+fn rootkit_litellm_indicators_002() {
+    assert_matrix(
+        "supply_chain_iocs",
+        "BLWK-ROOTKIT-002",
+        &[("indicator", s("litellm_loader_lock"))],
+        &[("indicator", s("something_else"))],
+    );
+}

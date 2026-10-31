@@ -49,13 +49,13 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
           toolchain: stable
           components: clippy, rustfmt
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
 
       # webkit2gtk + friends, needed to compile bulwark-app's Tauri backend on Linux.
       - name: Install Tauri Linux dependencies
@@ -161,7 +161,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # stable
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
           toolchain: stable
       - name: Install cargo-audit
@@ -221,12 +221,12 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
           toolchain: stable
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
 
       - name: Run e2e fixture tests
         run: cargo test -p bulwarkctl --test e2e -- --ignored --test-threads=1
@@ -294,6 +294,12 @@ jobs:
           cache: npm
           cache-dependency-path: docs/package-lock.json
       - run: npm ci
+      # The per-check pages (/checks/<id>) render from checks/catalog.json, generated from the rule
+      # files and the AI check catalog. A rule edited without regenerating would leave its page
+      # describing a check the scanner no longer runs, so a stale catalog fails here.
+      - run: |
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet --user --break-system-packages pyyaml
+          python3 scripts/generate-checks.py --check
       # A full VitePress build, not just a syntax check. VitePress compiles every page as a Vue
       # SFC, so a literal `{{ … }}` in prose is parsed as an interpolation and a non-JS expression
       # (e.g. an empty `{{ }}` describing the rule templating syntax) fails the build. Only the

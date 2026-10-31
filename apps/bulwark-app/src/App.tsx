@@ -5,7 +5,6 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { TitleBar } from "@/components/TitleBar";
 import { Sidebar, type View } from "@/components/Sidebar";
 import { OverviewView } from "@/components/OverviewView";
-import { AgentSecurityView } from "@/components/AgentSecurityView";
 import { AntivirusView } from "@/components/AntivirusView";
 import { IntegrityView } from "@/components/IntegrityView";
 import { RulesView } from "@/components/RulesView";
@@ -17,13 +16,12 @@ import { cn } from "@/lib/utils";
 
 const VIEWS: { id: View; render: (active: boolean, navigate: (v: View) => void) => React.ReactNode }[] = [
   { id: "overview", render: (_active, navigate) => <OverviewView onNavigate={navigate} /> },
-  { id: "agent-security", render: (active) => <AgentSecurityView active={active} /> },
   { id: "antivirus", render: (active) => <AntivirusView active={active} /> },
   { id: "integrity", render: () => <IntegrityView /> },
   { id: "rules", render: () => <RulesView /> },
   { id: "compliance", render: () => <ComplianceView /> },
   { id: "analytics", render: () => <AnalyticsView /> },
-  { id: "settings", render: () => <SettingsView /> },
+  { id: "settings", render: (active) => <SettingsView active={active} /> },
 ];
 
 function Shell() {

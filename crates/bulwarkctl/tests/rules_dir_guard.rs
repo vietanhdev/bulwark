@@ -73,6 +73,7 @@ fn the_env_var_is_validated_the_same_way_as_the_flag() {
 
 /// The guard must not fire on a real rule pack — otherwise it would be a very effective way of
 /// making the scanner useless.
+#[cfg(target_os = "linux")]
 #[test]
 fn the_real_rule_pack_still_scans() {
     let rules = concat!(env!("CARGO_MANIFEST_DIR"), "/../../rules");

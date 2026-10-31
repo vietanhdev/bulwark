@@ -10,6 +10,7 @@ export interface Finding {
   title: string;
   explanation: string;
   fix_hint: string;
+  context?: Record<string, unknown>;
 }
 
 const now = new Date();
@@ -87,6 +88,60 @@ export const findings: Finding[] = [
     fix_hint:
       "Add a forwarding rule to /etc/rsyslog.conf (e.g. '*.* @@logs.example.com:514') pointing " +
       "at a log destination this machine doesn't control.",
+  },
+  // Two unprotected SSH keys: one problem, found in two places (rule text from BLWK-SSH-012).
+  ...["id_ed25519_devbox", "id_ed25519_work"].map((name, i) => ({
+    id: `f-ssh-012-${i}`,
+    context: { path: `/home/user/.ssh/${name}` },
+    rule_id: "BLWK-SSH-012",
+    severity: "high" as const,
+    title: "SSH private key is not passphrase-protected",
+    explanation:
+      `Your SSH key /home/user/.ssh/${name} has no passphrase. It works like a password that is written ` +
+      "down: anyone or any program that copies this one file can log in to every server and Git host " +
+      "that trusts it, with nothing else needed.",
+    fix_hint:
+      "Lock the key with a passphrase. It takes a minute and your servers need no changes.\n" +
+      `1. In the Bulwark app, open this issue and use "Add a passphrase to these keys now". In a terminal, run 'ssh-keygen -p -f /home/user/.ssh/${name}'.\n` +
+      `2. To avoid typing it all the time, load the key once per session with 'ssh-add /home/user/.ssh/${name}'.\n` +
+      "3. Delete keys for machines you no longer use.\n" +
+      "Stronger options: keep keys in a password manager's SSH agent (Bitwarden, 1Password, KeePassXC), or use a hardware key that cannot be copied at all ('ssh-keygen -t ed25519-sk' with a YubiKey).",
+  })),
+  // AI assistant findings, as the dashboard stores them (file, line and redactability in `context`).
+  {
+    id: "f-ai-001",
+    rule_id: "BLWK-AI-001",
+    severity: "high",
+    title: "Anthropic API key exposed in AI context",
+    explanation:
+      "An Anthropic API key was found in a Claude Code session transcript. Anything written into an " +
+      "assistant's sessions or memory should be treated as leaked: rotate the key.",
+    fix_hint: "Remove the secret from the file (Bulwark can do this for you) and rotate the credential.",
+    context: {
+      file: "/home/user/.claude/projects/-home-user-Projects-api/5f2c.jsonl",
+      line: 214,
+      tool: "Claude Code",
+      evidence: "Anthropic API key: sk-a…3f",
+      redactable: true,
+    },
+  },
+  {
+    id: "f-ai-002",
+    rule_id: "BLWK-AI-002",
+    severity: "high",
+    title: "Project-supplied Claude Code hooks run shell commands automatically",
+    explanation:
+      "This settings file defines hooks. Claude Code hooks run shell commands automatically on " +
+      "tool/session events — a project-supplied hook can execute code the moment the repo is opened.",
+    fix_hint:
+      "Remove the hooks block from the repo's .claude/settings.json; keep hooks only in trusted user settings.",
+    context: {
+      file: "/home/user/Projects/api/.claude/settings.json",
+      line: 3,
+      tool: "Claude Code",
+      evidence: '"hooks": { "SessionStart": [ … ] }',
+      redactable: false,
+    },
   },
 ];
 

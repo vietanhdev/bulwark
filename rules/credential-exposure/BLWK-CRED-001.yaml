@@ -1,0 +1,21 @@
+id: BLWK-CRED-001
+title: A long-lived AWS access key is stored on disk
+category: credential-exposure
+severity: high
+collector: credential_stores
+# long_lived_keys is emitted only when the file was read, so an unreadable credentials file is a
+# collector error, never a confident "no long-lived keys".
+condition: kind == "aws_credentials" and long_lived_keys > 0
+explain: >
+  Your AWS access key is saved in a plain file ({{ credential_stores.path }}, {{ credential_stores.long_lived_keys }}
+  key(s)). These keys never expire, so whoever copies the file can use your AWS account, and run up
+  your bill, until you notice. That is exactly what a poisoned Python package did in October 2026:
+  LiteLLM 1.107.0 read these files on every developer machine that installed it.
+fix: |
+  Sign in to AWS with sessions that expire on their own, instead of a key that works forever.
+  1. Run 'aws configure sso' once to connect the AWS CLI to IAM Identity Center.
+  2. Start each work session with 'aws sso login'. The session expires after a few hours.
+  3. In the AWS console, deactivate and delete the old access key.
+  4. Remove the key from {{ credential_stores.path }}.
+  Can't use Identity Center? Keep the key in a password manager (1Password, Bitwarden or KeePassXC) and let the AWS CLI fetch it when needed with 'credential_process'.
+references: [ATTACK-T1552.001, ATTACK-T1078.004]

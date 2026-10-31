@@ -3,6 +3,8 @@
 //! slow, out-of-order multi-host) and the syslog year-inference boundary. This drives the REAL
 //! decoders and log-rules from the repo (not fixtures), so it proves the shipped pack behaves
 //! correctly across situations, not just that the code compiles.
+// Linux auth-log formats; the log rules are tagged `os: [linux]` and load nothing elsewhere.
+#![cfg(target_os = "linux")]
 
 use bulwark_core::{run_log_scan, LogScanRun, SyslogLinesSource};
 use std::io::Cursor;

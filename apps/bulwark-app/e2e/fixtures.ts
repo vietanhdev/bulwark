@@ -1,14 +1,13 @@
 import { type Page, expect } from "@playwright/test";
 
-// The eight primary views, keyed by their sidebar label. `title` is the heading
+// The seven primary views, keyed by their sidebar label. `title` is the heading
 // the view renders when active; `signature` is a section unique to that view, so
 // a test proves the *right* view is showing (all views stay mounted and are
 // CSS-hidden when inactive, so assertions must be visibility-aware).
 export const VIEWS = [
-  { label: "Home", title: "Home", signature: /scan scope/i },
+  { label: "Home", title: "Home", signature: /problems? to fix|all clear|let.s check this computer/i },
   { label: "Checkups", title: "Checkups", signature: /issues to fix|all clear|no issues/i },
   { label: "Virus scan", title: "Virus scan", signature: /real-time protection/i },
-  { label: "AI assistants", title: "AI assistants", signature: /findings/i },
   { label: "File changes", title: "File changes", signature: /what.?s watched/i },
   { label: "All checks", title: "All checks", signature: /kernel hardening/i },
   { label: "Activity", title: "Activity", signature: /findings over time/i },

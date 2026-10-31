@@ -1,33 +1,25 @@
-/* Same brand as the desktop app (apps/bulwark-app/src/styles.css): the Ubuntu aubergine + orange
-   pairing the app's chrome and accent are built on — aubergine (oklch hue ~350) is the primary
-   brand carrying links, buttons and structure, orange is the accent pop (the hero gradient, the
-   "what sets us apart" tile, the ambient glow). Kept in sync by hand: the docs site and the app
-   are separate npm projects with no shared build step.
+/* Same brand as the desktop app's default theme (apps/bulwark-app/src/lib/theme.ts): an aqua accent on
+   neutral graphite. Every other hue already means something in the product (red critical, orange
+   high, blue low, green fixed), so the brand stays out of the severity palette: aqua carries links,
+   buttons and structure, and a deeper blue-teal is the second stop in gradients. Kept in sync by
+   hand: the docs site and the app are separate npm projects with no shared build step.
 
-   This replaced an earlier teal — the app rebranded its chrome to aubergine (see styles.css §Chrome:
-   "the classic Canonical brand pairing is aubergine + orange"), and every screenshot on this site
-   shows that aubergine sidebar with orange buttons, so a teal site chrome read as a different
-   product. The site now leads with the same two colours the product does.
-
-   The app's own signature — ink chrome framing paper — isn't reproduced literally here. A
-   docs site is a document, not an instrument, and painting VitePress's nav dark in light mode
-   would mean fighting the framework for every text colour inside it. What carries across is
-   the palette, the type, and the severity rail (see the custom blocks below). */
+   The app's signature (ink chrome framing paper) isn't reproduced literally. A docs site is a
+   document, not an instrument; what carries across is the palette, the type, and the severity
+   rail (see the custom blocks below). */
 
 :root {
-  /* Aubergine — the app's dominant chrome colour, dark enough to read as link text and to carry
-     white-on-brand buttons at full contrast. */
-  --vp-c-brand-1: oklch(0.42 0.12 350);
-  --vp-c-brand-2: oklch(0.36 0.12 350);
-  --vp-c-brand-3: oklch(0.5 0.11 350);
-  --vp-c-brand-soft: oklch(0.94 0.035 350);
+  /* Aqua, deepened enough to read as link text and to carry white-on-brand buttons. */
+  --vp-c-brand-1: oklch(0.47 0.085 195);
+  --vp-c-brand-2: oklch(0.41 0.08 195);
+  --vp-c-brand-3: oklch(0.54 0.09 195);
+  --vp-c-brand-soft: oklch(0.95 0.03 195);
 
-  /* Brand buttons: pin the background to a mid aubergine dark enough to carry white text at full
-     contrast, rather than letting VitePress default it to the light brand-3 (which reads pink and
-     fails against white). */
-  --vp-button-brand-bg: oklch(0.44 0.12 350);
-  --vp-button-brand-hover-bg: oklch(0.38 0.12 350);
-  --vp-button-brand-active-bg: oklch(0.34 0.12 350);
+  /* Brand buttons: pin the background to a mid aqua dark enough to carry white text, rather than
+     letting VitePress default it to the light brand-3 (which fails against white). */
+  --vp-button-brand-bg: oklch(0.5 0.09 195);
+  --vp-button-brand-hover-bg: oklch(0.45 0.085 195);
+  --vp-button-brand-active-bg: oklch(0.41 0.08 195);
   --vp-button-brand-border: transparent;
   --vp-button-brand-hover-border: transparent;
   --vp-button-brand-active-border: transparent;
@@ -35,16 +27,14 @@
   --vp-button-brand-hover-text: #ffffff;
   --vp-button-brand-active-text: #ffffff;
 
-  /* Orange accent — the app's action colour, used for gradients, the differentiator tile and the
-     ambient glow rather than for body links (too light for text contrast on white). */
-  --bw-orange: oklch(0.62 0.19 42);
-  --bw-orange-deep: oklch(0.52 0.17 40);
+  /* Second stop for gradients, the differentiator tile and the ambient glow: a deeper blue-teal. */
+  --bw-accent: oklch(0.5 0.1 235);
+  --bw-accent-deep: oklch(0.44 0.1 235);
 
-  /* Paper, not white — a warm off-white so the page sits under the aubergine/orange palette rather
-     than fighting it with the old cool blue-grey. */
-  --vp-c-bg: oklch(0.99 0.004 60);
-  --vp-c-bg-alt: oklch(0.965 0.006 55);
-  --vp-c-bg-soft: oklch(0.965 0.006 55);
+  /* Near-white with a faint graphite cast, matching the app's neutral surfaces. */
+  --vp-c-bg: oklch(0.99 0.002 260);
+  --vp-c-bg-alt: oklch(0.97 0.003 260);
+  --vp-c-bg-soft: oklch(0.97 0.003 260);
 
   --vp-font-family-base:
     "Archivo Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
@@ -53,27 +43,36 @@
 }
 
 .dark {
-  --vp-c-brand-1: oklch(0.74 0.11 350);
-  --vp-c-brand-2: oklch(0.68 0.12 350);
-  --vp-c-brand-3: oklch(0.8 0.11 350);
-  --vp-c-brand-soft: oklch(0.32 0.06 350 / 0.5);
+  /* Night palette, shared with the app's dark theme: deep blue-slate layers and a vivid aqua.
+     On dark the brand button flips to aqua with dark text, which reads brighter than white on a
+     mid-teal and matches the app's Scan now button. */
+  --vp-c-brand-1: oklch(0.82 0.12 185);
+  --vp-c-brand-2: oklch(0.76 0.12 185);
+  --vp-c-brand-3: oklch(0.86 0.1 185);
+  --vp-c-brand-soft: oklch(0.45 0.08 190 / 0.22);
 
-  /* Same rationale as light mode: a mid aubergine the white label reads on, not the pale brand-3.
-     Kept deeper and less saturated so it reads aubergine rather than candy-pink on the dark ground. */
-  --vp-button-brand-bg: oklch(0.5 0.12 350);
-  --vp-button-brand-hover-bg: oklch(0.56 0.13 350);
-  --vp-button-brand-active-bg: oklch(0.46 0.12 350);
-  --vp-button-brand-text: #ffffff;
-  --vp-button-brand-hover-text: #ffffff;
-  --vp-button-brand-active-text: #ffffff;
+  --vp-button-brand-bg: oklch(0.8 0.13 185);
+  --vp-button-brand-hover-bg: oklch(0.85 0.12 185);
+  --vp-button-brand-active-bg: oklch(0.75 0.13 185);
+  --vp-button-brand-text: oklch(0.2 0.035 200);
+  --vp-button-brand-hover-text: oklch(0.2 0.035 200);
+  --vp-button-brand-active-text: oklch(0.2 0.035 200);
 
-  --bw-orange: oklch(0.7 0.17 45);
-  --bw-orange-deep: oklch(0.62 0.17 42);
+  --bw-accent: oklch(0.72 0.12 245);
+  --bw-accent-deep: oklch(0.64 0.12 245);
 
-  /* A deep aubergine-tinted ink, echoing the app's dark chrome rather than a neutral charcoal. */
-  --vp-c-bg: oklch(0.17 0.021 345);
-  --vp-c-bg-alt: oklch(0.14 0.018 345);
-  --vp-c-bg-soft: oklch(0.21 0.024 345);
+  --vp-c-bg: oklch(0.17 0.016 252);
+  --vp-c-bg-alt: oklch(0.145 0.014 252);
+  --vp-c-bg-soft: oklch(0.21 0.018 252);
+  --vp-c-bg-elv: oklch(0.23 0.02 252);
+  --vp-c-divider: oklch(0.8 0.03 230 / 11%);
+  --vp-c-gutter: oklch(0.12 0.012 252);
+  --vp-c-border: oklch(0.8 0.03 230 / 16%);
+  --vp-c-text-1: oklch(0.95 0.006 250);
+  --vp-c-text-2: oklch(0.76 0.016 250);
+  --vp-c-text-3: oklch(0.62 0.018 250);
+  --vp-code-block-bg: oklch(0.145 0.014 252);
+  --vp-c-default-soft: oklch(0.8 0.03 230 / 10%);
 }
 
 /* ---------------------------------------------------------------------------
@@ -303,8 +302,8 @@
 .dark .vp-doc .mermaid .node ellipse,
 .dark .vp-doc .mermaid .node polygon,
 .dark .vp-doc .mermaid .node path {
-  fill: oklch(0.28 0.035 350) !important;
-  stroke: oklch(0.75 0.12 350) !important;
+  fill: oklch(0.28 0.035 195) !important;
+  stroke: oklch(0.75 0.09 195) !important;
 }
 
 /* Node + edge label text. `color` for the HTML-in-foreignObject labels, `fill` for the plain
@@ -332,12 +331,12 @@
 .dark .vp-doc .mermaid .flowchart-link,
 .dark .vp-doc .mermaid .edgePath .path,
 .dark .vp-doc .mermaid path.path {
-  stroke: oklch(0.72 0.11 350) !important;
+  stroke: oklch(0.72 0.09 195) !important;
 }
 .dark .vp-doc .mermaid marker path,
 .dark .vp-doc .mermaid defs marker path {
-  fill: oklch(0.72 0.11 350) !important;
-  stroke: oklch(0.72 0.11 350) !important;
+  fill: oklch(0.72 0.09 195) !important;
+  stroke: oklch(0.72 0.09 195) !important;
 }
 
 /* Subgraph / cluster boxes sit *behind* the nodes, so they take the recessed surface. */
@@ -353,8 +352,8 @@
 
 /* Sequence diagram (guide/architecture's privilege-elevation flow) */
 .dark .vp-doc .mermaid .actor {
-  fill: oklch(0.28 0.035 350) !important;
-  stroke: oklch(0.75 0.12 350) !important;
+  fill: oklch(0.28 0.035 195) !important;
+  stroke: oklch(0.75 0.09 195) !important;
 }
 .dark .vp-doc .mermaid text.actor > tspan,
 .dark .vp-doc .mermaid .messageText,
@@ -366,7 +365,7 @@
 }
 .dark .vp-doc .mermaid .messageLine0,
 .dark .vp-doc .mermaid .messageLine1 {
-  stroke: oklch(0.72 0.11 350) !important;
+  stroke: oklch(0.72 0.09 195) !important;
 }
 .dark .vp-doc .mermaid .note {
   fill: oklch(0.24 0.02 205) !important;
@@ -375,8 +374,8 @@
 
 /* Entity-relationship diagram (the SQLite schema) */
 .dark .vp-doc .mermaid .er.entityBox {
-  fill: oklch(0.28 0.035 350) !important;
-  stroke: oklch(0.75 0.12 350) !important;
+  fill: oklch(0.28 0.035 195) !important;
+  stroke: oklch(0.75 0.09 195) !important;
 }
 .dark .vp-doc .mermaid .er.attributeBoxOdd,
 .dark .vp-doc .mermaid .er.attributeBoxEven {
@@ -388,7 +387,7 @@
   fill: oklch(0.94 0.01 205) !important;
 }
 .dark .vp-doc .mermaid .er.relationshipLine {
-  stroke: oklch(0.72 0.11 350) !important;
+  stroke: oklch(0.72 0.09 195) !important;
 }
 
 /* Pie chart (rules-per-category). The slice fills stay mermaid's own — they're categorical and
@@ -409,19 +408,19 @@
 
 :root {
   --vp-home-hero-name-color: transparent;
-  /* The two brand colours in one sweep: aubergine into orange. */
+  /* Aqua into a deeper blue-teal. */
   --vp-home-hero-name-background: linear-gradient(
     115deg,
-    oklch(0.42 0.12 350),
-    oklch(0.62 0.19 42)
+    oklch(0.42 0.09 195),
+    oklch(0.5 0.1 235)
   );
 }
 
 .dark {
   --vp-home-hero-name-background: linear-gradient(
     115deg,
-    oklch(0.74 0.13 350),
-    oklch(0.72 0.17 45)
+    oklch(0.86 0.11 180),
+    oklch(0.74 0.12 240)
   );
 }
 
@@ -456,9 +455,8 @@
 }
 
 /* ── Home-page decoration ───────────────────────────────────────────────────────
-   The site's link/brand colour is teal, but the app in the screenshots is orange-on-aubergine.
-   Warm the top of the landing with a soft ambient glow in those product colours so the page and the
-   product read as one thing — kept low-opacity so it's atmosphere, not a gradient hero. */
+   A soft ambient glow in the product's aqua at the top of the landing, kept low-opacity so it's
+   atmosphere, not a gradient hero. */
 .VPHome {
   position: relative;
   isolation: isolate;
@@ -471,15 +469,15 @@
   z-index: -1;
   pointer-events: none;
   background:
-    radial-gradient(52% 42% at 50% -4%, color-mix(in srgb, #db4f1c 14%, transparent), transparent 72%),
-    radial-gradient(46% 38% at 82% 6%, color-mix(in srgb, #772953 15%, transparent), transparent 74%),
-    radial-gradient(40% 34% at 16% 10%, color-mix(in srgb, #772953 9%, transparent), transparent 76%);
+    radial-gradient(52% 42% at 50% -4%, color-mix(in srgb, #1f8a8c 14%, transparent), transparent 72%),
+    radial-gradient(46% 38% at 82% 6%, color-mix(in srgb, #2f5f8f 15%, transparent), transparent 74%),
+    radial-gradient(40% 34% at 16% 10%, color-mix(in srgb, #2f5f8f 9%, transparent), transparent 76%);
 }
 .dark .VPHome::before {
   background:
-    radial-gradient(52% 42% at 50% -4%, color-mix(in srgb, #db4f1c 22%, transparent), transparent 72%),
-    radial-gradient(46% 38% at 82% 6%, color-mix(in srgb, #772953 26%, transparent), transparent 74%),
-    radial-gradient(40% 34% at 16% 10%, color-mix(in srgb, #772953 16%, transparent), transparent 76%);
+    radial-gradient(52% 42% at 50% -4%, color-mix(in srgb, #1f8a8c 22%, transparent), transparent 72%),
+    radial-gradient(46% 38% at 82% 6%, color-mix(in srgb, #2f5f8f 26%, transparent), transparent 74%),
+    radial-gradient(40% 34% at 16% 10%, color-mix(in srgb, #2f5f8f 16%, transparent), transparent 76%);
 }
 
 /* Hero eyebrow (rendered in the home-hero-info-before slot, index.ts) — a small capsule above the
@@ -546,7 +544,7 @@
 }
 .VPHome .VPFeature:hover {
   transform: translateY(-3px);
-  border-color: color-mix(in srgb, #db4f1c 45%, var(--vp-c-border));
+  border-color: color-mix(in srgb, #1f8a8c 45%, var(--vp-c-border));
   box-shadow: 0 14px 34px -16px rgba(60, 20, 10, 0.28);
 }
 .dark .VPHome .VPFeature:hover {
@@ -586,4 +584,155 @@
 }
 .dark .screenshot-gallery img {
   filter: drop-shadow(0 4px 20px rgba(0, 0, 0, 0.45));
+}
+
+/* ---------------------------------------------------------------------------
+   Check pages (/checks and /checks/<id>). Severity uses the app's own scale — red critical,
+   orange high, amber medium, blue low, grey info — so a check reads the same on the site as in
+   the scanner. Brand aqua never appears here, which keeps "severity" and "link" apart.
+   --------------------------------------------------------------------------- */
+:root {
+  --bw-sev-critical: oklch(0.55 0.2 27);
+  --bw-sev-high: oklch(0.6 0.17 45);
+  --bw-sev-medium: oklch(0.66 0.14 75);
+  --bw-sev-low: oklch(0.55 0.13 250);
+  --bw-sev-info: oklch(0.55 0.01 260);
+}
+.dark {
+  --bw-sev-critical: oklch(0.7 0.17 27);
+  --bw-sev-high: oklch(0.74 0.15 50);
+  --bw-sev-medium: oklch(0.8 0.13 80);
+  --bw-sev-low: oklch(0.72 0.11 250);
+  --bw-sev-info: oklch(0.7 0.01 260);
+}
+.bw-sev {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1;
+  padding: 0.3em 0.6em;
+  border-radius: 999px;
+  /* Text is darkened in light mode (lightened in dark) from the rail colour so every chip clears
+     4.5:1 on its own tint; amber is the one that would fail otherwise. */
+  color: color-mix(in oklch, var(--bw-sev, var(--bw-sev-info)) 72%, var(--vp-c-text-1));
+  background: color-mix(in oklch, var(--bw-sev, var(--bw-sev-info)) 13%, transparent);
+  white-space: nowrap;
+}
+.bw-sev::before {
+  content: "";
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 50%;
+  background: currentColor;
+}
+.bw-sev-critical { --bw-sev: var(--bw-sev-critical); }
+.bw-sev-high { --bw-sev: var(--bw-sev-high); }
+.bw-sev-medium { --bw-sev: var(--bw-sev-medium); }
+.bw-sev-low { --bw-sev: var(--bw-sev-low); }
+.bw-sev-info { --bw-sev: var(--bw-sev-info); }
+
+.vp-doc .bw-check-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.9rem;
+  font-size: 0.85rem;
+}
+.vp-doc .bw-check-meta a.bw-check-group {
+  color: var(--vp-c-text-2);
+  text-decoration: none;
+  font-weight: 500;
+}
+.vp-doc .bw-check-meta a.bw-check-group:hover { color: var(--vp-c-brand-1); }
+.vp-doc .bw-check-meta .bw-check-id {
+  margin-left: auto;
+  font-size: 0.8rem;
+  color: var(--vp-c-text-3);
+  background: transparent;
+  padding: 0;
+}
+.vp-doc .bw-check-note {
+  margin-top: -0.5rem;
+  color: var(--vp-c-text-2);
+  font-size: 0.9rem;
+}
+.vp-doc .bw-check-how {
+  margin: 1.25rem 0 0;
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 10px;
+}
+.vp-doc .bw-check-how summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+.vp-doc .bw-check-how[open] summary { margin-bottom: 0.5rem; }
+.vp-doc .bw-check-how > :last-child { margin-bottom: 0.25rem; }
+
+.bw-checks-filter {
+  width: 100%;
+  margin: 1.25rem 0 0.5rem;
+  padding: 0.65rem 0.9rem;
+  font-size: 16px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 10px;
+  background: var(--vp-c-bg-soft);
+}
+.bw-checks-filter:focus {
+  outline: 2px solid var(--vp-c-brand-1);
+  outline-offset: 1px;
+}
+.vp-doc .bw-checks-count {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--vp-c-text-3);
+}
+.vp-doc .bw-checks-group h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.bw-checks-n {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--vp-c-text-3);
+}
+.vp-doc .bw-checks-blurb {
+  margin: 0.25rem 0 0.75rem;
+  color: var(--vp-c-text-2);
+}
+.vp-doc .bw-checks ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.vp-doc .bw-checks li { margin: 0; }
+.vp-doc .bw-checks li + li { border-top: 1px solid var(--vp-c-divider); }
+.vp-doc .bw-checks li a {
+  display: grid;
+  grid-template-columns: 6.5rem 1fr auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.9rem;
+  color: var(--vp-c-text-1);
+  text-decoration: none;
+  transition: background-color 0.15s ease;
+}
+.vp-doc .bw-checks li a:hover { background: var(--vp-c-bg-soft); }
+.vp-doc .bw-checks li .bw-sev { justify-self: start; }
+.vp-doc .bw-checks li code {
+  font-size: 0.75rem;
+  color: var(--vp-c-text-3);
+  background: transparent;
+  padding: 0;
+}
+@media (max-width: 640px) {
+  .vp-doc .bw-checks li a { grid-template-columns: 1fr; gap: 0.3rem; }
 }

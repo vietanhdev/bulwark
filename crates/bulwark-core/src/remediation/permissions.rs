@@ -16,7 +16,6 @@
 //! Dry-run is the default everywhere: nothing is written unless the caller passes `apply = true`.
 
 use serde::{Deserialize, Serialize};
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 /// One path we want at a specific mode, with a human label for the report.
@@ -129,7 +128,14 @@ pub fn tighten_permissions(targets: &[PermTarget], apply: bool) -> PermReport {
             continue;
         }
 
-        let current = meta.permissions().mode() & 0o777;
+        let Some(current) = crate::platform::file_mode(&meta).map(|m| m & 0o777) else {
+            result.outcome = PermOutcome::Failed {
+                reason: "file modes are not supported on this platform".into(),
+            };
+            report.failed += 1;
+            report.results.push(result);
+            continue;
+        };
         result.current_mode = Some(format!("{current:o}"));
 
         if !is_too_permissive(current, t.desired) {
@@ -150,8 +156,7 @@ pub fn tighten_permissions(targets: &[PermTarget], apply: bool) -> PermReport {
             continue;
         }
 
-        match std::fs::set_permissions(&t.path, std::fs::Permissions::from_mode(t.desired & 0o777))
-        {
+        match crate::platform::set_file_mode(&t.path, t.desired & 0o777) {
             Ok(()) => {
                 result.outcome = PermOutcome::Tightened {
                     from,
@@ -241,10 +246,11 @@ pub fn etc_permission_targets() -> Vec<PermTarget> {
     ]
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::fs;
+    use std::os::unix::fs::PermissionsExt;
 
     fn mode_of(p: &Path) -> u32 {
         fs::symlink_metadata(p).unwrap().permissions().mode() & 0o777

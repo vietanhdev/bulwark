@@ -2,6 +2,7 @@
 //! would run it. The remediation *logic* is unit-tested in `bulwark-core`; this proves the CLI
 //! wiring — argument parsing, the dry-run/apply split, the root gate's `--config` exemption, and the
 //! human-readable output — actually hangs together.
+#![cfg(unix)]
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;

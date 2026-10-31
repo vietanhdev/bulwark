@@ -183,6 +183,7 @@ mod tests {
         assert_eq!(fact.get("has_install_section").unwrap(), &Value::Bool(true));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_dangling_symlink_does_not_hide_a_real_payload_unit_beside_it() {
         // The exact regression: a purged package leaves a dangling `.service` symlink, and an

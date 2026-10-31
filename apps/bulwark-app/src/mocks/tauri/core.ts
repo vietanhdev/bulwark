@@ -698,6 +698,10 @@ const handlers: Record<string, (args: Args) => unknown> = {
     console.info("[mock] open_flagged_file", args?.path, "reveal=", args?.reveal);
     return null;
   },
+  open_check_page: (args?: Args) => {
+    console.info("[mock] open_check_page", args?.ruleId);
+    return null;
+  },
 };
 
 export async function invoke<T>(cmd: string, args?: Args): Promise<T> {
