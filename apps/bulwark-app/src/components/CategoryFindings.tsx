@@ -177,6 +177,8 @@ function IssueTypeGroup({
   const goalOf = (t: string) => t.trim().split("\n")[0];
   const sameFix = group.items.every((f) => goalOf(f.fix_hint) === goalOf(group.items[0].fix_hint));
   const [open, setOpen] = useState(false);
+  // Steps that differ per place only make sense next to each place, so start with them showing.
+  const [details, setDetails] = useState(!sameFix);
   const [ignoring, setIgnoring] = useState(false);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
@@ -206,6 +208,20 @@ function IssueTypeGroup({
   const capability = actions?.fixCapabilities?.get(group.ruleId);
   const groupAction = actions?.groupActionFor?.(group.ruleId) ?? null;
   const fixRow = capability ? <FixIssueButton capability={capability} onFixed={actions?.onFixed} /> : null;
+  // Per-place actions (removing a leaked secret from its file) are the fix itself, so the list of
+  // places moves up into the fix block instead of hiding under Details.
+  const placeActions = sameFix && group.items.some((f) => actions?.footerFor?.(f));
+  const autoFix = Boolean(fixRow || groupAction || placeActions);
+  const places = (
+    <ul className="space-y-1">
+      {group.items.map((f) => (
+        <li key={f.id} className="flex flex-wrap items-center gap-2">
+          <code className="font-mono text-xs break-all">{locationOf(f)}</code>
+          {actions?.footerFor?.(f)}
+        </li>
+      ))}
+    </ul>
+  );
 
   return (
     <div>
@@ -230,7 +246,7 @@ function IssueTypeGroup({
             </span>
           </span>
         </button>
-        {(capability || groupAction) && (
+        {autoFix && (
           <span
             className="hidden shrink-0 rounded-full border border-primary/40 px-2 py-0.5 text-[11px] font-medium text-primary sm:inline"
             title="Bulwark can fix this for you. Open the row to preview the change."
@@ -283,38 +299,61 @@ function IssueTypeGroup({
         </div>
       )}
       {open && (
-        <div className="flex flex-col gap-3 border-t border-border bg-muted/20 px-4 py-3 sm:pl-10">
-          {sameFix && count > 1 ? (
-            // One problem in several places: explain it once, then list where it was found.
-            <div>
-              <p className="text-sm leading-relaxed text-muted-foreground">{first.explanation}</p>
-              <div className="mt-2 text-xs font-medium text-muted-foreground">Found in {count} places</div>
-              <ul className="mt-1 space-y-1">
-                {group.items.map((f) => (
-                  <li key={f.id} className="flex flex-wrap items-center gap-2">
-                    <code className="font-mono text-xs break-all">{locationOf(f)}</code>
-                    {actions?.footerFor?.(f)}
-                  </li>
-                ))}
-              </ul>
+        <div className="flex flex-col gap-2.5 border-t border-border bg-muted/20 px-4 py-3 sm:pl-10">
+          {/* Why it matters, then the one thing to do about it. Everything else sits behind Details. */}
+          <p className="line-clamp-2 text-sm leading-relaxed text-muted-foreground" title={first.explanation}>
+            {first.explanation}
+          </p>
+          {autoFix ? (
+            <div className="flex flex-col gap-2">
+              {fixRow}
+              {groupAction}
+              {placeActions && places}
             </div>
           ) : (
-            <div className="divide-y divide-border">
-              {group.items.map((f) => (
-                <FindingCard
-                  key={f.id}
-                  finding={f}
-                  animate={streamed}
-                  showFix={!sameFix}
-                  variant="plain"
-                  footer={actions?.footerFor?.(f)}
-                />
-              ))}
-            </div>
+            sameFix && <FixSteps text={first.fix_hint} heading="Fix" />
           )}
-          {sameFix && <FixSteps text={first.fix_hint} />}
-          {fixRow}
-          {groupAction}
+          <div>
+            <button
+              type="button"
+              onClick={() => setDetails((d) => !d)}
+              aria-expanded={details}
+              className="flex items-center gap-1 rounded text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            >
+              <ChevronRight className={cn("h-3 w-3 transition-transform", details && "rotate-90")} />
+              Details
+              <span className="font-normal">
+                ·{" "}
+                {[
+                  !placeActions && (count === 1 ? locationOf(first) : `${count} places`),
+                  autoFix && sameFix && "manual steps",
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </span>
+            </button>
+            {details && (
+              <div className="mt-2 flex flex-col gap-3">
+                {sameFix ? (
+                  !placeActions && places
+                ) : (
+                  <div className="divide-y divide-border">
+                    {group.items.map((f) => (
+                      <FindingCard
+                        key={f.id}
+                        finding={f}
+                        animate={streamed}
+                        variant="plain"
+                        footer={actions?.footerFor?.(f)}
+                      />
+                    ))}
+                  </div>
+                )}
+                {autoFix && sameFix && <FixSteps text={first.fix_hint} heading="Or fix it yourself" />}
+                <span className="font-mono text-[10px] text-muted-foreground/70">{group.ruleId}</span>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

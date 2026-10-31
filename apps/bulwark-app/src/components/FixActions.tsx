@@ -202,8 +202,7 @@ export function FixIssueButton({
           Fix automatically
         </Button>
         <span className="text-[11px] text-muted-foreground">
-          Applies {FIX_TITLES[capability.kind]}. You'll see every change before anything is written
-          {capability.needs_root ? ", then confirm with your password" : ""}.
+          Shows every change first{capability.needs_root ? ", then asks for your password" : ""}.
         </span>
       </div>
     );

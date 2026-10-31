@@ -38,6 +38,7 @@ export function SshKeyProtect({
    *  ready (refreshing at once would replace this result before it could be read). */
   onDone?: () => void;
 } = {}) {
+  const [expanded, setExpanded] = useState(false);
   const [pass, setPass] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
@@ -150,16 +151,20 @@ export function SshKeyProtect({
   );
 
   if (variant === "inline") {
-    return (
-      <div className="rounded-md border border-border bg-card p-3">
-        <p className="text-sm font-medium">Add a passphrase to these keys now</p>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          One passphrase for every unprotected key in <code>~/.ssh</code>. Each key is backed up first, keys
-          that already have a passphrase are left alone, and your servers need no changes.
-        </p>
-        {body}
-      </div>
-    );
+    if (!expanded && !report) {
+      return (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <Button size="sm" variant="outline" onClick={() => setExpanded(true)}>
+            <KeyRound className="h-3.5 w-3.5" />
+            Add a passphrase
+          </Button>
+          <span className="text-[11px] text-muted-foreground">
+            One passphrase for all unprotected keys. Each key is backed up first.
+          </span>
+        </div>
+      );
+    }
+    return <div className="-mt-3">{body}</div>;
   }
 
   return (

@@ -60,7 +60,9 @@ test.describe("SSH key protection", () => {
     await expect(row).toBeVisible();
     await expect(row).toContainText(/lock the key with a passphrase/i);
     await row.click();
-    await expect(page.getByText("Add a passphrase to these keys now", { exact: true })).toBeVisible();
+    // Expanded, the row leads with the one-click fix; manual steps wait behind Details.
+    await expect(page.getByText(/in the bulwark app, open this issue/i)).toHaveCount(0);
+    await page.getByRole("button", { name: /^details/i }).click();
     // The shared steps show once for both keys.
     await expect(page.getByText(/in the bulwark app, open this issue/i)).toHaveCount(1);
     // Steps render as a numbered list, not one paragraph.
@@ -70,6 +72,7 @@ test.describe("SSH key protection", () => {
         .filter({ hasText: /ssh-add/ })
         .first(),
     ).toBeVisible();
+    await page.getByRole("button", { name: /^add a passphrase$/i }).click();
     const fields = page.getByPlaceholder(/passphrase/i);
     await fields.nth(0).fill("correct horse battery staple");
     await fields.nth(1).fill("correct horse battery staple");
