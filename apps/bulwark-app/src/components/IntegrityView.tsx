@@ -4,6 +4,7 @@ import { FileCheck2, Fingerprint, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { CommandBlock } from "@/components/ui/copy-button";
+import { FixSteps } from "@/components/FixSteps";
 import { PageShell, SectionLabel } from "@/components/PageShell";
 import { SeverityLabel, railStyle, type Severity } from "@/components/Severity";
 import { useRevision } from "@/lib/revision";
@@ -150,14 +151,14 @@ export function IntegrityView() {
                   style={railStyle(f.severity)}
                 >
                   <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-                    <span className="font-mono text-xs font-semibold tracking-tight text-muted-foreground">
-                      {f.rule_id}
-                    </span>
+                    <h3 className="text-sm font-semibold">{f.title}</h3>
                     <SeverityLabel severity={f.severity} />
                   </div>
-                  <h3 className="mt-1.5 text-sm font-semibold">{f.title}</h3>
                   <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{f.explanation}</p>
-                  <CommandBlock command={f.fix_hint} className="mt-2.5" />
+                  <FixSteps text={f.fix_hint} className="mt-2.5" />
+                  <div className="mt-2 text-right font-mono text-[10px] text-muted-foreground/70">
+                    {f.rule_id}
+                  </div>
                 </article>
               ))}
             </div>

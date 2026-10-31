@@ -1,10 +1,12 @@
-import { useState } from "react";
-import { Ban, Check, ChevronRight, Copy, MoreVertical, RotateCw } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { Ban, ChevronRight, MoreVertical, RotateCw } from "lucide-react";
 import { FindingCard, type Finding } from "@/components/FindingCard";
 import { FixIssueButton } from "@/components/FixActions";
+import { FixSteps } from "@/components/FixSteps";
+import { recommendation } from "@/lib/fix-text";
 import { type FixCapability } from "@/lib/fixes";
-import { SEVERITY_ORDER, SeverityDot, SeverityLabel, railStyle, type Severity } from "@/components/Severity";
-import { categoryLabel } from "@/lib/format";
+import { SEVERITY_ORDER, SeverityLabel, type Severity } from "@/components/Severity";
+import { GROUP_ORDER, groupInfo, groupOf } from "@/lib/groups";
 import { cn } from "@/lib/utils";
 
 export interface FindingGroup {
@@ -24,16 +26,20 @@ export interface IssueActions {
   onRecheck?: () => void;
   fixCapabilities?: Map<string, FixCapability>;
   onFixed?: () => void;
+  /** Extra per-finding action for the card footer (e.g. removing a leaked secret from its file). */
+  footerFor?: (f: Finding) => ReactNode;
+  /** A tool that fixes every instance of a problem at once (e.g. adding a passphrase to all
+   *  unprotected SSH keys), shown in the expanded row and marked "Auto-fix" on the row. */
+  groupActionFor?: (ruleId: string) => ReactNode;
 }
 
 const bySeverity = (a: Finding, b: Finding) =>
   SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity);
 
 /**
- * Groups findings by the category that produced them, worst-severity group first. `categoryOf`
- * maps a rule id to its category; agent-security findings (which aren't in the YAML rule pack)
- * fall into their own `agent-security` bucket. Shared so the Overview and the Compliance tab bucket
- * issues identically.
+ * Groups findings into the user-facing groups in `lib/groups.ts` (what they protect, not the rule
+ * pack's directories), worst-severity group first. `categoryOf` maps a rule id to its rule-pack
+ * category, which `groupOf` turns into a group. Shared so Home and Checkups group identically.
  */
 export function groupFindingsByCategory(
   findings: Finding[],
@@ -41,10 +47,10 @@ export function groupFindingsByCategory(
 ): FindingGroup[] {
   const groups = new Map<string, Finding[]>();
   for (const f of findings) {
-    const category = f.rule_id.startsWith("BLWK-AI-") ? "agent-security" : categoryOf(f.rule_id);
-    const list = groups.get(category);
+    const group = groupOf(f.rule_id, categoryOf(f.rule_id));
+    const list = groups.get(group);
     if (list) list.push(f);
-    else groups.set(category, [f]);
+    else groups.set(group, [f]);
   }
   return Array.from(groups.entries())
     .map(([category, items]) => ({
@@ -55,7 +61,7 @@ export function groupFindingsByCategory(
     .sort((a, b) => {
       const wa = a.worst ? SEVERITY_ORDER.indexOf(a.worst) : 99;
       const wb = b.worst ? SEVERITY_ORDER.indexOf(b.worst) : 99;
-      return wa - wb || a.category.localeCompare(b.category);
+      return wa - wb || GROUP_ORDER.indexOf(a.category) - GROUP_ORDER.indexOf(b.category);
     });
 }
 
@@ -89,15 +95,14 @@ function groupByType(items: Finding[]): TypeGroup[] {
 }
 
 /**
- * One category's findings, under a collapsible header carrying the category's worst severity, its
- * count, and a "copy all fixes" action. Inside, findings are sub-grouped by rule *type* so a rule
+ * One category's findings, under a collapsible header carrying the category's worst severity and
+ * its count. Inside, findings are sub-grouped by rule *type* so a rule
  * that fired many times collapses to a single row you can expand — and each type carries a menu to
  * ignore that type of issue or recheck it.
  */
 export function CategoryFindings({
   category,
   items,
-  worst,
   streamed,
   collapsed,
   onToggle,
@@ -105,39 +110,32 @@ export function CategoryFindings({
 }: {
   category: string;
   items: Finding[];
-  worst: Severity | null;
+  /** Worst severity in the group; kept for callers, the rows carry their own severity. */
+  worst?: Severity | null;
   streamed?: boolean;
   collapsed: boolean;
   onToggle: () => void;
   actions?: IssueActions;
 }) {
   const types = groupByType(items);
+  const info = groupInfo(category);
   return (
     <section>
-      <div className="mb-2 flex items-center gap-2">
-        <button
-          type="button"
-          onClick={onToggle}
-          aria-expanded={!collapsed}
-          className="group flex min-w-0 flex-1 items-center gap-2 rounded py-0.5 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-        >
-          <ChevronRight
-            className={cn(
-              "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
-              !collapsed && "rotate-90",
-            )}
-          />
-          {worst && <SeverityDot severity={worst} />}
-          <span className="truncate font-mono text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
-            {categoryLabel(category)}
-          </span>
-          <span className="font-mono text-[11px] tabular-nums text-muted-foreground/60">{items.length}</span>
-        </button>
-        <CopyFixesButton commands={items.map((f) => f.fix_hint)} />
-      </div>
-
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={!collapsed}
+        title={info.blurb}
+        className="mb-2 flex items-center gap-1.5 rounded text-xs font-semibold tracking-wide text-muted-foreground uppercase hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      >
+        <ChevronRight
+          className={cn("h-3.5 w-3.5 shrink-0 transition-transform", !collapsed && "rotate-90")}
+        />
+        {info.title}
+        <span className="font-normal tabular-nums normal-case">{types.length}</span>
+      </button>
       {!collapsed && (
-        <div className="flex flex-col gap-2.5">
+        <div className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-card">
           {types.map((t) => (
             <IssueTypeGroup key={t.ruleId} group={t} streamed={streamed} actions={actions} />
           ))}
@@ -147,9 +145,22 @@ export function CategoryFindings({
   );
 }
 
-/** One rule type within a category. A single finding renders as a plain card (with the actions
- *  menu); a rule that fired more than once collapses under a count header you expand to see each
- *  instance. Large groups start collapsed so a noisy rule doesn't bury the rest. */
+/** Where one instance of a problem was found: its file (and line), or the path/port its fact names. */
+function locationOf(f: Finding): string {
+  if (f.file) return f.line ? `${f.file}:${f.line}` : f.file;
+  const c = f.context ?? {};
+  if (typeof c.path === "string") return c.path;
+  if (c.port !== undefined)
+    return `port ${String(c.port)}${typeof c.listen_address === "string" ? ` on ${c.listen_address}` : ""}`;
+  return f.title;
+}
+
+/**
+ * One root cause: a rule, however many places it fired. Collapsed it is a single row (severity,
+ * title, how many places, the recommendation in one sentence, and the automatic fix when there is
+ * one), so a long scan reads as a short list of problems. Clicking the row opens the full steps and
+ * every individual finding with its file, explanation and actions.
+ */
 function IssueTypeGroup({
   group,
   streamed,
@@ -159,8 +170,13 @@ function IssueTypeGroup({
   streamed?: boolean;
   actions?: IssueActions;
 }) {
-  const multi = group.items.length > 1;
-  const [open, setOpen] = useState(group.items.length <= 3);
+  const count = group.items.length;
+  // When every instance has the same fix text, show it once for the group, not on each card.
+  // Instances whose fixes differ only in a file path (one per SSH key, say) share the same goal
+  // line; showing the steps once keeps the expanded row short. Each instance still shows its path.
+  const goalOf = (t: string) => t.trim().split("\n")[0];
+  const sameFix = group.items.every((f) => goalOf(f.fix_hint) === goalOf(group.items[0].fix_hint));
+  const [open, setOpen] = useState(false);
   const [ignoring, setIgnoring] = useState(false);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
@@ -188,60 +204,17 @@ function IssueTypeGroup({
   }
 
   const capability = actions?.fixCapabilities?.get(group.ruleId);
+  const groupAction = actions?.groupActionFor?.(group.ruleId) ?? null;
   const fixRow = capability ? <FixIssueButton capability={capability} onFixed={actions?.onFixed} /> : null;
 
-  const reasonRow = ignoring ? (
-    <div className="mt-2 flex items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-2">
-      <input
-        autoFocus
-        value={reason}
-        onChange={(e) => setReason(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && confirmIgnore()}
-        placeholder="Reason for accepting this risk…"
-        className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
-      />
-      <button
-        type="button"
-        onClick={confirmIgnore}
-        disabled={busy || !reason.trim()}
-        className="flex items-center gap-1 rounded border border-border px-2 py-0.5 text-[11px] font-medium transition-colors hover:bg-accent disabled:opacity-50"
-      >
-        <Ban className="h-3 w-3" />
-        Ignore type
-      </button>
-      <button
-        type="button"
-        onClick={() => {
-          setIgnoring(false);
-          setReason("");
-        }}
-        className="rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
-      >
-        Cancel
-      </button>
-    </div>
-  ) : null;
-
-  // Single finding: the card itself carries the menu.
-  if (!multi) {
-    return (
-      <div>
-        <FindingCard finding={first} animate={streamed} action={menu} />
-        {fixRow}
-        {reasonRow}
-      </div>
-    );
-  }
-
-  // Many of the same rule: a collapsible count header owns the menu; expanding shows each instance.
   return (
-    <div className="rail rail-dim rounded-md border border-border bg-card" style={railStyle(group.worst)}>
-      <div className="flex items-center gap-2 py-2.5 pr-2.5 pl-3">
+    <div>
+      <div className="flex items-center gap-2 pr-2 transition-colors hover:bg-muted/40">
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
           aria-expanded={open}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+          className="flex min-w-0 flex-1 items-center gap-3 py-2.5 pl-3 text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
         >
           <ChevronRight
             className={cn(
@@ -249,24 +222,99 @@ function IssueTypeGroup({
               open && "rotate-90",
             )}
           />
-          <span className="font-mono text-xs font-semibold tracking-tight text-muted-foreground">
-            {group.ruleId}
-          </span>
-          <SeverityLabel severity={group.worst} />
-          <span className="min-w-0 flex-1 truncate text-sm">{first.title}</span>
-          <span className="shrink-0 rounded-full bg-muted px-1.5 font-mono text-[11px] tabular-nums text-muted-foreground">
-            {group.items.length}
+          <SeverityLabel severity={group.worst} className="w-16 justify-center" />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-medium">{first.title}</span>
+            <span className="block truncate text-xs text-muted-foreground">
+              {recommendation(first.fix_hint)}
+            </span>
           </span>
         </button>
+        {(capability || groupAction) && (
+          <span
+            className="hidden shrink-0 rounded-full border border-primary/40 px-2 py-0.5 text-[11px] font-medium text-primary sm:inline"
+            title="Bulwark can fix this for you. Open the row to preview the change."
+          >
+            Auto-fix
+          </span>
+        )}
+        {count > 1 && (
+          <span
+            className="shrink-0 text-xs text-muted-foreground tabular-nums"
+            title={`Found in ${count} places`}
+          >
+            {count}×
+          </span>
+        )}
+        <span className="hidden w-32 shrink-0 truncate text-right font-mono text-[10px] text-muted-foreground/70 lg:inline">
+          {group.ruleId}
+        </span>
         {menu}
       </div>
-      {fixRow && <div className="px-3 pb-1">{fixRow}</div>}
-      {reasonRow && <div className="px-3 pb-2">{reasonRow}</div>}
+      {ignoring && (
+        <div className="mx-3 mb-2 flex items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-2">
+          <input
+            autoFocus
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && confirmIgnore()}
+            placeholder="Reason for accepting this risk…"
+            className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+          />
+          <button
+            type="button"
+            onClick={confirmIgnore}
+            disabled={busy || !reason.trim()}
+            className="flex items-center gap-1 rounded border border-border px-2 py-0.5 text-[11px] font-medium transition-colors hover:bg-accent disabled:opacity-50"
+          >
+            <Ban className="h-3 w-3" />
+            Ignore type
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setIgnoring(false);
+              setReason("");
+            }}
+            className="rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
       {open && (
-        <div className="flex flex-col gap-2.5 px-3 pb-3">
-          {group.items.map((f) => (
-            <FindingCard key={f.id} finding={f} animate={streamed} />
-          ))}
+        <div className="flex flex-col gap-3 border-t border-border bg-muted/20 px-4 py-3 sm:pl-10">
+          {sameFix && count > 1 ? (
+            // One problem in several places: explain it once, then list where it was found.
+            <div>
+              <p className="text-sm leading-relaxed text-muted-foreground">{first.explanation}</p>
+              <div className="mt-2 text-xs font-medium text-muted-foreground">Found in {count} places</div>
+              <ul className="mt-1 space-y-1">
+                {group.items.map((f) => (
+                  <li key={f.id} className="flex flex-wrap items-center gap-2">
+                    <code className="font-mono text-xs break-all">{locationOf(f)}</code>
+                    {actions?.footerFor?.(f)}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <div className="divide-y divide-border">
+              {group.items.map((f) => (
+                <FindingCard
+                  key={f.id}
+                  finding={f}
+                  animate={streamed}
+                  showFix={!sameFix}
+                  variant="plain"
+                  footer={actions?.footerFor?.(f)}
+                />
+              ))}
+            </div>
+          )}
+          {sameFix && <FixSteps text={first.fix_hint} />}
+          {fixRow}
+          {groupAction}
         </div>
       )}
     </div>
@@ -334,35 +382,5 @@ function IssueMenu({ onIgnore, onRecheck }: { onIgnore?: () => void; onRecheck?:
         </>
       )}
     </div>
-  );
-}
-
-/**
- * Copies every fix command in a category as one newline-separated block — paste it into a terminal
- * and remediate the whole subsystem in one go. Copy, not run: applying a root-level config change
- * is the user's deliberate act, so Bulwark hands you the exact commands rather than executing them
- * behind your back.
- */
-export function CopyFixesButton({ commands }: { commands: string[] }) {
-  const [copied, setCopied] = useState(false);
-  const block = commands.join("\n");
-  return (
-    <button
-      type="button"
-      onClick={() => {
-        navigator.clipboard.writeText(block).then(
-          () => setCopied(true),
-          () => setCopied(false),
-        );
-      }}
-      className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-    >
-      {copied ? (
-        <Check className="h-3 w-3" style={{ color: "var(--sev-resolved-fg)" }} strokeWidth={3} />
-      ) : (
-        <Copy className="h-3 w-3" strokeWidth={2} />
-      )}
-      {copied ? "Copied" : `Copy ${commands.length} fix${commands.length === 1 ? "" : "es"}`}
-    </button>
   );
 }

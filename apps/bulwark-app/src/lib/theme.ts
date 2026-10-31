@@ -31,6 +31,13 @@ export const CHROMES: { id: Chrome; label: string; swatch: string }[] = [
   { id: "graphite", label: "Graphite", swatch: "oklch(0.24 0.006 260)" },
 ];
 
+// Defaults: a teal accent on a neutral graphite sidebar. Every other hue already means something
+// here (red important, orange should fix, blue minor, green fixed), so an orange or blue primary
+// button read as a severity. Teal says "action" and nothing else. Ubuntu's orange/aubergine and the
+// other accents remain one click away in Settings.
+export const DEFAULT_ACCENT: Accent = "aqua";
+export const DEFAULT_CHROME: Chrome = "graphite";
+
 const THEME_KEY = "bulwark-theme";
 const ACCENT_KEY = "bulwark-accent";
 const CHROME_KEY = "bulwark-chrome";
@@ -45,12 +52,12 @@ export function getStoredTheme(): ThemeMode {
 
 export function getStoredAccent(): Accent {
   const v = localStorage.getItem(ACCENT_KEY) as Accent | null;
-  return v && ACCENTS.some((a) => a.id === v) ? v : "orange";
+  return v && ACCENTS.some((a) => a.id === v) ? v : DEFAULT_ACCENT;
 }
 
 export function getStoredChrome(): Chrome {
   const v = localStorage.getItem(CHROME_KEY) as Chrome | null;
-  return v && CHROMES.some((c) => c.id === v) ? v : "aubergine";
+  return v && CHROMES.some((c) => c.id === v) ? v : DEFAULT_CHROME;
 }
 
 /** Whether the given mode resolves to a dark appearance right now. */

@@ -8,6 +8,9 @@ import { CategoryFindings, groupFindingsByCategory } from "@/components/Category
 import { FixAllButton } from "@/components/FixActions";
 import { useFixCapabilities } from "@/lib/fixes";
 import { type Finding } from "@/components/FindingCard";
+import { RedactButton } from "@/components/RedactButton";
+import { SshKeyProtect } from "@/components/SshKeyProtect";
+import { withLocation } from "@/lib/findings";
 import { SEVERITY_ORDER } from "@/components/Severity";
 import { useRevision } from "@/lib/revision";
 
@@ -44,12 +47,9 @@ type ScanEvent =
 const bySeverity = (a: Finding, b: Finding) =>
   SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity);
 
-// A finding this tab owns: the configuration rule pack, minus the two engines that have their own
-// tabs — the agent scanner (BLWK-AI-) and file integrity (BLWK-FIM-). Excluding FIM here is what
-// keeps this tab's count equal to the Overview's Compliance tile and distinct from the File
-// integrity tab, so the same issue is never counted in two places.
-const isComplianceFinding = (f: Finding) =>
-  !f.rule_id.startsWith("BLWK-AI-") && !f.rule_id.startsWith("BLWK-FIM-");
+// A finding this tab owns: every Checkups issue, AI assistant checks included, minus file integrity
+// (BLWK-FIM-), which has its own tab, so the same issue is never counted in two places.
+const isComplianceFinding = (f: Finding) => !f.rule_id.startsWith("BLWK-FIM-");
 
 /**
  * The Compliance scan's results: every configuration issue the rule pack found on this host —
@@ -91,7 +91,7 @@ export function ComplianceView() {
     invoke<DashboardSnapshot>("dashboard_snapshot")
       .then((snap) => {
         if (!snap.meta) return;
-        setFindings(snap.findings.filter(isComplianceFinding).sort(bySeverity));
+        setFindings(snap.findings.filter(isComplianceFinding).map(withLocation).sort(bySeverity));
         setSkippedPrivileged(snap.meta.privileged_collectors_skipped);
         setHasScanned(true);
         setStreamed(false);
@@ -185,7 +185,13 @@ export function ComplianceView() {
     try {
       const result = await invoke<ScanRunResult>("scan_privileged");
       setStreamed(false);
-      setFindings(result.findings.filter(isComplianceFinding).sort(bySeverity));
+      // The privileged run re-checks system settings only; keep the AI assistant findings already shown.
+      setFindings((prev) =>
+        [
+          ...prev.filter((f) => f.rule_id.startsWith("BLWK-AI-")),
+          ...result.findings.filter(isComplianceFinding),
+        ].sort(bySeverity),
+      );
       setSkippedPrivileged(result.privileged_collectors_skipped);
       setErrors(result.collector_errors.map((e) => `${e.collector}: ${e.message}`));
       setPrivilegedRunDone(true);
@@ -297,6 +303,10 @@ export function ComplianceView() {
                   onRecheck: runScan,
                   fixCapabilities,
                   onFixed: runScan,
+                  footerFor: (f) =>
+                    f.redactable && f.file ? <RedactButton file={f.file} onDone={bump} /> : null,
+                  groupActionFor: (ruleId) =>
+                    ruleId === "BLWK-SSH-012" ? <SshKeyProtect variant="inline" onDone={runScan} /> : null,
                 }}
               />
             ))}

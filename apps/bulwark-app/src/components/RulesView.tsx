@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Ban, Check, ChevronRight, History, RotateCcw, Search, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Callout } from "@/components/ui/callout";
-import { CommandBlock } from "@/components/ui/copy-button";
+import { FixSteps } from "@/components/FixSteps";
 import { PageShell, SectionLabel } from "@/components/PageShell";
 import { HardeningRing } from "@/components/HardeningRing";
 import {
@@ -594,7 +594,7 @@ export function RulesView() {
                                     <p className="text-xs leading-relaxed text-muted-foreground">
                                       {r.explain.trim()}
                                     </p>
-                                    <CommandBlock command={r.fix} className="mt-2.5 bg-card" />
+                                    <FixSteps text={r.fix} className="mt-2.5 bg-card" />
                                     {/* Which standards this one rule is evidence for. Answers the
                                     question an auditor actually asks — "why does this check
                                     matter to me?" — without making the reader cross-reference the

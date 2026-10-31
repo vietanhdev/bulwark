@@ -7,16 +7,16 @@ export type Severity = "critical" | "high" | "medium" | "low" | "info";
 export const SEVERITY_ORDER: Severity[] = ["critical", "high", "medium", "low", "info"];
 
 /**
- * Action-oriented, plain-language labels rather than the raw CIS severity words — a home user reads
- * "Should fix" and knows what to do, where "High" only ranks it. The underlying `Severity` enum
- * (and its colours, ordering and storage) is unchanged; this is purely how the level is spoken.
+ * The standard severity words developers already know from every other scanner, CI log and CVE
+ * feed, and the same ones the CLI, rule files and exports use. (Earlier builds used "Important /
+ * Should fix / Minor", which hid that ordering and disagreed with everything outside the app.)
  */
 const LABEL: Record<Severity, string> = {
-  critical: "Important",
-  high: "Should fix",
-  medium: "Worth doing",
-  low: "Minor",
-  info: "FYI",
+  critical: "Critical",
+  high: "High",
+  medium: "Medium",
+  low: "Low",
+  info: "Info",
 };
 
 /** The plain-language label for a severity — the single source of truth, shared by the chip, the

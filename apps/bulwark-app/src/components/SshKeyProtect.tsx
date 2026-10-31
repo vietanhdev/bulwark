@@ -27,7 +27,17 @@ interface ProtectReport {
  * ssh-keygen via SSH_ASKPASS (never argv), backs each key up, and only touches keys it can
  * confirm are unencrypted.
  */
-export function SshKeyProtect() {
+export function SshKeyProtect({
+  variant = "card",
+  onDone,
+}: {
+  /** "inline" is the compact form shown inside the "SSH private key is not passphrase-protected"
+   *  problem, without the settings-card chrome. */
+  variant?: "card" | "inline";
+  /** Offered as a "Re-check" button once keys are protected, so the list refreshes when the user is
+   *  ready (refreshing at once would replace this result before it could be read). */
+  onDone?: () => void;
+} = {}) {
   const [pass, setPass] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
@@ -53,6 +63,105 @@ export function SshKeyProtect() {
     }
   }
 
+  const body = (
+    <>
+      <form
+        className="mt-3 flex flex-col gap-2 sm:max-w-sm"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (canSubmit) void run();
+        }}
+      >
+        <Input
+          type="password"
+          autoComplete="new-password"
+          placeholder="New passphrase"
+          value={pass}
+          onChange={(e) => setPass(e.target.value)}
+          disabled={busy}
+        />
+        <Input
+          type="password"
+          autoComplete="new-password"
+          placeholder="Confirm passphrase"
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+          disabled={busy}
+          aria-invalid={mismatch}
+        />
+        {mismatch && <p className="text-xs text-[var(--sev-high-fg)]">Passphrases don't match.</p>}
+        <Button type="submit" disabled={!canSubmit} className="self-start">
+          {busy ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" /> Protecting…
+            </>
+          ) : (
+            <>
+              <ShieldCheck className="h-4 w-4" /> Protect unencrypted keys
+            </>
+          )}
+        </Button>
+      </form>
+
+      {error && (
+        <Callout tone="critical" className="mt-3">
+          {error}
+        </Callout>
+      )}
+
+      {report && (
+        <div className="mt-3 text-sm">
+          <p className="font-medium">
+            {report.protected} protected
+            {report.already_encrypted > 0 && `, ${report.already_encrypted} already encrypted`}
+            {report.undetermined > 0 && `, ${report.undetermined} skipped`}
+            {report.failed > 0 && `, ${report.failed} failed`}.
+          </p>
+          {report.protected > 0 && onDone && (
+            <Button size="sm" variant="outline" className="mt-2" onClick={onDone}>
+              Re-check
+            </Button>
+          )}
+          {report.protected > 0 && (
+            <p className="mt-1 text-muted-foreground">
+              Rotate anything that may have leaked while unprotected, and load a key into your agent with{" "}
+              <code>ssh-add</code> to avoid retyping the passphrase.
+            </p>
+          )}
+          <ul className="mt-2 space-y-1 font-mono text-xs">
+            {report.results.map((r) => (
+              <li key={r.path} className="flex items-center justify-between gap-2">
+                <span className="truncate text-muted-foreground">{r.path}</span>
+                <span
+                  className={cn(
+                    "shrink-0",
+                    r.outcome.status === "protected" && "text-[var(--sev-resolved-fg)]",
+                    r.outcome.status === "failed" && "text-[var(--sev-critical-fg)]",
+                  )}
+                >
+                  {r.outcome.status.replace(/_/g, " ")}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </>
+  );
+
+  if (variant === "inline") {
+    return (
+      <div className="rounded-md border border-border bg-card p-3">
+        <p className="text-sm font-medium">Add a passphrase to these keys now</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          One passphrase for every unprotected key in <code>~/.ssh</code>. Each key is backed up first, keys
+          that already have a passphrase are left alone, and your servers need no changes.
+        </p>
+        {body}
+      </div>
+    );
+  }
+
   return (
     <div className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-start gap-3">
@@ -64,83 +173,7 @@ export function SshKeyProtect() {
             password is far better than plaintext keys on disk. Already-encrypted keys are left alone, and
             each modified key is backed up first.
           </p>
-
-          <form
-            className="mt-3 flex flex-col gap-2 sm:max-w-sm"
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (canSubmit) void run();
-            }}
-          >
-            <Input
-              type="password"
-              autoComplete="new-password"
-              placeholder="New passphrase"
-              value={pass}
-              onChange={(e) => setPass(e.target.value)}
-              disabled={busy}
-            />
-            <Input
-              type="password"
-              autoComplete="new-password"
-              placeholder="Confirm passphrase"
-              value={confirm}
-              onChange={(e) => setConfirm(e.target.value)}
-              disabled={busy}
-              aria-invalid={mismatch}
-            />
-            {mismatch && <p className="text-xs text-[var(--sev-high-fg)]">Passphrases don't match.</p>}
-            <Button type="submit" disabled={!canSubmit} className="self-start">
-              {busy ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" /> Protecting…
-                </>
-              ) : (
-                <>
-                  <ShieldCheck className="h-4 w-4" /> Protect unencrypted keys
-                </>
-              )}
-            </Button>
-          </form>
-
-          {error && (
-            <Callout tone="critical" className="mt-3">
-              {error}
-            </Callout>
-          )}
-
-          {report && (
-            <div className="mt-3 text-sm">
-              <p className="font-medium">
-                {report.protected} protected
-                {report.already_encrypted > 0 && `, ${report.already_encrypted} already encrypted`}
-                {report.undetermined > 0 && `, ${report.undetermined} skipped`}
-                {report.failed > 0 && `, ${report.failed} failed`}.
-              </p>
-              {report.protected > 0 && (
-                <p className="mt-1 text-muted-foreground">
-                  Rotate anything that may have leaked while unprotected, and load a key into your agent with{" "}
-                  <code>ssh-add</code> to avoid retyping the passphrase.
-                </p>
-              )}
-              <ul className="mt-2 space-y-1 font-mono text-xs">
-                {report.results.map((r) => (
-                  <li key={r.path} className="flex items-center justify-between gap-2">
-                    <span className="truncate text-muted-foreground">{r.path}</span>
-                    <span
-                      className={cn(
-                        "shrink-0",
-                        r.outcome.status === "protected" && "text-[var(--sev-resolved-fg)]",
-                        r.outcome.status === "failed" && "text-[var(--sev-critical-fg)]",
-                      )}
-                    >
-                      {r.outcome.status.replace(/_/g, " ")}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+          {body}
         </div>
       </div>
     </div>

@@ -9,6 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { PageShell, SectionLabel } from "@/components/PageShell";
 import { ShieldMark } from "@/components/ShieldMark";
 import { SshKeyProtect, SshPermFix } from "@/components/SshKeyProtect";
+import { AiScanSettings } from "@/components/AiScanSettings";
 import { AppearanceSettings } from "@/components/AppearanceSettings";
 import { useRevision } from "@/lib/revision";
 import { cn } from "@/lib/utils";
@@ -72,7 +73,7 @@ function formatRelative(iso: string | null, now: number): string {
  * string and three links. Promoting either to the same rank as Overview or Rules told the user
  * they were somewhere they'd need to go regularly, which isn't true of either.
  */
-export function SettingsView() {
+export function SettingsView({ active = true }: { active?: boolean }) {
   const { bump } = useRevision();
   const [status, setStatus] = useState<MonitoringStatus | null>(null);
   const [toggleBusy, setToggleBusy] = useState(false);
@@ -214,6 +215,8 @@ export function SettingsView() {
             </div>
           )}
         </section>
+
+        <AiScanSettings active={active} />
 
         <section>
           <SectionLabel>SSH hardening</SectionLabel>

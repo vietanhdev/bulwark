@@ -5,14 +5,16 @@ import { goToView, visibleText } from "./fixtures";
 // labels, not fixture data). Assertions are visibility-aware because inactive
 // views stay mounted and hidden.
 const VIEW_SECTIONS: { label: string; sections: RegExp[] }[] = [
-  { label: "Home", sections: [/scans/i, /scan scope/i] },
+  { label: "Home", sections: [/^checks:/i, /problems? to fix|all clear/i, /secrets & credentials/i] },
   { label: "Checkups", sections: [/issues to fix|all clear|no issues/i] },
   { label: "Virus scan", sections: [/real-time protection/i, /manual scan/i] },
-  { label: "AI assistants", sections: [/findings/i] },
   { label: "File changes", sections: [/what.?s watched/i, /integrity findings/i] },
   { label: "All checks", sections: [/accounts.*services/i, /kernel hardening/i, /filesystem permissions/i] },
   { label: "Activity", sections: [/findings over time/i, /open by severity/i, /scan history/i] },
-  { label: "Settings", sections: [/appearance/i, /continuous monitoring/i, /ssh hardening/i] },
+  {
+    label: "Settings",
+    sections: [/appearance/i, /continuous monitoring/i, /ai assistant checks/i, /ssh hardening/i],
+  },
 ];
 
 test.describe("view content", () => {

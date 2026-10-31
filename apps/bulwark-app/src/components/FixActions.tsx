@@ -40,13 +40,15 @@ function ChangeRows({ report }: { report: CombinedFixReport | null | undefined }
 }
 
 const FIX_TITLES: Record<FixCapability["kind"], string> = {
-  ssh_perms: "~/.ssh permission tightening",
-  etc_perms: "/etc permission tightening",
-  sshd: "sshd_config hardening",
-  sysctl: "Kernel network settings",
-  banner: "Login warning banner",
-  login_defs: "Password aging policy",
+  ssh_perms: "private permissions on your ~/.ssh folder",
+  etc_perms: "safe permissions on sensitive system files",
+  sshd: "Bulwark's recommended SSH server settings",
+  sysctl: "Bulwark's recommended kernel network settings",
+  banner: "a login warning banner",
+  login_defs: "a password aging policy",
 };
+
+const sentenceCase = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** One line per fixer explaining how the change is made safe — shown with the preview. */
 const FIX_BLURBS: Record<FixCapability["kind"], string> = {
@@ -194,41 +196,43 @@ export function FixIssueButton({
 
   if (!open) {
     return (
-      <div className="mt-2">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <Button size="sm" variant="outline" onClick={() => run(false)} disabled={busy}>
           {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wrench className="h-3.5 w-3.5" />}
-          Fix this
+          Fix automatically
         </Button>
-        <span className="ml-2 align-middle text-[11px] text-muted-foreground">
-          Shows what would change first
-          {capability.needs_root ? " — asks for your password" : ""}.
+        <span className="text-[11px] text-muted-foreground">
+          Applies {FIX_TITLES[capability.kind]}. You'll see every change before anything is written
+          {capability.needs_root ? ", then confirm with your password" : ""}.
         </span>
       </div>
     );
   }
 
   return (
-    <FixPanel
-      title={FIX_TITLES[capability.kind]}
-      report={report}
-      applied={applied}
-      busy={busy}
-      error={error}
-      note={FIX_BLURBS[capability.kind]}
-      danger={
-        capability.lockout_risk ? (
-          <span className="flex items-start gap-1.5">
-            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <span>
-              This can lock you out. Only apply it once you have confirmed key-based login to this host
-              already works — if you reach this machine by password, you will not be able to log back in.
+    <div className="w-full basis-full">
+      <FixPanel
+        title={sentenceCase(FIX_TITLES[capability.kind])}
+        report={report}
+        applied={applied}
+        busy={busy}
+        error={error}
+        note={FIX_BLURBS[capability.kind]}
+        danger={
+          capability.lockout_risk ? (
+            <span className="flex items-start gap-1.5">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>
+                This can lock you out. Only apply it once you have confirmed key-based login to this host
+                already works — if you reach this machine by password, you will not be able to log back in.
+              </span>
             </span>
-          </span>
-        ) : null
-      }
-      onApply={() => run(true)}
-      onDismiss={dismiss}
-    />
+          ) : null
+        }
+        onApply={() => run(true)}
+        onDismiss={dismiss}
+      />
+    </div>
   );
 }
 
