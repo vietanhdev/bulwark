@@ -871,6 +871,9 @@ fn ai_finding_as_finding(
     if let Some(line) = f.line {
         context.insert("line".into(), serde_json::Value::from(line as u64));
     }
+    // Lets Home offer "Remove secret from this file" without a separate AI page. Only a hint for the
+    // button: `ai_redact` still re-checks the file against the last scan's redactable set.
+    context.insert("redactable".into(), serde_json::Value::Bool(f.redactable));
     Finding {
         id: f.id,
         rule_id: f.rule_id.clone(),

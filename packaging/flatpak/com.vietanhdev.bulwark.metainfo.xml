@@ -108,6 +108,18 @@
   </branding>
 
   <releases>
+    <release version="0.11.0" date="2026-10-31">
+      <description>
+        <p>One clear list of problems, new credential and supply-chain checks, and a calmer design.</p>
+        <ul>
+          <li>Findings are grouped by what they protect, and each problem shows once with its recommendation; details open on click</li>
+          <li>AI assistant checks are part of Checkups and look for keys leaked into agent sessions and memory only</li>
+          <li>New checks for long-lived AWS keys, plaintext Git and Docker credentials, readable token files, services open to the network, a missing firewall, Python startup hooks and the LiteLLM 1.107.0 compromise</li>
+          <li>Fix steps are written in plain words with copyable commands, and leaked secrets can be removed from a finding</li>
+          <li>New default colours: a teal accent on a neutral sidebar, keeping red, orange, blue and green for severity</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.10.2" date="2026-10-04">
       <description>
         <p>A maintenance release with updated desktop and scanner dependencies.</p>
