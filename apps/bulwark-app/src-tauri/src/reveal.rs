@@ -85,3 +85,63 @@ pub fn open_flagged_file(app: tauri::AppHandle, path: String, reveal: bool) -> R
             .map_err(|e| format!("couldn't open {path}: {e}"))
     }
 }
+
+/// The website page for a check, built from the rule ID alone so this command can never be used
+/// to open an arbitrary URL: anything that isn't shaped like `BLWK-<AREA>-<NNN>` is refused.
+fn check_page_url(rule_id: &str) -> Option<String> {
+    let mut parts = rule_id.split('-');
+    let (prefix, area, num) = (parts.next()?, parts.next()?, parts.next()?);
+    let valid = prefix == "BLWK"
+        && parts.next().is_none()
+        && !area.is_empty()
+        && area.len() <= 12
+        && area.chars().all(|c| c.is_ascii_uppercase())
+        && num.len() == 3
+        && num.chars().all(|c| c.is_ascii_digit());
+    valid.then(|| {
+        format!(
+            "https://bulwark.nrl.ai/checks/{}",
+            rule_id.to_ascii_lowercase()
+        )
+    })
+}
+
+/// Opens a check's explanation page on the Bulwark website in the default browser. Inside Flatpak
+/// an https URL goes through the OpenURI portal, which (unlike `file://`) sandboxed apps may use.
+#[tauri::command]
+pub fn open_check_page(app: tauri::AppHandle, rule_id: String) -> Result<(), String> {
+    let url =
+        check_page_url(&rule_id).ok_or_else(|| format!("{rule_id} is not a Bulwark rule ID"))?;
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| format!("couldn't open the check page: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_page_url;
+
+    #[test]
+    fn check_page_url_accepts_rule_ids_only() {
+        assert_eq!(
+            check_page_url("BLWK-SSH-012").as_deref(),
+            Some("https://bulwark.nrl.ai/checks/blwk-ssh-012")
+        );
+        assert_eq!(
+            check_page_url("BLWK-ROOTKIT-002").as_deref(),
+            Some("https://bulwark.nrl.ai/checks/blwk-rootkit-002")
+        );
+        for bad in [
+            "",
+            "BLWK-SSH-12",
+            "BLWK-ssh-012",
+            "BLWK-SSH-012-x",
+            "BLWK-SSH-012/../../evil",
+            "https://evil.example",
+            "BLWK--012",
+            "XBLWK-SSH-012",
+        ] {
+            assert_eq!(check_page_url(bad), None, "{bad:?} must be refused");
+        }
+    }
+}

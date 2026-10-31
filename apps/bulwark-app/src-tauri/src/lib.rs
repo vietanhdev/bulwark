@@ -1145,7 +1145,8 @@ pub fn run() {
             remediation::fix_ssh_permissions,
             remediation::fix_rule,
             remediation::fix_all,
-            reveal::open_flagged_file
+            reveal::open_flagged_file,
+            reveal::open_check_page
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

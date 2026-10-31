@@ -21,6 +21,8 @@ const OG_FALLBACK = "home";
 const OG_SLUG_OVERRIDES: Record<string, string> = { "index.md": "home" };
 
 function ogSlugFor(relativePath: string): string {
+  // The generated per-check pages share the checks index card.
+  if (relativePath.startsWith("checks/")) relativePath = "checks/checks.md";
   const slug =
     OG_SLUG_OVERRIDES[relativePath] ??
     relativePath.replace(/\.md$/, "").split("/").pop() ??
@@ -35,7 +37,7 @@ function ogSlugFor(relativePath: string): string {
 export default withMermaid({
   title: "Bulwark",
   description:
-    "A Linux host security scanner with a native CLI and desktop GUI.",
+    "A security scanner for Linux developer machines, with a native CLI and desktop app.",
   lang: "en-US",
   cleanUrls: true,
   // Default to light on first visit (no stored preference / no system-preference match yet)
@@ -61,7 +63,7 @@ export default withMermaid({
       "meta",
       {
         property: "og:title",
-        content: "Bulwark — Linux Host Security Scanner",
+        content: "Bulwark — Security Scanner for Developer Machines",
       },
     ],
     [
@@ -69,9 +71,9 @@ export default withMermaid({
       {
         property: "og:description",
         content:
-          "A Linux host security scanner with a native CLI and desktop GUI. Checks SSH " +
-          "hardening, persistence, kernel/sysctl hardening, and rootkit indicators, and " +
-          "explains every finding in plain language with a fix.",
+          "A security scanner for Linux developer machines. Finds plaintext keys, risky " +
+          "packages, exposed dev services and AI-assistant leaks, explains every problem " +
+          "in plain language, and fixes most in one click.",
       },
     ],
     ["meta", { name: "twitter:card", content: "summary_large_image" }],
@@ -79,7 +81,7 @@ export default withMermaid({
       "meta",
       {
         name: "twitter:title",
-        content: "Bulwark — Linux Host Security Scanner",
+        content: "Bulwark — Security Scanner for Developer Machines",
       },
     ],
     [
@@ -87,7 +89,7 @@ export default withMermaid({
       {
         name: "twitter:description",
         content:
-          "A Linux host security scanner with a native CLI and desktop GUI.",
+          "A security scanner for Linux developer machines, with a native CLI and desktop app.",
       },
     ],
     // JSON-LD structured data. Google reads it for rich results, and generative engines
@@ -107,13 +109,14 @@ export default withMermaid({
         downloadUrl: `${SITE_URL}/download`,
         softwareHelp: `${SITE_URL}/guide/architecture`,
         description:
-          "A free, open-source Linux host security scanner with a native CLI and a Tauri " +
-          "desktop GUI. Checks SSH hardening, sudoers, kernel/sysctl hardening, persistence, " +
-          "file permissions, logging and rootkit indicators against 65 declarative rules; " +
+          "A free, open-source security scanner for Linux developer machines and servers, with " +
+          "a native CLI and a Tauri desktop GUI. Checks plaintext credentials, supply-chain " +
+          "startup hooks, exposed dev services, SSH, sudoers, kernel/sysctl hardening, " +
+          "persistence, file permissions, logging and rootkit indicators against 73 declarative rules; " +
           "scans AI coding assistants (Claude Code, Cursor, Copilot, Codex) for leaked secrets " +
           "and prompt-injection-exploitable config; integrates ClamAV; and monitors continuously.",
         featureList: [
-          "65 host-hardening rules with plain-language explanations and fixes",
+          "93 checks, each with a plain-language explanation page and fix",
           "AI coding-assistant security scan (secrets in context, malicious MCP, YOLO mode)",
           "ClamAV antivirus integration",
           "Systemd-journal log correlation (SSH brute-force, sudo abuse)",
@@ -156,8 +159,11 @@ export default withMermaid({
     // Each article's frontmatter `description` is what a reader actually sees in a shared
     // link. Without this, all 13 articles inherit the site-wide og:description from head[]
     // above and every one of them previews as the same generic blurb about Bulwark.
+    // Check pages (checks/[slug]) are generated, so their description comes from route params.
     const pageDescription =
-      pageData.frontmatter.description ?? pageData.description;
+      pageData.frontmatter.description ??
+      pageData.params?.description ??
+      pageData.description;
     if (pageDescription) {
       const description = String(pageDescription).replace(/\s+/g, " ").trim();
       pageData.frontmatter.head.push(
@@ -181,11 +187,9 @@ export default withMermaid({
     );
   },
 
-  // Aubergine palette matching apps/bulwark-app/src/styles.css's brand (Ubuntu aubergine, converted
-  // to hex since mermaid doesn't understand oklch()). Only governs light mode — the plugin
-  // forces mermaid's own built-in dark theme when `.dark` is on <html>, this config has no
-  // effect there (a vitepress-plugin-mermaid limitation, not a choice made here — the dark
-  // diagrams are recoloured to aubergine directly in theme/custom.css instead).
+  // Aqua palette matching the app's default theme (converted to hex since mermaid doesn't
+  // understand oklch()). Only governs light mode — the plugin forces mermaid's own dark theme
+  // when `.dark` is on <html>; the dark diagrams are recoloured in theme/custom.css instead.
   mermaid: {
     theme: "base",
     themeVariables: {
@@ -199,20 +203,20 @@ export default withMermaid({
       // the diagrams no longer sit in Trebuchet MS while the page around them is in Archivo.
       fontFamily: '"Archivo Variable", ui-sans-serif, system-ui, sans-serif',
 
-      primaryColor: "#f0dbe6",
-      primaryTextColor: "#1a0d14",
-      primaryBorderColor: "#772953",
-      lineColor: "#772953",
-      secondaryColor: "#faf5f7",
-      secondaryBorderColor: "#e6d5dd",
+      primaryColor: "#dcf0f0",
+      primaryTextColor: "#141a1c",
+      primaryBorderColor: "#1f7577",
+      lineColor: "#1f7577",
+      secondaryColor: "#f5f8f9",
+      secondaryBorderColor: "#d5e1e3",
       tertiaryColor: "#ffffff",
-      tertiaryBorderColor: "#e6d5dd",
-      textColor: "#1a0d14",
-      actorBkg: "#f0dbe6",
-      actorBorder: "#772953",
-      actorTextColor: "#1a0d14",
-      signalColor: "#772953",
-      signalTextColor: "#1a0d14",
+      tertiaryBorderColor: "#d5e1e3",
+      textColor: "#141a1c",
+      actorBkg: "#dcf0f0",
+      actorBorder: "#1f7577",
+      actorTextColor: "#141a1c",
+      signalColor: "#1f7577",
+      signalTextColor: "#141a1c",
     },
   },
 
@@ -220,12 +224,17 @@ export default withMermaid({
     logo: "/shield.svg",
     nav: [
       { text: "Download", link: "/download" },
+      { text: "Checks", link: "/checks/" },
       { text: "Guide", link: "/guide/architecture" },
       { text: "Articles", link: "/articles/ssh-hardening-checklist" },
       { text: "Collaborate", link: "/collaborate" },
       { text: "GitHub", link: "https://github.com/vietanhdev/bulwark" },
     ],
     sidebar: [
+      {
+        text: "Checks",
+        items: [{ text: "Every check Bulwark runs", link: "/checks/" }],
+      },
       {
         text: "Guide",
         items: [

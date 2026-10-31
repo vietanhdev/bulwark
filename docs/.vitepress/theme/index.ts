@@ -2,6 +2,7 @@ import { h } from "vue";
 import DefaultTheme from "vitepress/theme";
 import MermaidLightbox from "./MermaidLightbox.vue";
 import HeroDemo from "./HeroDemo.vue";
+import ChecksIndex from "./ChecksIndex.vue";
 
 // Same pairing as the desktop app (apps/bulwark-app/src/styles.css): Archivo for prose, IBM
 // Plex Mono for anything that is data — rule IDs, paths, commands, config directives. These
@@ -16,6 +17,9 @@ import "./custom.css";
 
 export default {
   extends: DefaultTheme,
+  enhanceApp({ app }) {
+    app.component("ChecksIndex", ChecksIndex);
+  },
   Layout() {
     return h(DefaultTheme.Layout, null, {
       // An eyebrow above the hero name, and trust chips under the actions — the framing a modern

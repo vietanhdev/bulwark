@@ -30,6 +30,12 @@ export function forThisInstall(text: string): string {
   return text.replace(/\bbulwarkctl\b/g, "bulwark");
 }
 
+/** A rule's title or text outside a finding, where `{{ collector.field }}` has no live value yet:
+ *  shown as a readable placeholder (‹field›) rather than raw template syntax. */
+export function withPlaceholders(text: string): string {
+  return text.replace(/\{\{\s*\w+\.(\w+)\s*\}\}/g, (_, field: string) => `‹${field.replace(/_/g, " ")}›`);
+}
+
 const COMMAND_START =
   /^(sudo|chmod|chown|systemctl|ssh-keygen|ssh-add|git|gh|docker|aws|apt|dnf|pacman|ufw|sysctl|rm|mv|cp|echo|bulwark|bulwarkctl|clamscan|freshclam|passwd|usermod)\b/;
 

@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
-import { Ban, ChevronRight, MoreVertical, RotateCw } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { Ban, ChevronRight, ExternalLink, MoreVertical, RotateCw } from "lucide-react";
 import { FindingCard, type Finding } from "@/components/FindingCard";
 import { FixIssueButton } from "@/components/FixActions";
 import { FixSteps } from "@/components/FixSteps";
@@ -350,7 +351,17 @@ function IssueTypeGroup({
                   </div>
                 )}
                 {autoFix && sameFix && <FixSteps text={first.fix_hint} heading="Or fix it yourself" />}
-                <span className="font-mono text-[10px] text-muted-foreground/70">{group.ruleId}</span>
+                <div className="flex items-center gap-3 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => void invoke("open_check_page", { ruleId: group.ruleId }).catch(() => {})}
+                    className="inline-flex items-center gap-1 rounded font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  >
+                    Read the full explanation
+                    <ExternalLink className="h-3 w-3" />
+                  </button>
+                  <span className="font-mono text-[10px] text-muted-foreground/70">{group.ruleId}</span>
+                </div>
               </div>
             )}
           </div>

@@ -12,7 +12,7 @@ explain: >
   trusts it, with nothing else needed.
 fix: |
   Lock the key with a passphrase. It takes a minute and your servers need no changes.
-  1. In the Bulwark app, open this issue and use "Add a passphrase to these keys now". In a terminal, run 'ssh-keygen -p -f {{ ssh_private_keys.path }}'.
+  1. In the Bulwark app, open this issue and use "Add a passphrase". In a terminal, run 'ssh-keygen -p -f {{ ssh_private_keys.path }}'.
   2. To avoid typing it all the time, load the key once per session with 'ssh-add {{ ssh_private_keys.path }}'.
   3. Delete keys for machines you no longer use.
   Stronger options: keep keys in a password manager's SSH agent (Bitwarden, 1Password, KeePassXC), or use a hardware key that cannot be copied at all ('ssh-keygen -t ed25519-sk' with a YubiKey).

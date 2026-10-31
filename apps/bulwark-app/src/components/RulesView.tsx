@@ -16,6 +16,7 @@ import {
 } from "@/components/Severity";
 import { computeHardeningIndex } from "@/lib/hardening";
 import { useRevision } from "@/lib/revision";
+import { withPlaceholders } from "@/lib/fix-text";
 import { cn } from "@/lib/utils";
 
 interface RuleSummary {
@@ -423,8 +424,11 @@ export function RulesView() {
                             <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
                               {reference}
                             </span>
-                            <span className="min-w-0 flex-1 truncate text-sm" title={rule.title}>
-                              {rule.title}
+                            <span
+                              className="min-w-0 flex-1 truncate text-sm"
+                              title={withPlaceholders(rule.title)}
+                            >
+                              {withPlaceholders(rule.title)}
                             </span>
                           </div>
                         );
@@ -556,7 +560,9 @@ export function RulesView() {
                                     carried by the severity rail, the severity label and the
                                     colour contrast against the muted mono ID beneath; the
                                     title does not need to shout as well. */}
-                                    <span className="block truncate text-sm">{r.title}</span>
+                                    <span className="block truncate text-sm">
+                                      {withPlaceholders(r.title)}
+                                    </span>
                                     <span className="mt-0.5 flex items-center gap-1.5">
                                       <span className="font-mono text-[11px] text-muted-foreground">
                                         {r.id}

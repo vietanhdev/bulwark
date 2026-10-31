@@ -60,6 +60,54 @@
     "profiles": []
   },
   {
+    "id": "BLWK-CRED-001",
+    "title": "A long-lived AWS access key is stored on disk",
+    "category": "credential-exposure",
+    "severity": "high",
+    "collector": "credential_stores",
+    "references": ["ATTACK-T1552.001", "ATTACK-T1078.004"],
+    "explain": "Your AWS access key is saved in a plain file ({{ credential_stores.path }}, {{ credential_stores.long_lived_keys }} key(s)). These keys never expire, so whoever copies the file can use your AWS account, and run up your bill, until you notice. That is exactly what a poisoned Python package did in October 2026: LiteLLM 1.107.0 read these files on every developer machine that installed it.",
+    "fix": "Sign in to AWS with sessions that expire on their own, instead of a key that works forever.\n1. Run 'aws configure sso' once to connect the AWS CLI to IAM Identity Center.\n2. Start each work session with 'aws sso login'. The session expires after a few hours.\n3. In the AWS console, deactivate and delete the old access key.\n4. Remove the key from {{ credential_stores.path }}.\nCan't use Identity Center? Keep the key in a password manager (1Password, Bitwarden or KeePassXC) and let the AWS CLI fetch it when needed with 'credential_process'.\n",
+    "os": ["linux"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-CRED-002",
+    "title": "Git stores passwords and tokens in plain text",
+    "category": "credential-exposure",
+    "severity": "high",
+    "collector": "credential_stores",
+    "references": ["ATTACK-T1552.001"],
+    "explain": "Git is saving your passwords and access tokens in a plain text file ({{ credential_stores.path }}). Any program running as you can read it, and a GitHub token usually lets someone push code to your repositories or publish packages in your name.",
+    "fix": "Let Git keep your tokens in your computer's keychain instead of a plain file.\n1. For GitHub, run 'gh auth setup-git'. Git then uses the GitHub CLI's login, which is stored in your keychain.\n2. For other Git hosts, install Git Credential Manager. It works on Linux, macOS and Windows and uses the system keychain.\n3. Stop using the plain-file store: 'git config --global --unset credential.helper'.\n4. Delete ~/.git-credentials and revoke the tokens it contained, in case they were already copied.\nEven better: use SSH keys for Git, protected by a passphrase or a hardware key.\n",
+    "os": ["linux"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-CRED-003",
+    "title": "Docker registry logins are stored in the config file",
+    "category": "credential-exposure",
+    "severity": "medium",
+    "collector": "credential_stores",
+    "references": ["ATTACK-T1552.001"],
+    "explain": "Docker saved {{ credential_stores.inline_auths }} registry login(s) inside {{ credential_stores.path }}. They look scrambled, but it is only base64 encoding, not encryption: anyone who can read the file can decode your username and password or token in seconds.",
+    "fix": "Let Docker keep registry logins in your computer's keychain.\n1. Install Docker's credential helper ('golang-docker-credential-helpers' on Ubuntu; built in on macOS and Windows, and Docker Desktop sets it up for you).\n2. In {{ credential_stores.path }}, set \"credsStore\" to \"secretservice\" (Linux), \"osxkeychain\" (macOS) or \"wincred\" (Windows).\n3. Delete the entries under \"auths\", then run 'docker login' again for each registry.\n4. Rotate any registry token that was stored in the file.\n",
+    "os": ["linux"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-CRED-004",
+    "title": "A credential file can be read by other users",
+    "category": "credential-exposure",
+    "severity": "medium",
+    "collector": "credential_stores",
+    "references": ["CIS-6.1", "ATTACK-T1552.001"],
+    "explain": "{{ credential_stores.path }} holds a login token for a tool ({{ credential_stores.kind }}), and other users or programs on this computer can read it (permissions {{ credential_stores.mode }}). Token files should be readable by you alone.",
+    "fix": "Make the file private, then keep the token somewhere safer if the tool allows it.\n1. Run 'chmod 600 {{ credential_stores.path }}' so only you can read it.\n2. Move the token into a password manager and pass it to the tool when it runs: for example 'op run' (1Password) or 'bws run' (Bitwarden).\n3. For npm, write '//registry.npmjs.org/:_authToken=${NPM_TOKEN}' in .npmrc so the file holds no secret.\n4. For PyPI, let twine read the token from your keychain: 'pip install keyring'.\nIf other people use this computer, rotate the token too.\n",
+    "os": ["linux"],
+    "profiles": []
+  },
+  {
     "id": "BLWK-EVASION-001",
     "title": "Shell history recording is suppressed",
     "category": "defense-evasion",
@@ -516,6 +564,30 @@
     "profiles": []
   },
   {
+    "id": "BLWK-NET-003",
+    "title": "A database or development service is open to the network",
+    "category": "network-egress",
+    "severity": "high",
+    "collector": "listening_ports",
+    "references": ["ATTACK-T1133", "ATTACK-T1210"],
+    "explain": "A database or development service is reachable from your network on port {{ listening_ports.port }} (listening on {{ listening_ports.listen_address }}). On home, office or caf\u00e9 Wi-Fi, anyone nearby can connect to it, and development services often run without a password. Docker opens ports to the whole network by default.",
+    "fix": "Make the service reachable from this computer only.\n1. For Docker Compose, change the port line from '{{ listening_ports.port }}:{{ listening_ports.port }}' to '127.0.0.1:{{ listening_ports.port }}:{{ listening_ports.port }}' and restart the stack.\n2. For a service installed directly, set its listen or bind address to 127.0.0.1 in its config file.\n3. Need it from another machine? Use an SSH tunnel ('ssh -L {{ listening_ports.port }}:localhost:{{ listening_ports.port }} you@this-machine') or a private network such as Tailscale or WireGuard.\n",
+    "os": ["linux"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-NET-004",
+    "title": "No host firewall is filtering incoming connections",
+    "category": "network-egress",
+    "severity": "medium",
+    "collector": "host_firewall",
+    "references": ["CIS-3.5", "ATTACK-T1133"],
+    "explain": "No firewall is blocking incoming connections, so every service that listens on the network can be reached from any network you join. A firewall is your safety net for the service you forgot was running.",
+    "fix": "Turn on a firewall that blocks incoming connections by default.\n1. Ubuntu and Debian: 'sudo ufw default deny incoming', then 'sudo ufw enable'.\n2. If you log in to this machine remotely, allow SSH first: 'sudo ufw allow OpenSSH'.\n3. Fedora and RHEL: 'sudo systemctl enable --now firewalld'.\nNote: Docker opens its ports around ufw, so also bind containers to 127.0.0.1.\n",
+    "os": ["linux"],
+    "profiles": []
+  },
+  {
     "id": "BLWK-PERSIST-001",
     "title": "systemd unit runs a tunneling tool",
     "category": "persistence",
@@ -562,6 +634,18 @@
     "fix": "Review the entry under HKLM/HKCU ...\\CurrentVersion\\Run and remove it if you didn't create it.",
     "os": ["windows"],
     "profiles": ["desktop", "server"]
+  },
+  {
+    "id": "BLWK-PERSIST-005",
+    "title": "A Python startup hook runs code in every Python process",
+    "category": "persistence",
+    "severity": "medium",
+    "collector": "python_startup_hooks",
+    "references": ["ATTACK-T1546.018", "ATTACK-T1195.001"],
+    "explain": "{{ python_startup_hooks.path }} runs code every time Python starts in this environment, before your own program and even if you never import the package that added it. Some tools use this legitimately, but it is also how the poisoned LiteLLM 1.107.0 package stole credentials in October 2026.",
+    "fix": "Check where this file came from, and remove it if you don't recognise it.\n1. Find the package that installed it: 'pip show -f <package>' lists a package's files.\n2. If you recognise it, ignore this issue with the package name as the reason.\n3. If you don't, uninstall that package and rotate any secrets this Python environment could read.\n",
+    "os": ["linux"],
+    "profiles": []
   },
   {
     "id": "BLWK-PRIV-001",
@@ -620,6 +704,18 @@
     "references": ["ATTACK-T1040"],
     "explain": "{{ network_interfaces.interface }} is in promiscuous mode \u2014 it's capturing all traffic on its network segment, not just traffic addressed to this host. This is the defining behavior of a packet sniffer, and is exactly what chkrootkit's own \"sniffer\" test checks for. Bridge ports are excluded: the kernel makes every bridge-enslaved interface promiscuous by design, so a Docker/VM veth being promiscuous means nothing. This interface is not one of those.",
     "fix": "Run 'ip -d link show {{ network_interfaces.interface }}' and check 'ps aux' for a legitimate reason (tcpdump, Wireshark/tshark). If nothing legitimate explains it, treat this as active traffic interception and investigate immediately.\n",
+    "os": ["linux"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-ROOTKIT-002",
+    "title": "Traces of the LiteLLM 1.107.0 credential stealer were found",
+    "category": "rootkit-malware",
+    "severity": "critical",
+    "collector": "supply_chain_iocs",
+    "references": ["ATTACK-T1195.001", "ATTACK-T1552.001"],
+    "explain": "Found a trace of the poisoned LiteLLM 1.107.0 package ({{ supply_chain_iocs.indicator }} at {{ supply_chain_iocs.path }}). That release stole cloud, AI, SSH and browser credentials and installed a backdoor. A lock file in /tmp means the backdoor ran; a .pc_once_ file means the theft already happened.",
+    "fix": "Treat this computer as compromised and change your credentials from a different, clean device.\n1. Disconnect this computer from the network.\n2. From another device, rotate cloud keys, CI tokens, AI API keys and SSH keys, starting with the most powerful.\n3. Uninstall litellm 1.107.0 everywhere (the last safe version is 1.106.2) and delete cook.pth, cook.py and the sitecustomize.py it added.\n4. Rebuild affected Python environments from pinned, verified packages.\n",
     "os": ["linux"],
     "profiles": []
   },
@@ -762,8 +858,8 @@
     "severity": "high",
     "collector": "ssh_private_keys",
     "references": ["CIS-5.2", "ATTACK-T1552.004", "ATTACK-T1078"],
-    "explain": "The SSH private key at {{ ssh_private_keys.path }} (format: {{ ssh_private_keys.key_format }}) has no passphrase, so it is a plaintext credential on disk. Anyone who obtains a copy of that one file \u2014 from a backup, a lost or stolen laptop, a dotfiles repo synced to the cloud, or any process running as you \u2014 can authenticate as you to every server that trusts it, immediately and with nothing else required. A passphrase does not stop a determined attacker forever, but it turns \"copy one file and log in\" into \"also crack a passphrase,\" and it is what lets you notice and rotate the key before it is used.",
-    "fix": "Add a passphrase to the existing key in place (this keeps the same key, so you do not have to re-add it to any server): run 'ssh-keygen -p -f {{ ssh_private_keys.path }}' and enter a strong passphrase when prompted. To avoid typing it on every use, load the key into your agent once per session with 'ssh-add {{ ssh_private_keys.path }}'. If this key is shared, checked into a repo, or you are unsure who has copied it, treat it as compromised: generate a fresh one with 'ssh-keygen -t ed25519 -a 100', deploy the new public key, and remove the old key from every server's authorized_keys.\n",
+    "explain": "Your SSH key {{ ssh_private_keys.path }} has no passphrase. It works like a password that is written down: anyone or any program that copies this one file can log in to every server and Git host that trusts it, with nothing else needed.",
+    "fix": "Lock the key with a passphrase. It takes a minute and your servers need no changes.\n1. In the Bulwark app, open this issue and use \"Add a passphrase\". In a terminal, run 'ssh-keygen -p -f {{ ssh_private_keys.path }}'.\n2. To avoid typing it all the time, load the key once per session with 'ssh-add {{ ssh_private_keys.path }}'.\n3. Delete keys for machines you no longer use.\nStronger options: keep keys in a password manager's SSH agent (Bitwarden, 1Password, KeePassXC), or use a hardware key that cannot be copied at all ('ssh-keygen -t ed25519-sk' with a YubiKey).\n",
     "os": ["linux"],
     "profiles": []
   },
