@@ -39,6 +39,24 @@ impl Lonely {
     }
 }
 
+/// Runs a command on the freshly copied binary, retrying while Linux reports it "busy".
+///
+/// Tests run in parallel threads. While one copies its binary, another can fork, and the child holds
+/// the copy's still-open write handle until it execs; running the copy in that window fails with
+/// ETXTBSY ("Text file busy"). That is a race in how the test sets up, not in Bulwark, so it is
+/// retried rather than reported.
+fn run(cmd: &mut Command) -> std::process::Output {
+    for _ in 0..50 {
+        match cmd.output() {
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            other => return other.expect("binary runs"),
+        }
+    }
+    panic!("the copied binary stayed busy")
+}
+
 fn rule_files(pack: &str) -> usize {
     fn walk(p: &Path) -> usize {
         std::fs::read_dir(p)
@@ -67,7 +85,7 @@ fn rule_files(pack: &str) -> usize {
 #[test]
 fn a_copied_binary_lists_every_shipped_rule_from_its_built_in_pack() {
     let bin = Lonely::new();
-    let out = bin.cmd().args(["rules", "list"]).output().unwrap();
+    let out = run(bin.cmd().args(["rules", "list"]));
     assert!(
         out.status.success(),
         "rules list failed: {}",
@@ -87,11 +105,9 @@ fn a_copied_binary_lists_every_shipped_rule_from_its_built_in_pack() {
 #[test]
 fn a_copied_binary_scans_with_its_built_in_pack() {
     let bin = Lonely::new();
-    let out = bin
+    let out = run(bin
         .cmd()
-        .args(["scan", "--json", "--no-persist", "--no-notify"])
-        .output()
-        .unwrap();
+        .args(["scan", "--json", "--no-persist", "--no-notify"]));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         !stderr.contains("couldn't find"),
@@ -120,12 +136,10 @@ fn a_copied_binary_runs_the_log_pipeline_from_its_built_in_packs() {
     }
     std::fs::write(&log, lines).unwrap();
 
-    let out = bin
+    let out = run(bin
         .cmd()
         .args(["logs", "scan", "--json", "--no-persist", "--from-file"])
-        .arg(&log)
-        .output()
-        .unwrap();
+        .arg(&log));
     let stderr = String::from_utf8_lossy(&out.stderr);
     let scan: serde_json::Value = serde_json::from_slice(&out.stdout)
         .unwrap_or_else(|e| panic!("logs scan must print JSON ({e}); stderr: {stderr}"));
@@ -148,12 +162,7 @@ fn an_explicit_rules_folder_still_wins_over_the_built_in_pack() {
          condition: x11_forwarding == \"yes\"\nexplain: e\nfix: f\nos: [linux, macos, windows]\n",
     )
     .unwrap();
-    let out = bin
-        .cmd()
-        .args(["rules", "list", "--rules-dir"])
-        .arg(&mine)
-        .output()
-        .unwrap();
+    let out = run(bin.cmd().args(["rules", "list", "--rules-dir"]).arg(&mine));
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("MY-001") && !stdout.contains("BLWK-"),
