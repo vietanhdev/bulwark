@@ -32,7 +32,7 @@ fn is_never_a_private_key(name: &str) -> bool {
 }
 
 fn ssh_dir() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
+    let home = crate::paths::home_var_os()?;
     let dir = Path::new(&home).join(".ssh");
     dir.is_dir().then_some(dir)
 }
@@ -185,6 +185,10 @@ impl SshPrivateKeysCollector {
 impl Collector for SshPrivateKeysCollector {
     fn name(&self) -> &'static str {
         "ssh_private_keys"
+    }
+
+    fn supported_os(&self) -> &'static [crate::models::OperatingSystem] {
+        super::LINUX_AND_MACOS
     }
 
     fn is_applicable(&self) -> bool {

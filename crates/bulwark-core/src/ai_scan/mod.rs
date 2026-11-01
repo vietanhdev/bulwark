@@ -951,7 +951,7 @@ fn collect_gitignored(ws: &Path, abs_paths: &[PathBuf], out: &mut BTreeSet<PathB
     // `git check-ignore -- <paths>` prints, one per line, exactly the passed paths it ignores. Exit
     // 0 = at least one ignored, 1 = none, anything else (128 on a broken/absent repo) = no usable
     // answer, in which case we fall through to the textual matcher rather than trust silence.
-    if let Ok(output) = std::process::Command::new("git")
+    if let Ok(output) = crate::sandbox::quiet_command("git")
         .arg("-C")
         .arg(ws)
         .arg("check-ignore")
@@ -1018,7 +1018,7 @@ fn is_git_ignored(workspace: &std::path::Path, rel: &std::path::Path) -> bool {
     // other outcome (git absent, not a repo, an error) falls through to the textual matcher rather
     // than being read as "not ignored" — treating "couldn't determine" as "exposed" is the
     // absence-as-evidence mistake, and here it would raise a HIGH on a file git actually ignores.
-    if let Ok(status) = std::process::Command::new("git")
+    if let Ok(status) = crate::sandbox::quiet_command("git")
         .arg("-C")
         .arg(workspace)
         .arg("check-ignore")

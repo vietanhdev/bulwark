@@ -532,9 +532,109 @@ jobs:
           ls -1 build/relassets
           scripts/test-gui-packages-docker.sh
 
+  # macOS and Windows: CLI + desktop app, each built NATIVELY on its own runner (Apple-silicon
+  # macOS, x86_64 Windows) — the same reason the Linux arches are native: a cross-built bundle can
+  # compile and still ship a sidecar for the wrong platform. Like the Linux job, it asserts on what
+  # was built rather than on exit codes: the CLI must run a real scan that evaluates checks on that
+  # OS, and the app bundle must carry a real (non-empty) CLI sidecar and the rule pack.
+  #
+  # Both apps are new and not yet code-signed or notarized; the release notes say so, so nobody is
+  # surprised by Gatekeeper's or SmartScreen's warning on first launch.
+  desktop-other:
+    if: github.triggering_actor == 'vietanhdev'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            os: macos
+            arch: aarch64
+            bundle: dmg
+          - runner: windows-2022
+            os: windows
+            arch: x86_64
+            bundle: nsis
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve version
+        id: version
+        run: echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        with:
+          key: ${{ matrix.os }}-${{ matrix.arch }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/bulwark-app/package-lock.json
+
+      - name: Build the CLI
+        run: cargo build --release -p bulwarkctl
+
+      - name: The CLI must run a real scan on this OS
+        run: |
+          set -euo pipefail
+          EXE=target/release/bulwarkctl; [ "${{ matrix.os }}" = windows ] && EXE="${EXE}.exe"
+          "$EXE" --version
+          "$EXE" rules validate rules/
+          "$EXE" scan --json --no-persist --rules-dir rules > scan.json || true
+          python3 - <<'PY'
+          import json
+          s = json.load(open("scan.json"))
+          n = len(s["rules_evaluated"])
+          print("rules evaluated:", n, sorted(s["rules_evaluated"]))
+          print("collector errors:", s["collector_errors"])
+          assert n > 0, "a scan that evaluated nothing proves nothing"
+          PY
+
+      - name: Build the desktop app
+        working-directory: apps/bulwark-app
+        run: |
+          npm ci
+          npx tauri build --bundles ${{ matrix.bundle }}
+
+      - name: Collect and check artifacts
+        run: |
+          set -euo pipefail
+          V="${{ steps.version.outputs.version }}"
+          mkdir -p dist
+          if [ "${{ matrix.os }}" = macos ]; then
+            # The macOS build is named "Bulwark.app" (tauri.macos.conf.json); match whatever it is.
+            APP=$(ls -d target/release/bundle/macos/*.app | head -n1)
+            test -s "$APP/Contents/MacOS/bulwark" || { echo "::error::app ships no CLI sidecar"; exit 1; }
+            "$APP/Contents/MacOS/bulwark" --version
+            n=$(find "$APP/Contents/Resources" -name '*.yaml' | wc -l); echo "rule files: $n"
+            [ "$n" -ge 50 ] || { echo "::error::app ships only $n rule files"; exit 1; }
+            cp target/release/bundle/dmg/*.dmg "dist/bulwark-desktop-${V}-macos-aarch64.dmg"
+            tar -czf "dist/bulwarkctl-${V}-macos-aarch64.tar.gz" -C target/release bulwarkctl -C ../.. rules
+          else
+            SIDECAR="apps/bulwark-app/src-tauri/binaries/bulwark-x86_64-pc-windows-msvc.exe"
+            test -s "$SIDECAR" || { echo "::error::no CLI sidecar staged for the installer"; exit 1; }
+            cp target/release/bundle/nsis/*-setup.exe "dist/bulwark-desktop-${V}-windows-x86_64-setup.exe"
+            mkdir -p cli && cp target/release/bulwarkctl.exe cli/ && cp -r rules cli/
+            (cd cli && 7z a -tzip "../dist/bulwarkctl-${V}-windows-x86_64.zip" . >/dev/null)
+          fi
+          ls -la dist
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: bulwark-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/*
+          retention-days: 14
+
   release:
     if: github.triggering_actor == 'vietanhdev'
-    needs: [linux, verify-install, verify-appimage, verify-gui-launch]
+    needs: [linux, desktop-other, verify-install, verify-appimage, verify-gui-launch]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -551,7 +651,7 @@ jobs:
           # rather than naming the arches means adding a third one to the build matrix needs no
           # edit here — and, more importantly, a build job that silently stopped producing
           # artifacts cannot be papered over by a name that still resolves.
-          pattern: bulwark-linux-*
+          pattern: bulwark-*
           merge-multiple: true
           path: dist
 
@@ -615,6 +715,18 @@ jobs:
             sudo dnf install ./bulwarkctl-${{ steps.version.outputs.version }}.x86_64.rpm    # x86_64
             sudo dnf install ./bulwarkctl-${{ steps.version.outputs.version }}.aarch64.rpm   # arm64
             ```
+
+            **macOS (Apple silicon)** — desktop app: open `bulwark-desktop-${{ steps.version.outputs.version }}-macos-aarch64.dmg`
+            and drag Bulwark to Applications. CLI: `bulwarkctl-${{ steps.version.outputs.version }}-macos-aarch64.tar.gz`
+            (keep `rules/` next to the binary, or under `~/.local/lib/bulwark/rules`).
+
+            **Windows (x86_64)** — desktop app: run `bulwark-desktop-${{ steps.version.outputs.version }}-windows-x86_64-setup.exe`.
+            CLI: unzip `bulwarkctl-${{ steps.version.outputs.version }}-windows-x86_64.zip` and run `bulwarkctl.exe scan`.
+
+            The macOS and Windows builds are new: their checks cover each system's core security
+            settings (FileVault, Gatekeeper, SIP, firewall… / Defender, firewall, BitLocker, UAC,
+            RDP, SMBv1) plus the cross-platform credential checks, and they are **not yet
+            code-signed** — expect a Gatekeeper / SmartScreen prompt on first launch.
 
             Verify your download against `SHA256SUMS`:
             ```bash

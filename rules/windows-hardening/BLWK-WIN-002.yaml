@@ -1,0 +1,12 @@
+id: BLWK-WIN-002
+title: Microsoft Defender signatures are out of date
+category: windows-hardening
+severity: medium
+collector: windows_security
+os: [windows]
+# Only fires on a value actually read; an unreadable setting (e.g. BitLocker without elevation) never does.
+condition: defender_signature_age_known == true and defender_signature_age > 7
+explain: >
+  Defender's malware signatures are {{ windows_security.defender_signature_age }} days old, so recently discovered threats aren't recognised.
+fix: "Run 'Update-MpSignature' in PowerShell (or Windows Security → Virus & threat protection → Protection updates), and check that Windows Update can reach the internet."
+references: [ATTACK-T1562.001]

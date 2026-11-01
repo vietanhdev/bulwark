@@ -68,6 +68,62 @@ pub struct SuppressionEvent {
     pub reason: String,
     pub actor: String,
     pub at: DateTime<Utc>,
+    /// The one place this decision covered, for a single-finding ignore; `None` for a whole rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+}
+
+/// One finding the user chose to ignore — a rule at one place — rather than the whole rule.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FindingIgnore {
+    pub rule_id: String,
+    pub location: String,
+    pub reason: String,
+    pub created_at: DateTime<Utc>,
+    pub created_by: String,
+}
+
+/// Where a finding is: the file, the listening port, or (for a finding about the machine as a
+/// whole) its title. This is the identity a single-finding ignore is keyed on, so it leaves out
+/// anything that drifts between scans — a leaked key's line number moves whenever the file is
+/// edited, and the ignore must survive that. The app's `ignoreKeyOf` mirrors this exactly.
+pub fn finding_location(f: &Finding) -> String {
+    let c = &f.context;
+    for key in ["path", "file"] {
+        if let Some(serde_json::Value::String(p)) = c.get(key) {
+            if !p.is_empty() {
+                return p.clone();
+            }
+        }
+    }
+    if let Some(port) = c.get("port") {
+        let port = match port {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        return match c.get("listen_address").and_then(|v| v.as_str()) {
+            Some(addr) => format!("port {port} on {addr}"),
+            None => format!("port {port}"),
+        };
+    }
+    f.title.clone()
+}
+
+/// What the user chose not to see: whole rules, and single findings.
+#[derive(Debug, Clone, Default)]
+pub struct Ignores {
+    pub rules: std::collections::HashSet<String>,
+    pub places: std::collections::HashSet<(String, String)>,
+}
+
+impl Ignores {
+    pub fn covers(&self, f: &Finding) -> bool {
+        self.rules.contains(&f.rule_id)
+            || (!self.places.is_empty()
+                && self
+                    .places
+                    .contains(&(f.rule_id.clone(), finding_location(f))))
+    }
 }
 
 /// The operating system(s) a rule or collector targets. Everything in this project has been
@@ -133,6 +189,13 @@ pub struct Rule {
     /// YAML file," matching this project's "no Rust required to add a rule" philosophy.
     #[serde(default)]
     pub profiles: Vec<String>,
+    /// Host traits on which this rule does not apply, e.g. `[wsl]` for a check about something the
+    /// Windows host owns rather than the distro (the WSL2 kernel, its network stack, console
+    /// logins). Matched against the detected traits in the profile's `needs`. A rule skipped this way
+    /// is reported in `ScanRun::rules_not_applicable`, never as evaluated — "doesn't apply" is not
+    /// "passed".
+    #[serde(default)]
+    pub skip_on: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -188,6 +251,11 @@ pub struct ScanRun {
     /// showed "no baseline yet" indefinitely).
     #[serde(default)]
     pub rules_evaluated: Vec<String>,
+    /// Rules that loaded for this OS but don't apply to this host (`Rule::skip_on`, e.g. inside
+    /// WSL). Not evidence of anything; used only so findings such a rule raised before — when it
+    /// was still thought to apply — are closed rather than left open forever.
+    #[serde(default)]
+    pub rules_not_applicable: Vec<String>,
     /// True when the user stopped the scan before it finished. A cancelled run's findings are
     /// partial and must not be persisted as the host's current picture.
     #[serde(default)]
@@ -232,6 +300,7 @@ mod tests {
             }],
             privileged_collectors_skipped: vec!["sudoers".into()],
             rules_evaluated: vec!["BLWK-NET-001".into()],
+            rules_not_applicable: vec![],
             cancelled: false,
             findings: vec![Finding {
                 id: Uuid::new_v4(),
@@ -287,6 +356,7 @@ mod tests {
             collector_errors: vec![],
             privileged_collectors_skipped: vec![],
             rules_evaluated: vec![],
+            rules_not_applicable: vec![],
             cancelled: false,
             findings,
         }

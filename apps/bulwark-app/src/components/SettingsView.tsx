@@ -11,6 +11,7 @@ import { ShieldMark } from "@/components/ShieldMark";
 import { SshKeyProtect, SshPermFix } from "@/components/SshKeyProtect";
 import { AiScanSettings } from "@/components/AiScanSettings";
 import { AppearanceSettings } from "@/components/AppearanceSettings";
+import { NotificationsSettings } from "@/components/NotificationsSettings";
 import { useRevision } from "@/lib/revision";
 import { cn } from "@/lib/utils";
 
@@ -217,6 +218,11 @@ export function SettingsView({ active = true }: { active?: boolean }) {
         </section>
 
         <AiScanSettings active={active} />
+
+        <section id="alerts" className="scroll-mt-28">
+          <SectionLabel>Alerts</SectionLabel>
+          <NotificationsSettings />
+        </section>
 
         <section>
           <SectionLabel>SSH hardening</SectionLabel>

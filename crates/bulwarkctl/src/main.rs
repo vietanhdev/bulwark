@@ -9,6 +9,8 @@ use clap::{Parser, Subcommand};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
+mod hosts;
+mod notify;
 mod remote;
 
 #[derive(Parser)]
@@ -21,6 +23,15 @@ struct Cli {
     /// Directory containing YAML rule files (defaults to auto-detected ./rules)
     #[arg(long, global = true)]
     rules_dir: Option<PathBuf>,
+
+    /// Your own rules, loaded next to the shipped pack (default: ~/.config/bulwark/rules, or
+    /// %APPDATA%\bulwark\rules on Windows). Custom ids can't start with BLWK- or reuse a built-in id.
+    #[arg(long, global = true)]
+    custom_rules_dir: Option<PathBuf>,
+
+    /// Don't load your own rules folder for this run
+    #[arg(long, global = true)]
+    no_custom_rules: bool,
 
     /// SQLite findings database path (defaults to ~/.local/share/bulwark/bulwark.db)
     #[arg(long, global = true)]
@@ -40,6 +51,9 @@ enum Commands {
         /// Skip persisting this run to the local findings database
         #[arg(long)]
         no_persist: bool,
+        /// Don't send Telegram/e-mail alerts for new issues (see `bulwarkctl notify`)
+        #[arg(long)]
+        no_notify: bool,
         /// Also run collectors that need root (e.g. sudoers). Refuses unless actually
         /// running under sudo — see architecture doc §4 ADR-0004: the CLI never self-elevates.
         #[arg(long)]
@@ -89,6 +103,17 @@ enum Commands {
     Ai {
         #[command(subcommand)]
         action: AiAction,
+    },
+    /// Monitor other machines over SSH: register them, check the connection, scan on a
+    /// schedule. Agentless — nothing is installed on or listens on a monitored machine.
+    Hosts {
+        #[command(subcommand)]
+        action: hosts::HostsAction,
+    },
+    /// Send alerts and reports to Telegram or e-mail (opt-in; nothing is sent until configured)
+    Notify {
+        #[command(subcommand)]
+        action: notify::NotifyAction,
     },
     /// Protect SSH private keys (e.g. add a passphrase to every unencrypted key at once)
     Ssh {
@@ -323,10 +348,17 @@ enum ConfigRulesAction {
         /// unauditable, and the person who will need this is future you.
         #[arg(long)]
         reason: String,
+        /// Only this one finding: the file path, `port N on ADDR`, or (for a finding about the
+        /// machine as a whole) its title — as `bulwarkctl rules suppressions` and the app show it.
+        #[arg(long)]
+        place: Option<String>,
     },
     /// Withdraw a risk acceptance and let the rule count against you again
     Unsuppress {
         rule_id: String,
+        /// Only the single-finding ignore at this place
+        #[arg(long)]
+        place: Option<String>,
         /// Why the acceptance no longer holds. Required: this is an auditable decision
         /// too, and "why did this alert come back?" is a question someone will ask.
         #[arg(long)]
@@ -350,7 +382,16 @@ enum ConfigRulesAction {
 /// optional polish, it's what makes the packaged binary work at all.
 const INSTALLED_RULES_DIR: &str = "/usr/share/bulwark/rules";
 
-fn resolve_rules_dir(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
+/// The user's own rules folder for this run: an explicit `--custom-rules-dir`, else the default
+/// location when it exists; nothing with `--no-custom-rules`.
+fn custom_rules(explicit: Option<PathBuf>, disabled: bool) -> Option<PathBuf> {
+    if disabled {
+        return None;
+    }
+    explicit.or_else(bulwark_core::paths::custom_rules_dir)
+}
+
+pub(crate) fn resolve_rules_dir(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
     // An explicitly-named directory that isn't there is a typo, not a reason to fall back to the
     // auto-detected pack: silently scanning a *different* rule set than the one asked for is its own
     // kind of lie. Both of these used to be returned unchecked, and a path that didn't exist then
@@ -416,6 +457,8 @@ fn exe_relative_dir(subdir: &str) -> Option<PathBuf> {
     let candidates = [
         bin_dir.join(subdir),
         bin_dir.join("../lib/bulwark").join(subdir),
+        // macOS app bundle: Bulwark.app/Contents/MacOS/bulwark beside Contents/Resources/<subdir>.
+        bin_dir.join("../Resources").join(subdir),
     ];
     candidates
         .into_iter()
@@ -465,27 +508,16 @@ fn resolve_db_path(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
     if let Some(p) = explicit {
         return Ok(p);
     }
-    if let Ok(p) = std::env::var("BULWARK_DB_PATH") {
-        return Ok(PathBuf::from(p));
-    }
-    // Honour XDG_DATA_HOME before falling back to ~/.local/share, per the XDG base
-    // directory spec. On a normal system XDG_DATA_HOME is unset, so this resolves to
-    // exactly the same path as before. It matters inside a Flatpak: there $HOME is the
-    // real (read-only) home while XDG_DATA_HOME points at the app's writable
-    // ~/.var/app/<id>/data, so hardcoding ~/.local/share made every scan fail with
-    // "attempt to write a readonly database" — and working around it with an extra
-    // --filesystem grant is what Flathub's linter flags as unnecessary.
-    if let Some(dir) = std::env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()) {
-        return Ok(Path::new(&dir).join("bulwark/bulwark.db"));
-    }
-    let home = std::env::var("HOME").context("HOME not set")?;
-    Ok(Path::new(&home).join(".local/share/bulwark/bulwark.db"))
+    // `BULWARK_DB_PATH`, then `XDG_DATA_HOME`, then `~/.local/share` — one resolver shared with the
+    // GUI (see `bulwark_core::paths`). XDG_DATA_HOME matters inside a Flatpak, where $HOME is the
+    // real, read-only home and only XDG_DATA_HOME is writable.
+    bulwark_core::paths::default_db_path()
 }
 
 /// Who to attribute a suppression to in the audit trail. `SUDO_USER` wins over `USER` so a
 /// suppression made under `sudo` is credited to the human who ran it, not to root — the audit log
 /// is about accountability, and "root did it" is exactly the answer it exists to improve on.
-fn current_actor() -> String {
+pub(crate) fn current_actor() -> String {
     std::env::var("SUDO_USER")
         .or_else(|_| std::env::var("USER"))
         .unwrap_or_else(|_| "unknown".to_string())
@@ -501,7 +533,7 @@ fn severity_label(s: Severity) -> &'static str {
     }
 }
 
-fn exit_code_for(worst: Option<Severity>) -> i32 {
+pub(crate) fn exit_code_for(worst: Option<Severity>) -> i32 {
     match worst {
         Some(Severity::Critical) => 2,
         Some(s) if s >= Severity::Medium => 1,
@@ -523,12 +555,23 @@ fn scan_profile(needs: Vec<String>) -> Profile {
 }
 
 fn main() -> anyhow::Result<()> {
+    // SSH_ASKPASS mode, used only by `hosts setup-key --password-stdin`: ssh runs this binary to
+    // ask for the one-time password. Both variables are set by `remote::install_key` on that one
+    // ssh process; `sudo` and `pkexec` strip unknown variables, so this can't be reached from a
+    // privileged invocation.
+    if let (Ok(secret), Ok(_)) = (
+        std::env::var(remote::ASKPASS_ENV),
+        std::env::var("SSH_ASKPASS_REQUIRE"),
+    ) {
+        std::process::exit(remote::askpass_main(&secret));
+    }
     let cli = Cli::parse();
 
     match cli.command {
         Commands::Scan {
             json,
             no_persist,
+            no_notify,
             privileged,
             needs,
             ssh,
@@ -541,17 +584,13 @@ fn main() -> anyhow::Result<()> {
             // root — the remote invocation uses `sudo -n` on the far side (see remote::run_scan_cmd).
             if let Some(spec) = ssh {
                 let worst = run_ssh_scan(
-                    remote::RemoteTarget {
-                        spec,
-                        port: ssh_port,
-                        identity: ssh_identity,
-                        ssh_opts,
-                    },
+                    remote::RemoteTarget::interactive(spec, ssh_port, ssh_identity, ssh_opts),
                     privileged,
                     &needs,
                     json,
                     no_persist,
                     cli.rules_dir,
+                    cli.db_path,
                 )?;
                 std::process::exit(exit_code_for(worst));
             }
@@ -562,9 +601,28 @@ fn main() -> anyhow::Result<()> {
                 );
             }
             let rules_dir = resolve_rules_dir(cli.rules_dir)?;
+            // A root scan never picks up the user-writable custom folder on its own: a rule planted
+            // there could template root-only facts (sudoers lines, privileged file hashes) into its
+            // output. Only a folder named explicitly on the command line is used.
+            let custom = if privileged {
+                if cli.no_custom_rules {
+                    None
+                } else {
+                    cli.custom_rules_dir.clone()
+                }
+            } else {
+                custom_rules(cli.custom_rules_dir, cli.no_custom_rules)
+            };
             let collectors = all_collectors();
             let profile = scan_profile(needs);
-            let scan = engine::run_scan(&rules_dir, &collectors, privileged, &profile);
+            let scan = engine::run_scan_with_custom(
+                &rules_dir,
+                custom.as_deref(),
+                &collectors,
+                privileged,
+                &profile,
+                &|| false,
+            );
 
             // A scan that loaded no rules examined nothing, and "0 findings" from it is not a clean
             // bill of health — it is the absence of an opinion. Reported as success (exit 0, empty
@@ -598,6 +656,16 @@ fn main() -> anyhow::Result<()> {
                 );
             }
 
+            // What you've chosen not to see (whole checks and single findings). The JSON stays raw —
+            // remote scanning reads it and must see everything — but the table and the exit code a
+            // cron job gates on follow your decisions.
+            let ignores = resolve_db_path(cli.db_path.clone())
+                .ok()
+                .filter(|p| p.exists())
+                .and_then(|p| Store::open(&p).ok())
+                .and_then(|mut st| st.ignores().ok())
+                .unwrap_or_default();
+
             if !no_persist {
                 let db_path = resolve_db_path(cli.db_path)?;
                 let mut store = Store::open(&db_path)?;
@@ -606,21 +674,32 @@ fn main() -> anyhow::Result<()> {
                 // produce two rows for it. Using plain persist() here was the actual root
                 // cause of a real "I see duplicated issues now" bug report: this command
                 // kept inserting a fresh row every run against the same shared DB.
-                store.persist_and_reconcile(&scan)?;
+                let fresh = store.persist_and_reconcile(&scan)?;
+                drop(store);
+                if !no_notify && !fresh.is_empty() {
+                    notify_local(&db_path, &scan, &fresh);
+                }
             }
 
+            let worst = scan
+                .findings
+                .iter()
+                .filter(|f| !ignores.covers(f))
+                .map(|f| f.severity)
+                .max();
             if json {
                 println!("{}", serde_json::to_string_pretty(&scan)?);
             } else {
-                print_scan_table(&scan);
+                print_scan_table(&scan, &ignores);
             }
 
-            std::process::exit(exit_code_for(scan.worst_severity()));
+            std::process::exit(exit_code_for(worst));
         }
         Commands::Rules { action } => match action {
             ConfigRulesAction::List => {
                 let rules_dir = resolve_rules_dir(cli.rules_dir)?;
-                let (rules, errors) = engine::load_rules(&rules_dir);
+                let custom = custom_rules(cli.custom_rules_dir, cli.no_custom_rules);
+                let (rules, errors) = engine::load_rule_packs(&rules_dir, custom.as_deref());
                 for r in &rules {
                     let os_tag = r
                         .rule
@@ -630,10 +709,11 @@ fn main() -> anyhow::Result<()> {
                         .collect::<Vec<_>>()
                         .join(",");
                     println!(
-                        "{:<20} [{:<8}] ({os_tag:<7}) {}",
+                        "{:<20} [{:<8}] ({os_tag:<7}) {}{}",
                         r.rule.id,
                         severity_label(r.rule.severity),
-                        r.rule.title
+                        r.rule.title,
+                        if r.custom { "  (custom)" } else { "" }
                     );
                 }
                 if !errors.is_empty() {
@@ -686,7 +766,11 @@ fn main() -> anyhow::Result<()> {
                     std::process::exit(1);
                 }
             }
-            ConfigRulesAction::Suppress { rule_id, reason } => {
+            ConfigRulesAction::Suppress {
+                rule_id,
+                reason,
+                place,
+            } => {
                 // Reject a suppression for a rule that doesn't exist — otherwise a typo'd ID
                 // becomes a suppression that silently matches nothing, which is indistinguishable
                 // from a working one until the day the real rule fires anyway and confuses everyone.
@@ -699,13 +783,28 @@ fn main() -> anyhow::Result<()> {
                 }
                 let db_path = resolve_db_path(cli.db_path)?;
                 let mut store = Store::open(&db_path)?;
+                if let Some(place) = place {
+                    let i = store.ignore_finding(&rule_id, &place, &reason, &current_actor())?;
+                    println!("ignoring {} at {} — {}", i.rule_id, i.location, i.reason);
+                    println!("(the rule still reports every other place; lift it with: bulwarkctl rules unsuppress {rule_id} --place ... --reason ...)");
+                    return Ok(());
+                }
                 let s = store.suppress_rule(&rule_id, &reason, &current_actor())?;
                 println!("suppressed {} — {}", s.rule_id, s.reason);
                 println!("(the rule still runs every scan; lift it with: bulwarkctl rules unsuppress {rule_id} --reason ...)");
             }
-            ConfigRulesAction::Unsuppress { rule_id, reason } => {
+            ConfigRulesAction::Unsuppress {
+                rule_id,
+                reason,
+                place,
+            } => {
                 let db_path = resolve_db_path(cli.db_path)?;
                 let mut store = Store::open(&db_path)?;
+                if let Some(place) = place {
+                    store.unignore_finding(&rule_id, &place, &reason, &current_actor())?;
+                    println!("no longer ignoring {rule_id} at {place}");
+                    return Ok(());
+                }
                 store.unsuppress_rule(&rule_id, &reason, &current_actor())?;
                 println!("unsuppressed {rule_id} — it will count against you again");
             }
@@ -723,18 +822,33 @@ fn main() -> anyhow::Result<()> {
                     }
                     for e in &log {
                         println!(
-                            "{}  {:<12} {:<18} {} — {}",
+                            "{}  {:<12} {:<18} {}{} — {}",
                             e.at.format("%Y-%m-%d %H:%M"),
                             e.action.as_str(),
                             e.rule_id,
+                            e.location
+                                .as_deref()
+                                .map(|l| format!("at {l} "))
+                                .unwrap_or_default(),
                             e.actor,
                             e.reason
                         );
                     }
                 } else {
                     let active = store.list_suppressions()?;
-                    if active.is_empty() {
+                    let places = store.list_finding_ignores()?;
+                    if active.is_empty() && places.is_empty() {
                         println!("no active suppressions");
+                    }
+                    for i in &places {
+                        println!(
+                            "{:<18} at {} — by {} on {} — {}",
+                            i.rule_id,
+                            i.location,
+                            i.created_by,
+                            i.created_at.format("%Y-%m-%d"),
+                            i.reason
+                        );
                     }
                     for s in &active {
                         println!(
@@ -783,6 +897,20 @@ fn main() -> anyhow::Result<()> {
         },
         Commands::Logs { action } => run_logs(action, cli.db_path)?,
         Commands::Ai { action } => run_ai(action, cli.db_path)?,
+        Commands::Hosts { action } => {
+            let db = resolve_db_path(cli.db_path)?;
+            let code = hosts::run(action, &db, cli.rules_dir)?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }
+        Commands::Notify { action } => {
+            let db = resolve_db_path(cli.db_path)?;
+            let code = notify::run(action, &db)?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }
         Commands::Ssh { action } => run_ssh(action)?,
         Commands::Fix { action } => run_fix(action)?,
     }
@@ -792,7 +920,7 @@ fn main() -> anyhow::Result<()> {
 
 /// Resolves the user's home directory for AI-artifact discovery.
 fn resolve_home() -> anyhow::Result<PathBuf> {
-    let home = std::env::var("HOME").context("HOME not set")?;
+    let home = bulwark_core::paths::home_var().context("HOME not set")?;
     Ok(PathBuf::from(home))
 }
 
@@ -810,6 +938,7 @@ fn run_ssh_scan(
     json: bool,
     no_persist: bool,
     rules_dir: Option<PathBuf>,
+    db_path: Option<PathBuf>,
 ) -> anyhow::Result<Option<Severity>> {
     let rules_dir = resolve_rules_dir(rules_dir)?;
     let local_binary = std::env::current_exe().context("cannot locate this bulwarkctl binary")?;
@@ -818,7 +947,13 @@ fn run_ssh_scan(
     if !json {
         eprintln!("Scanning {spec} over SSH…");
     }
-    let result = remote::run_remote_scan(&target, privileged, needs, &local_binary, &rules_dir)?;
+    let ssh_line = target.ssh_command_line();
+    let result = remote::run_remote_scan(&target, privileged, needs, &local_binary, &rules_dir)
+        .map_err(|e| match e.downcast_ref::<remote::RemoteError>() {
+            // A classified failure gets its plain-language next step, not just ssh's words.
+            Some(re) => anyhow::anyhow!("{re}\n{}", re.kind.hint(&ssh_line)),
+            None => e,
+        })?;
     let scan = result.scan;
 
     // Same invariant as the local path: a scan that loaded no rules examined nothing, and its empty
@@ -831,7 +966,7 @@ fn run_ssh_scan(
     }
 
     if !no_persist {
-        let db_path = remote_db_path(&spec)?;
+        let db_path = remote_db_path(&resolve_db_path(db_path)?, &spec)?;
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent).ok();
         }
@@ -846,38 +981,60 @@ fn run_ssh_scan(
         println!("{}", serde_json::to_string_pretty(&scan)?);
     } else {
         match &result.engine {
-            remote::RemoteEngine::Installed(path) => {
-                eprintln!("Ran the remote's installed bulwark ({path}).");
+            remote::RemoteEngine::Installed { path, version } => {
+                eprintln!("Ran the remote's installed bulwark {version} ({path}).");
             }
             remote::RemoteEngine::Pushed { arch, .. } => {
                 eprintln!("Pushed this bulwarkctl ({arch}) to a temp dir and cleaned it up.");
             }
         }
-        print_scan_table(&scan);
+        print_scan_table(&scan, &bulwark_core::Ignores::default());
     }
     Ok(scan.worst_severity())
 }
 
-/// Isolated per-remote-host history database, so each scanned host reconciles against its own prior
-/// findings and this machine's dashboard stays pristine. The host spec is slugified into a
-/// filesystem-safe name (`user@host:port` → `user_at_host_port`).
-fn remote_db_path(spec: &str) -> anyhow::Result<PathBuf> {
-    let home = std::env::var("HOME").context("HOME not set")?;
-    let slug: String = spec
-        .chars()
-        .map(|c| match c {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '.' => c,
-            _ => '_',
-        })
-        .collect();
-    let slug = if slug.is_empty() {
-        "host".to_string()
-    } else {
-        slug
+/// Alert on issues a local scan newly opened, if the user set up alerts and included this computer.
+/// Best-effort: a delivery problem is printed and recorded, never fatal to the scan.
+fn notify_local(db: &Path, scan: &bulwark_core::ScanRun, fresh: &[bulwark_core::Finding]) {
+    let Ok(mut store) = Store::open(db) else {
+        return;
     };
-    Ok(Path::new(&home)
-        .join(".local/share/bulwark/remotes")
-        .join(format!("{slug}.db")))
+    let Ok(cfg) = bulwark_core::notify_config::load(&mut store) else {
+        return;
+    };
+    if !cfg.any_channel_enabled() || !cfg.include_this_computer {
+        return;
+    }
+    let host = bulwark_core::fleet::hostname_of_fingerprint(&scan.host_fingerprint);
+    let name = if host.is_empty() {
+        "This computer".to_string()
+    } else {
+        host
+    };
+    let briefs: Vec<(Severity, String)> = fresh
+        .iter()
+        .map(|f| (f.severity, f.title.clone()))
+        .collect();
+    if let Some(alert) = bulwark_core::fleet::new_issues_alert(&name, &briefs) {
+        for r in notify::deliver(db, &[alert]) {
+            if let Some(e) = r.error {
+                eprintln!("warning: couldn't send the {} alert: {e}", r.channel);
+            }
+        }
+    }
+}
+
+/// Isolated per-remote-host history database, so each scanned host reconciles against its own prior
+/// findings and this machine's dashboard stays pristine. A machine registered with `hosts add`
+/// keeps its history under its stable id, so an ad-hoc `scan --ssh` of the same address lands in
+/// the same history the scheduler and the GUI read; anything else gets a slug of the address.
+fn remote_db_path(main_db: &Path, spec: &str) -> anyhow::Result<PathBuf> {
+    if main_db.exists() {
+        if let Some(h) = Store::open(main_db)?.find_remote_host(spec)? {
+            return Ok(bulwark_core::paths::remote_host_db_path(main_db, &h.id));
+        }
+    }
+    Ok(bulwark_core::paths::adhoc_remote_db_path(main_db, spec))
 }
 
 fn run_fix(action: FixAction) -> anyhow::Result<()> {
@@ -886,7 +1043,7 @@ fn run_fix(action: FixAction) -> anyhow::Result<()> {
         ssh_permission_targets, tighten_permissions, write_banners, CombinedFixReport,
     };
 
-    let home = std::env::var("HOME").context("HOME not set")?;
+    let home = bulwark_core::paths::home_var().context("HOME not set")?;
     let ssh_dir = PathBuf::from(&home).join(".ssh");
     let backup_dir = PathBuf::from(&home).join(".local/share/bulwark/sshd-config-backups");
 
@@ -1378,7 +1535,7 @@ fn run_fix_all_json(
         Err(e) => report.sshd_error = Some(e.to_string()),
     }
 
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = bulwark_core::paths::home_var().unwrap_or_default();
     // Every one of these is in the safe (non-lockout) set — see the reasoning per capability in
     // `bulwark_core::FIX_CAPABILITIES`.
     match bulwark_core::harden_sysctl(
@@ -1518,7 +1675,7 @@ fn run_ssh(action: SshAction) -> anyhow::Result<()> {
                 );
             }
 
-            let home = std::env::var("HOME").context("HOME not set")?;
+            let home = bulwark_core::paths::home_var().context("HOME not set")?;
             let backup_dir = PathBuf::from(home).join(".local/share/bulwark/ssh-key-backups");
             let report = protect_unencrypted_keys(&passphrase, &backup_dir)?;
 
@@ -1905,7 +2062,7 @@ fn print_log_scan_table(scan: &LogScanRun) {
     println!("\n{} finding(s) total.", scan.findings.len());
 }
 
-fn print_scan_table(scan: &bulwark_core::ScanRun) {
+fn print_scan_table(scan: &bulwark_core::ScanRun, ignores: &bulwark_core::Ignores) {
     println!(
         "Bulwark scan — host {} — {} rule(s) loaded",
         scan.host_fingerprint, scan.rules_loaded
@@ -1937,7 +2094,11 @@ fn print_scan_table(scan: &bulwark_core::ScanRun) {
         println!("No findings.");
         return;
     }
-    let mut sorted = scan.findings.clone();
+    let (ignored, mut sorted): (Vec<_>, Vec<_>) = scan
+        .findings
+        .iter()
+        .cloned()
+        .partition(|f| ignores.covers(f));
     sorted.sort_by_key(|f| std::cmp::Reverse(f.severity));
     for f in &sorted {
         println!(
@@ -1949,7 +2110,15 @@ fn print_scan_table(scan: &bulwark_core::ScanRun) {
         println!("           {}", f.explanation);
         println!("           fix: {}", f.fix_hint);
     }
-    println!("\n{} finding(s) total.", scan.findings.len());
+    if ignored.is_empty() {
+        println!("\n{} finding(s) total.", sorted.len());
+    } else {
+        println!(
+            "\n{} finding(s), plus {} you've chosen to ignore (bulwarkctl rules suppressions).",
+            sorted.len(),
+            ignored.len()
+        );
+    }
 }
 
 #[cfg(test)]

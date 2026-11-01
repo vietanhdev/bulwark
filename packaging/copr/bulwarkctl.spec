@@ -32,6 +32,8 @@ BuildRequires:  gcc
 # Bulwark detects its absence and prints a distro-aware install hint. dnf installs
 # weak deps by default, so a normal install still pulls it in.
 Recommends:     clamav
+Recommends:     openssh-clients
+Recommends:     curl
 
 # Both architectures build from this spec unchanged: no arch-specific code, and the only
 # native dependency (libsqlite3-sys) compiles vendored SQLite C. Widening this alone is not

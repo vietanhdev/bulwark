@@ -3,6 +3,7 @@ title: A long-lived AWS access key is stored on disk
 category: credential-exposure
 severity: high
 collector: credential_stores
+os: [linux, macos]
 # long_lived_keys is emitted only when the file was read, so an unreadable credentials file is a
 # collector error, never a confident "no long-lived keys".
 condition: kind == "aws_credentials" and long_lived_keys > 0

@@ -26,7 +26,10 @@ interface PageShellProps {
 export function PageShell({ title, description, action, children, className }: PageShellProps) {
   return (
     <ScrollArea className="h-full">
-      <div className="sticky top-0 z-10 border-b border-border bg-background/85 backdrop-blur-sm dark:bg-background/50 dark:backdrop-blur-md">
+      {/* Solid on purpose: WebKitGTK (the engine the desktop app runs on) doesn't always render
+          backdrop-filter — with compositing off it can't — and with a translucent background the
+          content scrolled underneath ghosted through the page title. */}
+      <div className="sticky top-0 z-10 border-b border-border bg-background">
         <div className={cn("mx-auto flex max-w-5xl items-start gap-6 px-8 py-5", className)}>
           <div className="min-w-0 flex-1">
             <h1 className="font-heading text-xl font-semibold leading-none tracking-tight">{title}</h1>

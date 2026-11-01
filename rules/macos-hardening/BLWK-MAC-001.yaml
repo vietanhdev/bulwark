@@ -1,0 +1,12 @@
+id: BLWK-MAC-001
+title: FileVault disk encryption is off
+category: macos-hardening
+severity: high
+collector: macos_security
+os: [macos]
+# Only fires on a value actually read; "unknown" (command failed, unrecognised output) never does.
+condition: filevault_on_known == true and filevault_on == false
+explain: >
+  The startup disk isn't encrypted. Anyone who gets hold of this Mac — lost bag, repair shop, theft — can read every file on it, including SSH keys, browser sessions and cloud credentials, without knowing your password.
+fix: "Turn it on in System Settings → Privacy & Security → FileVault (or 'sudo fdesetup enable'). Keep the recovery key in your password manager, not on the Mac."
+references: [ATTACK-T1005, ATTACK-T1552.001]

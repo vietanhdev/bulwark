@@ -12,6 +12,8 @@ use walkdir::WalkDir;
 pub struct LoadedRule {
     pub rule: Rule,
     pub condition: Condition,
+    /// Loaded from the user's own rules folder rather than the shipped pack.
+    pub custom: bool,
 }
 
 /// Which OS to scan as, and which opt-in "needs" are active — the two axes rules are
@@ -56,6 +58,9 @@ pub struct RoleEvidence {
     pub graphical: bool,
     /// sshd is active. A box that accepts SSH is serving, whatever its chassis says.
     pub sshd_active: bool,
+    /// Running inside WSL (Windows Subsystem for Linux): the kernel, its network stack and the
+    /// console belong to the Windows host, so rules about them are skipped (`skip_on: [wsl]`).
+    pub wsl: bool,
     /// DMI chassis reports server/rack-mount, or we're in a VM/container.
     pub server_chassis: bool,
 }
@@ -110,10 +115,19 @@ impl RoleEvidence {
             .map(|t| matches!(t.trim(), "17" | "23" | "28"))
             .unwrap_or(false);
 
+        // WSL1 and WSL2 both report a Microsoft kernel in /proc/version ("…-microsoft-standard-
+        // WSL2"); the interop handler is a second signal. An SSH session has no WSL_DISTRO_NAME, so
+        // the environment variable alone would miss exactly the remote-scan case.
+        let wsl = std::fs::read_to_string("/proc/version")
+            .map(|v| is_wsl_kernel(&v))
+            .unwrap_or(false)
+            || std::path::Path::new("/proc/sys/fs/binfmt_misc/WSLInterop").exists();
+
         Self {
             graphical,
             sshd_active,
             server_chassis,
+            wsl,
         }
     }
 }
@@ -127,8 +141,16 @@ impl RoleEvidence {
 ///
 /// The roles are not exclusive: a laptop running sshd gets both, because the moment you accept
 /// SSH the server rules (login banners, remote log shipping) genuinely do apply to you.
+/// True for a WSL kernel's `/proc/version`.
+pub(crate) fn is_wsl_kernel(proc_version: &str) -> bool {
+    proc_version.to_ascii_lowercase().contains("microsoft")
+}
+
 pub fn detect_host_roles(ev: &RoleEvidence) -> Vec<String> {
     let mut needs = Vec::new();
+    if ev.wsl {
+        needs.push("wsl".to_string());
+    }
     if ev.graphical {
         needs.push("desktop".to_string());
     }
@@ -142,6 +164,11 @@ impl Default for Profile {
     fn default() -> Self {
         Self::current_host()
     }
+}
+
+/// A rule that applies to this OS and profile but not to this kind of host (`skip_on`).
+fn skipped_on_this_host(rule: &Rule, profile: &Profile) -> bool {
+    rule.skip_on.iter().any(|t| profile.needs.contains(t))
 }
 
 fn rule_matches_profile(rule: &Rule, profile: &Profile) -> bool {
@@ -219,7 +246,11 @@ pub fn load_rules(dir: &Path) -> (Vec<LoadedRule>, Vec<RuleLoadError>) {
             }
         };
         match Condition::parse(&rule.condition) {
-            Ok(condition) => loaded.push(LoadedRule { rule, condition }),
+            Ok(condition) => loaded.push(LoadedRule {
+                rule,
+                condition,
+                custom: false,
+            }),
             Err(e) => errors.push(RuleLoadError {
                 path: path_str,
                 message: format!("rule {}: bad condition: {}", rule.id, e),
@@ -254,6 +285,46 @@ pub fn load_rules(dir: &Path) -> (Vec<LoadedRule>, Vec<RuleLoadError>) {
         loaded.retain(|r| !dupes.contains(&r.rule.id));
     }
 
+    (loaded, errors)
+}
+
+/// The shipped pack plus the user's own rules folder, if there is one (see
+/// [`crate::paths::custom_rules_dir`]). Custom rules are loaded and validated exactly like shipped
+/// ones, with two extra refusals so a custom rule can never stand in for a built-in check: the
+/// `BLWK-` prefix is reserved, and an id the shipped pack already uses is rejected. Both surface as
+/// [`RuleLoadError`]s, never a silent drop.
+pub fn load_rule_packs(
+    builtin: &Path,
+    custom: Option<&Path>,
+) -> (Vec<LoadedRule>, Vec<RuleLoadError>) {
+    let (mut loaded, mut errors) = load_rules(builtin);
+    let Some(dir) = custom.filter(|d| d.is_dir()) else {
+        return (loaded, errors);
+    };
+    let builtin_ids: std::collections::HashSet<String> =
+        loaded.iter().map(|r| r.rule.id.clone()).collect();
+    let (extra, extra_errors) = load_rules(dir);
+    errors.extend(extra_errors);
+    for mut r in extra {
+        if r.rule.id.to_ascii_uppercase().starts_with("BLWK-") {
+            errors.push(RuleLoadError {
+                path: format!("{} (custom rule {})", dir.display(), r.rule.id),
+                message: "custom rule ids can't start with BLWK- (reserved for Bulwark's own \
+                          checks) — use your own prefix, e.g. MY-001"
+                    .into(),
+            });
+            continue;
+        }
+        if builtin_ids.contains(&r.rule.id) {
+            errors.push(RuleLoadError {
+                path: format!("{} (custom rule {})", dir.display(), r.rule.id),
+                message: format!("'{}' is already a built-in check's id", r.rule.id),
+            });
+            continue;
+        }
+        r.custom = true;
+        loaded.push(r);
+    }
     (loaded, errors)
 }
 
@@ -295,15 +366,37 @@ pub fn run_scan_cancellable(
     profile: &Profile,
     should_cancel: &dyn Fn() -> bool,
 ) -> ScanRun {
+    run_scan_with_custom(
+        rules_dir,
+        None,
+        collectors,
+        privileged,
+        profile,
+        should_cancel,
+    )
+}
+
+/// [`run_scan_cancellable`] with the user's own rules folder added (see [`load_rule_packs`]). The
+/// front-doors pass [`crate::paths::custom_rules_dir`]; tests and remote engines pass `None`, so a
+/// developer's personal rules never leak into either.
+pub fn run_scan_with_custom(
+    rules_dir: &Path,
+    custom_rules_dir: Option<&Path>,
+    collectors: &[Box<dyn Collector>],
+    privileged: bool,
+    profile: &Profile,
+    should_cancel: &dyn Fn() -> bool,
+) -> ScanRun {
     let started_at = Utc::now();
     let scan_run_id = Uuid::new_v4();
     let mut cancelled = false;
 
-    let (all_rules, rule_load_errors) = load_rules(rules_dir);
-    let rules: Vec<LoadedRule> = all_rules
+    let (all_rules, rule_load_errors) = load_rule_packs(rules_dir, custom_rules_dir);
+    let (rules, skipped): (Vec<LoadedRule>, Vec<LoadedRule>) = all_rules
         .into_iter()
         .filter(|r| rule_matches_profile(&r.rule, profile))
-        .collect();
+        .partition(|r| !skipped_on_this_host(&r.rule, profile));
+    let rules_not_applicable: Vec<String> = skipped.into_iter().map(|r| r.rule.id).collect();
 
     let mut needed: HashMap<&str, ()> = HashMap::new();
     for r in &rules {
@@ -426,6 +519,7 @@ pub fn run_scan_cancellable(
         collector_errors,
         privileged_collectors_skipped,
         rules_evaluated,
+        rules_not_applicable,
         cancelled,
         findings,
     }
@@ -461,15 +555,83 @@ pub(crate) fn render_template(template: &str, fact: &crate::models::Fact) -> Str
 }
 
 pub(crate) fn host_fingerprint() -> String {
+    // `/etc/hostname` and `/proc` are Linux-only. On macOS (and any other Unix) both are absent,
+    // which used to yield "/" — so a remote machine's identity pin (`fleet`'s guard against an
+    // address that starts answering as a different machine) silently did nothing for a Mac. The
+    // POSIX calls are the portable answer; the files stay first so Linux output is unchanged.
     let hostname = std::fs::read_to_string("/etc/hostname")
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(posix_hostname)
+        .unwrap_or_default();
     let kernel = std::fs::read_to_string("/proc/sys/kernel/osrelease")
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(posix_kernel_release)
+        .unwrap_or_default();
     format!("{hostname}/{kernel}")
+}
+
+#[cfg(unix)]
+fn posix_hostname() -> Option<String> {
+    let mut buf = [0u8; 256];
+    // SAFETY: the buffer is valid for its length; gethostname NUL-terminates on success.
+    let rc = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
+    if rc != 0 {
+        return None;
+    }
+    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    let name = String::from_utf8_lossy(&buf[..end]).trim().to_string();
+    // macOS reports "<name>.local"; the pin compares the short name, like /etc/hostname.
+    let short = name.split('.').next().unwrap_or("").to_string();
+    (!short.is_empty()).then_some(short)
+}
+
+#[cfg(unix)]
+fn posix_kernel_release() -> Option<String> {
+    // SAFETY: utsname is plain data; uname fills it and NUL-terminates each field on success.
+    let mut u: libc::utsname = unsafe { std::mem::zeroed() };
+    if unsafe { libc::uname(&mut u) } != 0 {
+        return None;
+    }
+    let bytes: Vec<u8> = u
+        .release
+        .iter()
+        .take_while(|&&c| c != 0)
+        .map(|&c| c as u8)
+        .collect();
+    let r = String::from_utf8_lossy(&bytes).trim().to_string();
+    (!r.is_empty()).then_some(r)
+}
+
+#[cfg(not(unix))]
+fn posix_hostname() -> Option<String> {
+    std::env::var("COMPUTERNAME").ok().filter(|s| !s.is_empty())
+}
+
+/// Windows has no `uname`; `ver` prints "Microsoft Windows [Version 10.0.26100.1234]". Without
+/// this the fingerprint read "<name>/" and the GUI showed a dangling slash after the host name.
+#[cfg(not(unix))]
+fn posix_kernel_release() -> Option<String> {
+    let out = crate::sandbox::quiet_command("cmd")
+        .args(["/d", "/c", "ver"])
+        .output()
+        .ok()?;
+    windows_version_from_ver(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Pulls "10.0.26100.1234" out of `ver`'s output. Pure, so it is tested on every OS.
+#[cfg_attr(unix, allow(dead_code))]
+fn windows_version_from_ver(text: &str) -> Option<String> {
+    let v = text.split("Version").nth(1)?;
+    let v: String = v
+        .trim()
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    (!v.is_empty()).then_some(v)
 }
 
 #[cfg(test)]
@@ -487,6 +649,54 @@ mod tests {
     use std::io::Write;
 
     #[test]
+    fn host_fingerprint_has_a_hostname_and_a_kernel() {
+        let fp = host_fingerprint();
+        let (host, kernel) = fp.split_once('/').unwrap();
+        assert!(!host.is_empty(), "{fp}");
+        assert!(!kernel.is_empty(), "{fp}");
+    }
+
+    #[test]
+    fn custom_rules_load_beside_the_pack_but_never_replace_a_built_in() {
+        let rule = |id: &str| {
+            format!(
+                "id: {id}\ntitle: t\ncategory: c\nseverity: low\ncollector: x\nos: [linux]\n\
+                 condition: a == 1\nexplain: e\nfix: f\nreferences: []\n"
+            )
+        };
+        let builtin = tempfile::tempdir().unwrap();
+        std::fs::write(builtin.path().join("a.yaml"), rule("BLWK-X-001")).unwrap();
+        let custom = tempfile::tempdir().unwrap();
+        std::fs::write(custom.path().join("mine.yaml"), rule("MY-001")).unwrap();
+        std::fs::write(custom.path().join("reserved.yaml"), rule("BLWK-MINE-001")).unwrap();
+        std::fs::write(custom.path().join("dup.yaml"), rule("blwk-x-001")).unwrap();
+        // A .txt example isn't a rule until renamed.
+        std::fs::write(custom.path().join("EXAMPLE.yaml.txt"), rule("MY-002")).unwrap();
+
+        let (rules, errors) = load_rule_packs(builtin.path(), Some(custom.path()));
+        let ids: Vec<(&str, bool)> = rules
+            .iter()
+            .map(|r| (r.rule.id.as_str(), r.custom))
+            .collect();
+        assert_eq!(ids, vec![("BLWK-X-001", false), ("MY-001", true)]);
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(errors.iter().all(|e| e.message.contains("BLWK-")));
+
+        // No folder, or none given: just the pack.
+        let (rules, errors) = load_rule_packs(builtin.path(), Some(Path::new("/nonexistent/x")));
+        assert_eq!((rules.len(), errors.len()), (1, 0));
+    }
+
+    #[test]
+    fn the_windows_version_is_read_from_ver() {
+        assert_eq!(
+            super::windows_version_from_ver("\r\nMicrosoft Windows [Version 10.0.26100.4652]\r\n"),
+            Some("10.0.26100.4652".into())
+        );
+        assert_eq!(super::windows_version_from_ver("garbage"), None);
+    }
+
+    #[test]
     fn an_unrecognised_os_matches_no_rule_fail_closed() {
         // With no recognised host OS, no rule matches — the host fails closed rather than running
         // the Linux ruleset (and Linux-only remediation) on an unvalidated platform.
@@ -498,6 +708,7 @@ mod tests {
             collector: "c".into(),
             os: vec![OperatingSystem::Linux],
             profiles: vec![],
+            skip_on: vec![],
             references: vec![],
             explain: "e".into(),
             fix: "f".into(),
@@ -648,6 +859,7 @@ references: [CIS-5.2.10]
             graphical,
             sshd_active,
             server_chassis,
+            wsl: false,
         };
 
         // A headless box is a server even with no other evidence — the absence of a display
@@ -1074,5 +1286,22 @@ fix: "f"
         assert!(rules.is_empty());
         assert_eq!(errors.len(), 1);
         assert!(errors[0].message.contains("BLWK-TEST-001"));
+    }
+
+    #[test]
+    fn wsl_is_recognised_from_its_kernel() {
+        assert!(is_wsl_kernel(
+            "Linux version 6.6.87.2-microsoft-standard-WSL2 (root@x) (gcc) #1 SMP"
+        ));
+        assert!(!is_wsl_kernel(
+            "Linux version 7.0.0-42-generic (buildd@lcy02) #42-Ubuntu SMP"
+        ));
+        let ev = RoleEvidence {
+            graphical: false,
+            sshd_active: true,
+            server_chassis: false,
+            wsl: true,
+        };
+        assert!(detect_host_roles(&ev).contains(&"wsl".to_string()));
     }
 }

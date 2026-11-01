@@ -80,7 +80,7 @@ own category names:
 ## The 4 rules with no reference — and why
 
 `BLWK-LOG-002` (no remote log forwarding configured), `BLWK-AV-001`/`BLWK-AV-002` (ClamAV missing
-or its signature database stale), and `BLWK-FIM-003` (no file-integrity baseline recorded yet) —
+or its signature database stale), and `BLWK-FIM-009` (no file-integrity baseline recorded yet) —
 all four are checks about Bulwark's or the host's own tooling *state*, not a specific
 misconfiguration or attack technique either framework catalogs directly. There's no CIS control
 number or ATT&CK technique ID that means "your file-integrity tool has no baseline yet" — that's

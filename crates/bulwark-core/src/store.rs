@@ -13,12 +13,14 @@
 //! Three engines, three table pairs, three different reconciliation models — see
 //! `migrations/*/up.sql` for why they are deliberately not one table.
 
+use crate::fleet::{AttemptOutcome, LastStatus, NewRemoteHost, RemoteHost, RemoteHostPatch};
 use crate::models::{
-    Finding, FindingStatus, ScanRun, Severity, Suppression, SuppressionAction, SuppressionEvent,
+    Finding, FindingIgnore, FindingStatus, Ignores, ScanRun, Severity, Suppression,
+    SuppressionAction, SuppressionEvent,
 };
 use crate::schema::{
-    ai_findings, ai_scan_runs, findings, log_findings, log_scan_runs, rule_suppression_events,
-    rule_suppressions, scan_runs, settings,
+    ai_findings, ai_scan_runs, finding_ignores, findings, log_findings, log_scan_runs,
+    remote_hosts, rule_suppression_events, rule_suppressions, scan_runs, settings,
 };
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
@@ -150,6 +152,7 @@ struct SuppressionEventRow {
     reason: String,
     actor: String,
     at: String,
+    location: Option<String>,
 }
 
 impl SuppressionEventRow {
@@ -166,6 +169,7 @@ impl SuppressionEventRow {
             reason: self.reason,
             actor: self.actor,
             at: parse_audit_ts(&self.at)?,
+            location: self.location,
         })
     }
 }
@@ -180,6 +184,7 @@ fn append_suppression_event(
     reason: &str,
     actor: &str,
     at: DateTime<Utc>,
+    location: Option<&str>,
 ) -> anyhow::Result<()> {
     diesel::insert_into(rule_suppression_events::table)
         .values((
@@ -189,6 +194,7 @@ fn append_suppression_event(
             rule_suppression_events::reason.eq(reason),
             rule_suppression_events::actor.eq(actor),
             rule_suppression_events::at.eq(at.to_rfc3339()),
+            rule_suppression_events::location.eq(location),
         ))
         .execute(conn)?;
     Ok(())
@@ -372,6 +378,83 @@ impl AiFindingRow {
     }
 }
 
+#[derive(Queryable, Selectable, Insertable, AsChangeset)]
+#[diesel(table_name = remote_hosts)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+#[diesel(treat_none_as_null = true)]
+struct RemoteHostRow {
+    id: String,
+    name: String,
+    spec: String,
+    port: Option<i64>,
+    identity_file: Option<String>,
+    jump_host: Option<String>,
+    privileged: bool,
+    enabled: bool,
+    interval_minutes: i64,
+    created_at: String,
+    expected_hostname: Option<String>,
+    last_attempt_at: Option<String>,
+    last_success_at: Option<String>,
+    last_status: Option<String>,
+    last_error: Option<String>,
+    consecutive_failures: i64,
+    engine: Option<String>,
+    os_kind: Option<String>,
+    os_name: Option<String>,
+}
+
+impl RemoteHostRow {
+    fn into_host(self) -> RemoteHost {
+        RemoteHost {
+            id: self.id,
+            name: self.name,
+            spec: self.spec,
+            port: self.port.and_then(|p| u16::try_from(p).ok()),
+            identity_file: self.identity_file,
+            jump_host: self.jump_host,
+            privileged: self.privileged,
+            enabled: self.enabled,
+            interval_minutes: u32::try_from(self.interval_minutes)
+                .unwrap_or(crate::fleet::DEFAULT_INTERVAL_MINUTES),
+            created_at: parse_ts(&self.created_at),
+            expected_hostname: self.expected_hostname,
+            last_attempt_at: self.last_attempt_at.as_deref().map(parse_ts),
+            last_success_at: self.last_success_at.as_deref().map(parse_ts),
+            last_status: self.last_status.as_deref().map(LastStatus::from_db),
+            last_error: self.last_error,
+            consecutive_failures: u32::try_from(self.consecutive_failures).unwrap_or(0),
+            engine: self.engine,
+            os_kind: self.os_kind,
+            os_name: self.os_name,
+        }
+    }
+
+    fn from_host(h: &RemoteHost) -> Self {
+        RemoteHostRow {
+            id: h.id.clone(),
+            name: h.name.clone(),
+            spec: h.spec.clone(),
+            port: h.port.map(i64::from),
+            identity_file: h.identity_file.clone(),
+            jump_host: h.jump_host.clone(),
+            privileged: h.privileged,
+            enabled: h.enabled,
+            interval_minutes: i64::from(h.interval_minutes),
+            created_at: h.created_at.to_rfc3339(),
+            expected_hostname: h.expected_hostname.clone(),
+            last_attempt_at: h.last_attempt_at.map(|t| t.to_rfc3339()),
+            last_success_at: h.last_success_at.map(|t| t.to_rfc3339()),
+            last_status: h.last_status.map(LastStatus::to_db),
+            last_error: h.last_error.clone(),
+            consecutive_failures: i64::from(h.consecutive_failures),
+            engine: h.engine.clone(),
+            os_kind: h.os_kind.clone(),
+            os_name: h.os_name.clone(),
+        }
+    }
+}
+
 impl Store {
     /// Opens (creating if needed) the database at `path` and brings its schema up to date.
     ///
@@ -505,10 +588,18 @@ impl Store {
                 match existing_id {
                     Some(id) => {
                         diesel::update(findings::table.find(&id))
+                            // The rule's current wording and severity too, not just the facts:
+                            // otherwise an open finding keeps the text (and severity) its rule had
+                            // when first seen, and a tuned rule — a clearer title, a corrected
+                            // severity — never reaches the issues already on screen.
                             .set((
                                 findings::last_seen.eq(f.last_seen.to_rfc3339()),
                                 findings::scan_run_id.eq(f.scan_run_id.to_string()),
                                 findings::context.eq(serde_json::to_string(&f.context)?),
+                                findings::title.eq(&f.title),
+                                findings::explanation.eq(&f.explanation),
+                                findings::fix_hint.eq(&f.fix_hint),
+                                findings::severity.eq(severity_str(f.severity)),
                             ))
                             .execute(conn)?;
                         matched_ids.insert(id);
@@ -526,8 +617,14 @@ impl Store {
                 }
             }
 
-            // Close what's demonstrably fixed.
-            for rule_id in &scan.rules_evaluated {
+            // Close what's demonstrably fixed — and what a rule raised before it was known not to
+            // apply to this host (`rules_not_applicable`, e.g. a kernel check inside WSL). The
+            // latter only ever closes rows; it is never counted as evidence that anything passed.
+            for rule_id in scan
+                .rules_evaluated
+                .iter()
+                .chain(scan.rules_not_applicable.iter())
+            {
                 let open_ids: Vec<String> = findings::table
                     .filter(findings::rule_id.eq(rule_id))
                     .filter(findings::status.eq("open"))
@@ -561,14 +658,30 @@ impl Store {
             // Suppressed rules are excluded, matching what the Overview counts as "active"
             // (`open_findings_split`): an accepted risk shouldn't inflate the History trend any more
             // than it inflates the dashboard's headline number.
-            let suppressed: Vec<String> = rule_suppressions::table
-                .select(rule_suppressions::rule_id)
-                .load(conn)?;
-            let open_count: i64 = findings::table
+            // Single-finding ignores count the same way, which needs each finding's place — so the
+            // open rows are filtered here rather than in SQL.
+            let ignores = Ignores {
+                rules: rule_suppressions::table
+                    .select(rule_suppressions::rule_id)
+                    .load::<String>(conn)?
+                    .into_iter()
+                    .collect(),
+                places: finding_ignores::table
+                    .select((finding_ignores::rule_id, finding_ignores::location))
+                    .load::<(String, String)>(conn)?
+                    .into_iter()
+                    .collect(),
+            };
+            let open_rows: Vec<FindingRow> = findings::table
                 .filter(findings::status.eq("open"))
-                .filter(findings::rule_id.ne_all(&suppressed))
-                .count()
-                .get_result(conn)?;
+                .select(FindingRow::as_select())
+                .load(conn)?;
+            let mut open_count: i64 = 0;
+            for row in open_rows {
+                if !ignores.covers(&row.try_into_finding()?) {
+                    open_count += 1;
+                }
+            }
             diesel::update(scan_runs::table.find(scan.id.to_string()))
                 .set(scan_runs::total_findings.eq(open_count))
                 .execute(conn)?;
@@ -859,6 +972,7 @@ impl Store {
                 reason,
                 actor,
                 now,
+                None,
             )?;
             Ok(())
         })?;
@@ -894,6 +1008,7 @@ impl Store {
                 reason,
                 actor,
                 now,
+                None,
             )?;
             Ok(())
         })
@@ -918,6 +1033,134 @@ impl Store {
             .load::<String>(&mut self.conn)?
             .into_iter()
             .collect())
+    }
+
+    /// Ignores one finding — `rule_id` at `location` (see [`crate::models::finding_location`]) —
+    /// instead of the whole rule. Same rules as [`Self::suppress_rule`]: a reason is required, and
+    /// state and audit entry are written together.
+    pub fn ignore_finding(
+        &mut self,
+        rule_id: &str,
+        location: &str,
+        reason: &str,
+        actor: &str,
+    ) -> anyhow::Result<FindingIgnore> {
+        let reason = reason.trim();
+        if reason.is_empty() {
+            anyhow::bail!("ignoring an issue needs a reason — an unexplained one is unauditable");
+        }
+        if location.trim().is_empty() {
+            anyhow::bail!("say which place to ignore");
+        }
+        let now = Utc::now();
+        self.conn.transaction::<_, anyhow::Error, _>(|conn| {
+            diesel::insert_into(finding_ignores::table)
+                .values((
+                    finding_ignores::rule_id.eq(rule_id),
+                    finding_ignores::location.eq(location),
+                    finding_ignores::reason.eq(reason),
+                    finding_ignores::created_at.eq(now.to_rfc3339()),
+                    finding_ignores::created_by.eq(actor),
+                ))
+                .on_conflict((finding_ignores::rule_id, finding_ignores::location))
+                .do_update()
+                .set((
+                    finding_ignores::reason.eq(reason),
+                    finding_ignores::created_at.eq(now.to_rfc3339()),
+                    finding_ignores::created_by.eq(actor),
+                ))
+                .execute(conn)?;
+            append_suppression_event(
+                conn,
+                rule_id,
+                SuppressionAction::Suppressed,
+                reason,
+                actor,
+                now,
+                Some(location),
+            )?;
+            Ok(())
+        })?;
+        Ok(FindingIgnore {
+            rule_id: rule_id.to_string(),
+            location: location.to_string(),
+            reason: reason.to_string(),
+            created_at: now,
+            created_by: actor.to_string(),
+        })
+    }
+
+    /// Stops ignoring one finding. Needs a reason, like every other change to what is hidden.
+    pub fn unignore_finding(
+        &mut self,
+        rule_id: &str,
+        location: &str,
+        reason: &str,
+        actor: &str,
+    ) -> anyhow::Result<()> {
+        let reason = reason.trim();
+        if reason.is_empty() {
+            anyhow::bail!("un-ignoring an issue needs a reason too — it is an auditable decision");
+        }
+        let now = Utc::now();
+        self.conn.transaction::<_, anyhow::Error, _>(|conn| {
+            let removed = diesel::delete(
+                finding_ignores::table
+                    .filter(finding_ignores::rule_id.eq(rule_id))
+                    .filter(finding_ignores::location.eq(location)),
+            )
+            .execute(conn)?;
+            if removed == 0 {
+                anyhow::bail!("{rule_id} at {location} is not ignored");
+            }
+            append_suppression_event(
+                conn,
+                rule_id,
+                SuppressionAction::Unsuppressed,
+                reason,
+                actor,
+                now,
+                Some(location),
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Every single-finding ignore, newest first.
+    pub fn list_finding_ignores(&mut self) -> anyhow::Result<Vec<FindingIgnore>> {
+        let rows: Vec<(String, String, String, String, String)> = finding_ignores::table
+            .order(finding_ignores::created_at.desc())
+            .select((
+                finding_ignores::rule_id,
+                finding_ignores::location,
+                finding_ignores::reason,
+                finding_ignores::created_at,
+                finding_ignores::created_by,
+            ))
+            .load(&mut self.conn)?;
+        rows.into_iter()
+            .map(|(rule_id, location, reason, created_at, created_by)| {
+                Ok(FindingIgnore {
+                    rule_id,
+                    location,
+                    reason,
+                    created_at: DateTime::parse_from_rfc3339(&created_at)?.with_timezone(&Utc),
+                    created_by,
+                })
+            })
+            .collect()
+    }
+
+    /// Everything currently hidden: whole rules and single findings.
+    pub fn ignores(&mut self) -> anyhow::Result<Ignores> {
+        Ok(Ignores {
+            rules: self.suppressed_rule_ids()?,
+            places: finding_ignores::table
+                .select((finding_ignores::rule_id, finding_ignores::location))
+                .load::<(String, String)>(&mut self.conn)?
+                .into_iter()
+                .collect(),
+        })
     }
 
     /// The append-only audit trail, newest first. Pass `rule_id` to scope it to one rule's history.
@@ -972,11 +1215,11 @@ impl Store {
     /// number a reviewer wants to see. "0 issues" and "0 issues, 14 suppressed" are very different
     /// sentences, and the UI is entitled to say the second one.
     pub fn open_findings_split(&mut self) -> anyhow::Result<SplitFindings> {
-        let suppressed_ids = self.suppressed_rule_ids()?;
+        let ignores = self.ignores()?;
         let (suppressed, active) = self
             .open_findings()?
             .into_iter()
-            .partition(|f| suppressed_ids.contains(&f.rule_id));
+            .partition(|f| ignores.covers(f));
         Ok(SplitFindings { active, suppressed })
     }
 
@@ -1023,6 +1266,204 @@ impl Store {
             .transpose()
     }
 
+    // ---- remote machines (see `fleet`) ---------------------------------------------------------
+
+    /// Every registered remote machine, ordered by name.
+    pub fn list_remote_hosts(&mut self) -> anyhow::Result<Vec<RemoteHost>> {
+        let rows: Vec<RemoteHostRow> = remote_hosts::table
+            .order(remote_hosts::name.asc())
+            .select(RemoteHostRow::as_select())
+            .load(&mut self.conn)?;
+        Ok(rows.into_iter().map(RemoteHostRow::into_host).collect())
+    }
+
+    /// Looks a machine up by id, then by name, then by address — so the CLI can take whichever the
+    /// user remembers. An address shared by several entries is ambiguous and matches none of them.
+    pub fn find_remote_host(&mut self, key: &str) -> anyhow::Result<Option<RemoteHost>> {
+        let all = self.list_remote_hosts()?;
+        if let Some(h) = all.iter().find(|h| h.id == key) {
+            return Ok(Some(h.clone()));
+        }
+        if let Some(h) = all.iter().find(|h| h.name == key) {
+            return Ok(Some(h.clone()));
+        }
+        let by_spec: Vec<&RemoteHost> = all.iter().filter(|h| h.spec == key).collect();
+        Ok(match by_spec.as_slice() {
+            [one] => Some((*one).clone()),
+            _ => None,
+        })
+    }
+
+    /// Registers a machine. Validation happens here, in core, so no front-door can store a target
+    /// the scheduler would later refuse — or, worse, one shaped like an ssh option.
+    pub fn add_remote_host(&mut self, new: &NewRemoteHost) -> anyhow::Result<RemoteHost> {
+        new.validate().map_err(|e| anyhow::anyhow!(e))?;
+        let spec = new.spec.trim().to_string();
+        let name = new
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| crate::fleet::default_name_for(&spec));
+        if self.list_remote_hosts()?.iter().any(|h| h.name == name) {
+            anyhow::bail!("a machine named \"{name}\" already exists — choose another name");
+        }
+        let host = RemoteHost {
+            id: uuid::Uuid::new_v4().to_string(),
+            name,
+            spec,
+            port: new.port,
+            identity_file: new.identity_file.as_deref().map(|s| s.trim().to_string()),
+            jump_host: new
+                .jump_host
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+            privileged: new.privileged,
+            enabled: true,
+            interval_minutes: new
+                .interval_minutes
+                .unwrap_or(crate::fleet::DEFAULT_INTERVAL_MINUTES),
+            created_at: Utc::now(),
+            expected_hostname: None,
+            last_attempt_at: None,
+            last_success_at: None,
+            last_status: None,
+            last_error: None,
+            consecutive_failures: 0,
+            engine: None,
+            os_kind: None,
+            os_name: None,
+        };
+        diesel::insert_into(remote_hosts::table)
+            .values(RemoteHostRow::from_host(&host))
+            .execute(&mut self.conn)?;
+        Ok(host)
+    }
+
+    /// Applies a partial update. Changing the address also forgets the pinned hostname, since the
+    /// new address is expected to be a different endpoint for the same machine.
+    pub fn update_remote_host(
+        &mut self,
+        id: &str,
+        patch: &RemoteHostPatch,
+    ) -> anyhow::Result<RemoteHost> {
+        patch.validate().map_err(|e| anyhow::anyhow!(e))?;
+        let all = self.list_remote_hosts()?;
+        let mut h = all
+            .iter()
+            .find(|h| h.id == id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no machine with id {id}"))?;
+        if let Some(n) = &patch.name {
+            let n = n.trim().to_string();
+            if all.iter().any(|o| o.id != h.id && o.name == n) {
+                anyhow::bail!("a machine named \"{n}\" already exists — choose another name");
+            }
+            h.name = n;
+        }
+        if let Some(s) = &patch.spec {
+            let s = s.trim().to_string();
+            if s != h.spec {
+                h.expected_hostname = None;
+            }
+            h.spec = s;
+        }
+        if let Some(p) = patch.port {
+            h.port = p;
+        }
+        if let Some(i) = &patch.identity_file {
+            h.identity_file = i.as_deref().map(|s| s.trim().to_string());
+        }
+        if let Some(j) = &patch.jump_host {
+            h.jump_host = j
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+        }
+        if let Some(p) = patch.privileged {
+            h.privileged = p;
+        }
+        if let Some(e) = patch.enabled {
+            h.enabled = e;
+        }
+        if let Some(m) = patch.interval_minutes {
+            h.interval_minutes = m;
+        }
+        if patch.reset_identity {
+            h.expected_hostname = None;
+            if matches!(
+                h.last_status,
+                Some(LastStatus::Failed(
+                    crate::fleet::RemoteErrorKind::IdentityChanged
+                ))
+            ) {
+                // Make it due again right away: the user just resolved the reason it was failing.
+                h.last_attempt_at = None;
+            }
+        }
+        diesel::update(remote_hosts::table.find(&h.id))
+            .set(RemoteHostRow::from_host(&h))
+            .execute(&mut self.conn)?;
+        Ok(h)
+    }
+
+    /// Records what the machine runs, as seen by a successful connection (for the app's OS icon).
+    pub fn set_remote_os(&mut self, id: &str, kind: &str, name: &str) -> anyhow::Result<()> {
+        diesel::update(remote_hosts::table.find(id))
+            .set((
+                remote_hosts::os_kind.eq(kind),
+                remote_hosts::os_name.eq(name),
+            ))
+            .execute(&mut self.conn)?;
+        Ok(())
+    }
+
+    /// Unregisters a machine. Its findings database is the caller's to keep or delete.
+    pub fn delete_remote_host(&mut self, id: &str) -> anyhow::Result<bool> {
+        Ok(diesel::delete(remote_hosts::table.find(id)).execute(&mut self.conn)? > 0)
+    }
+
+    /// Records the outcome of a scan attempt: timestamps, status, failure streak, engine, and — on
+    /// the first success — the machine's hostname, which pins its identity from then on.
+    pub fn record_remote_attempt(
+        &mut self,
+        id: &str,
+        at: DateTime<Utc>,
+        outcome: &AttemptOutcome,
+    ) -> anyhow::Result<RemoteHost> {
+        let mut h = self
+            .list_remote_hosts()?
+            .into_iter()
+            .find(|h| h.id == id)
+            .ok_or_else(|| anyhow::anyhow!("no machine with id {id}"))?;
+        h.last_attempt_at = Some(at);
+        match outcome {
+            AttemptOutcome::Success { hostname, engine } => {
+                h.last_success_at = Some(at);
+                h.last_status = Some(LastStatus::Ok);
+                h.last_error = None;
+                h.consecutive_failures = 0;
+                h.engine = Some(engine.clone());
+                if h.expected_hostname.is_none() && !hostname.is_empty() {
+                    h.expected_hostname = Some(hostname.clone());
+                }
+            }
+            AttemptOutcome::Failure { kind, message } => {
+                h.last_status = Some(LastStatus::Failed(*kind));
+                h.last_error = Some(message.clone());
+                h.consecutive_failures = h.consecutive_failures.saturating_add(1);
+            }
+        }
+        diesel::update(remote_hosts::table.find(&h.id))
+            .set(RemoteHostRow::from_host(&h))
+            .execute(&mut self.conn)?;
+        Ok(h)
+    }
+
     /// The most recent `limit` scan runs, newest first — backs the History timeline. Its
     /// `total_findings` is what that specific scan produced, not a live re-derived count, so the
     /// trend stays accurate even as later runs reconcile finding rows onto themselves.
@@ -1059,6 +1500,11 @@ impl Store {
 /// `findings.scan_run_id -> scan_runs.id` reference is decoration rather than a constraint.
 fn prepare(conn: &mut SqliteConnection) -> anyhow::Result<()> {
     diesel::sql_query("PRAGMA foreign_keys = ON").execute(conn)?;
+    // Several processes can now write the same database at once — the GUI, its background remote
+    // scans (separate CLI processes), and a `bulwarkctl hosts scan --due` from cron. Without a busy
+    // timeout SQLite fails a writer immediately with "database is locked" instead of waiting the
+    // few milliseconds the other writer needs.
+    diesel::sql_query("PRAGMA busy_timeout = 10000").execute(conn)?;
     conn.run_pending_migrations(MIGRATIONS)
         .map_err(|e| anyhow::anyhow!("running migrations: {e}"))?;
     Ok(())
@@ -1210,6 +1656,7 @@ mod tests {
             }],
             privileged_collectors_skipped: vec!["sudoers".into()],
             rules_evaluated: vec!["BLWK-SSH-001".into()],
+            rules_not_applicable: vec![],
             cancelled: false,
             findings: vec![Finding {
                 id: Uuid::new_v4(),
@@ -1334,6 +1781,110 @@ mod tests {
              '0 issues, 1 accepted' are different sentences"
         );
         assert_eq!(split.suppressed[0].rule_id, "BLWK-SSH-001");
+    }
+
+    /// A scan with one rule firing at two places (two config files).
+    fn two_place_scan(line: u64) -> ScanRun {
+        let mut scan = sample_scan();
+        let template = scan.findings[0].clone();
+        scan.findings = ["/home/u/.npmrc", "/home/u/.yarnrc"]
+            .iter()
+            .map(|path| {
+                let mut f = template.clone();
+                f.id = Uuid::new_v4();
+                f.rule_id = "BLWK-DEV-007".into();
+                f.context = [
+                    (
+                        "path".to_string(),
+                        serde_json::Value::String((*path).into()),
+                    ),
+                    ("line".to_string(), serde_json::Value::from(line)),
+                ]
+                .into_iter()
+                .collect();
+                f
+            })
+            .collect();
+        scan.rules_evaluated = vec!["BLWK-DEV-007".into()];
+        scan
+    }
+
+    #[test]
+    fn ignoring_one_finding_hides_that_place_only() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.persist_and_reconcile(&two_place_scan(3)).unwrap();
+        // A reason is required, as for a whole rule.
+        assert!(store
+            .ignore_finding("BLWK-DEV-007", "/home/u/.npmrc", "  ", "a")
+            .is_err());
+        store
+            .ignore_finding(
+                "BLWK-DEV-007",
+                "/home/u/.npmrc",
+                "internal mirror, HTTP only",
+                "a",
+            )
+            .unwrap();
+
+        let split = store.open_findings_split().unwrap();
+        assert_eq!(split.active.len(), 1, "the other file is still reported");
+        assert_eq!(
+            split.active[0].context.get("path").and_then(|v| v.as_str()),
+            Some("/home/u/.yarnrc")
+        );
+        assert_eq!(split.suppressed.len(), 1);
+        assert!(
+            store.suppressed_rule_ids().unwrap().is_empty(),
+            "the rule itself stays on"
+        );
+
+        // The place identity ignores what drifts: a later scan at another line is still ignored,
+        // and the history count leaves it out like a whole-rule suppression.
+        store.persist_and_reconcile(&two_place_scan(9)).unwrap();
+        assert_eq!(store.open_findings_split().unwrap().active.len(), 1);
+        let latest: i64 = scan_runs::table
+            .order(scan_runs::started_at.desc())
+            .select(scan_runs::total_findings)
+            .first(&mut store.conn)
+            .unwrap();
+        assert_eq!(latest, 1);
+
+        // Audited with the place, and reversible with a reason.
+        let log = store
+            .suppression_audit_log(Some("BLWK-DEV-007"), 10)
+            .unwrap();
+        assert_eq!(log[0].location.as_deref(), Some("/home/u/.npmrc"));
+        assert!(store
+            .unignore_finding("BLWK-DEV-007", "/home/u/.npmrc", "", "a")
+            .is_err());
+        store
+            .unignore_finding(
+                "BLWK-DEV-007",
+                "/home/u/.npmrc",
+                "mirror moved to HTTPS",
+                "a",
+            )
+            .unwrap();
+        assert_eq!(store.open_findings_split().unwrap().active.len(), 2);
+        assert!(store.list_finding_ignores().unwrap().is_empty());
+        assert!(store
+            .unignore_finding("BLWK-DEV-007", "/home/u/.npmrc", "again", "a")
+            .is_err());
+    }
+
+    #[test]
+    fn adding_finding_ignores_preserves_suppressions_and_their_history() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&tmp.path().join("u.db")).unwrap();
+        store
+            .suppress_rule("BLWK-BANN-001", "personal laptop", "a")
+            .unwrap();
+        revert_through(&mut store.conn, "2026-11-03-000000");
+        store.conn.run_pending_migrations(MIGRATIONS).unwrap();
+        assert_eq!(store.list_suppressions().unwrap().len(), 1);
+        let log = store.suppression_audit_log(None, 10).unwrap();
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].location, None, "older events cover the whole rule");
     }
 
     #[test]
@@ -2102,8 +2653,9 @@ mod tests {
         let mut store = Store::open(&db_path).unwrap();
         store.persist_and_reconcile(&sample_scan()).unwrap();
 
-        // Wind back to the schema as it stood before this migration.
-        store.conn.revert_last_migration(MIGRATIONS).unwrap();
+        // Wind back to the schema as it stood before this migration (reverting any later ones
+        // first — "last migration" stopped meaning this one when remote_hosts was added).
+        revert_through(&mut store.conn, "2026-07-19-000000");
         assert!(
             !store.is_schema_current().unwrap(),
             "the revert must actually have taken the database off the current schema, or this \
@@ -2319,5 +2871,250 @@ mod tests {
             .first(&mut store.conn)
             .unwrap();
         assert_eq!(occ, 2);
+    }
+
+    /// Reverts migrations newest-first until the one whose name starts with `version` has been
+    /// reverted. Lets an upgrade test target its own migration no matter how many follow it.
+    fn revert_through(conn: &mut SqliteConnection, version: &str) {
+        let want: String = version.chars().filter(char::is_ascii_digit).collect();
+        for _ in 0..64 {
+            let reverted = conn.revert_last_migration(MIGRATIONS).unwrap().to_string();
+            let got: String = reverted.chars().filter(char::is_ascii_digit).collect();
+            if got.starts_with(&want) {
+                return;
+            }
+        }
+        panic!("migration {version} was never reverted");
+    }
+
+    fn new_host(spec: &str) -> crate::fleet::NewRemoteHost {
+        crate::fleet::NewRemoteHost {
+            name: None,
+            spec: spec.into(),
+            port: None,
+            identity_file: None,
+            jump_host: None,
+            privileged: false,
+            interval_minutes: None,
+        }
+    }
+
+    /// Append-only, exercised: a database from before machines could be registered comes forward
+    /// with its scan history intact and an empty machine list.
+    #[test]
+    fn adding_remote_hosts_preserves_existing_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("upgrade.db");
+        let mut store = Store::open(&db_path).unwrap();
+        store.persist_and_reconcile(&sample_scan()).unwrap();
+        store.set_setting("monitoring_enabled", "false").unwrap();
+
+        revert_through(&mut store.conn, "2026-11-01-000000");
+        assert!(!store.is_schema_current().unwrap());
+        assert!(diesel::sql_query("SELECT id FROM remote_hosts")
+            .execute(&mut store.conn)
+            .is_err());
+
+        store.conn.run_pending_migrations(MIGRATIONS).unwrap();
+        assert_eq!(store.count_scan_runs().unwrap(), 1);
+        assert_eq!(store.open_findings().unwrap().len(), 1);
+        assert_eq!(
+            store.get_setting("monitoring_enabled").unwrap().as_deref(),
+            Some("false")
+        );
+        assert!(store.list_remote_hosts().unwrap().is_empty());
+    }
+
+    #[test]
+    fn remote_hosts_round_trip_and_validate_in_core() {
+        let mut store = Store::open_in_memory().unwrap();
+        let h = store.add_remote_host(&new_host("deploy@web-1")).unwrap();
+        assert_eq!(h.name, "web-1", "the name defaults to the host part");
+        assert_eq!(h.interval_minutes, crate::fleet::DEFAULT_INTERVAL_MINUTES);
+        assert!(h.enabled);
+        assert_eq!(store.list_remote_hosts().unwrap(), vec![h.clone()]);
+
+        // Lookup by id, name and (unambiguous) address.
+        for key in [h.id.as_str(), "web-1", "deploy@web-1"] {
+            assert_eq!(store.find_remote_host(key).unwrap().unwrap().id, h.id);
+        }
+
+        // Validation is enforced by the store, not left to the front-doors.
+        assert!(store
+            .add_remote_host(&new_host("-oProxyCommand=touch /tmp/x"))
+            .is_err());
+        // Duplicate names are refused with a readable message.
+        let dup = store.add_remote_host(&new_host("other@web-1")).unwrap_err();
+        assert!(dup.to_string().contains("already exists"));
+
+        let patched = store
+            .update_remote_host(
+                &h.id,
+                &crate::fleet::RemoteHostPatch {
+                    enabled: Some(false),
+                    port: Some(Some(2222)),
+                    interval_minutes: Some(15),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(!patched.enabled);
+        assert_eq!(patched.port, Some(2222));
+        assert_eq!(patched.interval_minutes, 15);
+        assert!(store
+            .update_remote_host(
+                &h.id,
+                &crate::fleet::RemoteHostPatch {
+                    interval_minutes: Some(1),
+                    ..Default::default()
+                }
+            )
+            .is_err());
+
+        assert!(store.delete_remote_host(&h.id).unwrap());
+        assert!(store.list_remote_hosts().unwrap().is_empty());
+    }
+
+    #[test]
+    fn attempts_track_streaks_and_pin_identity_on_first_success() {
+        use crate::fleet::{AttemptOutcome, LastStatus, RemoteErrorKind};
+        let mut store = Store::open_in_memory().unwrap();
+        let h = store.add_remote_host(&new_host("web-1")).unwrap();
+        let now = Utc::now();
+
+        let fail = AttemptOutcome::Failure {
+            kind: RemoteErrorKind::Unreachable,
+            message: "Connection refused".into(),
+        };
+        store.record_remote_attempt(&h.id, now, &fail).unwrap();
+        let h2 = store.record_remote_attempt(&h.id, now, &fail).unwrap();
+        assert_eq!(h2.consecutive_failures, 2);
+        assert_eq!(
+            h2.last_status,
+            Some(LastStatus::Failed(RemoteErrorKind::Unreachable))
+        );
+        assert!(h2.last_success_at.is_none());
+
+        let ok = AttemptOutcome::Success {
+            hostname: "web-1".into(),
+            engine: "installed /usr/bin/bulwarkctl".into(),
+        };
+        let h3 = store.record_remote_attempt(&h.id, now, &ok).unwrap();
+        assert_eq!(h3.consecutive_failures, 0);
+        assert_eq!(h3.last_status, Some(LastStatus::Ok));
+        assert_eq!(h3.expected_hostname.as_deref(), Some("web-1"));
+        assert!(h3.last_error.is_none());
+
+        // A later success never silently re-pins to a different hostname; only an explicit reset
+        // does.
+        let other = AttemptOutcome::Success {
+            hostname: "imposter".into(),
+            engine: "x".into(),
+        };
+        let h4 = store.record_remote_attempt(&h.id, now, &other).unwrap();
+        assert_eq!(h4.expected_hostname.as_deref(), Some("web-1"));
+        let h5 = store
+            .update_remote_host(
+                &h.id,
+                &crate::fleet::RemoteHostPatch {
+                    reset_identity: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(h5.expected_hostname.is_none());
+    }
+
+    #[test]
+    fn changing_the_address_forgets_the_pinned_identity() {
+        let mut store = Store::open_in_memory().unwrap();
+        let h = store.add_remote_host(&new_host("web-1")).unwrap();
+        store
+            .record_remote_attempt(
+                &h.id,
+                Utc::now(),
+                &crate::fleet::AttemptOutcome::Success {
+                    hostname: "web-1".into(),
+                    engine: "x".into(),
+                },
+            )
+            .unwrap();
+        let moved = store
+            .update_remote_host(
+                &h.id,
+                &crate::fleet::RemoteHostPatch {
+                    spec: Some("10.0.0.7".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(moved.expected_hostname.is_none());
+    }
+
+    #[test]
+    fn a_reobserved_finding_takes_its_rules_current_wording_and_severity() {
+        let mut store = Store::open_in_memory().unwrap();
+        let first = sample_scan();
+        store.persist_and_reconcile(&first).unwrap();
+
+        let mut second = sample_scan();
+        second.findings[0].title = "Tuned title (port 5432)".into();
+        second.findings[0].explanation = "Tuned explanation".into();
+        second.findings[0].severity = Severity::Medium;
+        let fresh = store.persist_and_reconcile(&second).unwrap();
+        assert!(
+            fresh.is_empty(),
+            "the same issue, re-observed — not a new one"
+        );
+
+        let open = store.open_findings().unwrap();
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].title, "Tuned title (port 5432)");
+        assert_eq!(open[0].explanation, "Tuned explanation");
+        assert_eq!(open[0].severity, Severity::Medium);
+    }
+
+    #[test]
+    fn a_rule_that_stops_applying_closes_its_old_findings_without_counting_as_evaluated() {
+        let mut store = Store::open_in_memory().unwrap();
+        let first = sample_scan(); // one open BLWK-SSH-001 finding
+        store.persist_and_reconcile(&first).unwrap();
+        assert_eq!(store.open_findings().unwrap().len(), 1);
+
+        // Next scan: the rule no longer applies on this host (e.g. it is skipped inside WSL).
+        let mut second = sample_scan();
+        second.findings.clear();
+        second.rules_evaluated = vec![];
+        second.rules_not_applicable = vec!["BLWK-SSH-001".into()];
+        store.persist_and_reconcile(&second).unwrap();
+        assert!(store.open_findings().unwrap().is_empty());
+        // And it is not stored as evidence of a pass.
+        assert!(store.latest_rules_evaluated().unwrap().unwrap().is_empty());
+    }
+
+    /// Append-only, exercised: machines registered before the OS columns existed survive the
+    /// upgrade, with their OS simply not known yet.
+    #[test]
+    fn adding_remote_os_columns_preserves_registered_machines() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&tmp.path().join("u.db")).unwrap();
+        revert_through(&mut store.conn, "2026-11-02-000000");
+        diesel::sql_query(
+            "INSERT INTO remote_hosts (id, name, spec, created_at) VALUES ('h1', 'web-1', 'web-1', '2026-11-01T00:00:00Z')",
+        )
+        .execute(&mut store.conn)
+        .unwrap();
+        store.conn.run_pending_migrations(MIGRATIONS).unwrap();
+        let hosts = store.list_remote_hosts().unwrap();
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].name, "web-1");
+        assert!(hosts[0].os_kind.is_none());
+        store
+            .set_remote_os("h1", "ubuntu", "Ubuntu 24.04.1 LTS")
+            .unwrap();
+        assert_eq!(
+            store.list_remote_hosts().unwrap()[0].os_kind.as_deref(),
+            Some("ubuntu")
+        );
     }
 }

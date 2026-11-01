@@ -18,6 +18,7 @@ path = "src/main.rs"
 [dependencies]
 bulwark-core = { path = "../bulwark-core", version = "0.11.1" }
 clap.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
@@ -43,7 +44,7 @@ extended-description = "Scans a Linux host for security misconfigurations and in
 # Deliberately NOT openssh-server: `fix sshd` validation uses `sshd -t`, but installing an SSH
 # *server* on a machine just to run a security tool would enlarge its attack surface, not shrink it.
 depends = "$auto"
-recommends = "clamav, openssh-client, git"
+recommends = "clamav, openssh-client, curl, git"
 section = "admin"
 priority = "optional"
 assets = [
@@ -72,4 +73,5 @@ assets = [
 [package.metadata.generate-rpm.recommends]
 clamav = "*"
 openssh-clients = "*"
+curl = "*"
 git = "*"

@@ -68,7 +68,7 @@ impl Collector for AuthorizedKeysCollector {
 
 impl AuthorizedKeysCollector {
     fn path() -> Option<std::path::PathBuf> {
-        let home = std::env::var_os("HOME")?;
+        let home = crate::paths::home_var_os()?;
         let path = std::path::Path::new(&home).join(".ssh/authorized_keys");
         path.exists().then_some(path)
     }

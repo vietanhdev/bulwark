@@ -1,5 +1,5 @@
 id: BLWK-PERSIST-003
-title: Unexpected LaunchAgent/LaunchDaemon found
+title: "Suspicious LaunchAgent/LaunchDaemon: {{ launchd_persistence.label }}"
 category: persistence
 severity: high
 collector: launchd_persistence
@@ -7,7 +7,8 @@ os: [macos]
 profiles: [desktop]
 condition: recognized == false
 explain: >
-  The LaunchAgent/LaunchDaemon "{{ launchd_persistence.label }}" runs on every login/boot and
-  isn't one this host's baseline recognizes — macOS's equivalent of a rogue systemd unit.
-fix: "Review the plist under ~/Library/LaunchAgents or /Library/Launch{Agents,Daemons} and remove it if you didn't create it."
+  The launch job "{{ launchd_persistence.label }}" ({{ launchd_persistence.path }}) starts on every
+  login or boot, and {{ launchd_persistence.reason }} — the shape macOS persistence malware takes
+  rather than the shape installed software does. It runs: {{ launchd_persistence.program }}.
+fix: "If you didn't create it, unload it with `launchctl bootout gui/$(id -u) {{ launchd_persistence.path }}` (or `sudo launchctl bootout system {{ launchd_persistence.path }}` for /Library/LaunchDaemons), move the plist and the program it runs aside, and check what else that program touched."
 references: [ATTACK-T1543.001]

@@ -1,0 +1,11 @@
+id: BLWK-DEV-007
+title: "Packages are installed from a plain-HTTP registry ({{ dev_tool_config.path }})"
+category: developer-tools
+severity: high
+collector: dev_tool_config
+os: [linux, macos, windows]
+condition: kind in ["npm", "pip"] and http_registry == true
+explain: >
+  {{ dev_tool_config.path }} installs from {{ dev_tool_config.detail }} over unencrypted HTTP. Anyone on the network path can swap in a package that runs its own code at install time, and can read any token sent with the request.
+fix: "Change the address to https:// (npm config set registry https://…, or index-url / extra-index-url in pip.conf). If the registry has no HTTPS, put it behind a TLS proxy rather than installing over plain HTTP."
+references: [ATTACK-T1195.001, ATTACK-T1557]

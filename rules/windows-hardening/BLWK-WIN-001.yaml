@@ -1,0 +1,12 @@
+id: BLWK-WIN-001
+title: Microsoft Defender real-time protection is off
+category: windows-hardening
+severity: high
+collector: windows_security
+os: [windows]
+# Only fires on a value actually read; an unreadable setting (e.g. BitLocker without elevation) never does.
+condition: defender_realtime_known == true and defender_realtime == false
+explain: >
+  Real-time protection is what stops malware as it's downloaded or run. With it off, Defender only finds threats when a scan happens to run.
+fix: "Turn it on in Windows Security → Virus & threat protection → Manage settings → Real-time protection. If it keeps switching off, check for another antivirus or a policy disabling it."
+references: [ATTACK-T1562.001]

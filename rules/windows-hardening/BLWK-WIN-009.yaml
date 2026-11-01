@@ -1,0 +1,11 @@
+id: BLWK-WIN-009
+title: Automatic sign-in keeps a password in the registry
+category: windows-hardening
+severity: high
+collector: windows_security
+os: [windows]
+condition: autologon_password_stored_known == true and autologon_password_stored == true
+explain: >
+  Windows signs in by itself using a password stored in plain text in the registry (Winlogon's DefaultPassword). Anyone with administrator access, any malware running as administrator, and anyone with the disk can read that account's password.
+fix: "Turn off automatic sign-in (run 'netplwiz' and tick 'Users must enter a user name and password', or set AutoAdminLogon to 0), then delete the DefaultPassword value under HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon and change that account's password."
+references: [ATTACK-T1552.002]

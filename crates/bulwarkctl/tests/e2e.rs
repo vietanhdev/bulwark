@@ -207,3 +207,254 @@ e2e_scenario!(
     systemd_tunnel_persistence_is_detected,
     "systemd-tunnel-persistence"
 );
+
+// ---- agentless remote monitoring over a real sshd ---------------------------------------------
+
+/// Runs this build's `bulwarkctl` against an isolated database and returns (exit code, stdout).
+fn ctl(db: &std::path::Path, args: &[&str], stdin: Option<&str>) -> (i32, String) {
+    use std::io::Write;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_bulwarkctl"))
+        .args(args)
+        .env("BULWARK_DB_PATH", db)
+        .stdin(if stdin.is_some() {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::null()
+        })
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn bulwarkctl");
+    if let Some(s) = stdin {
+        child.stdin.take().unwrap().write_all(s.as_bytes()).unwrap();
+    }
+    let out = child.wait_with_output().unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+    )
+}
+
+fn json(s: &str) -> serde_json::Value {
+    serde_json::from_str(s).unwrap_or_else(|e| panic!("not JSON ({e}):\n{s}"))
+}
+
+/// The whole remote-monitoring path against a real OpenSSH server, the way a user meets it:
+/// first contact refuses an unverified host key and offers its fingerprint; trusting a *wrong*
+/// fingerprint writes nothing; trusting the right one lets a password-only account be switched to
+/// Bulwark's restricted key (password used once, via stdin); the scan copies the engine over, finds
+/// the server's real misconfiguration, and cleans up; and a machine that goes away is reported as
+/// unreachable, never as clean. Each of these was first verified by hand and broke in at least one
+/// way no mock reproduced (an agent full of keys tripping MaxAuthTries, for one).
+#[test]
+#[ignore = "needs Docker; run via `cargo test -p bulwarkctl --test e2e -- --ignored`"]
+fn remote_monitoring_over_real_ssh() {
+    if !docker_available() {
+        eprintln!("skipping remote monitoring e2e: Docker is not available");
+        return;
+    }
+    let root = workspace_root();
+    let image = "bulwark-e2e-remote-sshd";
+    let build = Command::new("docker")
+        .args(["build", "-q", "-t", image])
+        .arg(root.join("tests/e2e/remote-sshd"))
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let tmp = tempfile::tempdir().unwrap();
+    let keys = tmp.path().join("authorized");
+    std::fs::create_dir_all(&keys).unwrap();
+    // No key is authorized up front: the account is password-only, the case setup-key exists for.
+    std::fs::write(keys.join("deploy"), "").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&keys, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(keys.join("deploy"), std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    let name = format!("bulwark-e2e-remote-{}", std::process::id());
+    let _guard = Container { name: name.clone() };
+    let run = Command::new("docker")
+        .args(["run", "-d", "--name", &name, "-p", "127.0.0.1::22", "-v"])
+        .arg(format!("{}:/authorized_keys:ro", keys.display()))
+        .arg(image)
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let port_out = Command::new("docker")
+        .args(["port", &name, "22"])
+        .output()
+        .unwrap();
+    let mapped = String::from_utf8_lossy(&port_out.stdout);
+    let port: String = mapped
+        .lines()
+        .next()
+        .and_then(|l| l.rsplit(':').next())
+        .unwrap()
+        .trim()
+        .to_string();
+    for _ in 0..50 {
+        if std::net::TcpStream::connect(format!("127.0.0.1:{port}")).is_ok() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+
+    let db = tmp.path().join("state/bulwark.db");
+    let (code, _) = ctl(
+        &db,
+        &[
+            "hosts",
+            "add",
+            "deploy@127.0.0.1",
+            "--port",
+            &port,
+            "--name",
+            "web-1",
+        ],
+        None,
+    );
+    assert_eq!(code, 0);
+
+    // 1. First contact: refused, with the fingerprint offered for comparison.
+    let (_, out) = ctl(&db, &["hosts", "test", "web-1", "--json"], None);
+    let report = json(&out);
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["steps"][1]["problem"]["kind"], "host_key_unknown");
+    let offered = report["host_keys"][0]["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let real = Command::new("docker")
+        .args(["exec", &name, "sh", "-c"])
+        .arg(format!(
+            "ssh-keygen -lf /etc/ssh/ssh_host_{}_key.pub",
+            report["host_keys"][0]["key_type"]
+                .as_str()
+                .unwrap()
+                .to_lowercase()
+        ))
+        .output()
+        .unwrap();
+    let real_fp = String::from_utf8_lossy(&real.stdout)
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        offered, real_fp,
+        "the offered fingerprint must be the machine's own"
+    );
+
+    // 2. A wrong fingerprint trusts nothing.
+    let (code, _) = ctl(
+        &db,
+        &[
+            "hosts",
+            "trust",
+            "web-1",
+            "--fingerprint",
+            "SHA256:not-the-key",
+            "--json",
+        ],
+        None,
+    );
+    assert_ne!(code, 0);
+    assert!(!db.with_file_name("known_hosts").exists());
+
+    // 3. The right one does — into Bulwark's own known_hosts.
+    let (code, _) = ctl(
+        &db,
+        &[
+            "hosts",
+            "trust",
+            "web-1",
+            "--fingerprint",
+            &offered,
+            "--json",
+        ],
+        None,
+    );
+    assert_eq!(code, 0);
+    let (_, out) = ctl(&db, &["hosts", "test", "web-1", "--json"], None);
+    assert_eq!(json(&out)["steps"][1]["problem"]["kind"], "auth_failed");
+
+    // 4. Password once → dedicated restricted key; a wrong password changes nothing.
+    let (code, _) = ctl(
+        &db,
+        &["hosts", "setup-key", "web-1", "--password-stdin", "--json"],
+        Some("wrong-password\n"),
+    );
+    assert_ne!(code, 0);
+    let (code, out) = ctl(
+        &db,
+        &["hosts", "setup-key", "web-1", "--password-stdin", "--json"],
+        Some("bulwark-e2e-only\n"),
+    );
+    assert_eq!(code, 0, "{out}");
+    assert!(json(&out)["public_key"]
+        .as_str()
+        .unwrap()
+        .starts_with("restrict ssh-ed25519 "));
+    let (_, out) = ctl(&db, &["hosts", "test", "web-1", "--json"], None);
+    let report = json(&out);
+    assert_eq!(report["ok"], true, "{out}");
+    assert!(report["advice"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| a["id"] == "key" && a["level"] == "good"));
+
+    // 5. Scan: engine copied in, real finding found, nothing left behind.
+    let (_, out) = ctl(
+        &db,
+        &["hosts", "scan", "web-1", "--json", "--no-notify"],
+        None,
+    );
+    let results = json(&out);
+    assert_eq!(results[0]["ok"], true, "{out}");
+    let (_, out) = ctl(&db, &["hosts", "show", "web-1", "--json"], None);
+    let ids: BTreeSet<String> = json(&out)["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["rule_id"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        ids.contains("BLWK-SSH-001"),
+        "password auth is on in the image: {ids:?}"
+    );
+    let leftovers = Command::new("docker")
+        .args([
+            "exec",
+            &name,
+            "sh",
+            "-c",
+            "ls /tmp | grep -c bulwark || true",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&leftovers.stdout).trim(), "0");
+
+    // 6. Gone: reported as a failure, never as a clean scan.
+    let _ = Command::new("docker")
+        .args(["stop", "-t", "1", &name])
+        .output();
+    let (code, out) = ctl(
+        &db,
+        &["hosts", "scan", "web-1", "--json", "--no-notify"],
+        None,
+    );
+    assert_eq!(code, 3);
+    let r = json(&out);
+    assert_eq!(r[0]["ok"], false);
+    let kind = r[0]["machine"]["problem"]["kind"].as_str().unwrap();
+    assert!(matches!(kind, "unreachable" | "timeout"), "{kind}");
+}

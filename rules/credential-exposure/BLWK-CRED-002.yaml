@@ -1,8 +1,9 @@
 id: BLWK-CRED-002
-title: Git stores passwords and tokens in plain text
+title: "Git stores passwords and tokens in plain text ({{ credential_stores.path }})"
 category: credential-exposure
 severity: high
 collector: credential_stores
+os: [linux, macos]
 condition: (kind == "git_credentials" and stored_entries > 0) or (kind == "git_config" and helper_store == true)
 explain: >
   Git is saving your passwords and access tokens in a plain text file ({{ credential_stores.path }}).

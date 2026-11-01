@@ -1,0 +1,11 @@
+id: BLWK-DEV-002
+title: "Git trusts repositories owned by anyone ({{ dev_tool_config.path }})"
+category: developer-tools
+severity: medium
+collector: dev_tool_config
+os: [linux, macos, windows]
+condition: kind == "git" and safe_directory_any == true
+explain: >
+  {{ dev_tool_config.path }} sets safe.directory = *, which turns off Git's protection against repositories owned by another user (CVE-2022-24765). A repository someone else controls — on a shared machine, in /tmp or a mounted drive — can then set core.fsmonitor or a hook that runs a command as you the moment you, your shell prompt or your editor runs git status there.
+fix: "Replace the wildcard with the specific directories you need: git config --global --unset-all safe.directory, then git config --global --add safe.directory /path/to/that/repo for each one."
+references: [ATTACK-T1059, ATTACK-T1204]

@@ -85,4 +85,4 @@ controls:
 
   - id: A.8.32
     title: Change management / integrity of the deployed configuration
-    rules: [BLWK-FIM-001, BLWK-FIM-002, BLWK-FIM-003, BLWK-FIM-004, BLWK-FIM-005, BLWK-FIM-006]
+    rules: [BLWK-FIM-001, BLWK-FIM-002, BLWK-FIM-003, BLWK-FIM-004, BLWK-FIM-005, BLWK-FIM-006, BLWK-FIM-009]

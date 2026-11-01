@@ -1,13 +1,13 @@
 # Bulwark
 
-> Bulwark is a free, open-source (Apache-2.0) Linux host security scanner with a native CLI (`bulwarkctl`, installed as `bulwark` by the desktop package) and a Tauri desktop GUI, built on one Rust engine. It checks a machine's real configuration against 73 declarative rules — plaintext credential stores (AWS, Git, Docker, npm, PyPI, kube), Python startup hooks and supply-chain indicators, dev services exposed on all interfaces, the host firewall, SSH hardening, sudoers, kernel/sysctl hardening, systemd/cron persistence, file permissions, logging, and rootkit indicators — and explains every finding in plain language with a concrete fix. Every check has its own page at https://bulwark.nrl.ai/checks/. It also scans AI coding assistants (Claude Code, Cursor, Copilot, Codex, Gemini, and more) for secrets leaked into session transcripts and memory and for agent configuration a prompt injection could turn into code execution, integrates ClamAV antivirus, correlates systemd-journal auth events (SSH brute-force, sudo abuse), monitors file integrity, and re-scans continuously. Fully local, no telemetry. Website: https://bulwark.nrl.ai — Source: https://github.com/vietanhdev/bulwark
+> Bulwark is a free, open-source (Apache-2.0) host security scanner for Linux, with macOS and Windows builds, a native CLI (`bulwarkctl`, installed as `bulwark` by the desktop package) and a Tauri desktop GUI, built on one Rust engine. It checks a machine's real configuration against 100 declarative rules — plaintext credential stores, developer-tool settings that switch security off (Git TLS and safe.directory, SSH host-key checks and agent forwarding, plain-HTTP or unverified npm/pip registries, an unauthenticated Docker API) (AWS, Git, Docker, npm, PyPI, kube), Python startup hooks and supply-chain indicators, dev services exposed on all interfaces, the host firewall, SSH hardening, sudoers, kernel/sysctl hardening, systemd/cron persistence, file permissions, logging, and rootkit indicators — and explains every finding in plain language with a concrete fix. Every check has its own page at https://bulwark.nrl.ai/checks/. It also scans AI coding assistants (Claude Code, Cursor, Copilot, Codex, Gemini, and more) for secrets leaked into session transcripts and memory and for agent configuration a prompt injection could turn into code execution, integrates ClamAV antivirus, correlates systemd-journal auth events (SSH brute-force, sudo abuse), monitors file integrity, and re-scans continuously. It also keeps watch over other machines (servers, home-lab boxes, other workstations) over plain SSH — agentless: no agent runs on and nothing listens on a monitored machine, host keys are verified, and a machine that can't be reached is never reported as clean — with optional alerts to Telegram or e-mail. Local-first, no telemetry. Website: https://bulwark.nrl.ai — Source: https://github.com/vietanhdev/bulwark
 
 ## Key facts
 
 - License: Apache-2.0. Free and open source.
-- Platforms: Linux x86_64 (Ubuntu 22.04+, Debian 12+, Fedora 36+). Ships as .deb, .rpm, and AppImage.
+- Platforms: Linux x86_64 and aarch64 (Ubuntu 22.04+, Debian 12+, Fedora 36+). Ships as .deb, .rpm, and AppImage. Also runs natively on macOS (FileVault, Gatekeeper, SIP, firewall, automatic security updates, guest account, launchd persistence, plus the credential and SSH-key checks) and Windows (Defender, firewall, BitLocker, UAC, Remote Desktop, SMBv1). Inside WSL, Linux checks that concern the Windows host (its kernel, network stack, console) are reported as not applicable. Remote monitoring over SSH covers Linux (including WSL) and macOS.
 - Built with: Rust, Tauri v2, React. One engine (`bulwark-core`), two front-doors (CLI + desktop app).
-- Privacy: fully local, no telemetry, no network calls from the core; scan history in a local SQLite database.
+- Privacy: local-first, no telemetry, no network calls from the core; scan history in a local SQLite database. The only network use is opt-in and user-directed: SSH to machines you register, and alerts to your own Telegram bot or SMTP server.
 - Rules are data (YAML) with a small condition DSL — adding a check needs no Rust and no recompile.
 
 ## Documentation
@@ -16,6 +16,7 @@
 - [Architecture](https://bulwark.nrl.ai/guide/architecture): the engine, data model, and design decisions.
 - [Agent Security](https://bulwark.nrl.ai/guide/agent-security): how Bulwark scans AI coding assistants, and the 23 AI-security checks (mapped to CVEs / MITRE ATT&CK).
 - [Fixing findings](https://bulwark.nrl.ai/guide/remediation): how remediation works.
+- [Monitoring other machines](https://bulwark.nrl.ai/guide/remote-monitoring): agentless SSH monitoring, connection security, scheduling, and Telegram/e-mail alerts.
 
 ## Articles
 

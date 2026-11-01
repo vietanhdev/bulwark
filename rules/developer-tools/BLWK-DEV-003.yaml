@@ -1,0 +1,11 @@
+id: BLWK-DEV-003
+title: "Git allows the ext:: transport, which runs commands from a URL ({{ dev_tool_config.path }})"
+category: developer-tools
+severity: high
+collector: dev_tool_config
+os: [linux, macos, windows]
+condition: kind == "git" and ext_protocol_allowed == true
+explain: >
+  {{ dev_tool_config.path }} sets protocol.allow (or protocol.ext.allow) to always. An ext:: remote is a shell command, so a submodule URL or a link in a project can run arbitrary code on this machine when Git fetches it. Git disables it by default for exactly this reason.
+fix: "Remove the setting: git config --global --unset protocol.allow and git config --global --unset protocol.ext.allow. If one tool needs ext::, pass -c protocol.ext.allow=always on that one command."
+references: [ATTACK-T1059, ATTACK-T1195.001]

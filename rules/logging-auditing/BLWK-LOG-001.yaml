@@ -3,6 +3,9 @@ title: auditd is not installed
 category: logging-auditing
 severity: medium
 collector: logging
+# The Windows host owns this inside WSL (its kernel, network stack and console), so it is not
+# something the distro can act on: reported as not applicable there, never as passing.
+skip_on: [wsl]
 profiles: [server]
 condition: auditd_present == false
 explain: >

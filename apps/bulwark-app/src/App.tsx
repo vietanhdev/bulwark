@@ -11,11 +11,16 @@ import { RulesView } from "@/components/RulesView";
 import { ComplianceView } from "@/components/ComplianceView";
 import { AnalyticsView } from "@/components/AnalyticsView";
 import { SettingsView, type MonitoringStatus } from "@/components/SettingsView";
+import { MachinesView } from "@/components/MachinesView";
 import { RevisionProvider, useRevision } from "@/lib/revision";
 import { cn } from "@/lib/utils";
 
 const VIEWS: { id: View; render: (active: boolean, navigate: (v: View) => void) => React.ReactNode }[] = [
   { id: "overview", render: (_active, navigate) => <OverviewView onNavigate={navigate} /> },
+  {
+    id: "machines",
+    render: (active, navigate) => <MachinesView active={active} onNavigate={navigate} />,
+  },
   { id: "antivirus", render: (active) => <AntivirusView active={active} /> },
   { id: "integrity", render: () => <IntegrityView /> },
   { id: "rules", render: () => <RulesView /> },
@@ -26,7 +31,6 @@ const VIEWS: { id: View; render: (active: boolean, navigate: (v: View) => void) 
 
 function Shell() {
   const [view, setViewRaw] = useState<View>("overview");
-  const [historyCount, setHistoryCount] = useState<number | null>(null);
   const [monitoringEnabled, setMonitoringEnabled] = useState<boolean | null>(null);
   const { revision, bump } = useRevision();
 
@@ -51,9 +55,6 @@ function Shell() {
   }, []);
 
   const refreshChrome = useCallback(() => {
-    invoke<number>("history_count")
-      .then(setHistoryCount)
-      .catch(() => setHistoryCount(null));
     invoke<MonitoringStatus>("monitoring_get_status")
       .then((s) => setMonitoringEnabled(s.enabled))
       .catch(() => setMonitoringEnabled(null));
@@ -81,12 +82,7 @@ function Shell() {
     <div className="app-shell flex h-screen flex-col bg-background text-foreground">
       <TitleBar />
       <div className="flex min-h-0 flex-1">
-        <Sidebar
-          view={view}
-          onChange={setView}
-          historyCount={historyCount}
-          monitoringEnabled={monitoringEnabled}
-        />
+        <Sidebar view={view} onChange={setView} monitoringEnabled={monitoringEnabled} />
         <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
           {/* Mounted once first visited, then kept alive and merely hidden on every later
               switch away — see the `visited` state above for why this isn't the more obvious

@@ -25,7 +25,7 @@ onMounted(() => {
       playsinline
       preload="auto"
       poster="/screenshots/overview.png"
-      aria-label="Bulwark demo: run a scan, open a problem and its one-click fix, and switch between light and dark themes"
+      aria-label="Bulwark demo: run a scan, open a problem and its one-click fix, check a remote machine, and switch between light and dark themes"
     ></video>
   </div>
 </template>

@@ -35,6 +35,7 @@ GROUPS = [
 ]
 BY_CATEGORY = {
     "credential-exposure": "secrets",
+    "developer-tools": "supply-chain",
     "network-egress": "network",
     "ssh-remote-access": "remote-access",
     "rootkit-malware": "intrusion",
@@ -45,6 +46,8 @@ BY_CATEGORY = {
     "filesystem-permissions": "hardening",
     "accounts-services": "hardening",
     "logging-auditing": "hardening",
+    "macos-hardening": "hardening",
+    "windows-hardening": "hardening",
     "privilege-escalation": "hardening",
 }
 BY_RULE = {
@@ -55,6 +58,7 @@ BY_RULE = {
     "BLWK-AI-016": "secrets",
     "BLWK-AI-018": "secrets",
     "BLWK-PERSIST-005": "supply-chain",
+    "BLWK-DEV-009": "network",
     "BLWK-ROOTKIT-002": "supply-chain",
     "BLWK-AI-003": "supply-chain",
     "BLWK-AI-004": "supply-chain",

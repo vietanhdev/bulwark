@@ -5,15 +5,15 @@
 <h1 align="center">Bulwark</h1>
 
 <p align="center">
-  <strong>Security scanner for Linux developer machines and servers.</strong><br>
-  Plaintext keys, risky packages, exposed dev services and AI-assistant leaks, explained in plain language and fixed in one click.
+  <strong>Security for your dev machines, the servers they reach, and your AI coding tools.</strong><br>
+  Plaintext keys, risky packages, exposed dev services and AI-assistant leaks — on this computer and, over plain SSH, on the machines you manage — explained in plain language and fixed in one click.
 </p>
 
 <p align="center">
   <a href="https://github.com/vietanhdev/bulwark/actions/workflows/ci.yml"><img src="https://github.com/vietanhdev/bulwark/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License: Apache 2.0"></a>
   <a href="https://bulwark.nrl.ai"><img src="https://img.shields.io/badge/docs-bulwark.nrl.ai-1f8a8c" alt="Docs"></a>
-  <a href="https://bulwark.nrl.ai/checks/"><img src="https://img.shields.io/badge/checks-93-1f8a8c" alt="93 checks"></a>
+  <a href="https://bulwark.nrl.ai/checks/"><img src="https://img.shields.io/badge/checks-123-1f8a8c" alt="123 checks"></a>
 </p>
 
 Bulwark looks where attacks on developer machines start: long-lived cloud keys and Git or Docker
@@ -21,20 +21,43 @@ passwords stored in plain text, SSH keys without a passphrase, Python startup ho
 malicious-package traces, dev databases listening on every network interface, and API keys pasted
 into **AI coding assistant** sessions and memory (Claude Code, Cursor, Copilot, Codex, Gemini and
 more). It also checks SSH, sudo, kernel, persistence and file permissions, and scans for viruses
-with ClamAV.
+with ClamAV. And it keeps watch over your other machines — Linux servers, a home lab, a Mac, a
+Windows PC — over the SSH access you already have, with no agent and no server (a Linux server needs
+nothing installed at all) and alerts to Telegram or e-mail.
 
 Problems are grouped by cause and ranked by severity. Each one says why it matters in a sentence
 and offers the fix: one click when Bulwark can do it safely (previewed and backed up), numbered
 steps with copyable commands otherwise. [Every check has its own page](https://bulwark.nrl.ai/checks/)
 with the full explanation. It scans other machines over SSH too.
 
-Built with Tauri v2 + Rust + React. One rule engine, one rule pack, two front-doors: the desktop
-app and the CLI (`bulwark` when installed with the app, `bulwarkctl` from the CLI-only package).
-Fully local — no telemetry, nothing leaves the machine.
+Built with Tauri v2 + Rust + React, for Linux, macOS and Windows. One rule engine, one rule pack, two
+front-doors: the desktop app and the CLI (`bulwark` when installed with the app, `bulwarkctl` from the
+CLI-only package). Local-first — no account, no telemetry; nothing leaves the machine unless you turn
+on alerts or point it at another machine.
 
 ## Demo
 
-![Bulwark in action: run a scan, open a problem and its one-click fix, and switch between light and dark](docs/public/demo.gif)
+![Bulwark in action: run a scan, open a problem and its one-click fix, check a remote machine, and switch between light and dark](docs/public/demo.gif)
+
+## How it works
+
+<p align="center">
+  <img src="docs/public/diagrams/architecture.svg" alt="Bulwark architecture: the desktop app and the bulwarkctl CLI share one Rust engine. Collectors, the AI-assistant scanner, the auth-log scanner and ClamAV feed a rule engine of 100 YAML rules plus your own; findings explain themselves and come with fixes, are scored honestly, and are stored in a local SQLite database. The same engine scans remote Linux, macOS, Windows and WSL machines over SSH, and alerts go to Telegram or e-mail." width="100%">
+</p>
+
+Every check is a small YAML rule over facts that a **collector** gathers — one place to read, one
+place to fix. A check that couldn't run (no privilege, wrong OS, a file it couldn't read) is reported
+as such and never counted as a pass, so a green result means something.
+
+<p align="center">
+  <img src="docs/public/diagrams/checks.svg" alt="123 checks in seven groups: secrets and credentials (10), supply chain and developer tools (14), exposed services (6), AI coding agents (15), SSH (11), compromise indicators (17), OS hardening (50), plus your own YAML checks; runs on Linux, macOS, Windows and WSL." width="100%">
+</p>
+
+### Watch your other machines
+
+<p align="center">
+  <img src="docs/public/diagrams/remote.svg" alt="Agentless remote monitoring: Bulwark on your computer signs in over your SSH with a restricted key and pinned host keys; a Linux server gets the scanner copied in and removed again, a Mac or Windows PC runs its installed Bulwark, WSL is reached through the Windows host; results come back as JSON and alerts go to Telegram or e-mail." width="100%">
+</p>
 
 ## Screenshots
 
@@ -46,12 +69,15 @@ Fully local — no telemetry, nothing leaves the machine.
 | **Dark mode** — follows your desktop or set by hand | **Virus scan** — ClamAV with live progress and folder watching |
 | ![All checks: the full rule pack, searchable and filterable by severity](docs/public/screenshots/rules.png) | ![Settings: theme, accent and sidebar colour, monitoring, AI assistant checks](docs/public/screenshots/settings.png) |
 | **All checks** — every rule, searchable, with CIS / MITRE ATT&CK coverage | **Settings** — light or dark, eight accents, six sidebar colours |
+| ![Remote: every monitored machine with its system, connection and last scan](docs/public/screenshots/machines.png) | ![One remote machine: connection and last scan side by side, issues grouped by cause](docs/public/screenshots/machine.png) |
+| **Remote** — Linux, macOS, Windows and WSL machines at a glance | **One machine** — connection and scan kept apart, issues grouped |
 
 ## Features
 
-- **73 rules** across 12 categories (credential exposure, SSH/remote access, persistence, network
+- **100 rules** across 15 categories (credential exposure, SSH/remote access, persistence, network
   egress, kernel hardening, filesystem permissions, privilege escalation, logging/auditing,
-  accounts/services, defense evasion, rootkit/malware, file integrity), each carrying a severity,
+  accounts/services, defense evasion, rootkit/malware, file integrity, developer-tool settings, macOS and
+  Windows settings), each carrying a severity,
   a plain-language explanation with live values interpolated in, step-by-step fix, and CIS/MITRE
   ATT&CK references. Every check, including the 23 AI assistant checks, has its own page at
   [bulwark.nrl.ai/checks](https://bulwark.nrl.ai/checks/).
@@ -66,6 +92,17 @@ Fully local — no telemetry, nothing leaves the machine.
   base-URL exfil overrides, and world-readable credential stores. Workspaces are auto-discovered;
   leaked secrets are opt-in redactable (dry-run first, `0600` backup, permissions preserved). A
   highlighted tab in the GUI and `bulwarkctl ai scan` / `bulwarkctl ai redact` in the CLI.
+- **Monitor other machines, agentless** — add servers and other computers you can SSH into, and
+  Bulwark scans them on a schedule with the same checks and plain-language fixes. Nothing is
+  installed on or listens on a monitored machine, and there is no server to run: it uses your own
+  SSH (config aliases, agent, jump hosts — or a password once, to install its own `restrict`ed
+  key). Every machine's identity is verified once and a changed host key stops scans; a machine it
+  can't reach is reported as unreachable, never as clean. A **Machines** page in the GUI, or
+  `bulwarkctl hosts …` plus one cron line. See
+  [Monitoring other machines](https://bulwark.nrl.ai/guide/remote-monitoring).
+- **Alerts on Telegram or by e-mail** — opt-in: new issues, a machine that stops answering, a
+  changed host key, and an optional daily report, batched into one message per round of scans.
+  `bulwarkctl notify …` or Settings → Alerts.
 - **Antivirus scanning** — shells out to a real ClamAV `clamscan` on demand, plus a fast
   presence/database-freshness check on every routine scan.
 - **Log analysis** — a decode → detect → correlate pipeline over the systemd journal (or any
@@ -137,6 +174,12 @@ cargo run -p bulwarkctl -- scan
 # Prefers a bulwark installed on the remote; otherwise pushes the binary + rules and cleans up.
 cargo run -p bulwarkctl -- scan --ssh user@host
 
+# Or monitor it: register it, verify it, and let cron (or the GUI) scan it on a schedule.
+cargo run -p bulwarkctl -- hosts add deploy@web-1 --name web-1
+cargo run -p bulwarkctl -- hosts test web-1      # step-by-step check, with the fix for each failure
+cargo run -p bulwarkctl -- hosts scan --due      # put this in cron every few minutes
+cargo run -p bulwarkctl -- notify telegram       # optional: alerts to your own Telegram bot
+
 # Apply safe, reversible autofixes for what a scan finds (dry-run by default; --apply to change).
 cargo run -p bulwarkctl -- fix list            # preview every available fix
 cargo run -p bulwarkctl -- fix ssh-perms --apply    # tighten ~/.ssh permissions
@@ -169,7 +212,25 @@ references: [CIS-5.2.4]
 ```
 
 See `AGENTS.md`'s "adding a new check" section for the full workflow, including the condition
-grammar and testing expectations.
+grammar and testing expectations. The same format works for checks you keep to yourself: drop them in
+`~/.config/bulwark/rules` ([guide](https://bulwark.nrl.ai/guide/custom-checks)).
+
+## Contributing
+
+Bulwark grows one check at a time, and most checks need no Rust at all. Good ways in:
+
+- **A new check** — one YAML file in `rules/`, plus a test that it fires on the bad case and stays
+  quiet on a normal one. Seen a misconfiguration bite someone? That's a check.
+- **A new AI coding agent** — add where it keeps its settings and MCP servers to the table in
+  `crates/bulwark-core/src/ai_scan/discovery.rs`; the existing checks then cover it.
+- **A new developer tool** — a path and a small parser in `collectors/dev_tools.rs` (Cargo, Gradle,
+  Maven and Go proxies are all open).
+- **Windows and macOS** — both have room for many more checks, each a field in one collector.
+- **False positives** — if Bulwark flags something fine on your machine, an issue with the config
+  shape (no secrets!) is the most valuable report there is.
+
+`cargo test --workspace` runs everything without Docker; [`CONTRIBUTING.md`](CONTRIBUTING.md) has the
+rest.
 
 ## License
 

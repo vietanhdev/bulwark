@@ -3,10 +3,15 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Minus, Square, X } from "lucide-react";
 import { ShieldMark } from "@/components/ShieldMark";
 import { cn } from "@/lib/utils";
+import { usePlatform } from "@/lib/platform";
 
 const appWindow = getCurrentWindow();
 
 export function TitleBar() {
+  // macOS keeps its own traffic lights (tauri.macos.conf.json overlays them on this bar), so the
+  // bar leaves room for them on the left and draws no buttons of its own; Windows and Linux get
+  // the custom controls on the right, where both platforms put them.
+  const mac = usePlatform() === "macos";
   // Native apps dim their chrome when the window loses focus. Its absence is one of the
   // fastest tells that a frameless window was built without looking at how the platform's own
   // apps behave.
@@ -22,7 +27,8 @@ export function TitleBar() {
   return (
     <div
       className={cn(
-        "flex h-10 shrink-0 items-center justify-between border-b border-ink-border bg-ink pr-1.5 pl-3 transition-opacity duration-200",
+        "flex h-10 shrink-0 items-center justify-between border-b border-ink-border bg-ink pr-1.5 transition-opacity duration-200",
+        mac ? "pl-[78px]" : "pl-3",
         !focused && "opacity-60",
       )}
     >
@@ -41,17 +47,23 @@ export function TitleBar() {
           Bulwark
         </span>
       </div>
-      <div className="flex items-center gap-0.5">
-        <WindowButton onClick={() => appWindow.minimize()} label="Minimize">
-          <Minus className="h-3.5 w-3.5" />
-        </WindowButton>
-        <WindowButton onClick={() => appWindow.toggleMaximize()} label="Maximize">
-          <Square className="h-3 w-3" />
-        </WindowButton>
-        <WindowButton onClick={() => appWindow.close()} label="Close" danger>
-          <X className="h-3.5 w-3.5" />
-        </WindowButton>
-      </div>
+      {!mac && <WindowControls />}
+    </div>
+  );
+}
+
+function WindowControls() {
+  return (
+    <div className="flex items-center gap-0.5">
+      <WindowButton onClick={() => appWindow.minimize()} label="Minimize">
+        <Minus className="h-3.5 w-3.5" />
+      </WindowButton>
+      <WindowButton onClick={() => appWindow.toggleMaximize()} label="Maximize">
+        <Square className="h-3 w-3" />
+      </WindowButton>
+      <WindowButton onClick={() => appWindow.close()} label="Close" danger>
+        <X className="h-3.5 w-3.5" />
+      </WindowButton>
     </div>
   );
 }

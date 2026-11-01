@@ -1,0 +1,12 @@
+id: BLWK-WIN-007
+title: SMBv1 is enabled
+category: windows-hardening
+severity: high
+collector: windows_security
+os: [windows]
+# Only fires on a value actually read; an unreadable setting (e.g. BitLocker without elevation) never does.
+condition: smb1_enabled_known == true and smb1_enabled == true
+explain: >
+  SMBv1 is the obsolete file-sharing protocol behind WannaCry and NotPetya. Nothing modern needs it.
+fix: "Run 'Set-SmbServerConfiguration -EnableSMB1Protocol $false' in an elevated PowerShell, or remove the 'SMB 1.0/CIFS File Sharing Support' Windows feature."
+references: [ATTACK-T1210]

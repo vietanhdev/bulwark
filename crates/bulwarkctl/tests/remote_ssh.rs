@@ -32,10 +32,15 @@ fn fixture_json() -> String {
 /// `command -v` reports a bulwark on the remote (the "installed" branch) or nothing (the "push"
 /// branch).
 fn write_mocks(dir: &Path, log_path: &Path, fixture_path: &Path, installed: bool) {
+    // The connection probe is one `sh -c` script (see remote::probe_script) that reports
+    // `key=value` lines and ends with the `probe=done` sentinel.
     let installed_line = if installed {
-        "echo /usr/bin/bulwarkctl; exit 0"
+        format!(
+            "echo bin=/usr/bin/bulwarkctl; echo 'ver=bulwarkctl {}'; echo arch=$(uname -m); echo probe=done; exit 0",
+            env!("CARGO_PKG_VERSION")
+        )
     } else {
-        "exit 1" // command -v found nothing
+        "echo bin=; echo arch=$(uname -m); echo probe=done; exit 0".to_string() // nothing installed
     };
     // The remote command is the LAST argument ssh receives. We branch on its content.
     let ssh = format!(
@@ -43,8 +48,7 @@ fn write_mocks(dir: &Path, log_path: &Path, fixture_path: &Path, installed: bool
 echo "ssh $*" >> "{log}"
 for a in "$@"; do cmd="$a"; done
 case "$cmd" in
-  *"command -v"*) {installed_line} ;;
-  *"uname -m"*) uname -m ;;
+  *"probe=done"*) {installed_line} ;;
   *"mktemp"*) echo /tmp/bulwark.MOCK01 ;;
   *"chmod"*) exit 0 ;;
   *"rm -rf"*) exit 0 ;;
@@ -221,8 +225,7 @@ fn an_arch_mismatch_refuses_to_push() {
     // pushed binary could never run there, so we must refuse rather than copy a broken binary over.
     let ssh = r#"for a in "$@"; do cmd="$a"; done
 case "$cmd" in
-  *"command -v"*) exit 1 ;;
-  *"uname -m"*) echo sparc64 ;;
+  *"probe=done"*) echo bin=; echo arch=sparc64; echo probe=done ;;
   *) exit 0 ;;
 esac"#;
     let (ok, _out, err) = run_with_ssh_script(ssh, &[]);
@@ -231,4 +234,31 @@ esac"#;
         err.contains("sparc64") && err.to_lowercase().contains("install bulwark"),
         "expected an arch-mismatch refusal that suggests installing on the remote, got:\n{err}"
     );
+}
+
+#[test]
+fn the_target_is_never_read_as_an_ssh_option() {
+    // Every ssh invocation must put `--` before the target, and an option-shaped target must be
+    // refused before ssh is ever spawned.
+    let (_stdout, _stderr, log) = run_remote(true, &["--json"]);
+    for line in log.lines().filter(|l| l.starts_with("ssh ")) {
+        assert!(
+            line.contains(" -- testhost "),
+            "missing `--` before the target: {line}"
+        );
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let out = Command::new(bin())
+        .args([
+            "scan",
+            "--ssh",
+            "-oProxyCommand=touch /tmp/bulwark-e2e-pwned",
+            "--no-persist",
+        ])
+        .env("HOME", tmp.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(!Path::new("/tmp/bulwark-e2e-pwned").exists());
 }

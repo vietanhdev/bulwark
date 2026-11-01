@@ -662,19 +662,50 @@ mod tests {
             (
                 "not a Linux host control; these standards are mapped here only against the \
                  Linux host configuration Bulwark audits",
-                &["BLWK-PERSIST-003", "BLWK-PERSIST-004"],
+                &[
+                    "BLWK-PERSIST-003",
+                    "BLWK-PERSIST-004",
+                    "BLWK-MAC-001",
+                    "BLWK-MAC-002",
+                    "BLWK-MAC-003",
+                    "BLWK-MAC-004",
+                    "BLWK-MAC-005",
+                    "BLWK-MAC-006",
+                    "BLWK-WIN-001",
+                    "BLWK-WIN-002",
+                    "BLWK-WIN-003",
+                    "BLWK-WIN-004",
+                    "BLWK-WIN-005",
+                    "BLWK-WIN-006",
+                    "BLWK-WIN-007",
+                    "BLWK-WIN-008",
+                    "BLWK-WIN-009",
+                    "BLWK-WIN-010",
+                ],
             ),
             (
                 "developer-workstation credential, network-exposure and supply-chain checks added \
                  in 0.11; not yet reviewed against the embedded HIPAA/ISO/PCI controls, so no \
                  mapping is claimed until that review is done",
                 &[
+                    "BLWK-DEV-001",
+                    "BLWK-DEV-002",
+                    "BLWK-DEV-003",
+                    "BLWK-DEV-004",
+                    "BLWK-DEV-005",
+                    "BLWK-DEV-006",
+                    "BLWK-DEV-007",
+                    "BLWK-DEV-008",
+                    "BLWK-DEV-009",
                     "BLWK-CRED-001",
                     "BLWK-CRED-002",
                     "BLWK-CRED-003",
                     "BLWK-CRED-004",
                     "BLWK-NET-003",
                     "BLWK-NET-004",
+                    // The firewalled twin of NET-003 (added with remote monitoring): same
+                    // review status.
+                    "BLWK-NET-005",
                     "BLWK-PERSIST-005",
                     "BLWK-ROOTKIT-002",
                 ],

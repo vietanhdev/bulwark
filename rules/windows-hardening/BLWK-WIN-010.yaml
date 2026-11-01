@@ -1,0 +1,12 @@
+id: BLWK-WIN-010
+title: Windows hasn't installed an update in {{ windows_security.last_update_days }} days
+category: windows-hardening
+severity: medium
+collector: windows_security
+os: [windows]
+# Windows ships security updates monthly; two missed cycles is a pattern, not a delay.
+condition: last_update_days_known == true and last_update_days > 60
+explain: >
+  The newest installed Windows update is {{ windows_security.last_update_days }} days old. Microsoft releases security fixes every month, so this computer is likely missing fixes for vulnerabilities that are already public.
+fix: "Open Settings → Windows Update → Check for updates and install what's offered. If updates keep failing or are paused, check 'Pause updates' and any update policy set by your organisation."
+references: [ATTACK-T1190]

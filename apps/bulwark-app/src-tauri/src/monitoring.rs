@@ -234,7 +234,7 @@ fn watched_paths() -> Vec<PathBuf> {
         PathBuf::from("/etc/cron.d"),
         PathBuf::from("/etc/crontab"),
     ];
-    if let Ok(home) = std::env::var("HOME") {
+    if let Ok(home) = bulwark_core::paths::home_var() {
         paths.push(PathBuf::from(home).join(".ssh/authorized_keys"));
     }
     paths.into_iter().filter(|p| p.exists()).collect()
@@ -330,7 +330,15 @@ fn run_tick(app: &AppHandle, rules_dir: &Path) {
     // Default profile (host OS, no opted-in needs) — the background loop doesn't currently
     // know the user's active profile selection from the Dashboard; see the Profiles section
     // of the architecture doc's open questions for wiring a persisted selection through here.
-    let scan = engine::run_scan(rules_dir, &collectors, false, &Profile::default());
+    let custom = bulwark_core::paths::custom_rules_dir();
+    let scan = engine::run_scan_with_custom(
+        rules_dir,
+        custom.as_deref(),
+        &collectors,
+        false,
+        &Profile::default(),
+        &|| false,
+    );
 
     let new_findings = if let Ok(db_path) = super_db_path() {
         Store::open(&db_path)
@@ -341,6 +349,22 @@ fn run_tick(app: &AppHandle, rules_dir: &Path) {
     };
 
     if !new_findings.is_empty() {
+        // Also to Telegram / e-mail, when the user set that up and included this computer.
+        let host = bulwark_core::fleet::hostname_of_fingerprint(&scan.host_fingerprint);
+        let briefs: Vec<_> = new_findings
+            .iter()
+            .map(|f| (f.severity, f.title.clone()))
+            .collect();
+        if let Some(alert) = bulwark_core::fleet::new_issues_alert(
+            if host.is_empty() {
+                "This computer"
+            } else {
+                &host
+            },
+            &briefs,
+        ) {
+            crate::machines::forward_local_alerts(vec![alert]);
+        }
         let title = if new_findings.len() == 1 {
             "Bulwark found a new issue".to_string()
         } else {
@@ -366,19 +390,8 @@ fn run_tick(app: &AppHandle, rules_dir: &Path) {
     inner.last_tick_new_findings = new_findings.len();
 }
 
-// Duplicated in lib.rs deliberately kept private there — this module only needs the same
-// small resolution logic, not a shared-crate abstraction for two call sites.
+/// The shared database path — see `bulwark_core::paths`, which replaced four private copies of
+/// this resolver that had drifted apart.
 fn super_db_path() -> Result<PathBuf, String> {
-    if let Ok(p) = std::env::var("BULWARK_DB_PATH") {
-        return Ok(PathBuf::from(p));
-    }
-    // XDG_DATA_HOME before ~/.local/share (XDG base directory spec). Unset on a normal
-    // system, so this resolves identically to before; inside a Flatpak it is the app's
-    // writable ~/.var/app/<id>/data while $HOME is the read-only real home, so the old
-    // hardcoded path made every persisted scan fail with "readonly database".
-    if let Some(dir) = std::env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()) {
-        return Ok(PathBuf::from(dir).join("bulwark/bulwark.db"));
-    }
-    let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
-    Ok(PathBuf::from(home).join(".local/share/bulwark/bulwark.db"))
+    bulwark_core::paths::default_db_path().map_err(|e| e.to_string())
 }

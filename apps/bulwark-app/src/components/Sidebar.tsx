@@ -4,18 +4,19 @@ import {
   LayoutDashboard,
   LineChart,
   ListChecks,
+  Server,
   Settings,
   ShieldCheck,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export type View = "overview" | "antivirus" | "integrity" | "rules" | "compliance" | "analytics" | "settings";
+export type View =
+  "overview" | "machines" | "antivirus" | "integrity" | "rules" | "compliance" | "analytics" | "settings";
 
 interface SidebarProps {
   view: View;
   onChange: (view: View) => void;
-  historyCount: number | null;
   monitoringEnabled: boolean | null;
 }
 
@@ -62,7 +63,12 @@ interface NavItem {
 const GROUPS: { label: string | null; items: NavItem[] }[] = [
   {
     label: null,
-    items: [{ id: "overview", label: "Home", icon: LayoutDashboard }],
+    items: [
+      { id: "overview", label: "Home", icon: LayoutDashboard },
+      // The other machines this one keeps watch over (agentless, over SSH). Right under Home
+      // because it is the same question — "what is wrong?" — asked of more than one computer.
+      { id: "machines", label: "Remote", icon: Server },
+    ],
   },
   {
     label: "Scans",
@@ -122,7 +128,7 @@ function NavButton({
   );
 }
 
-export function Sidebar({ view, onChange, historyCount, monitoringEnabled }: SidebarProps) {
+export function Sidebar({ view, onChange, monitoringEnabled }: SidebarProps) {
   return (
     <nav className="flex w-52 shrink-0 flex-col justify-between border-r border-ink-border bg-ink p-2.5">
       <div className="flex flex-col gap-5">
@@ -142,10 +148,12 @@ export function Sidebar({ view, onChange, historyCount, monitoringEnabled }: Sid
 
       <div className="flex flex-col gap-1">
         {/* The live status chip doubles as the way into the setting that governs it — clicking
-            "Monitoring paused" should take you to the thing that un-pauses it. */}
+            "Monitoring paused" should take you to the thing that un-pauses it. It used to carry a
+            second line, "N scans recorded" — a lifetime counter that read as though it measured
+            the watch above it, and that nobody could act on. The state is the whole message. */}
         <button
           onClick={() => onChange("settings")}
-          className="flex flex-col gap-1 rounded-md px-3 py-2 text-left transition-colors hover:bg-ink-raised/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+          className="flex flex-col rounded-md px-3 py-2 text-left transition-colors hover:bg-ink-raised/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
         >
           <span className="flex items-center gap-1.5">
             <span className="relative flex h-1.5 w-1.5 shrink-0">
@@ -166,9 +174,6 @@ export function Sidebar({ view, onChange, historyCount, monitoringEnabled }: Sid
                   ? "Keeping watch"
                   : "Watch paused"}
             </span>
-          </span>
-          <span className="pl-3 font-mono text-[11px] text-ink-muted">
-            {historyCount === null ? "—" : `${historyCount} scan${historyCount === 1 ? "" : "s"} recorded`}
           </span>
         </button>
 

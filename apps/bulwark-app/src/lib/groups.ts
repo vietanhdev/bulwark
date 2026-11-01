@@ -51,6 +51,7 @@ export const GROUPS: FindingGroupInfo[] = [
 
 const BY_CATEGORY: Record<string, string> = {
   "credential-exposure": "secrets",
+  "developer-tools": "supply-chain",
   "network-egress": "network",
   "ssh-remote-access": "remote-access",
   "rootkit-malware": "intrusion",
@@ -61,6 +62,8 @@ const BY_CATEGORY: Record<string, string> = {
   "filesystem-permissions": "hardening",
   "accounts-services": "hardening",
   "logging-auditing": "hardening",
+  "macos-hardening": "hardening",
+  "windows-hardening": "hardening",
   "privilege-escalation": "hardening",
 };
 
@@ -75,6 +78,7 @@ const BY_RULE: Record<string, string> = {
   "BLWK-AI-018": "secrets",
   // Code that runs because of something you installed.
   "BLWK-PERSIST-005": "supply-chain",
+  "BLWK-DEV-009": "network",
   "BLWK-ROOTKIT-002": "supply-chain",
   "BLWK-AI-003": "supply-chain",
   "BLWK-AI-004": "supply-chain",

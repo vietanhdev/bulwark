@@ -1,0 +1,212 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 660" width="1200" height="660" font-family="-apple-system, 'Segoe UI', Ubuntu, Roboto, 'Helvetica Neue', Arial, sans-serif" role="img" aria-labelledby="t d">
+  <title id="t">Bulwark architecture</title>
+  <desc id="d">A desktop app and a CLI share one Rust engine. Collectors, the AI-assistant scanner, the log scanner and ClamAV feed facts to a rule engine of 100 YAML rules plus your own; findings come with plain-language explanations and fixes, are filtered by your audited ignores, and are stored locally in SQLite. The same engine scans remote Linux, macOS, Windows and WSL machines over SSH, and alerts go to Telegram or e-mail.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f7fafc"/><stop offset="1" stop-color="#eef3f8"/></linearGradient>
+    <linearGradient id="teal" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#19b3a3"/><stop offset="1" stop-color="#0b7f86"/></linearGradient>
+    <linearGradient id="violet" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8f6bff"/><stop offset="1" stop-color="#5b3fd6"/></linearGradient>
+    <linearGradient id="orange" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffab3d"/><stop offset="1" stop-color="#ef6c1a"/></linearGradient>
+    <linearGradient id="pink" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f2468f"/><stop offset="1" stop-color="#c2185b"/></linearGradient>
+    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3f8ef0"/><stop offset="1" stop-color="#1d5fc2"/></linearGradient>
+    <linearGradient id="green" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5cc15a"/><stop offset="1" stop-color="#2e8b3a"/></linearGradient>
+    <linearGradient id="slate" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4b5565"/><stop offset="1" stop-color="#262c36"/></linearGradient>
+    <filter id="sh" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#1b2a3a" flood-opacity="0.12"/></filter>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="10" orient="auto-start-reverse"><path d="M0 1L10 5L0 9z" fill="#5b6b7d"/></marker>
+    <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" fill="none" stroke="#dfe7ef" stroke-width="1"/></pattern>
+  </defs>
+
+  <rect width="1200" height="660" rx="18" fill="url(#bg)"/>
+  <rect width="1200" height="660" rx="18" fill="url(#grid)" opacity="0.6"/>
+
+  <!-- Title -->
+  <g transform="translate(32 26)">
+    <path d="M14 2l11 4.5v8c0 7-4.6 11.7-11 14-6.4-2.3-11-7-11-14v-8z" fill="url(#teal)"/>
+    <path d="M9 15l3.4 3.4L19.5 11" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="38" y="21" font-size="22" font-weight="700" fill="#16202c">Bulwark</text>
+    <text x="134" y="21" font-size="15" fill="#5b6b7d">one Rust engine · two front-doors · nothing leaves your machine unless you ask</text>
+  </g>
+
+  <!-- ===== Left: front-doors ===== -->
+  <g filter="url(#sh)">
+    <rect x="32" y="84" width="220" height="250" rx="14" fill="#fff" stroke="#d5dee8"/>
+  </g>
+  <path d="M32 118V98A14 14 0 0 1 46 84H238A14 14 0 0 1 252 98V118Z" fill="url(#slate)"/>
+  <text x="48" y="106" font-size="13" font-weight="700" fill="#fff" letter-spacing=".4">YOU</text>
+
+  <g transform="translate(48 132)">
+    <rect width="188" height="88" rx="10" fill="#f3f7fb" stroke="#dbe4ee"/>
+    <rect x="12" y="14" width="40" height="40" rx="10" fill="url(#teal)"/>
+    <rect x="20" y="22" width="24" height="17" rx="2.5" fill="none" stroke="#fff" stroke-width="2"/>
+    <path d="M26 45h12M32 39v6" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+    <text x="62" y="31" font-size="14" font-weight="700" fill="#16202c">Desktop app</text>
+    <text x="62" y="49" font-size="11.5" fill="#5b6b7d">scan, fix, keep watch</text>
+    <text x="12" y="76" font-size="11" fill="#5b6b7d">Linux · macOS · Windows</text>
+  </g>
+  <g transform="translate(48 232)">
+    <rect width="188" height="88" rx="10" fill="#f3f7fb" stroke="#dbe4ee"/>
+    <rect x="12" y="14" width="40" height="40" rx="10" fill="url(#slate)"/>
+    <path d="M21 26l7 6-7 6" fill="none" stroke="#7ef0d8" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M31 40h10" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
+    <text x="62" y="31" font-size="14" font-weight="700" fill="#16202c">bulwarkctl</text>
+    <text x="62" y="49" font-size="11.5" fill="#5b6b7d">same engine, in a CLI</text>
+    <text x="12" y="76" font-size="11" fill="#5b6b7d">Terminal, cron, CI, servers</text>
+  </g>
+
+  <!-- Your rules -->
+  <g filter="url(#sh)"><rect x="32" y="352" width="220" height="128" rx="14" fill="#fff" stroke="#d5dee8"/></g>
+  <rect x="48" y="368" width="40" height="40" rx="10" fill="url(#violet)"/>
+  <path d="M58 380h20M58 388h20M58 396h12" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>
+  <text x="98" y="386" font-size="14" font-weight="700" fill="#16202c">Your choices</text>
+  <text x="98" y="403" font-size="11.5" fill="#5b6b7d">audited, never silent</text>
+  <text x="48" y="430" font-size="11.5" fill="#33414f">• ignore one finding or a type</text>
+  <text x="48" y="447" font-size="11.5" fill="#33414f">• turn checks off, with a reason</text>
+  <text x="48" y="464" font-size="11.5" fill="#33414f">• add your own YAML checks</text>
+
+  <!-- ===== Center: engine ===== -->
+  <g filter="url(#sh)"><rect x="292" y="84" width="572" height="512" rx="16" fill="#ffffff" stroke="#a9dcd6" stroke-width="1.5"/></g>
+  <path d="M292 122V100A16 16 0 0 1 308 84H848A16 16 0 0 1 864 100V122Z" fill="url(#teal)"/>
+  <text x="312" y="109" font-size="14" font-weight="700" fill="#fff" letter-spacing=".3">bulwark-core · the engine</text>
+  <text x="844" y="109" font-size="11.5" fill="#d8fffa" text-anchor="end">pure Rust · no network calls</text>
+
+  <!-- sources row -->
+  <g font-size="12">
+    <g transform="translate(312 140)">
+      <rect width="126" height="112" rx="10" fill="#eef6ff" stroke="#c9dcf3"/>
+      <rect x="12" y="12" width="34" height="34" rx="9" fill="url(#blue)"/>
+      <circle cx="29" cy="29" r="9" fill="none" stroke="#fff" stroke-width="2"/><path d="M29 20v-4M29 42v-4M20 29h-4M42 29h-4" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+      <text x="12" y="66" font-weight="700" fill="#16202c">30 collectors</text>
+      <text x="12" y="83" font-size="11" fill="#5b6b7d">SSH, sudo, kernel,</text>
+      <text x="12" y="98" font-size="11" fill="#5b6b7d">ports, dev tools, OS</text>
+    </g>
+    <g transform="translate(450 140)">
+      <rect width="126" height="112" rx="10" fill="#f4f0ff" stroke="#dcd2fb"/>
+      <rect x="12" y="12" width="34" height="34" rx="9" fill="url(#violet)"/>
+      <path d="M21 33l4-12 4 12M22.5 29h5M34 21v12" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <text x="12" y="66" font-weight="700" fill="#16202c">AI assistants</text>
+      <text x="12" y="83" font-size="11" fill="#5b6b7d">25 agents: leaked</text>
+      <text x="12" y="98" font-size="11" fill="#5b6b7d">keys, risky settings</text>
+    </g>
+    <g transform="translate(588 140)">
+      <rect width="126" height="112" rx="10" fill="#fff4ea" stroke="#f6d9bd"/>
+      <rect x="12" y="12" width="34" height="34" rx="9" fill="url(#orange)"/>
+      <path d="M20 22h18M20 29h18M20 36h11" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>
+      <text x="12" y="66" font-weight="700" fill="#16202c">Auth logs</text>
+      <text x="12" y="83" font-size="11" fill="#5b6b7d">SSH brute force,</text>
+      <text x="12" y="98" font-size="11" fill="#5b6b7d">sudo abuse</text>
+    </g>
+    <g transform="translate(726 140)">
+      <rect width="118" height="112" rx="10" fill="#ffeef5" stroke="#f6cadc"/>
+      <rect x="12" y="12" width="34" height="34" rx="9" fill="url(#pink)"/>
+      <path d="M29 18l8 3.4v5.6c0 5-3.3 8.3-8 10-4.7-1.7-8-5-8-10v-5.6z" fill="none" stroke="#fff" stroke-width="2"/>
+      <text x="12" y="66" font-weight="700" fill="#16202c">ClamAV</text>
+      <text x="12" y="83" font-size="11" fill="#5b6b7d">virus scan with</text>
+      <text x="12" y="98" font-size="11" fill="#5b6b7d">live progress</text>
+    </g>
+  </g>
+
+  <!-- facts arrow -->
+  <path d="M578 258v34" stroke="#5b6b7d" stroke-width="2" marker-end="url(#ar)"/>
+  <rect x="596" y="264" width="44" height="20" rx="10" fill="#e9eef4"/><text x="618" y="278" font-size="11" fill="#33414f" text-anchor="middle">facts</text>
+
+  <!-- rule engine -->
+  <g transform="translate(312 300)">
+    <rect width="532" height="76" rx="12" fill="url(#teal)"/>
+    <rect x="16" y="16" width="44" height="44" rx="11" fill="#ffffff" opacity="0.18"/>
+    <path d="M27 30h22M27 38h22M27 46h14" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
+    <text x="74" y="36" font-size="16" font-weight="700" fill="#fff">Rule engine</text>
+    <text x="74" y="56" font-size="12.5" fill="#dcfffa">100 declarative YAML rules + your own · a check that couldn't run is never a pass</text>
+  </g>
+
+  <path d="M578 382v30" stroke="#5b6b7d" stroke-width="2" marker-end="url(#ar)"/>
+
+  <!-- findings -->
+  <g transform="translate(312 418)">
+    <rect width="258" height="82" rx="12" fill="#fff8e6" stroke="#f3dfa6"/>
+    <text x="16" y="28" font-size="14" font-weight="700" fill="#16202c">Findings that explain</text>
+    <text x="16" y="47" font-size="11.5" fill="#5b6b7d">why it matters, in plain language,</text>
+    <text x="16" y="64" font-size="11.5" fill="#5b6b7d">and the exact fix — often one click</text>
+  </g>
+  <g transform="translate(586 418)">
+    <rect width="258" height="82" rx="12" fill="#f4f0ff" stroke="#dcd2fb"/>
+    <text x="16" y="28" font-size="14" font-weight="700" fill="#16202c">Scored honestly</text>
+    <text x="16" y="47" font-size="11.5" fill="#5b6b7d">only checks that ran count; PCI DSS,</text>
+    <text x="16" y="64" font-size="11.5" fill="#5b6b7d">HIPAA, ISO 27001 with their scope</text>
+  </g>
+
+  <!-- storage -->
+  <g transform="translate(312 516)">
+    <rect width="532" height="62" rx="12" fill="#f3f7fb" stroke="#dbe4ee"/>
+    <ellipse cx="40" cy="20" rx="16" ry="6" fill="url(#blue)"/>
+    <path d="M24 20v20c0 3.3 7.2 6 16 6s16-2.7 16-6V20" fill="url(#blue)"/>
+    <ellipse cx="40" cy="20" rx="16" ry="6" fill="#7fb4f5"/>
+    <text x="72" y="28" font-size="14" font-weight="700" fill="#16202c">Local SQLite</text>
+    <text x="72" y="46" font-size="11.5" fill="#5b6b7d">history, reconciliation, ignores and their audit trail — on your disk only</text>
+  </g>
+
+  <!-- arrows from front-doors into engine -->
+  <path d="M252 176C272 176 278 196 300 196" fill="none" stroke="#5b6b7d" stroke-width="2" marker-end="url(#ar)"/>
+  <path d="M252 276C272 276 278 300 300 312" fill="none" stroke="#5b6b7d" stroke-width="2" marker-end="url(#ar)"/>
+  <path d="M252 410C276 410 280 352 300 342" fill="none" stroke="#7b61ff" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#ar)"/>
+
+  <!-- ===== Right: remote + alerts ===== -->
+  <g filter="url(#sh)"><rect x="904" y="84" width="264" height="300" rx="14" fill="#fff" stroke="#d5dee8"/></g>
+  <path d="M904 118V98A14 14 0 0 1 918 84H1154A14 14 0 0 1 1168 98V118Z" fill="url(#blue)"/>
+  <text x="920" y="106" font-size="13" font-weight="700" fill="#fff" letter-spacing=".3">REMOTE MACHINES · AGENTLESS</text>
+
+  <g font-size="12.5">
+    <g transform="translate(920 132)">
+      <rect width="232" height="44" rx="9" fill="#fff4ea" stroke="#f6d9bd"/>
+      <rect x="8" y="7" width="30" height="30" rx="8" fill="url(#orange)"/>
+      <circle cx="23" cy="22" r="7" fill="none" stroke="#fff" stroke-width="2"/><circle cx="23" cy="13" r="2.4" fill="#fff"/><circle cx="15.5" cy="26" r="2.4" fill="#fff"/><circle cx="30.5" cy="26" r="2.4" fill="#fff"/>
+      <text x="48" y="20" font-weight="700" fill="#16202c">Linux servers</text>
+      <text x="48" y="36" font-size="11" fill="#5b6b7d">copies itself, scans, removes it</text>
+    </g>
+    <g transform="translate(920 184)">
+      <rect width="232" height="44" rx="9" fill="#f1f3f6" stroke="#d9dee5"/>
+      <rect x="8" y="7" width="30" height="30" rx="8" fill="url(#slate)"/>
+      <text x="23" y="28" font-size="15" font-weight="700" fill="#fff" text-anchor="middle">⌘</text>
+      <text x="48" y="20" font-weight="700" fill="#16202c">Macs</text>
+      <text x="48" y="36" font-size="11" fill="#5b6b7d">FileVault, Gatekeeper, SIP …</text>
+    </g>
+    <g transform="translate(920 236)">
+      <rect width="232" height="44" rx="9" fill="#eef6ff" stroke="#c9dcf3"/>
+      <rect x="8" y="7" width="30" height="30" rx="8" fill="url(#blue)"/>
+      <rect x="15" y="14" width="7" height="7" fill="#fff"/><rect x="24" y="14" width="7" height="7" fill="#fff"/><rect x="15" y="23" width="7" height="7" fill="#fff"/><rect x="24" y="23" width="7" height="7" fill="#fff"/>
+      <text x="48" y="20" font-weight="700" fill="#16202c">Windows &amp; WSL</text>
+      <text x="48" y="36" font-size="11" fill="#5b6b7d">Defender, BitLocker, updates …</text>
+    </g>
+    <g transform="translate(920 288)">
+      <rect width="232" height="80" rx="9" fill="#f3f7fb" stroke="#dbe4ee"/>
+      <path d="M19 22v-3a5 5 0 0 1 10 0v3" fill="none" stroke="#0b7f86" stroke-width="2.2"/><rect x="15" y="21" width="18" height="13" rx="3" fill="url(#teal)"/><circle cx="24" cy="27" r="1.8" fill="#fff"/>
+      <text x="44" y="28" font-weight="700" fill="#16202c">Your SSH, verified</text>
+      <text x="14" y="54" font-size="11" fill="#5b6b7d">host keys pinned · restricted key</text>
+      <text x="14" y="70" font-size="11" fill="#5b6b7d">no agent, no open port, no server</text>
+    </g>
+  </g>
+
+  <path d="M864 210C884 210 884 200 904 200" fill="none" stroke="#1d5fc2" stroke-width="2" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <rect x="868" y="168" width="32" height="18" rx="9" fill="#e3eefc"/><text x="884" y="181" font-size="10.5" fill="#1d5fc2" text-anchor="middle">SSH</text>
+
+  <!-- alerts -->
+  <g filter="url(#sh)"><rect x="904" y="404" width="264" height="192" rx="14" fill="#fff" stroke="#d5dee8"/></g>
+  <path d="M904 438V418A14 14 0 0 1 918 404H1154A14 14 0 0 1 1168 418V438Z" fill="url(#pink)"/>
+  <text x="920" y="426" font-size="13" font-weight="700" fill="#fff" letter-spacing=".3">ALERTS &amp; REPORTS</text>
+  <g transform="translate(920 452)">
+    <circle cx="16" cy="16" r="15" fill="#29a9eb"/>
+    <path d="M8 16l15-6-3 13-4-4-3 2 0-4 6-5-8 4z" fill="#fff"/>
+    <text x="40" y="14" font-size="13" font-weight="700" fill="#16202c">Telegram</text>
+    <text x="40" y="29" font-size="11" fill="#5b6b7d">your own bot</text>
+  </g>
+  <g transform="translate(920 500)">
+    <rect x="1" y="5" width="30" height="22" rx="4" fill="url(#orange)"/>
+    <path d="M3 8l13 9 13-9" fill="none" stroke="#fff" stroke-width="2"/>
+    <text x="40" y="14" font-size="13" font-weight="700" fill="#16202c">E-mail (SMTP)</text>
+    <text x="40" y="29" font-size="11" fill="#5b6b7d">TLS required</text>
+  </g>
+  <text x="920" y="566" font-size="11" fill="#5b6b7d">new issues · a machine goes quiet ·</text>
+  <text x="920" y="582" font-size="11" fill="#5b6b7d">a host key changes · daily summary</text>
+  <path d="M864 470C884 470 884 480 904 480" fill="none" stroke="#c2185b" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#ar)"/>
+  <text x="884" y="460" font-size="10" fill="#c2185b" text-anchor="middle">opt-in</text>
+
+  <text x="32" y="636" font-size="11.5" fill="#7a8796">Open source (Apache-2.0) · github.com/vietanhdev/bulwark · bulwark.nrl.ai</text>
+</svg>

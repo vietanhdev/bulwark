@@ -1,0 +1,11 @@
+id: BLWK-WIN-008
+title: The Windows Guest account is enabled
+category: windows-hardening
+severity: medium
+collector: windows_security
+os: [windows]
+condition: guest_enabled_known == true and guest_enabled == true
+explain: >
+  The built-in Guest account is switched on. Anyone who can reach this computer, at the keyboard or over the network, can sign in without a password of their own and reach shared folders and printers.
+fix: "In an administrator PowerShell run: Get-LocalUser | Where-Object { $_.SID -like '*-501' } | Disable-LocalUser. Or open Computer Management → Local Users and Groups → Users → Guest and tick 'Account is disabled'."
+references: [ATTACK-T1078.001]

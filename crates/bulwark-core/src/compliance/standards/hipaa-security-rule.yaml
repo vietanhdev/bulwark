@@ -47,7 +47,7 @@ controls:
   - id: 164.312(c)(1)
     title: Integrity
     obligation: standard
-    rules: [BLWK-FIM-001, BLWK-FIM-002, BLWK-FIM-003, BLWK-FIM-004, BLWK-FIM-005, BLWK-FIM-006]
+    rules: [BLWK-FIM-001, BLWK-FIM-002, BLWK-FIM-003, BLWK-FIM-004, BLWK-FIM-005, BLWK-FIM-006, BLWK-FIM-009]
 
   - id: 164.312(d)
     title: Person or entity authentication

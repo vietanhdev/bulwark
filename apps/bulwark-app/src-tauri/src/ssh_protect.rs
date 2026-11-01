@@ -9,7 +9,7 @@ use bulwark_core::{protect_unencrypted_keys, BulkProtectionReport};
 use std::path::PathBuf;
 
 fn ssh_backup_dir() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
+    let home = bulwark_core::paths::home_var().map_err(|_| "HOME not set".to_string())?;
     Ok(PathBuf::from(home).join(".local/share/bulwark/ssh-key-backups"))
 }
 

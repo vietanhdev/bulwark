@@ -1,0 +1,12 @@
+id: BLWK-MAC-004
+title: The macOS firewall is off
+category: macos-hardening
+severity: medium
+collector: macos_security
+os: [macos]
+# Only fires on a value actually read; "unknown" (command failed, unrecognised output) never does.
+condition: firewall_on_known == true and firewall_on == false
+explain: >
+  The application firewall is off, so any service on this Mac that listens on the network can be reached from whatever network you're on.
+fix: "Turn it on in System Settings → Network → Firewall (or 'sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate on'). Stealth mode is worth enabling too."
+references: [ATTACK-T1133]

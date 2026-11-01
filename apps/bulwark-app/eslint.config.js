@@ -19,7 +19,27 @@ export default tseslint.config(
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
-      "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
+      // These helpers live beside the component they belong to on purpose (shadcn's *Variants,
+      // the severity helpers, the revision hook). The only cost is a full reload instead of a hot
+      // swap when one of those files changes in dev, so they are allowed by name — a new
+      // non-component export elsewhere still warns.
+      "react-refresh/only-export-components": [
+        "warn",
+        {
+          allowConstantExport: true,
+          allowExportNames: [
+            "badgeVariants",
+            "buttonVariants",
+            "tabsListVariants",
+            "groupFindingsByCategory",
+            "ignoreKeyOf",
+            "SEVERITY_ORDER",
+            "severityLabel",
+            "railStyle",
+            "useRevision",
+          ],
+        },
+      ],
       // Rules read live host state into typed structs whose exact shape isn't worth
       // re-declaring on the frontend for every unused field — an explicit opt-out here,
       // not a blanket relaxation (unused *variables* still error).

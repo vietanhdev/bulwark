@@ -1,9 +1,10 @@
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Ban, ChevronRight, ExternalLink, MoreVertical, RotateCw } from "lucide-react";
+import { Ban, ChevronRight, ExternalLink, EyeOff, MoreVertical, RotateCw } from "lucide-react";
 import { FindingCard, type Finding } from "@/components/FindingCard";
 import { FixIssueButton } from "@/components/FixActions";
 import { FixSteps } from "@/components/FixSteps";
+import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu";
 import { recommendation } from "@/lib/fix-text";
 import { type FixCapability } from "@/lib/fixes";
 import { SEVERITY_ORDER, SeverityLabel, type Severity } from "@/components/Severity";
@@ -24,6 +25,8 @@ export interface FindingGroup {
  *  `onFixed` runs after a fix is applied so the view can re-scan. */
 export interface IssueActions {
   onIgnoreType?: (ruleId: string, reason: string) => Promise<void>;
+  /** Ignore one finding — a rule at one place (see `ignoreKeyOf`) — leaving the rule on. */
+  onIgnorePlace?: (ruleId: string, location: string, reason: string) => Promise<void>;
   onRecheck?: () => void;
   fixCapabilities?: Map<string, FixCapability>;
   onFixed?: () => void;
@@ -147,6 +150,24 @@ export function CategoryFindings({
 }
 
 /** Where one instance of a problem was found: its file (and line), or the path/port its fact names. */
+/**
+ * The place a single-finding ignore is keyed on. Mirrors `bulwark_core::finding_location` exactly —
+ * the file (without a line number, which moves whenever the file is edited), the listening port,
+ * or the title — so an ignore made here matches the finding the backend filters.
+ */
+export function ignoreKeyOf(f: Finding): string {
+  const c = f.context ?? {};
+  for (const key of ["path", "file"]) {
+    const v = c[key];
+    if (typeof v === "string" && v) return v;
+  }
+  if (c.port !== undefined && c.port !== null) {
+    const addr = typeof c.listen_address === "string" ? c.listen_address : null;
+    return addr ? `port ${String(c.port)} on ${addr}` : `port ${String(c.port)}`;
+  }
+  return f.title;
+}
+
 function locationOf(f: Finding): string {
   if (f.file) return f.line ? `${f.file}:${f.line}` : f.file;
   const c = f.context ?? {};
@@ -180,7 +201,8 @@ function IssueTypeGroup({
   const [open, setOpen] = useState(false);
   // Steps that differ per place only make sense next to each place, so start with them showing.
   const [details, setDetails] = useState(!sameFix);
-  const [ignoring, setIgnoring] = useState(false);
+  // What the inline reason box will hide: the whole issue type, or one place.
+  const [ignoring, setIgnoring] = useState<false | { place: string | null }>(false);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const first = group.items[0];
@@ -188,17 +210,28 @@ function IssueTypeGroup({
   const menu =
     actions && (actions.onIgnoreType || actions.onRecheck) ? (
       <IssueMenu
-        onIgnore={actions.onIgnoreType ? () => setIgnoring(true) : undefined}
+        onIgnore={actions.onIgnoreType ? () => setIgnoring({ place: null }) : undefined}
+        onIgnoreOne={
+          actions.onIgnorePlace && group.items.length === 1
+            ? () => setIgnoring({ place: ignoreKeyOf(group.items[0]) })
+            : undefined
+        }
         onRecheck={actions.onRecheck}
       />
     ) : null;
 
   async function confirmIgnore() {
     const r = reason.trim();
-    if (!r || !actions?.onIgnoreType) return;
+    if (!r || !ignoring) return;
     setBusy(true);
     try {
-      await actions.onIgnoreType(group.ruleId, r);
+      if (ignoring.place !== null) {
+        if (!actions?.onIgnorePlace) return;
+        await actions.onIgnorePlace(group.ruleId, ignoring.place, r);
+      } else {
+        if (!actions?.onIgnoreType) return;
+        await actions.onIgnoreType(group.ruleId, r);
+      }
       setIgnoring(false);
       setReason("");
     } finally {
@@ -213,12 +246,28 @@ function IssueTypeGroup({
   // places moves up into the fix block instead of hiding under Details.
   const placeActions = sameFix && group.items.some((f) => actions?.footerFor?.(f));
   const autoFix = Boolean(fixRow || groupAction || placeActions);
+  // The "Auto-fix" pill is a shortcut to the fix: open the row and bring the fix into view.
+  const fixRef = useRef<HTMLDivElement>(null);
+  function showFix() {
+    setOpen(true);
+    requestAnimationFrame(() => fixRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
+  }
   const places = (
     <ul className="space-y-1">
       {group.items.map((f) => (
         <li key={f.id} className="flex flex-wrap items-center gap-2">
           <code className="font-mono text-xs break-all">{locationOf(f)}</code>
           {actions?.footerFor?.(f)}
+          {actions?.onIgnorePlace && count > 1 && (
+            <button
+              type="button"
+              onClick={() => setIgnoring({ place: ignoreKeyOf(f) })}
+              className="rounded text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              title="Stop reporting this one place; the others keep being reported"
+            >
+              Ignore
+            </button>
+          )}
         </li>
       ))}
     </ul>
@@ -248,12 +297,14 @@ function IssueTypeGroup({
           </span>
         </button>
         {autoFix && (
-          <span
-            className="hidden shrink-0 rounded-full border border-primary/40 px-2 py-0.5 text-[11px] font-medium text-primary sm:inline"
-            title="Bulwark can fix this for you. Open the row to preview the change."
+          <button
+            type="button"
+            onClick={showFix}
+            className="hidden shrink-0 rounded-full border border-primary/40 px-2 py-0.5 text-[11px] font-medium text-primary transition-colors hover:border-primary hover:bg-primary/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:inline"
+            title="Bulwark can fix this for you — preview the change first"
           >
             Auto-fix
-          </span>
+          </button>
         )}
         {count > 1 && (
           <span
@@ -275,7 +326,11 @@ function IssueTypeGroup({
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && confirmIgnore()}
-            placeholder="Reason for accepting this risk…"
+            placeholder={
+              ignoring && ignoring.place !== null
+                ? `Why ignore it at ${ignoring.place}?`
+                : "Reason for accepting this risk…"
+            }
             className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
           />
           <button
@@ -285,7 +340,7 @@ function IssueTypeGroup({
             className="flex items-center gap-1 rounded border border-border px-2 py-0.5 text-[11px] font-medium transition-colors hover:bg-accent disabled:opacity-50"
           >
             <Ban className="h-3 w-3" />
-            Ignore type
+            {ignoring && ignoring.place !== null ? "Ignore here" : "Ignore type"}
           </button>
           <button
             type="button"
@@ -306,7 +361,7 @@ function IssueTypeGroup({
             {first.explanation}
           </p>
           {autoFix ? (
-            <div className="flex flex-col gap-2">
+            <div ref={fixRef} className="flex flex-col gap-2">
               {fixRow}
               {groupAction}
               {placeActions && places}
@@ -371,66 +426,45 @@ function IssueTypeGroup({
   );
 }
 
-/** The per-issue actions menu (⋯). A tiny self-contained dropdown — a full-screen transparent
- *  backdrop closes it on an outside click. Only renders the actions it's given. */
-function IssueMenu({ onIgnore, onRecheck }: { onIgnore?: () => void; onRecheck?: () => void }) {
-  const [open, setOpen] = useState(false);
+/** The per-issue actions menu (⋯). Portalled (see `ui/menu`), so it is never clipped by the
+ *  findings card and opens upward on the last row. Only renders the actions it's given. */
+function IssueMenu({
+  onIgnore,
+  onIgnoreOne,
+  onRecheck,
+}: {
+  onIgnore?: () => void;
+  onIgnoreOne?: () => void;
+  onRecheck?: () => void;
+}) {
   return (
-    <div className="relative shrink-0">
-      <button
-        type="button"
+    <Menu>
+      <MenuTrigger
         aria-label="Issue actions"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-        className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring data-popup-open:bg-accent data-popup-open:text-foreground"
       >
         <MoreVertical className="h-4 w-4" />
-      </button>
-      {open && (
-        <>
-          <button
-            type="button"
-            aria-hidden
-            tabIndex={-1}
-            onClick={() => setOpen(false)}
-            className="fixed inset-0 z-10 cursor-default"
-          />
-          <div
-            role="menu"
-            className="absolute right-0 z-20 mt-1 w-56 overflow-hidden rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md"
-          >
-            {onIgnore && (
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setOpen(false);
-                  onIgnore();
-                }}
-                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors hover:bg-accent"
-              >
-                <Ban className="h-3.5 w-3.5 text-muted-foreground" />
-                Ignore this type of issue
-              </button>
-            )}
-            {onRecheck && (
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setOpen(false);
-                  onRecheck();
-                }}
-                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors hover:bg-accent"
-              >
-                <RotateCw className="h-3.5 w-3.5 text-muted-foreground" />
-                Recheck
-              </button>
-            )}
-          </div>
-        </>
-      )}
-    </div>
+      </MenuTrigger>
+      <MenuContent>
+        {onIgnoreOne && (
+          <MenuItem onClick={onIgnoreOne}>
+            <EyeOff className="h-3.5 w-3.5 text-muted-foreground" />
+            Ignore only this one
+          </MenuItem>
+        )}
+        {onIgnore && (
+          <MenuItem onClick={onIgnore}>
+            <Ban className="h-3.5 w-3.5 text-muted-foreground" />
+            Ignore this type of issue
+          </MenuItem>
+        )}
+        {onRecheck && (
+          <MenuItem onClick={onRecheck}>
+            <RotateCw className="h-3.5 w-3.5 text-muted-foreground" />
+            Recheck
+          </MenuItem>
+        )}
+      </MenuContent>
+    </Menu>
   );
 }

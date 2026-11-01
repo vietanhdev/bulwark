@@ -1,0 +1,12 @@
+id: BLWK-MAC-005
+title: Automatic security updates are off
+category: macos-hardening
+severity: medium
+collector: macos_security
+os: [macos]
+# Only fires on a value actually read; "unknown" (command failed, unrecognised output) never does.
+condition: security_updates_on_known == true and security_updates_on == false
+explain: >
+  macOS can install security responses and system data files (XProtect malware signatures among them) automatically. That's turned off, so protection against newly found malware arrives only when you update by hand.
+fix: "In System Settings → General → Software Update → Automatic Updates, turn on 'Install Security Responses and system files'."
+references: [ATTACK-T1562.001]

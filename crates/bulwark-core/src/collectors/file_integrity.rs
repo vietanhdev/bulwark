@@ -47,7 +47,7 @@ fn baseline_path() -> PathBuf {
     if let Ok(p) = std::env::var("BULWARK_FIM_BASELINE") {
         return PathBuf::from(p);
     }
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = crate::paths::home_var().unwrap_or_default();
     PathBuf::from(home).join(".local/share/bulwark/fim-baseline.txt")
 }
 
@@ -91,7 +91,11 @@ fn compute_hashes(paths: &[PathBuf]) -> HashMap<String, String> {
 /// it internally) so tests can point at an isolated tempdir path directly instead of
 /// mutating the process-wide `BULWARK_FIM_BASELINE` env var, which `cargo test`'s default
 /// parallel execution would otherwise turn into a real race between tests.
-fn collect_for(watched: &[&str], baseline_file: &Path) -> Vec<Fact> {
+/// With no baseline recorded at all, `with_summary` adds one `kind: "summary"` row (rule
+/// BLWK-FIM-009) so that state is reported once, rather than as one "not covered" finding per
+/// watched file — nine identical rows that said one thing. It carries every field the per-file
+/// rules read, set so none of them fire on it, because a condition over a missing field is an error.
+fn collect_for(watched: &[&str], baseline_file: &Path, with_summary: bool) -> Vec<Fact> {
     let baseline_exists = baseline_file.exists();
     let baseline = if baseline_exists {
         std::fs::read_to_string(baseline_file)
@@ -119,7 +123,7 @@ fn collect_for(watched: &[&str], baseline_file: &Path) -> Vec<Fact> {
         .collect();
     let current = compute_hashes(&existing);
 
-    paths
+    let mut rows = paths
         .into_iter()
         .map(|path| {
             let present = Path::new(&path).exists();
@@ -146,9 +150,23 @@ fn collect_for(watched: &[&str], baseline_file: &Path) -> Vec<Fact> {
             fact.insert("currently_present".to_string(), Value::Bool(present));
             fact.insert("changed".to_string(), Value::Bool(changed));
             fact.insert("unreadable".to_string(), Value::Bool(unreadable));
+            fact.insert("kind".to_string(), Value::String("file".into()));
             fact
         })
-        .collect()
+        .collect::<Vec<_>>();
+    if with_summary && !baseline_exists {
+        let mut summary = Fact::new();
+        summary.insert("path".to_string(), Value::String("(no baseline)".into()));
+        summary.insert("baseline_exists".to_string(), Value::Bool(false));
+        summary.insert("in_baseline".to_string(), Value::Bool(false));
+        summary.insert("currently_present".to_string(), Value::Bool(false));
+        summary.insert("changed".to_string(), Value::Bool(false));
+        summary.insert("unreadable".to_string(), Value::Bool(false));
+        summary.insert("kind".to_string(), Value::String("summary".into()));
+        summary.insert("watched".to_string(), Value::from(rows.len()));
+        rows.push(summary);
+    }
+    rows
 }
 
 pub struct FileIntegrityCollector;
@@ -165,7 +183,11 @@ impl Collector for FileIntegrityCollector {
     }
 
     fn collect(&self) -> anyhow::Result<Vec<Fact>> {
-        Ok(collect_for(UNPRIVILEGED_WATCHED_PATHS, &baseline_path()))
+        Ok(collect_for(
+            UNPRIVILEGED_WATCHED_PATHS,
+            &baseline_path(),
+            true,
+        ))
     }
 }
 
@@ -187,7 +209,11 @@ impl Collector for FileIntegrityPrivilegedCollector {
     }
 
     fn collect(&self) -> anyhow::Result<Vec<Fact>> {
-        Ok(collect_for(PRIVILEGED_WATCHED_PATHS, &baseline_path()))
+        Ok(collect_for(
+            PRIVILEGED_WATCHED_PATHS,
+            &baseline_path(),
+            false,
+        ))
     }
 }
 
@@ -314,13 +340,13 @@ mod tests {
         let n = establish_baseline_at(watched, &baseline_file).unwrap();
         assert_eq!(n, 1);
 
-        let rows = collect_for(watched, &baseline_file);
+        let rows = collect_for(watched, &baseline_file, false);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].get("changed").unwrap(), &Value::Bool(false));
         assert_eq!(rows[0].get("in_baseline").unwrap(), &Value::Bool(true));
 
         std::fs::write(&watched_file, "tampered content\n").unwrap();
-        let rows = collect_for(watched, &baseline_file);
+        let rows = collect_for(watched, &baseline_file, false);
         assert_eq!(rows[0].get("changed").unwrap(), &Value::Bool(true));
         assert_eq!(
             rows[0].get("currently_present").unwrap(),
@@ -341,7 +367,7 @@ mod tests {
         establish_baseline_at(watched, &baseline_file).unwrap();
         std::fs::remove_file(&watched_file).unwrap();
 
-        let rows = collect_for(watched, &baseline_file);
+        let rows = collect_for(watched, &baseline_file, false);
         assert_eq!(
             rows.len(),
             1,
@@ -363,7 +389,7 @@ mod tests {
         // A baseline file that doesn't exist at all yet.
         let baseline_file = tmp.path().join("no-baseline-here.txt");
 
-        let rows = collect_for(&[watched_path.as_str()], &baseline_file);
+        let rows = collect_for(&[watched_path.as_str()], &baseline_file, false);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].get("baseline_exists").unwrap(), &Value::Bool(false));
         assert_eq!(rows[0].get("in_baseline").unwrap(), &Value::Bool(false));
@@ -392,6 +418,7 @@ mod tests {
         let rows = collect_for(
             &[baselined.to_str().unwrap(), uncovered.to_str().unwrap()],
             &baseline_file,
+            false,
         );
         let uncovered_row = rows
             .iter()
@@ -439,7 +466,7 @@ mod tests {
             std::fs::set_permissions(&watched_file, std::fs::Permissions::from_mode(0o000))
                 .unwrap();
         }
-        let rows = collect_for(&[path.as_str()], &baseline_file);
+        let rows = collect_for(&[path.as_str()], &baseline_file, false);
         let row = &rows[0];
         let unreadable = row.get("unreadable").unwrap().as_bool().unwrap();
         let changed = row.get("changed").unwrap().as_bool().unwrap();
@@ -456,5 +483,42 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&watched_file, std::fs::Permissions::from_mode(0o644));
         }
+    }
+
+    #[test]
+    fn no_baseline_is_one_summary_row_not_one_per_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a");
+        let b = dir.path().join("b");
+        std::fs::write(&a, "x").unwrap();
+        std::fs::write(&b, "y").unwrap();
+        let baseline_file = dir.path().join("baseline");
+        let watched = [a.to_str().unwrap(), b.to_str().unwrap()];
+
+        let rows = collect_for(&watched, &baseline_file, true);
+        let summaries: Vec<_> = rows
+            .iter()
+            .filter(|r| r.get("kind") == Some(&Value::String("summary".into())))
+            .collect();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].get("watched"), Some(&Value::from(2)));
+        // Every field the per-file rules read is present on the summary row (a missing field
+        // would be a condition error), and set so none of them fire on it.
+        for k in [
+            "baseline_exists",
+            "in_baseline",
+            "currently_present",
+            "changed",
+            "unreadable",
+        ] {
+            assert!(summaries[0].contains_key(k), "{k}");
+        }
+
+        // Once a baseline exists, no summary row.
+        establish_baseline_at(&watched, &baseline_file).unwrap();
+        let rows = collect_for(&watched, &baseline_file, true);
+        assert!(rows
+            .iter()
+            .all(|r| r.get("kind") == Some(&Value::String("file".into()))));
     }
 }

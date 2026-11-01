@@ -103,6 +103,13 @@ impl Collector for ListeningPortsCollector {
             );
             seen.insert(key)
         });
+        // Whether a default-deny host firewall (ufw) sits in front of these. Recorded per row so
+        // BLWK-NET-003 (anyone on the network can connect) and BLWK-NET-005 (all interfaces, but
+        // behind the firewall) can tell the two apart without a cross-collector join.
+        let firewalled = super::host_firewall::host_ufw_denies_inbound();
+        for f in &mut rows {
+            f.insert("inbound_firewalled".to_string(), Value::Bool(firewalled));
+        }
         Ok(rows)
     }
 }

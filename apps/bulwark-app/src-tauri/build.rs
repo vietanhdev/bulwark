@@ -39,7 +39,14 @@ fn stage_cli_sidecar() {
     }
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let binaries_dir = manifest_dir.join("binaries");
-    let dest = binaries_dir.join(format!("bulwark-{triple}"));
+    // Windows executables carry `.exe` — on the CLI cargo builds and on the sidecar name Tauri
+    // looks for. Without it a Windows build found no CLI and shipped the zero-byte placeholder.
+    let exe = if triple.contains("windows") {
+        ".exe"
+    } else {
+        ""
+    };
+    let dest = binaries_dir.join(format!("bulwark-{triple}{exe}"));
     let _ = std::fs::create_dir_all(&binaries_dir);
 
     // Where the workspace target dir actually is. `CARGO_TARGET_DIR` (or `build.target-dir`,
@@ -86,8 +93,11 @@ fn stage_cli_sidecar() {
         .iter()
         .flat_map(|p| {
             [
-                workspace_target.join(&triple).join(p).join("bulwarkctl"),
-                workspace_target.join(p).join("bulwarkctl"),
+                workspace_target
+                    .join(&triple)
+                    .join(p)
+                    .join(format!("bulwarkctl{exe}")),
+                workspace_target.join(p).join(format!("bulwarkctl{exe}")),
             ]
         })
         .find(|p| p.is_file());

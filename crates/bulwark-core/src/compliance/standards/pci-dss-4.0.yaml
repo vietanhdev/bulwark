@@ -90,4 +90,4 @@ controls:
 
   - id: "11.5.2"
     title: A change-detection mechanism monitors critical files
-    rules: [BLWK-FIM-001, BLWK-FIM-002, BLWK-FIM-003, BLWK-FIM-004, BLWK-FIM-005, BLWK-FIM-006]
+    rules: [BLWK-FIM-001, BLWK-FIM-002, BLWK-FIM-003, BLWK-FIM-004, BLWK-FIM-005, BLWK-FIM-006, BLWK-FIM-009]

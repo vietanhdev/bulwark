@@ -1,0 +1,11 @@
+id: BLWK-DEV-004
+title: "SSH doesn't check server identities ({{ dev_tool_config.path }})"
+category: developer-tools
+severity: medium
+collector: dev_tool_config
+os: [linux, macos, windows]
+condition: kind == "ssh" and host_key_checks_off == true
+explain: >
+  {{ dev_tool_config.path }} applies {{ dev_tool_config.detail }} to every host, so SSH connects without verifying it is talking to the real server. Anyone in the network path can pose as GitHub, a deploy target or a bastion, capture what you type and push you modified code.
+fix: "Remove the line, or use 'StrictHostKeyChecking accept-new', which trusts a server the first time and still refuses a key that later changes. Keep any exception inside a Host block for the one throw-away machine that needs it."
+references: [ATTACK-T1557]

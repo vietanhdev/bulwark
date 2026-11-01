@@ -1,0 +1,12 @@
+id: BLWK-MAC-006
+title: The guest account is enabled
+category: macos-hardening
+severity: low
+collector: macos_security
+os: [macos]
+# Only fires on a value actually read; "unknown" (command failed, unrecognised output) never does.
+condition: guest_enabled_known == true and guest_enabled == true
+explain: >
+  Anyone can log in to this Mac as a guest without a password. Guest sessions are limited, but they still give a stranger a foothold on the machine.
+fix: "Turn it off in System Settings → Users & Groups → Guest User."
+references: [ATTACK-T1078.001]

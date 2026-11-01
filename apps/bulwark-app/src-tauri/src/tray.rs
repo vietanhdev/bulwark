@@ -21,10 +21,13 @@ pub fn spawn(app: &AppHandle) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, "quit", "Quit Bulwark", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &quit])?;
 
-    let icon = app
-        .default_window_icon()
-        .cloned()
-        .ok_or_else(|| tauri::Error::AssetNotFound("default window icon".into()))?;
+    // A symbolic white glyph, not the full-colour app icon: the GNOME/Ubuntu top bar draws status
+    // icons as white symbols, and the app icon squeezed to panel size read as a dark blob there.
+    // Raw RGBA (rendered by scripts/render-app-icons.py from icons/tray-icon.svg) so no image
+    // decoder crate is needed.
+    const TRAY_SIZE: u32 = 64;
+    const TRAY_RGBA: &[u8] = include_bytes!("../icons/tray-icon.rgba");
+    let icon = tauri::image::Image::new_owned(TRAY_RGBA.to_vec(), TRAY_SIZE, TRAY_SIZE);
 
     TrayIconBuilder::with_id("main")
         .icon(icon)

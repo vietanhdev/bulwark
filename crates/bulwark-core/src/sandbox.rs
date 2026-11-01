@@ -77,7 +77,30 @@ pub fn host_command(program: &str) -> std::process::Command {
         cmd.arg("--host").arg(program);
         return cmd;
     }
-    std::process::Command::new(program)
+    let mut cmd = std::process::Command::new(program);
+    no_console(&mut cmd);
+    cmd
+}
+
+/// A new [`Command`] for `program` that never opens a console window. On Windows a GUI process
+/// that spawns a console program (PowerShell, `cmd`, `git`, the CLI sidecar) gets a terminal
+/// window flashing up for each one — on every scan and every background tick — unless the child is
+/// created with `CREATE_NO_WINDOW`. Elsewhere this is plain `Command::new`.
+pub fn quiet_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    let mut cmd = std::process::Command::new(program);
+    no_console(&mut cmd);
+    cmd
+}
+
+/// Applies `CREATE_NO_WINDOW` on Windows; a no-op on every other OS.
+pub fn no_console(cmd: &mut std::process::Command) -> &mut std::process::Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
 }
 
 /// Whether reaching host tools is actually possible from here.

@@ -1,0 +1,11 @@
+id: BLWK-DEV-009
+title: "Docker's API is open to every program on this computer ({{ dev_tool_config.path }})"
+category: developer-tools
+severity: high
+collector: dev_tool_config
+os: [linux, macos, windows]
+condition: kind == "docker" and docker_api_unprotected == true
+explain: >
+  {{ dev_tool_config.path }} opens the Docker API on {{ dev_tool_config.detail }} with no authentication. Any program running as any user on this computer — a malicious package's install script, another account — can start a container with this machine's disk mounted and become root here. (An API reachable from the network is reported separately, from the open port.)
+fix: "Remove the tcp:// entry from daemon.json (or untick 'Expose daemon on tcp://localhost:2375 without TLS' in Docker Desktop → Settings → General) and use the default socket. For remote access use ssh://user@host as the Docker host, or TLS with client certificates on port 2376."
+references: [ATTACK-T1610, ATTACK-T1133]

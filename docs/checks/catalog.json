@@ -136,7 +136,7 @@
   },
   {
    "id": "BLWK-CRED-002",
-   "title": "Git stores passwords and tokens in plain text",
+   "title": "Git stores passwords and tokens in plain text ({{ credential_stores.path }})",
    "category": "credential-exposure",
    "severity": "high",
    "explain": "Git is saving your passwords and access tokens in a plain text file ({{ credential_stores.path }}). Any program running as you can read it, and a GitHub token usually lets someone push code to your repositories or publish packages in your name.",
@@ -200,6 +200,157 @@
    "slug": "blwk-evasion-001"
   },
   {
+   "id": "BLWK-DEV-001",
+   "title": "Git skips TLS certificate checks ({{ dev_tool_config.path }})",
+   "category": "developer-tools",
+   "severity": "high",
+   "explain": "{{ dev_tool_config.path }} sets http.sslVerify = false for every remote. Anyone on the network path — public Wi-Fi, a compromised router or proxy — can impersonate GitHub or your Git server, read the credentials Git sends, and hand you modified code that you then build and run.",
+   "fix": "Remove the line with 'git config --global --unset http.sslVerify'. If one server has a private certificate, trust its CA for that server only: git config --global http.https://git.example.com/.sslCAInfo /path/to/ca.pem",
+   "references": [
+    "ATTACK-T1557",
+    "ATTACK-T1195.001"
+   ],
+   "collector": "dev_tool_config",
+   "condition": "kind == \"git\" and ssl_verify_off == true",
+   "source": "rules/developer-tools/BLWK-DEV-001.yaml",
+   "group": "supply-chain",
+   "slug": "blwk-dev-001"
+  },
+  {
+   "id": "BLWK-DEV-002",
+   "title": "Git trusts repositories owned by anyone ({{ dev_tool_config.path }})",
+   "category": "developer-tools",
+   "severity": "medium",
+   "explain": "{{ dev_tool_config.path }} sets safe.directory = *, which turns off Git's protection against repositories owned by another user (CVE-2022-24765). A repository someone else controls — on a shared machine, in /tmp or a mounted drive — can then set core.fsmonitor or a hook that runs a command as you the moment you, your shell prompt or your editor runs git status there.",
+   "fix": "Replace the wildcard with the specific directories you need: git config --global --unset-all safe.directory, then git config --global --add safe.directory /path/to/that/repo for each one.",
+   "references": [
+    "ATTACK-T1059",
+    "ATTACK-T1204"
+   ],
+   "collector": "dev_tool_config",
+   "condition": "kind == \"git\" and safe_directory_any == true",
+   "source": "rules/developer-tools/BLWK-DEV-002.yaml",
+   "group": "supply-chain",
+   "slug": "blwk-dev-002"
+  },
+  {
+   "id": "BLWK-DEV-003",
+   "title": "Git allows the ext:: transport, which runs commands from a URL ({{ dev_tool_config.path }})",
+   "category": "developer-tools",
+   "severity": "high",
+   "explain": "{{ dev_tool_config.path }} sets protocol.allow (or protocol.ext.allow) to always. An ext:: remote is a shell command, so a submodule URL or a link in a project can run arbitrary code on this machine when Git fetches it. Git disables it by default for exactly this reason.",
+   "fix": "Remove the setting: git config --global --unset protocol.allow and git config --global --unset protocol.ext.allow. If one tool needs ext::, pass -c protocol.ext.allow=always on that one command.",
+   "references": [
+    "ATTACK-T1059",
+    "ATTACK-T1195.001"
+   ],
+   "collector": "dev_tool_config",
+   "condition": "kind == \"git\" and ext_protocol_allowed == true",
+   "source": "rules/developer-tools/BLWK-DEV-003.yaml",
+   "group": "supply-chain",
+   "slug": "blwk-dev-003"
+  },
+  {
+   "id": "BLWK-DEV-004",
+   "title": "SSH doesn't check server identities ({{ dev_tool_config.path }})",
+   "category": "developer-tools",
+   "severity": "medium",
+   "explain": "{{ dev_tool_config.path }} applies {{ dev_tool_config.detail }} to every host, so SSH connects without verifying it is talking to the real server. Anyone in the network path can pose as GitHub, a deploy target or a bastion, capture what you type and push you modified code.",
+   "fix": "Remove the line, or use 'StrictHostKeyChecking accept-new', which trusts a server the first time and still refuses a key that later changes. Keep any exception inside a Host block for the one throw-away machine that needs it.",
+   "references": [
+    "ATTACK-T1557"
+   ],
+   "collector": "dev_tool_config",
+   "condition": "kind == \"ssh\" and host_key_checks_off == true",
+   "source": "rules/developer-tools/BLWK-DEV-004.yaml",
+   "group": "supply-chain",
+   "slug": "blwk-dev-004"
+  },
+  {
+   "id": "BLWK-DEV-005",
+   "title": "SSH forwards your agent to every server ({{ dev_tool_config.path }})",
+   "category": "developer-tools",
+   "severity": "medium",
+   "explain": "{{ dev_tool_config.path }} sets ForwardAgent yes for all hosts. While you are connected, root — or an attacker — on any server you log in to can use your loaded keys to sign in to every other machine and Git host those keys open, without ever seeing the key itself.",
+   "fix": "Remove ForwardAgent from Host * (and the top of the file). To reach a machine through another, use ProxyJump (ssh -J bastion target), which needs no forwarding; if one host truly needs it, set ForwardAgent yes in that host's block only.",
+   "references": [
+    "ATTACK-T1563.001"
+   ],
+   "collector": "dev_tool_config",
+   "condition": "kind == \"ssh\" and agent_forwarding_all == true",
+   "source": "rules/developer-tools/BLWK-DEV-005.yaml",
+   "group": "supply-chain",
+   "slug": "blwk-dev-005"
+  },
+  {
+   "id": "BLWK-DEV-006",
+   "title": "npm/yarn installs packages without checking TLS certificates ({{ dev_tool_config.path }})",
+   "category": "developer-tools",
+   "severity": "high",
+   "explain": "{{ dev_tool_config.path }} turns off certificate checks for the package registry. Anyone on the network path can serve a modified package — whose install script runs on this machine — and read the registry token npm sends.",
+   "fix": "Remove strict-ssl=false (npm config delete strict-ssl), or enableStrictSsl: false for yarn. Behind a corporate proxy, point npm at its CA instead: npm config set cafile /path/to/proxy-ca.pem",
+   "references": [
+    "ATTACK-T1195.001",
+    "ATTACK-T1557"
+   ],
+   "collector": "dev_tool_config",
+   "condition": "kind == \"npm\" and strict_ssl_off == true",
+   "source": "rules/developer-tools/BLWK-DEV-006.yaml",
+   "group": "supply-chain",
+   "slug": "blwk-dev-006"
+  },
+  {
+   "id": "BLWK-DEV-007",
+   "title": "Packages are installed from a plain-HTTP registry ({{ dev_tool_config.path }})",
+   "category": "developer-tools",
+   "severity": "high",
+   "explain": "{{ dev_tool_config.path }} installs from {{ dev_tool_config.detail }} over unencrypted HTTP. Anyone on the network path can swap in a package that runs its own code at install time, and can read any token sent with the request.",
+   "fix": "Change the address to https:// (npm config set registry https://…, or index-url / extra-index-url in pip.conf). If the registry has no HTTPS, put it behind a TLS proxy rather than installing over plain HTTP.",
+   "references": [
+    "ATTACK-T1195.001",
+    "ATTACK-T1557"
+   ],
+   "collector": "dev_tool_config",
+   "condition": "kind in [\"npm\", \"pip\"] and http_registry == true",
+   "source": "rules/developer-tools/BLWK-DEV-007.yaml",
+   "group": "supply-chain",
+   "slug": "blwk-dev-007"
+  },
+  {
+   "id": "BLWK-DEV-008",
+   "title": "pip skips certificate checks for a package index ({{ dev_tool_config.path }})",
+   "category": "developer-tools",
+   "severity": "medium",
+   "explain": "{{ dev_tool_config.path }} lists {{ dev_tool_config.detail }} as a trusted-host, which tells pip to accept any certificate — or none — from it. A spoofed or intercepted index can then serve packages that run code when installed.",
+   "fix": "Remove the trusted-host line and give pip the index's CA instead: pip config set global.cert /path/to/ca.pem",
+   "references": [
+    "ATTACK-T1195.001",
+    "ATTACK-T1557"
+   ],
+   "collector": "dev_tool_config",
+   "condition": "kind == \"pip\" and trusted_host == true",
+   "source": "rules/developer-tools/BLWK-DEV-008.yaml",
+   "group": "supply-chain",
+   "slug": "blwk-dev-008"
+  },
+  {
+   "id": "BLWK-DEV-009",
+   "title": "Docker's API is open to every program on this computer ({{ dev_tool_config.path }})",
+   "category": "developer-tools",
+   "severity": "high",
+   "explain": "{{ dev_tool_config.path }} opens the Docker API on {{ dev_tool_config.detail }} with no authentication. Any program running as any user on this computer — a malicious package's install script, another account — can start a container with this machine's disk mounted and become root here. (An API reachable from the network is reported separately, from the open port.)",
+   "fix": "Remove the tcp:// entry from daemon.json (or untick 'Expose daemon on tcp://localhost:2375 without TLS' in Docker Desktop → Settings → General) and use the default socket. For remote access use ssh://user@host as the Docker host, or TLS with client certificates on port 2376.",
+   "references": [
+    "ATTACK-T1610",
+    "ATTACK-T1133"
+   ],
+   "collector": "dev_tool_config",
+   "condition": "kind == \"docker\" and docker_api_unprotected == true",
+   "source": "rules/developer-tools/BLWK-DEV-009.yaml",
+   "group": "network",
+   "slug": "blwk-dev-009"
+  },
+  {
    "id": "BLWK-FIM-001",
    "title": "File modified since baseline: {{ file_integrity.path }}",
    "category": "file-integrity",
@@ -237,11 +388,11 @@
    "title": "Not covered by the file-integrity baseline: {{ file_integrity.path }}",
    "category": "file-integrity",
    "severity": "info",
-   "explain": "{{ file_integrity.path }} is present but has no recorded baseline hash, so Bulwark can tell that it exists but not whether it has been tampered with. This fires per-file, on purpose: the previous version keyed on whether a baseline existed *at all*, which meant that once you had baselined anything, a critical file you had never actually recorded — including one added to the watch list later — read as \"verified clean\" rather than \"never checked\". A file nobody ever baselined is not a file known to be good.",
+   "explain": "{{ file_integrity.path }} is present but has no recorded baseline hash, so Bulwark can tell that it exists but not whether it has been tampered with. This fires per-file, on purpose: the previous version keyed on whether a baseline existed *at all*, which meant that once you had baselined anything, a critical file you had never actually recorded — including one added to the watch list later — read as \"verified clean\" rather than \"never checked\". A file nobody ever baselined is not a file known to be good. (With no baseline recorded at all, that single fact is reported once, as BLWK-FIM-009, instead of once per watched file.)",
    "fix": "Run 'bulwarkctl fim baseline' now, while you trust this host, to record a known-good hash for this file (add '--privileged' to also cover /etc/shadow and /etc/sudoers).",
    "references": [],
    "collector": "file_integrity",
-   "condition": "in_baseline == false and currently_present == true and unreadable == false",
+   "condition": "kind == \"file\" and baseline_exists == true and in_baseline == false and currently_present == true and unreadable == false",
    "source": "rules/file-integrity/BLWK-FIM-003.yaml",
    "group": "intrusion",
    "slug": "blwk-fim-003"
@@ -291,7 +442,7 @@
     "ATTACK-T1548.003"
    ],
    "collector": "file_integrity_privileged",
-   "condition": "in_baseline == false and currently_present == true and unreadable == false",
+   "condition": "kind == \"file\" and baseline_exists == true and in_baseline == false and currently_present == true and unreadable == false",
    "source": "rules/file-integrity/BLWK-FIM-006.yaml",
    "group": "intrusion",
    "slug": "blwk-fim-006"
@@ -323,6 +474,20 @@
    "source": "rules/file-integrity/BLWK-FIM-008.yaml",
    "group": "intrusion",
    "slug": "blwk-fim-008"
+  },
+  {
+   "id": "BLWK-FIM-009",
+   "title": "No file-integrity baseline recorded yet",
+   "category": "file-integrity",
+   "severity": "info",
+   "explain": "Bulwark watches {{ file_integrity.watched }} critical files (sshd_config, PAM, sudo, su, login settings and similar) for tampering, but no known-good baseline has been recorded on this machine, so it can see the files exist but not whether any of them has been changed.",
+   "fix": "Run 'bulwarkctl fim baseline' now, while you trust this machine, to record known-good hashes (add '--privileged' with sudo to also cover /etc/shadow and /etc/sudoers). In the desktop app: File changes → Record baseline.",
+   "references": [],
+   "collector": "file_integrity",
+   "condition": "kind == \"summary\" and baseline_exists == false",
+   "source": "rules/file-integrity/BLWK-FIM-009.yaml",
+   "group": "intrusion",
+   "slug": "blwk-fim-009"
   },
   {
    "id": "BLWK-FS-001",
@@ -763,6 +928,104 @@
    "slug": "blwk-log-003"
   },
   {
+   "id": "BLWK-MAC-001",
+   "title": "FileVault disk encryption is off",
+   "category": "macos-hardening",
+   "severity": "high",
+   "explain": "The startup disk isn't encrypted. Anyone who gets hold of this Mac — lost bag, repair shop, theft — can read every file on it, including SSH keys, browser sessions and cloud credentials, without knowing your password.",
+   "fix": "Turn it on in System Settings → Privacy & Security → FileVault (or 'sudo fdesetup enable'). Keep the recovery key in your password manager, not on the Mac.",
+   "references": [
+    "ATTACK-T1005",
+    "ATTACK-T1552.001"
+   ],
+   "collector": "macos_security",
+   "condition": "filevault_on_known == true and filevault_on == false",
+   "source": "rules/macos-hardening/BLWK-MAC-001.yaml",
+   "group": "hardening",
+   "slug": "blwk-mac-001"
+  },
+  {
+   "id": "BLWK-MAC-002",
+   "title": "Gatekeeper is disabled",
+   "category": "macos-hardening",
+   "severity": "high",
+   "explain": "Gatekeeper checks that apps are signed and notarized before they run. With it off, a downloaded app — or one a malicious installer drops — runs without that check.",
+   "fix": "Run 'sudo spctl --master-enable', then confirm with 'spctl --status' (it should print 'assessments enabled').",
+   "references": [
+    "ATTACK-T1553.001"
+   ],
+   "collector": "macos_security",
+   "condition": "gatekeeper_on_known == true and gatekeeper_on == false",
+   "source": "rules/macos-hardening/BLWK-MAC-002.yaml",
+   "group": "hardening",
+   "slug": "blwk-mac-002"
+  },
+  {
+   "id": "BLWK-MAC-003",
+   "title": "System Integrity Protection is disabled",
+   "category": "macos-hardening",
+   "severity": "high",
+   "explain": "System Integrity Protection stops even root from modifying macOS system files, kernel extensions and protected processes. With it off, malware that gets root can tamper with the operating system itself and hide there.",
+   "fix": "Restart into Recovery (hold the power button on Apple silicon), open Utilities → Terminal, run 'csrutil enable', and restart. 'csrutil status' should then print 'enabled'.",
+   "references": [
+    "ATTACK-T1562.001",
+    "ATTACK-T1014"
+   ],
+   "collector": "macos_security",
+   "condition": "sip_on_known == true and sip_on == false",
+   "source": "rules/macos-hardening/BLWK-MAC-003.yaml",
+   "group": "hardening",
+   "slug": "blwk-mac-003"
+  },
+  {
+   "id": "BLWK-MAC-004",
+   "title": "The macOS firewall is off",
+   "category": "macos-hardening",
+   "severity": "medium",
+   "explain": "The application firewall is off, so any service on this Mac that listens on the network can be reached from whatever network you're on.",
+   "fix": "Turn it on in System Settings → Network → Firewall (or 'sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate on'). Stealth mode is worth enabling too.",
+   "references": [
+    "ATTACK-T1133"
+   ],
+   "collector": "macos_security",
+   "condition": "firewall_on_known == true and firewall_on == false",
+   "source": "rules/macos-hardening/BLWK-MAC-004.yaml",
+   "group": "hardening",
+   "slug": "blwk-mac-004"
+  },
+  {
+   "id": "BLWK-MAC-005",
+   "title": "Automatic security updates are off",
+   "category": "macos-hardening",
+   "severity": "medium",
+   "explain": "macOS can install security responses and system data files (XProtect malware signatures among them) automatically. That's turned off, so protection against newly found malware arrives only when you update by hand.",
+   "fix": "In System Settings → General → Software Update → Automatic Updates, turn on 'Install Security Responses and system files'.",
+   "references": [
+    "ATTACK-T1562.001"
+   ],
+   "collector": "macos_security",
+   "condition": "security_updates_on_known == true and security_updates_on == false",
+   "source": "rules/macos-hardening/BLWK-MAC-005.yaml",
+   "group": "hardening",
+   "slug": "blwk-mac-005"
+  },
+  {
+   "id": "BLWK-MAC-006",
+   "title": "The guest account is enabled",
+   "category": "macos-hardening",
+   "severity": "low",
+   "explain": "Anyone can log in to this Mac as a guest without a password. Guest sessions are limited, but they still give a stranger a foothold on the machine.",
+   "fix": "Turn it off in System Settings → Users & Groups → Guest User.",
+   "references": [
+    "ATTACK-T1078.001"
+   ],
+   "collector": "macos_security",
+   "condition": "guest_enabled_known == true and guest_enabled == true",
+   "source": "rules/macos-hardening/BLWK-MAC-006.yaml",
+   "group": "hardening",
+   "slug": "blwk-mac-006"
+  },
+  {
    "id": "BLWK-NET-001",
    "title": "A VNC/remote-desktop port is listening",
    "category": "network-egress",
@@ -796,7 +1059,7 @@
   },
   {
    "id": "BLWK-NET-003",
-   "title": "A database or development service is open to the network",
+   "title": "A database or development service is open to the network (port {{ listening_ports.port }})",
    "category": "network-egress",
    "severity": "high",
    "explain": "A database or development service is reachable from your network on port {{ listening_ports.port }} (listening on {{ listening_ports.listen_address }}). On home, office or café Wi-Fi, anyone nearby can connect to it, and development services often run without a password. Docker opens ports to the whole network by default.",
@@ -806,7 +1069,7 @@
     "ATTACK-T1210"
    ],
    "collector": "listening_ports",
-   "condition": "listen_address in [\"0.0.0.0\", \"::\"] and port in [1025, 2375, 3306, 5432, 5672, 6379, 8025, 9000, 9001, 9200, 10050, 10051, 11211, 15672, 27017]",
+   "condition": "listen_address in [\"0.0.0.0\", \"::\"] and port in [1025, 2375, 3306, 5432, 5672, 6379, 8025, 9000, 9001, 9200, 11211, 15672, 27017] and inbound_firewalled == false",
    "source": "rules/network-egress/BLWK-NET-003.yaml",
    "group": "network",
    "slug": "blwk-net-003"
@@ -827,6 +1090,22 @@
    "source": "rules/network-egress/BLWK-NET-004.yaml",
    "group": "network",
    "slug": "blwk-net-004"
+  },
+  {
+   "id": "BLWK-NET-005",
+   "title": "A database or development service listens on all interfaces (port {{ listening_ports.port }}, behind the firewall)",
+   "category": "network-egress",
+   "severity": "medium",
+   "explain": "A database or development service listens on every network interface (port {{ listening_ports.port }}, on {{ listening_ports.listen_address }}). The host firewall denies incoming connections by default, so it isn't directly reachable — but its safety now depends on that firewall. Ports published by Docker bypass ufw unless DOCKER-USER rules restrict them, and a single \"allow\" rule added later reopens it.",
+   "fix": "Bind it to this computer only, so it doesn't depend on the firewall.\n1. For Docker Compose, change the port line from '{{ listening_ports.port }}:{{ listening_ports.port }}' to '127.0.0.1:{{ listening_ports.port }}:{{ listening_ports.port }}' and restart the stack.\n2. For a service installed directly, set its listen or bind address to 127.0.0.1.\n3. If it must stay reachable from other machines, restrict it in DOCKER-USER (for Docker) or with a ufw rule scoped to your private network (e.g. your tailnet), and accept the risk here.",
+   "references": [
+    "ATTACK-T1133"
+   ],
+   "collector": "listening_ports",
+   "condition": "listen_address in [\"0.0.0.0\", \"::\"] and port in [1025, 2375, 3306, 5432, 5672, 6379, 8025, 9000, 9001, 9200, 11211, 15672, 27017] and inbound_firewalled == true",
+   "source": "rules/network-egress/BLWK-NET-005.yaml",
+   "group": "network",
+   "slug": "blwk-net-005"
   },
   {
    "id": "BLWK-PERSIST-001",
@@ -864,11 +1143,11 @@
   },
   {
    "id": "BLWK-PERSIST-003",
-   "title": "Unexpected LaunchAgent/LaunchDaemon found",
+   "title": "Suspicious LaunchAgent/LaunchDaemon: {{ launchd_persistence.label }}",
    "category": "persistence",
    "severity": "high",
-   "explain": "The LaunchAgent/LaunchDaemon \"{{ launchd_persistence.label }}\" runs on every login/boot and isn't one this host's baseline recognizes — macOS's equivalent of a rogue systemd unit.",
-   "fix": "Review the plist under ~/Library/LaunchAgents or /Library/Launch{Agents,Daemons} and remove it if you didn't create it.",
+   "explain": "The launch job \"{{ launchd_persistence.label }}\" ({{ launchd_persistence.path }}) starts on every login or boot, and {{ launchd_persistence.reason }} — the shape macOS persistence malware takes rather than the shape installed software does. It runs: {{ launchd_persistence.program }}.",
+   "fix": "If you didn't create it, unload it with `launchctl bootout gui/$(id -u) {{ launchd_persistence.path }}` (or `sudo launchctl bootout system {{ launchd_persistence.path }}` for /Library/LaunchDaemons), move the plist and the program it runs aside, and check what else that program touched.",
    "references": [
     "ATTACK-T1543.001"
    ],
@@ -1187,7 +1466,7 @@
   },
   {
    "id": "BLWK-SSH-012",
-   "title": "SSH private key is not passphrase-protected",
+   "title": "SSH private key is not passphrase-protected: {{ ssh_private_keys.path }}",
    "category": "ssh-remote-access",
    "severity": "high",
    "explain": "Your SSH key {{ ssh_private_keys.path }} has no passphrase. It works like a password that is written down: anyone or any program that copies this one file can log in to every server and Git host that trusts it, with nothing else needed.",
@@ -1220,6 +1499,166 @@
    "source": "rules/ssh-remote-access/BLWK-SSH-013.yaml",
    "group": "secrets",
    "slug": "blwk-ssh-013"
+  },
+  {
+   "id": "BLWK-WIN-001",
+   "title": "Microsoft Defender real-time protection is off",
+   "category": "windows-hardening",
+   "severity": "high",
+   "explain": "Real-time protection is what stops malware as it's downloaded or run. With it off, Defender only finds threats when a scan happens to run.",
+   "fix": "Turn it on in Windows Security → Virus & threat protection → Manage settings → Real-time protection. If it keeps switching off, check for another antivirus or a policy disabling it.",
+   "references": [
+    "ATTACK-T1562.001"
+   ],
+   "collector": "windows_security",
+   "condition": "defender_realtime_known == true and defender_realtime == false",
+   "source": "rules/windows-hardening/BLWK-WIN-001.yaml",
+   "group": "hardening",
+   "slug": "blwk-win-001"
+  },
+  {
+   "id": "BLWK-WIN-002",
+   "title": "Microsoft Defender signatures are out of date",
+   "category": "windows-hardening",
+   "severity": "medium",
+   "explain": "Defender's malware signatures are {{ windows_security.defender_signature_age }} days old, so recently discovered threats aren't recognised.",
+   "fix": "Run 'Update-MpSignature' in PowerShell (or Windows Security → Virus & threat protection → Protection updates), and check that Windows Update can reach the internet.",
+   "references": [
+    "ATTACK-T1562.001"
+   ],
+   "collector": "windows_security",
+   "condition": "defender_signature_age_known == true and defender_signature_age > 7",
+   "source": "rules/windows-hardening/BLWK-WIN-002.yaml",
+   "group": "hardening",
+   "slug": "blwk-win-002"
+  },
+  {
+   "id": "BLWK-WIN-003",
+   "title": "Windows Firewall is off for a network profile",
+   "category": "windows-hardening",
+   "severity": "high",
+   "explain": "The firewall is off for: {{ windows_security.firewall_off_profiles }}. On a network of that type, every listening service on this machine can be reached.",
+   "fix": "Turn it back on in Windows Security → Firewall & network protection, or run 'Set-NetFirewallProfile -All -Enabled True' in an elevated PowerShell.",
+   "references": [
+    "ATTACK-T1562.004"
+   ],
+   "collector": "windows_security",
+   "condition": "firewall_all_on_known == true and firewall_all_on == false",
+   "source": "rules/windows-hardening/BLWK-WIN-003.yaml",
+   "group": "hardening",
+   "slug": "blwk-win-003"
+  },
+  {
+   "id": "BLWK-WIN-004",
+   "title": "BitLocker is not protecting the system drive",
+   "category": "windows-hardening",
+   "severity": "high",
+   "explain": "The system drive isn't encrypted, so anyone with physical access to the disk can read every file on it — including saved credentials and SSH keys.",
+   "fix": "Turn on BitLocker (Control Panel → BitLocker Drive Encryption, or 'manage-bde -on C:' elevated) and store the recovery key somewhere other than this machine.",
+   "references": [
+    "ATTACK-T1005"
+   ],
+   "collector": "windows_security",
+   "condition": "bitlocker_on_known == true and bitlocker_on == false",
+   "source": "rules/windows-hardening/BLWK-WIN-004.yaml",
+   "group": "hardening",
+   "slug": "blwk-win-004"
+  },
+  {
+   "id": "BLWK-WIN-005",
+   "title": "User Account Control is disabled",
+   "category": "windows-hardening",
+   "severity": "high",
+   "explain": "With UAC off, every program an administrator runs gets full administrator rights silently — a malicious download included.",
+   "fix": "Set EnableLUA to 1 under HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System (or restore the default in Control Panel → User Account Control Settings) and restart.",
+   "references": [
+    "ATTACK-T1548.002"
+   ],
+   "collector": "windows_security",
+   "condition": "uac_enabled_known == true and uac_enabled == false",
+   "source": "rules/windows-hardening/BLWK-WIN-005.yaml",
+   "group": "hardening",
+   "slug": "blwk-win-005"
+  },
+  {
+   "id": "BLWK-WIN-006",
+   "title": "Remote Desktop is on without Network Level Authentication",
+   "category": "windows-hardening",
+   "severity": "high",
+   "explain": "Remote Desktop accepts connections, and without Network Level Authentication anyone who can reach it gets a login screen — and the pre-authentication attack surface — before proving who they are.",
+   "fix": "Turn on 'Require devices to use Network Level Authentication' in Settings → System → Remote Desktop, or turn Remote Desktop off if you don't use it. Limit it to your VPN or private network.",
+   "references": [
+    "ATTACK-T1021.001"
+   ],
+   "collector": "windows_security",
+   "condition": "rdp_enabled_known == true and rdp_enabled == true and rdp_nla_known == true and rdp_nla == false",
+   "source": "rules/windows-hardening/BLWK-WIN-006.yaml",
+   "group": "hardening",
+   "slug": "blwk-win-006"
+  },
+  {
+   "id": "BLWK-WIN-007",
+   "title": "SMBv1 is enabled",
+   "category": "windows-hardening",
+   "severity": "high",
+   "explain": "SMBv1 is the obsolete file-sharing protocol behind WannaCry and NotPetya. Nothing modern needs it.",
+   "fix": "Run 'Set-SmbServerConfiguration -EnableSMB1Protocol $false' in an elevated PowerShell, or remove the 'SMB 1.0/CIFS File Sharing Support' Windows feature.",
+   "references": [
+    "ATTACK-T1210"
+   ],
+   "collector": "windows_security",
+   "condition": "smb1_enabled_known == true and smb1_enabled == true",
+   "source": "rules/windows-hardening/BLWK-WIN-007.yaml",
+   "group": "hardening",
+   "slug": "blwk-win-007"
+  },
+  {
+   "id": "BLWK-WIN-008",
+   "title": "The Windows Guest account is enabled",
+   "category": "windows-hardening",
+   "severity": "medium",
+   "explain": "The built-in Guest account is switched on. Anyone who can reach this computer, at the keyboard or over the network, can sign in without a password of their own and reach shared folders and printers.",
+   "fix": "In an administrator PowerShell run: Get-LocalUser | Where-Object { $_.SID -like '*-501' } | Disable-LocalUser. Or open Computer Management → Local Users and Groups → Users → Guest and tick 'Account is disabled'.",
+   "references": [
+    "ATTACK-T1078.001"
+   ],
+   "collector": "windows_security",
+   "condition": "guest_enabled_known == true and guest_enabled == true",
+   "source": "rules/windows-hardening/BLWK-WIN-008.yaml",
+   "group": "hardening",
+   "slug": "blwk-win-008"
+  },
+  {
+   "id": "BLWK-WIN-009",
+   "title": "Automatic sign-in keeps a password in the registry",
+   "category": "windows-hardening",
+   "severity": "high",
+   "explain": "Windows signs in by itself using a password stored in plain text in the registry (Winlogon's DefaultPassword). Anyone with administrator access, any malware running as administrator, and anyone with the disk can read that account's password.",
+   "fix": "Turn off automatic sign-in (run 'netplwiz' and tick 'Users must enter a user name and password', or set AutoAdminLogon to 0), then delete the DefaultPassword value under HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon and change that account's password.",
+   "references": [
+    "ATTACK-T1552.002"
+   ],
+   "collector": "windows_security",
+   "condition": "autologon_password_stored_known == true and autologon_password_stored == true",
+   "source": "rules/windows-hardening/BLWK-WIN-009.yaml",
+   "group": "hardening",
+   "slug": "blwk-win-009"
+  },
+  {
+   "id": "BLWK-WIN-010",
+   "title": "Windows hasn't installed an update in {{ windows_security.last_update_days }} days",
+   "category": "windows-hardening",
+   "severity": "medium",
+   "explain": "The newest installed Windows update is {{ windows_security.last_update_days }} days old. Microsoft releases security fixes every month, so this computer is likely missing fixes for vulnerabilities that are already public.",
+   "fix": "Open Settings → Windows Update → Check for updates and install what's offered. If updates keep failing or are paused, check 'Pause updates' and any update policy set by your organisation.",
+   "references": [
+    "ATTACK-T1190"
+   ],
+   "collector": "windows_security",
+   "condition": "last_update_days_known == true and last_update_days > 60",
+   "source": "rules/windows-hardening/BLWK-WIN-010.yaml",
+   "group": "hardening",
+   "slug": "blwk-win-010"
   },
   {
    "id": "BLWK-AI-001",
