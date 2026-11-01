@@ -156,6 +156,15 @@ export function CategoryFindings({
  * the file (without a line number, which moves whenever the file is edited), the listening port,
  * or the title — so an ignore made here matches the finding the backend filters.
  */
+/** The question asked before ignoring one finding. A finding about the whole machine has no
+ *  place but its own title, which made "Why ignore it at SSH password authentication is
+ *  enabled?"; a path or port reads "at", an identity (a unit, a module) reads "for". */
+function ignorePrompt(place: string, title?: string): string {
+  if (place === title) return "Why ignore this one?";
+  const located = /^(\/|~|[A-Za-z]:\\|port )/.test(place);
+  return located ? `Why ignore it at ${place}?` : `Why ignore it for ${place}?`;
+}
+
 export function ignoreKeyOf(f: Finding): string {
   const c = f.context ?? {};
   for (const key of ["path", "file"]) {
@@ -223,7 +232,7 @@ function IssueTypeGroup({
   // Steps that differ per place only make sense next to each place, so start with them showing.
   const [details, setDetails] = useState(!sameFix);
   // What the inline reason box will hide: the whole issue type, or one place.
-  const [ignoring, setIgnoring] = useState<false | { place: string | null }>(false);
+  const [ignoring, setIgnoring] = useState<false | { place: string | null; title?: string }>(false);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const first = group.items[0];
@@ -234,7 +243,7 @@ function IssueTypeGroup({
         onIgnore={actions.onIgnoreType ? () => setIgnoring({ place: null }) : undefined}
         onIgnoreOne={
           actions.onIgnorePlace && group.items.length === 1
-            ? () => setIgnoring({ place: ignoreKeyOf(group.items[0]) })
+            ? () => setIgnoring({ place: ignoreKeyOf(group.items[0]), title: group.items[0].title })
             : undefined
         }
         onRecheck={actions.onRecheck}
@@ -282,7 +291,7 @@ function IssueTypeGroup({
           {actions?.onIgnorePlace && count > 1 && (
             <button
               type="button"
-              onClick={() => setIgnoring({ place: ignoreKeyOf(f) })}
+              onClick={() => setIgnoring({ place: ignoreKeyOf(f), title: f.title })}
               className="rounded text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
               title="Stop reporting this one place; the others keep being reported"
             >
@@ -351,7 +360,7 @@ function IssueTypeGroup({
             onKeyDown={(e) => e.key === "Enter" && confirmIgnore()}
             placeholder={
               ignoring && ignoring.place !== null
-                ? `Why ignore it at ${ignoring.place}?`
+                ? ignorePrompt(ignoring.place, ignoring.title)
                 : "Reason for accepting this risk…"
             }
             className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
