@@ -58,8 +58,8 @@ pub const CATALOG: &[RuleMeta] = &[
     },
     RuleMeta {
         id: "BLWK-AI-002",
-        title: "Project-supplied Claude Code hooks run shell commands automatically",
-        fix: "Remove the hooks block from the repo's .claude/settings.json; keep hooks only in your own trusted user-level settings. Review any repo you didn't author before opening it in Claude Code.",
+        title: "Project-supplied agent hooks run shell commands automatically",
+        fix: "Remove the hooks from the repository's agent config (for example the hooks block in .claude/settings.json, .cursor/hooks.json, .kiro/hooks/, or a project crushrc) and keep hooks only in your own user-level settings. Review any repository you didn't write before opening it with an AI agent.",
         severity: Critical,
         references: &["CVE-2025-59536", "ATTACK-T1546"],
     },
@@ -87,14 +87,14 @@ pub const CATALOG: &[RuleMeta] = &[
     RuleMeta {
         id: "BLWK-AI-006",
         title: "An agent permission allowlist permits arbitrary command execution",
-        fix: "Scope the allowlist: replace Bash(*) / Bash(curl:*) / a bare \"*\" with the specific, read-only commands the agent actually needs. A wildcard exec permission is a prompt-injection's path straight to your shell.",
+        fix: "Scope the allowlist: replace Bash(*) / Shell(*) / Bash(curl:*) / a bare \"*\" / a blanket \"bash\": \"allow\" with the specific, read-only commands the agent actually needs. A wildcard exec permission is a prompt-injection's path straight to your shell.",
         severity: High,
         references: &["ATTACK-T1059"],
     },
     RuleMeta {
         id: "BLWK-AI-007",
         title: "An agent is configured to bypass all permission prompts",
-        fix: "Remove defaultMode: \"bypassPermissions\" (and never run with --dangerously-skip-permissions outside a throwaway container). It disables every guardrail between the model and your machine.",
+        fix: "Turn off the setting named in this finding (for example Claude Code's defaultMode: \"bypassPermissions\", Zed's tool_permissions default \"allow\", Goose's GOOSE_MODE: auto, OpenCode's permission: \"allow\", Qwen Code's approvalMode \"yolo\", Cursor CLI approvalMode \"unrestricted\"), and only run an agent without approvals inside a throwaway container or VM. It removes every guardrail between the model and your machine.",
         severity: High,
         references: &["ATTACK-T1059"],
     },
@@ -189,6 +189,27 @@ pub const CATALOG: &[RuleMeta] = &[
         severity: High,
         references: &["ATTACK-T1083"],
     },
+    RuleMeta {
+        id: "BLWK-AI-021",
+        title: "An AI agent's command sandbox is turned off",
+        fix: "Turn the agent's sandbox back on (for example remove sandbox_mode = \"danger-full-access\" from ~/.codex/config.toml, or sandbox.mode \"disabled\" from the Cursor CLI config). If one command genuinely needs to escape it, allow that command alone rather than switching the sandbox off for everything.",
+        severity: High,
+        references: &["ATTACK-T1059", "ATTACK-T1611"],
+    },
+    RuleMeta {
+        id: "BLWK-AI-022",
+        title: "The account that runs AI agents can become root without a password",
+        fix: "Take your everyday account out of the docker (or lxd/incus) group and use rootless Docker or Podman instead, or run your agents under a separate account or in a container or VM. Any member of these groups can start a container that mounts / and gain root, so a prompt-injected agent can too.",
+        severity: High,
+        references: &["ATTACK-T1611", "ATTACK-T1068"],
+    },
+    RuleMeta {
+        id: "BLWK-AI-023",
+        title: "An MCP server's tools run without asking for approval",
+        fix: "Remove trust: true, or the \"*\" entry in alwaysAllow / autoApprove, from this MCP server's config so each tool call is shown to you first. Approve specific, read-only tools by name if the prompts are too frequent.",
+        severity: Medium,
+        references: &["ATTACK-T1059"],
+    },
 ];
 
 /// Looks up a rule's static metadata. Panics only on a programming error (a detector emitting a
@@ -208,7 +229,7 @@ fn line_of(text: &str, byte_offset: usize) -> usize {
 /// Code uses for `settings.json`/`tasks.json`). Strict JSON — Claude's `settings.json`, a
 /// `.mcp.json` — parses on the first try; only if that fails do we strip comments/commas and
 /// retry, so a well-formed file is never mangled by the sanitizer.
-fn parse_jsonish(content: &str) -> Option<serde_json::Value> {
+pub(super) fn parse_jsonish(content: &str) -> Option<serde_json::Value> {
     if let Ok(v) = serde_json::from_str(content) {
         return Some(v);
     }
@@ -282,7 +303,7 @@ fn strip_jsonc(input: &str) -> String {
     cleaned
 }
 
-fn evidence_line(content: &str, line: usize) -> String {
+pub(super) fn evidence_line(content: &str, line: usize) -> String {
     let raw: String = content
         .lines()
         .nth(line.saturating_sub(1))
@@ -295,7 +316,7 @@ fn evidence_line(content: &str, line: usize) -> String {
     super::secrets::redact_text(&raw).0
 }
 
-fn find_key_line(content: &str, needle: &str) -> Option<usize> {
+pub(super) fn find_key_line(content: &str, needle: &str) -> Option<usize> {
     content
         .lines()
         .position(|l| l.contains(needle))
@@ -546,24 +567,38 @@ pub fn detect_claude_settings(content: &str, is_project: bool) -> Vec<Detection>
     out
 }
 
-fn is_dangerous_permission(entry: &str) -> bool {
+pub(super) fn is_dangerous_permission(entry: &str) -> bool {
     let e = entry.trim();
-    if e == "*" || e == "Bash(*)" || e == "Bash" {
+    if matches!(
+        e,
+        "*" | "Bash(*)" | "Bash" | "Shell(*)" | "Shell" | "run_shell_command" | "bash"
+    ) {
         return true;
     }
     // A network/exec command with a wildcard argument: Bash(curl:*), Bash(sh:*), Bash(eval:*)…
     let lower = e.to_ascii_lowercase();
     const EXEC_CMDS: &[&str] = &[
-        "curl", "wget", "nc", "bash", "sh", "eval", "python", "node", "rm",
+        "curl", "wget", "nc", "bash", "sh", "zsh", "eval", "python", "python3", "node", "perl",
+        "ruby", "rm",
     ];
+    // Claude Code / Qwen `Bash(cmd:*)`: an exact command unless it carries a wildcard.
     if let Some(inner) = lower
         .strip_prefix("bash(")
         .and_then(|s| s.strip_suffix(")"))
     {
         let cmd = inner.split(':').next().unwrap_or("");
-        if EXEC_CMDS.contains(&cmd) && inner.contains('*') {
-            return true;
-        }
+        return EXEC_CMDS.contains(&cmd) && inner.contains('*');
+    }
+    // Cursor CLI `Shell(cmd)` and Gemini/Qwen `run_shell_command(cmd)` match by command *prefix*:
+    // naming an interpreter or a downloader admits any arguments (`bash -c '<anything>'`), and a
+    // wildcard admits any command at all.
+    if let Some(inner) = ["shell(", "run_shell_command("]
+        .iter()
+        .find_map(|p| lower.strip_prefix(p))
+        .and_then(|s| s.strip_suffix(")"))
+    {
+        let cmd = inner.split([' ', ':']).next().unwrap_or("").trim();
+        return inner.contains('*') || EXEC_CMDS.contains(&cmd);
     }
     false
 }
@@ -653,57 +688,222 @@ fn is_remote_url(url: &str) -> bool {
 }
 
 pub fn detect_mcp(content: &str) -> Vec<Detection> {
-    let mut out = Vec::new();
     let Some(v) = parse_jsonish(content) else {
-        // Even if the JSON won't parse, a raw mcp-remote / unpinned-npx mention is worth
-        // surfacing rather than silently missing.
-        if content.contains("mcp-remote") {
-            out.push(Detection {
-                rule_id: "BLWK-AI-004",
-                explanation: "This MCP config references mcp-remote, which had a critical command-injection flaw in versions ≤ 0.1.15 (CVE-2025-6514).".to_string(),
-                line: find_key_line(content, "mcp-remote"),
-                evidence: "mcp-remote".to_string(),
-            });
-        }
-        return out;
+        return mcp_unparsed(content);
     };
+    detect_mcp_value(content, &v)
+}
 
-    // MCP servers live under different keys across tools: `mcpServers` (Claude, Cursor),
-    // `servers` (VS Code), `mcp_servers` (Codex-style). And `~/.claude.json` nests them a level
-    // deeper, one block per project under `projects.<path>.mcpServers` — which the old top-level-
-    // only lookup never saw, so a machine's real per-project MCP servers went unscanned.
-    let mut server_objs: Vec<&serde_json::Map<String, serde_json::Value>> = Vec::new();
-    let top = v
-        .get("mcpServers")
-        .or_else(|| v.get("servers"))
-        .or_else(|| v.get("mcp_servers"))
-        .and_then(|s| s.as_object());
-    if let Some(s) = top {
-        server_objs.push(s);
+/// MCP detection for a YAML manifest — Goose's `config.yaml` (`extensions:`) and Continue's
+/// `config.yaml` / `.continue/mcpServers/*.yaml` (`mcpServers:` as a list). YAML is converted to the
+/// same JSON value model so every tool's servers go through one set of checks.
+pub fn detect_mcp_yaml(content: &str) -> Vec<Detection> {
+    match serde_yaml::from_str::<serde_json::Value>(content) {
+        Ok(v) => detect_mcp_value(content, &v),
+        Err(_) => mcp_unparsed(content),
     }
+}
+
+/// MCP detection for a TOML manifest — Codex's `config.toml` (`[mcp_servers.<name>]`).
+pub fn detect_mcp_toml(content: &str) -> Vec<Detection> {
+    match toml::from_str::<toml::Value>(content)
+        .ok()
+        .and_then(|t| serde_json::to_value(t).ok())
+    {
+        Some(v) => detect_mcp_value(content, &v),
+        None => mcp_unparsed(content),
+    }
+}
+
+/// Even if a manifest won't parse, a raw mcp-remote mention is worth surfacing rather than silently
+/// missing.
+fn mcp_unparsed(content: &str) -> Vec<Detection> {
+    if content.contains("mcp-remote") {
+        return vec![Detection {
+            rule_id: "BLWK-AI-004",
+            explanation: "This MCP config references mcp-remote, which had a critical command-injection flaw in versions ≤ 0.1.15 (CVE-2025-6514).".to_string(),
+            line: find_key_line(content, "mcp-remote"),
+            evidence: "mcp-remote".to_string(),
+        }];
+    }
+    Vec::new()
+}
+
+/// One MCP server definition, normalized across every agent's config dialect.
+#[derive(Debug, Default)]
+struct McpServer {
+    name: String,
+    command: String,
+    args: Vec<String>,
+    url: Option<String>,
+    /// Header names, plus any inline-credential field the dialect has (Codex's `bearer_token`).
+    auth_keys: Vec<String>,
+    /// Why every tool of this server runs without approval, if it does: Gemini/Qwen `trust: true`,
+    /// or a `"*"` in Kiro's `autoApprove` / Cline's and Roo's `alwaysAllow`.
+    auto_trust: Option<&'static str>,
+    /// Switched off in config (`disabled: true` — Claude Code, Cline/Roo, Kiro, Crush; `enabled:
+    /// false` — Goose, OpenCode). It never launches, so launch-risk checks don't apply; an inline
+    /// credential in its config is still exposed at rest and is still reported.
+    disabled: bool,
+}
+
+/// The keys different agents keep their MCP server set under. Each value is a map of
+/// `name -> definition`, or (Continue) a list of definitions carrying a `name`.
+///
+/// `mcpServers` (Claude Code, Cursor, Gemini CLI + extensions, Cline/Roo/Kilo, Windsurf, Kiro, Amazon
+/// Q, Junie, LM Studio, Claude Desktop), `servers` (VS Code / Copilot), `mcp_servers` (Codex),
+/// `context_servers` (Zed), `mcp` (OpenCode, Crush), `amp.mcpServers` (Amp, a flat dotted key),
+/// `extensions` (Goose).
+const MCP_SERVER_KEYS: &[&str] = &[
+    "mcpServers",
+    "servers",
+    "mcp_servers",
+    "context_servers",
+    "mcp",
+    "amp.mcpServers",
+    "extensions",
+];
+
+fn json_str_list(v: Option<&serde_json::Value>) -> Vec<String> {
+    v.and_then(|a| a.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Normalizes one server definition. Returns `None` for anything that is not a server (a Goose
+/// `builtin` extension, a stray scalar under a shared key like `mcp`).
+fn normalize_server(name: &str, def: &serde_json::Value) -> Option<McpServer> {
+    let obj = def.as_object()?;
+    if obj.get("type").and_then(|t| t.as_str()) == Some("builtin") {
+        return None; // Goose's built-in extensions run in-process, no external command.
+    }
+    let mut s = McpServer {
+        name: obj
+            .get("name")
+            .and_then(|n| n.as_str())
+            .unwrap_or(name)
+            .to_string(),
+        ..Default::default()
+    };
+    // The launch command comes in three shapes: a string + `args` (most tools), an array whose
+    // head is the executable (OpenCode), or `{path, args}` (older Zed). Goose spells it `cmd`.
+    match obj.get("command").or_else(|| obj.get("cmd")) {
+        Some(serde_json::Value::String(c)) => {
+            s.command = c.clone();
+            s.args = json_str_list(obj.get("args"));
+        }
+        Some(serde_json::Value::Array(parts)) => {
+            let mut parts = parts.iter().filter_map(|x| x.as_str().map(str::to_string));
+            s.command = parts.next().unwrap_or_default();
+            s.args = parts.collect();
+            s.args.extend(json_str_list(obj.get("args")));
+        }
+        Some(serde_json::Value::Object(c)) => {
+            s.command = c
+                .get("path")
+                .and_then(|p| p.as_str())
+                .unwrap_or("")
+                .to_string();
+            s.args = json_str_list(c.get("args"));
+        }
+        _ => {}
+    }
+    // Remote endpoints: `url` (most), `uri` (Goose SSE), `serverUrl` (Windsurf), `httpUrl` (Gemini).
+    s.url = ["url", "uri", "serverUrl", "httpUrl"]
+        .iter()
+        .find_map(|k| obj.get(*k).and_then(|u| u.as_str()))
+        .map(str::to_string);
+    for hk in ["headers", "http_headers"] {
+        if let Some(h) = obj.get(hk).and_then(|h| h.as_object()) {
+            s.auth_keys.extend(h.keys().cloned());
+        }
+    }
+    if obj.get("trust").and_then(|t| t.as_bool()) == Some(true) {
+        s.auto_trust = Some("trust: true");
+    } else if json_str_list(obj.get("autoApprove"))
+        .iter()
+        .any(|t| t == "*")
+    {
+        s.auto_trust = Some("autoApprove: [\"*\"]");
+    } else if json_str_list(obj.get("alwaysAllow"))
+        .iter()
+        .any(|t| t == "*")
+    {
+        s.auto_trust = Some("alwaysAllow: [\"*\"]");
+    }
+    s.disabled = obj.get("disabled").and_then(|d| d.as_bool()) == Some(true)
+        || obj.get("enabled").and_then(|d| d.as_bool()) == Some(false);
+    if obj.get("bearer_token").and_then(|t| t.as_str()).is_some() {
+        s.auth_keys.push("bearer_token".to_string());
+    }
+    (!s.command.is_empty() || s.url.is_some()).then_some(s)
+}
+
+fn collect_servers(set: &serde_json::Value, out: &mut Vec<McpServer>) {
+    match set {
+        serde_json::Value::Object(m) => {
+            out.extend(m.iter().filter_map(|(n, d)| normalize_server(n, d)));
+        }
+        serde_json::Value::Array(a) => {
+            out.extend(a.iter().filter_map(|d| normalize_server("", d)));
+        }
+        _ => {}
+    }
+}
+
+/// Every MCP server a parsed config declares, whatever dialect it is written in.
+fn mcp_servers_of(v: &serde_json::Value) -> Vec<McpServer> {
+    let mut out = Vec::new();
+    for key in MCP_SERVER_KEYS {
+        if let Some(set) = v.get(*key) {
+            collect_servers(set, &mut out);
+        }
+    }
+    // `~/.claude.json` nests MCP a level deeper, one block per project under
+    // `projects.<path>.mcpServers` — which a top-level-only lookup never sees.
     if let Some(projects) = v.get("projects").and_then(|p| p.as_object()) {
         for proj in projects.values() {
-            if let Some(s) = proj.get("mcpServers").and_then(|s| s.as_object()) {
-                server_objs.push(s);
+            if let Some(set) = proj.get("mcpServers") {
+                collect_servers(set, &mut out);
             }
         }
     }
-    if server_objs.is_empty() {
-        return out;
+    // VS Code's legacy in-settings form: `"mcp": {"servers": {…}}`.
+    if let Some(set) = v.get("mcp").and_then(|m| m.get("servers")) {
+        collect_servers(set, &mut out);
     }
+    // Zed nests its agent config under `agent`/`assistant` in some versions.
+    for parent in ["agent", "assistant"] {
+        if let Some(set) = v.get(parent).and_then(|a| a.get("context_servers")) {
+            collect_servers(set, &mut out);
+        }
+    }
+    out
+}
 
-    for (name, def) in server_objs.into_iter().flatten() {
-        let command = def.get("command").and_then(|c| c.as_str()).unwrap_or("");
-        let args: Vec<String> = def
-            .get("args")
-            .and_then(|a| a.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|x| x.as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default();
+pub(super) fn detect_mcp_value(content: &str, v: &serde_json::Value) -> Vec<Detection> {
+    let mut out = Vec::new();
+    for server in mcp_servers_of(v) {
+        let McpServer {
+            name,
+            command,
+            args,
+            url,
+            auth_keys,
+            auto_trust,
+            disabled,
+        } = server;
+        let name = name.as_str();
+        let command = command.as_str();
         let all = format!("{command} {}", args.join(" "));
+        let all = match url.as_deref() {
+            Some(u) if command.is_empty() => u.to_string(),
+            _ => all,
+        };
         // MCP server definitions routinely carry credentials in their args/env (a bearer token, an
         // `Authorization:` header). Evidence is persisted and printed, so mask any high-confidence
         // secret out of it first — the same invariant `evidence_line` upholds for config lines.
@@ -713,6 +913,46 @@ pub fn detect_mcp(content: &str) -> Vec<Detection> {
             .take(120)
             .collect();
         let line = find_key_line(content, name).unwrap_or(1);
+
+        // Remote (HTTP/SSE) MCP server: a `type: "http"|"sse"` + `url`, or a bare `url` field. A
+        // non-localhost endpoint sees every request the agent sends it, and an inline auth token is
+        // exposed to anything that can read the config.
+        if let Some(url) = url.as_deref() {
+            let has_inline_auth = auth_keys.iter().any(|k| {
+                let k = k.to_ascii_lowercase();
+                k == "authorization"
+                    || k == "bearer_token"
+                    || k.contains("token")
+                    || k.contains("api-key")
+                    || k.contains("apikey")
+            });
+            if is_remote_url(url) && has_inline_auth {
+                out.push(Detection {
+                    rule_id: "BLWK-AI-018",
+                    explanation: format!(
+                        "MCP server \"{name}\" connects to the remote endpoint {url} with a credential written inline in its config."
+                    ),
+                    line: Some(line),
+                    evidence: evidence.clone(),
+                });
+            }
+        }
+
+        // Everything below is about what the server does when it *runs*; a disabled one doesn't.
+        if disabled {
+            continue;
+        }
+
+        if let Some(why) = auto_trust {
+            out.push(Detection {
+                rule_id: "BLWK-AI-023",
+                explanation: format!(
+                    "MCP server \"{name}\" is configured with {why}, so every tool it offers runs without asking you first. A prompt-injected agent can call any of them."
+                ),
+                line: Some(line),
+                evidence: evidence.clone(),
+            });
+        }
 
         if all.contains("mcp-remote") {
             out.push(Detection {
@@ -747,38 +987,6 @@ pub fn detect_mcp(content: &str) -> Vec<Detection> {
                 line: Some(line),
                 evidence: evidence.clone(),
             });
-        }
-
-        // Remote (HTTP/SSE) MCP server: a `type: "http"|"sse"` + `url`, or a bare `url` field. A
-        // non-localhost endpoint sees every request the agent sends it, and an inline auth token is
-        // exposed to anything that can read the config.
-        let url = def.get("url").and_then(|u| u.as_str());
-        if let Some(url) = url {
-            if is_remote_url(url) {
-                let has_inline_auth = def
-                    .get("headers")
-                    .and_then(|h| h.as_object())
-                    .map(|h| {
-                        h.keys().any(|k| {
-                            let k = k.to_ascii_lowercase();
-                            k == "authorization"
-                                || k.contains("token")
-                                || k.contains("api-key")
-                                || k.contains("apikey")
-                        })
-                    })
-                    .unwrap_or(false);
-                if has_inline_auth {
-                    out.push(Detection {
-                        rule_id: "BLWK-AI-018",
-                        explanation: format!(
-                            "MCP server \"{name}\" connects to the remote endpoint {url} with a credential written inline in its headers."
-                        ),
-                        line: Some(line),
-                        evidence: evidence.clone(),
-                    });
-                }
-            }
         }
 
         // Container-launched MCP server with host-level privilege: --privileged, the Docker socket,
@@ -888,24 +1096,79 @@ fn is_unpinned(args: &[String]) -> bool {
 // ---- Codex config detector -----------------------------------------------------------------
 
 pub fn detect_codex_config(content: &str) -> Vec<Detection> {
-    // No TOML parser in this crate's deps; the two keys that matter are unambiguous on their
-    // own line, so a line-oriented check is both sufficient and robust to formatting.
-    let approval_never = content.lines().any(|l| {
-        let l = l.trim();
-        l.starts_with("approval_policy") && l.contains("never")
-    });
-    let danger_access = content.lines().any(|l| {
-        let l = l.trim();
-        l.starts_with("sandbox_mode") && l.contains("danger-full-access")
-    });
+    let mut out = detect_codex_sandbox(content);
+    // Codex keeps MCP servers in the same file (`[mcp_servers.<name>]`); a TOML that won't parse
+    // has already been reported on by the line-oriented checks above, so only parse errors are
+    // swallowed here, never detections.
+    if content.contains("mcp_servers") {
+        out.extend(detect_mcp_toml(content));
+    }
+    out
+}
+
+/// Codex's effective `(approval_policy, sandbox_mode)`: the top-level keys, overridden by the
+/// profile the file selects with `profile = "<name>"`. Other `[profiles.*]` tables are inactive
+/// unless chosen with `--profile` at launch, so they are not the configured posture. If the file
+/// won't parse as TOML, falls back to reading the top-level lines (those before the first table).
+fn codex_effective(content: &str) -> (Option<String>, Option<String>) {
+    let get = |v: &toml::Value, k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
+    if let Ok(t) = toml::from_str::<toml::Value>(content) {
+        let mut approval = get(&t, "approval_policy");
+        let mut sandbox = get(&t, "sandbox_mode");
+        if let Some(p) = t
+            .get("profile")
+            .and_then(|p| p.as_str())
+            .and_then(|name| t.get("profiles").and_then(|ps| ps.get(name)))
+        {
+            approval = get(p, "approval_policy").or(approval);
+            sandbox = get(p, "sandbox_mode").or(sandbox);
+        }
+        return (approval, sandbox);
+    }
+    let top_level = content
+        .lines()
+        .map(str::trim)
+        .take_while(|l| !l.starts_with('['));
+    let mut approval = None;
+    let mut sandbox = None;
+    for l in top_level {
+        if let Some((k, v)) = l.split_once('=') {
+            let v = v.trim().trim_matches('"').to_string();
+            match k.trim() {
+                "approval_policy" => approval = Some(v),
+                "sandbox_mode" => sandbox = Some(v),
+                _ => {}
+            }
+        }
+    }
+    (approval, sandbox)
+}
+
+fn detect_codex_sandbox(content: &str) -> Vec<Detection> {
+    let (approval, sandbox) = codex_effective(content);
+    let approval_never = approval.as_deref() == Some("never");
+    let danger_access = sandbox.as_deref() == Some("danger-full-access");
+    // Point at the line that actually sets the unsafe value, not merely the first mention of the key.
+    let line = content
+        .lines()
+        .position(|l| l.contains("sandbox_mode") && l.contains("danger-full-access"))
+        .map(|i| i + 1);
     if approval_never && danger_access {
-        let line = find_key_line(content, "sandbox_mode")
-            .or_else(|| find_key_line(content, "approval_policy"));
         return vec![Detection {
             rule_id: "BLWK-AI-017",
             explanation: "Codex is set to approval_policy = \"never\" together with sandbox_mode = \"danger-full-access\" — the agent can run any command, unprompted, with full filesystem access.".to_string(),
             line,
             evidence: "approval_policy=never + sandbox_mode=danger-full-access".to_string(),
+        }];
+    }
+    // The sandbox off on its own is still a posture finding: approvals are the only thing left
+    // between the model and the machine, and one approved command runs unconfined.
+    if danger_access {
+        return vec![Detection {
+            rule_id: "BLWK-AI-021",
+            explanation: "Codex is set to sandbox_mode = \"danger-full-access\": commands it runs are not confined to the workspace, so any command you approve can read and change anything your account can.".to_string(),
+            line,
+            evidence: line.map(|l| evidence_line(content, l)).unwrap_or_default(),
         }];
     }
     Vec::new()
@@ -1294,5 +1557,114 @@ mod tests {
             "sandbox_mode = \"danger-full-access\"\napproval_policy = \"never\"\n",
         );
         assert!(both.iter().any(|x| x.rule_id == "BLWK-AI-017"));
+    }
+
+    #[test]
+    fn codex_mcp_servers_in_toml_are_checked() {
+        let d = detect_codex_config(
+            "model = \"o3\"\n[mcp_servers.gh]\ncommand = \"npx\"\nargs = [\"-y\", \"some-gh-server\"]\n",
+        );
+        assert!(d.iter().any(|x| x.rule_id == "BLWK-AI-003"), "{d:?}");
+    }
+
+    #[test]
+    fn codex_full_access_alone_is_a_sandbox_finding_not_ai_017() {
+        let d = detect_codex_config("sandbox_mode = \"danger-full-access\"\n");
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert_eq!(d[0].rule_id, "BLWK-AI-021");
+        // Both together stay the single, stronger AI-017.
+        let both = detect_codex_config(
+            "approval_policy = \"never\"\nsandbox_mode = \"danger-full-access\"\n",
+        );
+        assert_eq!(
+            both.iter().map(|x| x.rule_id).collect::<Vec<_>>(),
+            ["BLWK-AI-017"]
+        );
+        assert!(detect_codex_config("sandbox_mode = \"workspace-write\"\n").is_empty());
+    }
+
+    #[test]
+    fn mcp_auto_trust_shapes() {
+        for cfg in [
+            r#"{"mcpServers":{"s":{"command":"node","args":["s.js"],"autoApprove":["*"]}}}"#,
+            r#"{"mcpServers":{"s":{"command":"node","args":["s.js"],"alwaysAllow":["*"]}}}"#,
+            r#"{"mcpServers":{"s":{"httpUrl":"https://x.example/mcp","trust":true}}}"#,
+        ] {
+            assert!(
+                detect_mcp(cfg).iter().any(|x| x.rule_id == "BLWK-AI-023"),
+                "{cfg}"
+            );
+        }
+        // Approving named tools is a deliberate, scoped choice.
+        let named = r#"{"mcpServers":{"s":{"command":"node","args":["s.js"],"autoApprove":["read_file"]}}}"#;
+        assert!(!detect_mcp(named).iter().any(|x| x.rule_id == "BLWK-AI-023"));
+    }
+
+    #[test]
+    fn remote_server_url_spellings_and_codex_bearer_token() {
+        // Windsurf spells it serverUrl; Codex keeps an inline bearer_token.
+        let w = r#"{"mcpServers":{"r":{"serverUrl":"https://mcp.example.com/sse","headers":{"Authorization":"Bearer x"}}}}"#;
+        assert!(detect_mcp(w).iter().any(|x| x.rule_id == "BLWK-AI-018"));
+        let c = detect_mcp_toml(
+            "[mcp_servers.r]\nurl = \"https://mcp.example.com/mcp\"\nbearer_token = \"abc\"\n",
+        );
+        assert!(c.iter().any(|x| x.rule_id == "BLWK-AI-018"), "{c:?}");
+    }
+
+    #[test]
+    fn new_rule_ids_are_in_the_catalog() {
+        for id in ["BLWK-AI-021", "BLWK-AI-022", "BLWK-AI-023"] {
+            assert_eq!(meta(id).id, id);
+        }
+    }
+
+    #[test]
+    fn a_disabled_server_skips_launch_checks_but_keeps_its_inline_token_finding() {
+        let off = r#"{"mcpServers":{"s":{"command":"npx","args":["-y","some-server"],"alwaysAllow":["*"],"disabled":true}}}"#;
+        assert!(detect_mcp(off).is_empty(), "{:?}", detect_mcp(off));
+        let goose_off = "extensions:\n  x:\n    type: stdio\n    enabled: false\n    cmd: npx\n    args: [some-server]\n";
+        assert!(detect_mcp_yaml(goose_off).is_empty());
+        let remote_off = r#"{"mcpServers":{"r":{"url":"https://mcp.example.com/mcp","headers":{"Authorization":"Bearer x"},"disabled":true}}}"#;
+        assert!(detect_mcp(remote_off)
+            .iter()
+            .any(|d| d.rule_id == "BLWK-AI-018"));
+    }
+
+    #[test]
+    fn codex_posture_follows_the_selected_profile_not_every_profile() {
+        // An unselected profile with full access is not the configured posture.
+        let inactive = "sandbox_mode = \"workspace-write\"\n[profiles.yolo]\nsandbox_mode = \"danger-full-access\"\n";
+        assert!(
+            detect_codex_config(inactive).is_empty(),
+            "{:?}",
+            detect_codex_config(inactive)
+        );
+        // Selecting it makes it the posture, and the line points at the unsafe value.
+        let selected = format!("profile = \"yolo\"\n{inactive}");
+        let d = detect_codex_config(&selected);
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert_eq!(d[0].rule_id, "BLWK-AI-021");
+        assert_eq!(d[0].line, Some(4));
+    }
+
+    #[test]
+    fn prefix_matched_shell_permissions_naming_an_interpreter_are_dangerous() {
+        for e in [
+            "Shell(bash)",
+            "Shell(python3)",
+            "run_shell_command(sh)",
+            "run_shell_command(*)",
+            "Shell(git *)",
+        ] {
+            assert!(is_dangerous_permission(e), "{e}");
+        }
+        for e in [
+            "Shell(git)",
+            "run_shell_command(git status)",
+            "Shell(npm test)",
+            "Bash(npm run test)",
+        ] {
+            assert!(!is_dangerous_permission(e), "{e}");
+        }
     }
 }

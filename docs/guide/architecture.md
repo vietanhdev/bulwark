@@ -15,7 +15,7 @@ Bulwark is a Tauri + Rust desktop app that scans a Linux host for security misco
 
 This document was written before implementation and has been revised to describe what actually shipped, not just what was planned. As of v0.1:
 
-- **73 rules across 12 categories** (SSH/remote access, persistence, privilege escalation, defense evasion, credential exposure (plaintext credential stores, added in 0.11), filesystem permissions, network egress, kernel/sysctl hardening, logging/auditing, accounts & services, rootkit/malware indicators, file integrity), plus a dedicated 20-rule AI agent-security pass.
+- **73 rules across 12 categories** (SSH/remote access, persistence, privilege escalation, defense evasion, credential exposure (plaintext credential stores, added in 0.11), filesystem permissions, network egress, kernel/sysctl hardening, logging/auditing, accounts & services, rootkit/malware indicators, file integrity), plus a dedicated 23-rule AI agent-security pass covering two dozen coding agents.
 - **Both front-doors work end-to-end**: `bulwarkctl` (scan, rules list/validate, history) and `bulwark-app` (Tauri v2 + React GUI), sharing one `bulwark-core` engine and one local SQLite store, exactly as designed in §4.
 - **Real ClamAV integration** — not a placeholder: live streamed per-file scan progress, real engine/database version and staleness reporting, and a distro-aware install command shown when ClamAV isn't installed at all.
 - **File-integrity monitoring** for a curated set of security-relevant files, plus a background monitoring loop that re-scans on an interval and reconciles findings across runs.

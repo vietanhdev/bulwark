@@ -14,7 +14,7 @@
 
 - [Download](https://bulwark.nrl.ai/download): install for Debian/Ubuntu, Fedora/RHEL, or any distro (AppImage).
 - [Architecture](https://bulwark.nrl.ai/guide/architecture): the engine, data model, and design decisions.
-- [Agent Security](https://bulwark.nrl.ai/guide/agent-security): how Bulwark scans AI coding assistants, and the 20 AI-security checks (mapped to CVEs / MITRE ATT&CK).
+- [Agent Security](https://bulwark.nrl.ai/guide/agent-security): how Bulwark scans AI coding assistants, and the 23 AI-security checks (mapped to CVEs / MITRE ATT&CK).
 - [Fixing findings](https://bulwark.nrl.ai/guide/remediation): how remediation works.
 
 ## Articles

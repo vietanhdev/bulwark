@@ -14,6 +14,7 @@
 //! per-rule CVE/researcher citations (Rules File Backdoor, MCP tool-poisoning, CVE-2025-59536
 //! Claude hook RCE, CVE-2025-53773 Copilot YOLO, CVE-2025-6514 mcp-remote).
 
+pub mod agent_settings;
 pub mod detectors;
 pub mod discovery;
 pub mod redact;
@@ -242,7 +243,18 @@ pub fn scan_cancellable(
         artifacts.extend(discovery::global_artifacts(&opts.home));
     }
     for ws in &workspaces {
-        artifacts.extend(discovery::workspace_artifacts(ws));
+        let mut found = discovery::workspace_artifacts(ws);
+        // Home itself becomes a "workspace" whenever an agent was once run in `~` (Claude Code
+        // records it under ~/.claude/projects). Its files are the user's own — `~/.cursor/hooks.json`
+        // is their automation, not a cloned repository's — so they must never take the
+        // project-only paths (AI-002 hooks, AI-013 injection), which would report the user's own
+        // config as an attack.
+        if same_dir(ws, &opts.home) {
+            for a in &mut found {
+                a.workspace = None;
+            }
+        }
+        artifacts.extend(found);
     }
 
     // De-duplicate by path — a directory that's both a discovered workspace and a configured
@@ -294,9 +306,39 @@ pub fn scan_cancellable(
 
     let cancelled = cancel_flag.load(Ordering::Relaxed);
     let artifacts_scanned = scanned.load(Ordering::Relaxed);
+
+    // Host posture for the account the agents run as. Only on a whole-machine sweep of the real
+    // current user's home: a `--target` scan is about one folder, and a scan of some other home (a
+    // test fixture, another user's directory) says nothing about which account runs the agents.
+    // "The real current user's home" comes from the password database, not `$HOME`, which a caller
+    // can point anywhere.
+    let mut host_findings = Vec::new();
+    // A check that could not run is reported in `errors`, never dropped silently (architecture §8);
+    // a scan of a home that simply isn't this account's is out of scope, not a failure.
+    if opts.explicit_targets.is_empty() && !cancelled {
+        match current_account() {
+            Some(account) if same_dir(&account.home, &opts.home) => {
+                match std::fs::read_to_string("/etc/group") {
+                    Ok(groups) => host_findings.extend(check_root_equivalent_groups(
+                        &artifacts,
+                        &account,
+                        &groups,
+                        "/etc/group",
+                    )),
+                    Err(e) => errors.push(format!(
+                        "BLWK-AI-022 not checked: /etc/group could not be read: {e}"
+                    )),
+                }
+            }
+            Some(_) => {}
+            None => errors.push(
+                "BLWK-AI-022 not checked: the current account could not be looked up".to_string(),
+            ),
+        }
+    }
     // Collect in input order (rayon's `collect` preserves it), so the later dedup keeps a
     // deterministic representative and the final ordering doesn't depend on thread scheduling.
-    let mut findings = Vec::new();
+    let mut findings = host_findings;
     for r in per_artifact {
         match r {
             Ok(mut fs) => findings.append(&mut fs),
@@ -366,6 +408,7 @@ fn scan_artifact(artifact: &Artifact) -> anyhow::Result<Vec<AiFinding>> {
             | Settings
             | McpConfig
             | Tasks
+            | Hooks
             | Transcript
             | DotEnv
             | CodexConfig
@@ -458,10 +501,22 @@ fn scan_artifact(artifact: &Artifact) -> anyhow::Result<Vec<AiFinding>> {
             .filter(|d| d.rule_id != "BLWK-AI-013")
             .collect(),
         Instructions => detectors::detect_instructions(&content),
-        McpConfig => detectors::detect_mcp(&content),
+        McpConfig => match artifact.path.extension().and_then(|e| e.to_str()) {
+            Some("yaml" | "yml") => detectors::detect_mcp_yaml(&content),
+            Some("toml") => detectors::detect_mcp_toml(&content),
+            _ => detectors::detect_mcp(&content),
+        },
         Tasks => detectors::detect_tasks(&content),
+        Hooks => {
+            agent_settings::detect_hooks_file(artifact.tool, &content, artifact.workspace.is_some())
+        }
         CodexConfig => detectors::detect_codex_config(&content),
-        Settings => detect_settings(artifact, &content),
+        // `workspace.is_some()` = this settings file lives in a project, not the user's own home —
+        // which is what distinguishes the CVE-2025-59536 hooks threat from the user's own trusted
+        // global automation.
+        Settings => {
+            agent_settings::detect_settings(artifact.tool, &content, artifact.workspace.is_some())
+        }
         // A real base-URL override lives in an env file. A base URL merely *mentioned* in a
         // transcript (a command someone ran, a fixture, a discussion) or appearing in the JSON of a
         // credential store is not a configured setting — flagging those produced a stream of FPs
@@ -502,7 +557,9 @@ fn kind_is_secret_scanned(kind: ArtifactKind) -> bool {
     use ArtifactKind::*;
     match kind {
         Transcript | Memory => true,
-        Instructions | Settings | McpConfig | Tasks | DotEnv | CodexConfig | Credential => false,
+        Instructions | Settings | McpConfig | Tasks | Hooks | DotEnv | CodexConfig | Credential => {
+            false
+        }
     }
 }
 
@@ -529,7 +586,7 @@ fn kind_allows_redaction(kind: ArtifactKind) -> bool {
         // Functional configs / credential stores — something reads the secret from these, so a
         // rewrite is data loss. Enumerated explicitly (no wildcard) so a newly-added kind must make
         // a deliberate decision here rather than defaulting into "safe to rewrite".
-        DotEnv | McpConfig | Settings | Tasks | CodexConfig | Credential => false,
+        DotEnv | McpConfig | Settings | Tasks | Hooks | CodexConfig | Credential => false,
     }
 }
 
@@ -540,10 +597,27 @@ const AGENT_DIRS: &[&str] = &[
     ".codex",
     ".cursor",
     ".gemini",
+    ".qwen",
     ".continue",
     ".roo",
+    ".cline",
     ".windsurf",
+    ".devin",
     ".amazonq",
+    ".kiro",
+    ".zed",
+    ".agents",
+    ".opencode",
+    ".kilo",
+    ".kilocode",
+    ".crush",
+    ".amp",
+    ".augment",
+    ".junie",
+    ".copilot",
+    "saoudrizwan.claude-dev",
+    "rooveterinaryinc.roo-cline",
+    "kilocode.kilo-code",
 ];
 
 /// Whether `path` lives inside a recognized agent directory (see [`AGENT_DIRS`]).
@@ -561,18 +635,6 @@ fn path_in_agent_dir(path: &Path) -> bool {
             .to_str()
             .is_some_and(|s| AGENT_DIRS.contains(&s))
     })
-}
-
-/// Settings files split by tool: VS Code's `settings.json` has its own risky keys (YOLO mode,
-/// workspace trust) distinct from Claude's (hooks, permissions).
-fn detect_settings(artifact: &Artifact, content: &str) -> Vec<detectors::Detection> {
-    match artifact.tool {
-        Tool::VsCode => detectors::detect_vscode_settings(content),
-        // `workspace.is_some()` = this settings file lives in a project, not the user's own
-        // ~/.claude — which is what distinguishes the CVE-2025-59536 hooks threat from the user's
-        // own trusted global automation.
-        _ => detectors::detect_claude_settings(content, artifact.workspace.is_some()),
-    }
 }
 
 fn read_capped(path: &std::path::Path) -> anyhow::Result<Option<String>> {
@@ -641,6 +703,127 @@ fn finding_from_detection(artifact: &Artifact, tool: &str, d: detectors::Detecti
         references: meta.references.iter().map(|s| s.to_string()).collect(),
         redactable: false,
     }
+}
+
+/// The real (not effective, not `$HOME`-claimed) account.
+struct Account {
+    name: String,
+    home: PathBuf,
+    /// Primary group id — membership through it never appears in `/etc/group`'s member list.
+    gid: u32,
+}
+
+/// Two paths name the same directory once symlinks are resolved (`/home` is a symlink on some
+/// systems, so `$HOME` and the passwd entry can differ textually).
+fn same_dir(a: &Path, b: &Path) -> bool {
+    a == b
+        || matches!(
+            (std::fs::canonicalize(a), std::fs::canonicalize(b)),
+            (Ok(x), Ok(y)) if x == y
+        )
+}
+
+#[cfg(unix)]
+fn current_account() -> Option<Account> {
+    use std::ffi::CStr;
+    use std::os::unix::ffi::OsStrExt;
+    // The reentrant variant: the GUI can run a manual scan and a background sweep at once, and
+    // `getpwuid`'s shared static buffer would race between them. 64 KiB fits any real passwd entry
+    // (glibc's own sysconf hint is 1 KiB); ERANGE beyond that yields None, which is reported.
+    let mut buf = vec![0 as libc::c_char; 64 * 1024];
+    // SAFETY: `pwd` and `buf` outlive every pointer getpwuid_r writes into them, and the strings are
+    // copied out before either is dropped. A null `result` means "no entry" or an error.
+    unsafe {
+        let mut pwd: libc::passwd = std::mem::zeroed();
+        let mut result: *mut libc::passwd = std::ptr::null_mut();
+        let rc = libc::getpwuid_r(
+            libc::getuid(),
+            &mut pwd,
+            buf.as_mut_ptr(),
+            buf.len(),
+            &mut result,
+        );
+        if rc != 0 || result.is_null() || pwd.pw_name.is_null() || pwd.pw_dir.is_null() {
+            return None;
+        }
+        let name = CStr::from_ptr(pwd.pw_name).to_str().ok()?.to_string();
+        let dir = std::ffi::OsStr::from_bytes(CStr::from_ptr(pwd.pw_dir).to_bytes());
+        Some(Account {
+            name,
+            home: PathBuf::from(dir),
+            gid: pwd.pw_gid,
+        })
+    }
+}
+
+#[cfg(not(unix))]
+fn current_account() -> Option<Account> {
+    None
+}
+
+/// Groups whose members can start a container that bind-mounts `/` and so become root without a
+/// password. Being in one is root-equivalent by the projects' own documentation (Docker's "docker
+/// group grants root-level privileges", LXD's and Incus's equivalent warnings).
+const ROOT_EQUIVALENT_GROUPS: &[&str] = &["docker", "lxd", "incus-admin"];
+
+/// `BLWK-AI-022`: the account AI agents run as is in a root-equivalent group. Fires only when at
+/// least one agent's state was actually found — a machine with no agents has no agent to abuse it.
+/// Pure over the `/etc/group` text so it is testable without touching the real host.
+fn check_root_equivalent_groups(
+    artifacts: &[Artifact],
+    account: &Account,
+    group_file: &str,
+    group_path: &str,
+) -> Vec<AiFinding> {
+    let user = account.name.as_str();
+    let mut agents: Vec<&'static str> = artifacts
+        .iter()
+        .filter(|a| !matches!(a.tool, Tool::Generic | Tool::VsCode))
+        .map(|a| discovery::tool_label(a.tool))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if agents.is_empty() {
+        return Vec::new();
+    }
+    let shown = agents.len().min(4);
+    let more = agents.len() - shown;
+    agents.truncate(shown);
+    let who = if more > 0 {
+        format!("{} and {more} more", agents.join(", "))
+    } else {
+        agents.join(", ")
+    };
+
+    let meta = detectors::meta("BLWK-AI-022");
+    group_file
+        .lines()
+        .enumerate()
+        .filter_map(|(i, line)| {
+            let mut parts = line.split(':');
+            let name = parts.next()?;
+            let gid = parts.nth(1)?.parse::<u32>().ok();
+            let members = parts.next()?;
+            let member = members.split(',').any(|m| m.trim() == user) || gid == Some(account.gid);
+            (ROOT_EQUIVALENT_GROUPS.contains(&name) && member)
+                .then(|| AiFinding {
+                    id: Uuid::new_v4(),
+                    rule_id: meta.id.to_string(),
+                    severity: meta.severity,
+                    tool: discovery::tool_label(Tool::Generic).to_string(),
+                    title: meta.title.to_string(),
+                    explanation: format!(
+                        "The account {user} is in the {name} group, and AI agents run as that account ({who}). A member of {name} can start a container that mounts the whole filesystem and become root with no password, so a prompt-injected agent that can run shell commands can do the same."
+                    ),
+                    fix_hint: meta.fix.to_string(),
+                    file: group_path.to_string(),
+                    line: Some(i + 1),
+                    evidence: format!("{name}: {user}"),
+                    references: meta.references.iter().map(|s| s.to_string()).collect(),
+                    redactable: false,
+                })
+        })
+        .collect()
 }
 
 /// Flags a credential store readable by group or other. Unix-only; on other platforms this
@@ -1277,5 +1460,64 @@ mod tests {
         assert!(report.findings.is_empty());
         assert!(report.errors.is_empty());
         assert_eq!(report.artifacts_scanned, 0);
+    }
+
+    #[test]
+    fn root_equivalent_group_membership_is_reported_only_with_agents_present() {
+        let groups = "root:x:0:\ndocker:x:998:alice,bob\nlxd:x:997:carol\nwheel:x:10:alice\n";
+        let claude = Artifact {
+            path: PathBuf::from("/home/alice/.claude/settings.json"),
+            tool: Tool::ClaudeCode,
+            kind: ArtifactKind::Settings,
+            workspace: None,
+        };
+        let acct = |name: &str, gid: u32| Account {
+            name: name.to_string(),
+            home: PathBuf::from("/home/x"),
+            gid,
+        };
+        let f = check_root_equivalent_groups(
+            std::slice::from_ref(&claude),
+            &acct("alice", 1000),
+            groups,
+            "/etc/group",
+        );
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert_eq!(f[0].rule_id, "BLWK-AI-022");
+        assert_eq!(f[0].line, Some(2));
+        assert!(f[0].explanation.contains("Claude Code"));
+        // Not a member of a root-equivalent group (wheel is not one, and `al` is not `alice`).
+        assert!(check_root_equivalent_groups(
+            std::slice::from_ref(&claude),
+            &acct("al", 1000),
+            groups,
+            "/etc/group"
+        )
+        .is_empty());
+        // Membership through the primary group never shows in the member list.
+        let primary = check_root_equivalent_groups(
+            std::slice::from_ref(&claude),
+            &acct("dave", 998),
+            groups,
+            "/etc/group",
+        );
+        assert_eq!(primary.len(), 1, "{primary:?}");
+        // No agent on the machine: nothing to abuse the membership.
+        assert!(
+            check_root_equivalent_groups(&[], &acct("alice", 1000), groups, "/etc/group")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn new_agent_transcripts_are_redactable_and_their_configs_are_not() {
+        assert!(path_in_agent_dir(Path::new(
+            "/home/u/.qwen/projects/p/chats/s.jsonl"
+        )));
+        assert!(path_in_agent_dir(Path::new(
+            "/home/u/.config/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/1/ui_messages.json"
+        )));
+        assert!(!kind_allows_redaction(ArtifactKind::Hooks));
+        assert!(!kind_is_secret_scanned(ArtifactKind::Hooks));
     }
 }
