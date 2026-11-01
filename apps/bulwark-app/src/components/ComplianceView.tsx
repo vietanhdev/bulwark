@@ -179,6 +179,15 @@ export function ComplianceView() {
     }
   }
 
+  async function ignorePlace(ruleId: string, location: string, reason: string) {
+    try {
+      await invoke("finding_ignore", { ruleId, location, reason });
+      bump();
+    } catch (e) {
+      setErrors((prev) => [...prev, String(e)]);
+    }
+  }
+
   async function runPrivilegedScan() {
     setElevating(true);
     setErrors([]);
@@ -300,6 +309,7 @@ export function ComplianceView() {
                 onToggle={() => toggle(category)}
                 actions={{
                   onIgnoreType: ignoreType,
+                  onIgnorePlace: ignorePlace,
                   onRecheck: runScan,
                   fixCapabilities,
                   onFixed: runScan,

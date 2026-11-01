@@ -3,10 +3,11 @@ layout: home
 
 hero:
   name: Bulwark
-  text: Security scanner for developer machines
+  text: Security for your dev machines, the servers they reach, and your AI coding tools
   tagline: >-
-    Finds the keys in plain text, the risky packages and the exposed dev services on your Linux
-    computer, explains each problem in plain language, and fixes most of them in one click.
+    Finds the keys in plain text, the risky packages and the exposed dev services on your Linux,
+    macOS or Windows computer — and, over plain SSH, on the machines you manage — explains each
+    problem in plain language, and fixes most of them in one click.
   actions:
     - theme: brand
       text: Download
@@ -23,11 +24,11 @@ hero:
 
 <section class="bw-stats" aria-label="Bulwark at a glance">
   <div class="bw-stat">
-    <span class="bw-stat-num">93</span>
+    <span class="bw-stat-num">123</span>
     <span class="bw-stat-label">built-in checks</span>
   </div>
   <div class="bw-stat">
-    <span class="bw-stat-num">10</span>
+    <span class="bw-stat-num">25</span>
     <span class="bw-stat-label">AI coding assistants covered</span>
   </div>
   <div class="bw-stat">
@@ -36,7 +37,7 @@ hero:
   </div>
   <div class="bw-stat">
     <span class="bw-stat-num">0</span>
-    <span class="bw-stat-label">network calls</span>
+    <span class="bw-stat-label">accounts or telemetry</span>
   </div>
 </section>
 
@@ -57,6 +58,7 @@ hero:
     <h3>Secrets, supply chain and exposed services</h3>
     <p>Long-lived AWS keys, Git and Docker passwords stored in plain text, SSH keys without a passphrase, and credential files other users can read.</p>
     <p>Python startup hooks and known malicious-package traces, unpinned MCP servers, and dev databases listening on every network interface.</p>
+    <p>Tool settings that quietly switch security off: Git or npm skipping certificate checks, pip trusting any index, SSH accepting any server or forwarding your agent everywhere, and a Docker API open without TLS.</p>
     <p class="bw-card-meta">Each finding comes with a safer alternative, such as a password manager, a credential helper or a hardware key.</p>
   </article>
 
@@ -96,8 +98,8 @@ hero:
     <div class="bw-card-icon">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>
     </div>
-    <h3>Desktop app and CLI</h3>
-    <p>One Rust engine, two front-doors. Run <code>bulwark scan</code> in a terminal, or <code>bulwark scan --ssh user@host</code> to check a server over your existing SSH.</p>
+    <h3>Linux, macOS and Windows</h3>
+    <p>One Rust engine, a desktop app and a CLI on all three. Each system gets its own checks — FileVault and Gatekeeper on a Mac, Defender and BitLocker on Windows — and the score only counts checks that actually ran there.</p>
   </article>
 
   <article class="bw-card">
@@ -105,9 +107,50 @@ hero:
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 0114-5.3L20 8M20 4v4h-4"/><path d="M20 12a8 8 0 01-14 5.3L4 16M4 20v-4h4"/></svg>
     </div>
     <h3>Continuous and fully local</h3>
-    <p>A background loop re-checks on a schedule and speaks up only when something new appears. No account, no telemetry, no network calls.</p>
+    <p>A background loop re-checks on a schedule and speaks up only when something new appears. No account and no telemetry: nothing leaves your computer unless you turn on alerts.</p>
   </article>
 </div>
+
+</section>
+
+<section class="bw-section">
+
+<p class="bw-eyebrow">New: remote machines</p>
+
+<h2 class="bw-h2">Keep watch over your servers too</h2>
+
+<p class="bw-sub">Add a Linux, macOS or Windows machine you can SSH into. Bulwark checks it on a schedule with the same explanations and fixes — no agent, no open port, no server to run, and on a Linux server nothing to install at all — and tells you on Telegram or by e-mail when something new turns up.</p>
+
+<p><img src="/diagrams/remote.svg" alt="Agentless remote monitoring: Bulwark signs in over your SSH, scans Linux servers, Macs, Windows PCs and WSL, and alerts on Telegram or e-mail" class="bw-diagram" /></p>
+
+<div class="bw-gallery">
+  <figure>
+    <img src="/screenshots/machines.png" alt="Remote: each machine with its system, connection state and last scan" />
+    <figcaption>Every machine at a glance: its system, whether it answers, and what its last scan found.</figcaption>
+  </figure>
+  <figure>
+    <img src="/screenshots/machine.png" alt="One remote machine: connection and last scan side by side, and its issues grouped by cause" />
+    <figcaption>One machine opened: connection and scan kept apart, issues grouped like Home's.</figcaption>
+  </figure>
+</div>
+
+<p class="bw-sub"><a href="/guide/remote-monitoring">How remote monitoring works →</a></p>
+
+</section>
+
+<section class="bw-section">
+
+<p class="bw-eyebrow">Under the hood</p>
+
+<h2 class="bw-h2">One engine, every platform, nothing hidden</h2>
+
+<p class="bw-sub">A desktop app and a CLI on Linux, macOS and Windows share one Rust engine. Every check is a small YAML rule you can read, change or add to — and a check that couldn't run is never counted as a pass.</p>
+
+<p><img src="/diagrams/architecture.svg" alt="Bulwark architecture: the desktop app and the CLI share one Rust engine; collectors, the AI-assistant scanner, the log scanner and ClamAV feed a rule engine of 100 YAML rules plus your own; findings are explained, scored honestly and stored locally; remote machines are scanned over SSH; alerts go to Telegram or e-mail" class="bw-diagram" /></p>
+
+<p><img src="/diagrams/checks.svg" alt="123 checks in seven groups plus your own YAML checks" class="bw-diagram" /></p>
+
+<p class="bw-sub"><a href="/guide/architecture">Read the architecture →</a> · <a href="https://github.com/vietanhdev/bulwark">Contribute a check →</a></p>
 
 </section>
 
@@ -193,6 +236,15 @@ hero:
 </div>
 
 <style>
+.bw-diagram {
+  display: block;
+  width: 100%;
+  max-width: 1152px;
+  height: auto;
+  margin: 8px auto 20px;
+  border-radius: 18px;
+  box-shadow: 0 8px 28px rgba(15, 30, 45, 0.10);
+}
 .bw-home {
   max-width: 1152px;
   margin: 0 auto;

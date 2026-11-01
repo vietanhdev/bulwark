@@ -3,6 +3,9 @@ title: kexec can load an unsigned, arbitrary kernel image
 category: kernel-hardening
 severity: low
 collector: sysctl_kernel
+# The Windows host owns this inside WSL (its kernel, network stack and console), so it is not
+# something the distro can act on: reported as not applicable there, never as passing.
+skip_on: [wsl]
 condition: kexec_load_disabled == 0 and lockdown == "none"
 explain: >
   kernel.kexec_load_disabled is 0 — a process with sufficient privilege can use kexec to

@@ -1,8 +1,9 @@
 id: BLWK-SSH-012
-title: SSH private key is not passphrase-protected
+title: "SSH private key is not passphrase-protected: {{ ssh_private_keys.path }}"
 category: ssh-remote-access
 severity: high
 collector: ssh_private_keys
+os: [linux, macos]
 # Require encryption_known so this fires only on a key we positively read as plaintext, never on one
 # whose header we couldn't parse — that undetermined case is BLWK-SSH-013, not a confident "plaintext".
 condition: encrypted == false and encryption_known == true

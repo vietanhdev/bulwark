@@ -203,6 +203,9 @@ jobs:
               - 'crates/bulwark-core/src/collectors/**'
               - 'tests/e2e/**'
               - 'crates/bulwarkctl/tests/e2e.rs'
+              - 'crates/bulwarkctl/src/remote.rs'
+              - 'crates/bulwarkctl/src/hosts.rs'
+              - 'crates/bulwark-core/src/fleet.rs'
 
   # Gated to only run when rules/collectors/fixtures actually changed — building the fixture
   # images adds real CI time (a handful of small apt-installs, not compilation, but not free)

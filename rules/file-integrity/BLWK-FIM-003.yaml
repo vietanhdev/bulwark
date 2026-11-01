@@ -3,13 +3,14 @@ title: "Not covered by the file-integrity baseline: {{ file_integrity.path }}"
 category: file-integrity
 severity: info
 collector: file_integrity
-condition: in_baseline == false and currently_present == true and unreadable == false
+condition: kind == "file" and baseline_exists == true and in_baseline == false and currently_present == true and unreadable == false
 explain: >
   {{ file_integrity.path }} is present but has no recorded baseline hash, so Bulwark can tell
   that it exists but not whether it has been tampered with. This fires per-file, on purpose:
   the previous version keyed on whether a baseline existed *at all*, which meant that once you
   had baselined anything, a critical file you had never actually recorded — including one added
   to the watch list later — read as "verified clean" rather than "never checked". A file nobody
-  ever baselined is not a file known to be good.
+  ever baselined is not a file known to be good. (With no baseline recorded at all, that single
+  fact is reported once, as BLWK-FIM-009, instead of once per watched file.)
 fix: "Run 'bulwarkctl fim baseline' now, while you trust this host, to record a known-good hash for this file (add '--privileged' to also cover /etc/shadow and /etc/sudoers)."
 references: []

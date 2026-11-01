@@ -172,6 +172,10 @@ impl Collector for CredentialStoresCollector {
         "credential_stores"
     }
 
+    fn supported_os(&self) -> &'static [crate::models::OperatingSystem] {
+        super::LINUX_AND_MACOS
+    }
+
     fn is_applicable(&self) -> bool {
         !super::user_homes().is_empty()
     }

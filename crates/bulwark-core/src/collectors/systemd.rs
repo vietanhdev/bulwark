@@ -16,7 +16,7 @@ fn unit_search_dirs() -> Vec<PathBuf> {
         PathBuf::from("/etc/systemd/system"),
         PathBuf::from("/run/systemd/system"),
     ];
-    if let Ok(home) = std::env::var("HOME") {
+    if let Ok(home) = crate::paths::home_var() {
         dirs.push(PathBuf::from(home).join(".config/systemd/user"));
     }
     dirs

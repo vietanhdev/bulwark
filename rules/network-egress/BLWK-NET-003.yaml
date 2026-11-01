@@ -1,11 +1,15 @@
 id: BLWK-NET-003
-title: A database or development service is open to the network
+title: "A database or development service is open to the network (port {{ listening_ports.port }})"
 category: network-egress
 severity: high
 collector: listening_ports
 # Only an all-interfaces bind fires. A loopback bind is local-only, and a bind to one specific
 # address (a VPN or tailnet interface, for example) is a deliberate choice this rule leaves alone.
-condition: listen_address in ["0.0.0.0", "::"] and port in [1025, 2375, 3306, 5432, 5672, 6379, 8025, 9000, 9001, 9200, 10050, 10051, 11211, 15672, 27017]
+# Behind a default-deny host firewall the same bind is BLWK-NET-005 (medium) instead: still worth
+# fixing, but "anyone on the network can connect" would overstate it. Zabbix's 10050/10051 are not
+# in the list: they are monitoring endpoints designed to accept network connections (with their own
+# Server= allow-list), not development services left open by accident.
+condition: listen_address in ["0.0.0.0", "::"] and port in [1025, 2375, 3306, 5432, 5672, 6379, 8025, 9000, 9001, 9200, 11211, 15672, 27017] and inbound_firewalled == false
 explain: >
   A database or development service is reachable from your network on port {{ listening_ports.port }}
   (listening on {{ listening_ports.listen_address }}). On home, office or café Wi-Fi, anyone nearby can

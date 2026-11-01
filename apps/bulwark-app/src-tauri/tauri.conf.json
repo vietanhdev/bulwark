@@ -52,14 +52,14 @@
     "externalBin": ["binaries/bulwark"],
     "linux": {
       "deb": {
-        "recommends": ["clamav", "openssh-client", "git", "policykit-1"],
+        "recommends": ["clamav", "openssh-client", "curl", "git", "policykit-1"],
         "desktopTemplate": "bulwark.desktop",
         "files": {
           "/usr/share/polkit-1/actions/com.bulwark.policy": "../../../polkit/com.bulwark.policy"
         }
       },
       "rpm": {
-        "recommends": ["clamav", "openssh-clients", "git", "polkit"],
+        "recommends": ["clamav", "openssh-clients", "curl", "git", "polkit"],
         "desktopTemplate": "bulwark.desktop",
         "files": {
           "/usr/share/polkit-1/actions/com.bulwark.policy": "../../../polkit/com.bulwark.policy"

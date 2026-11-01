@@ -2,6 +2,8 @@
  *  and Compliance views can pass their own richer `RuleSummary` straight in. */
 export interface GateableRule {
   id: string;
+  /** The user's own rule — not part of the score, which measures Bulwark's checks. */
+  custom?: boolean;
   collector: string;
   os: string[];
   profiles: string[];
@@ -17,39 +19,43 @@ export interface HardeningIndex {
   skipped: number;
 }
 
+/** What the last scans prove actually ran. */
+export interface RunEvidence {
+  /** The config scan's persisted `rules_evaluated` set. Empty when no scan recorded one. */
+  rulesEvaluated: Set<string>;
+  /** Whether an AI-assistant scan has completed, which is what evaluates the `BLWK-AI-*` checks. */
+  agentScanned: boolean;
+}
+
+/** Whether a rule demonstrably ran on the last scan: it fired, or the scan recorded evaluating it.
+ *  A rule that didn't run must be shown as unknown — never as a pass. */
+export function ruleRan(ruleId: string, openRuleIds: Set<string>, evidence: RunEvidence): boolean {
+  if (openRuleIds.has(ruleId)) return true;
+  return ruleId.startsWith("BLWK-AI-") ? evidence.agentScanned : evidence.rulesEvaluated.has(ruleId);
+}
+
 /**
- * Bulwark's headline metric, computed once and shared.
+ * Bulwark's headline metric, computed once and shared by Home and All checks.
  *
- * This used to exist twice, with two different denominators — the Overview counted only
- * framework-mapped rules while Compliance counted every evaluated rule — so the two screens
- * showed different "N/M passing" figures for what read as the same number. One definition now,
- * used by both.
+ * Only rules that demonstrably ran are scored, mirroring Lynis's hardening index: a check that
+ * never ran tells you nothing, so it is left out of the numerator AND the denominator rather than
+ * counted as a free pass. "Ran" is taken from the scan's own record (`rules_evaluated`), plus any
+ * rule that produced an open finding — never inferred from the rule pack. Inferring it is what
+ * this used to do, assuming every non-skipped Linux rule had run; on Windows that reported
+ * "64 of 64 checks pass" for a scan that had evaluated seven.
  *
- * The exclusion logic mirrors Lynis's own hardening index: a check that never *ran* tells you
- * nothing either way, so it is removed from the numerator AND the denominator rather than
- * counted as a free pass. Three ways a rule can fail to have run:
- *
- *   - its collector needed privilege the scan didn't have (`skippedCollectors`);
- *   - it isn't applicable to this OS (the GUI is Linux-only, so a macOS-tagged rule
- *     structurally never executed here);
- *   - it is profile-gated (`needs: server`) and the last scan may not have opted into that
- *     need. A gated rule that produced an open finding demonstrably DID run, so it still
- *     counts; one that produced nothing is ambiguous — ran-and-passed vs. never-ran — and is
- *     conservatively excluded rather than risk inflating the score with a rule that never
- *     actually executed.
+ * Returns null when there is no evidence at all (no scan yet, or a database written before the
+ * evaluated set was stored): the UI then shows no score instead of an invented one.
  */
 export function computeHardeningIndex(
   rules: GateableRule[],
   openRuleIds: Set<string>,
-  skippedCollectors: Set<string>,
+  evidence: RunEvidence,
 ): HardeningIndex | null {
-  const evaluated = rules.filter((r) => {
-    if (skippedCollectors.has(r.collector)) return false;
-    if (!r.os.includes("linux")) return false;
-    if (r.profiles.length > 0 && !openRuleIds.has(r.id)) return false;
-    return true;
-  });
-
+  // Without the record, rules with open findings alone would make a 0% score out of a partial view.
+  if (evidence.rulesEvaluated.size === 0 && !evidence.agentScanned) return null;
+  // Custom checks are the user's own and could only inflate (or deflate) the score at will.
+  const evaluated = rules.filter((r) => !r.custom && ruleRan(r.id, openRuleIds, evidence));
   if (evaluated.length === 0) return null;
 
   const passing = evaluated.filter((r) => !openRuleIds.has(r.id)).length;
@@ -57,7 +63,7 @@ export function computeHardeningIndex(
     score: Math.round((passing / evaluated.length) * 100),
     passing,
     evaluated: evaluated.length,
-    skipped: rules.length - evaluated.length,
+    skipped: rules.filter((r) => !r.custom).length - evaluated.length,
   };
 }
 

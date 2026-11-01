@@ -394,6 +394,29 @@ pub struct Condition {
 }
 
 impl Condition {
+    /// Whether this condition reads a field the row marks as undetermined (`<field>_known: false`).
+    /// Collectors set that marker when a value couldn't be read (BitLocker without elevation, a
+    /// root-only file), and a rule that depends on such a value must count as *not evaluated* —
+    /// never as a pass, which would let a scan that couldn't see a problem resolve it. The engine
+    /// checks this before evaluating, so a rule's own `x_known == true and …` guard (which on its
+    /// own evaluates to a clean `false`) can't hide the gap.
+    pub fn reads_unknown_field(&self, fact: &crate::models::Fact) -> bool {
+        fn walk(e: &Expr, fact: &crate::models::Fact) -> bool {
+            match e {
+                // Only a *value* whose marker says it couldn't be read. A condition about the marker
+                // itself (`x_known == false`, the "couldn't determine" findings) stays decidable.
+                Expr::Cmp { field, .. } => {
+                    !field.ends_with("_known")
+                        && fact.get(&format!("{field}_known"))
+                            == Some(&serde_json::Value::Bool(false))
+                }
+                Expr::And(a, b) | Expr::Or(a, b) => walk(a, fact) || walk(b, fact),
+                Expr::Not(a) => walk(a, fact),
+            }
+        }
+        walk(&self.expr, fact)
+    }
+
     pub fn parse(src: &str) -> Result<Self, ConditionError> {
         let tokens = lex(src)?;
         let mut parser = Parser {

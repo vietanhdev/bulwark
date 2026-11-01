@@ -1,0 +1,12 @@
+id: BLWK-WIN-003
+title: Windows Firewall is off for a network profile
+category: windows-hardening
+severity: high
+collector: windows_security
+os: [windows]
+# Only fires on a value actually read; an unreadable setting (e.g. BitLocker without elevation) never does.
+condition: firewall_all_on_known == true and firewall_all_on == false
+explain: >
+  The firewall is off for: {{ windows_security.firewall_off_profiles }}. On a network of that type, every listening service on this machine can be reached.
+fix: "Turn it back on in Windows Security → Firewall & network protection, or run 'Set-NetFirewallProfile -All -Enabled True' in an elevated PowerShell."
+references: [ATTACK-T1562.004]

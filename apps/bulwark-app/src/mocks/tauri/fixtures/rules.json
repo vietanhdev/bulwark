@@ -68,19 +68,19 @@
     "references": ["ATTACK-T1552.001", "ATTACK-T1078.004"],
     "explain": "Your AWS access key is saved in a plain file ({{ credential_stores.path }}, {{ credential_stores.long_lived_keys }} key(s)). These keys never expire, so whoever copies the file can use your AWS account, and run up your bill, until you notice. That is exactly what a poisoned Python package did in October 2026: LiteLLM 1.107.0 read these files on every developer machine that installed it.",
     "fix": "Sign in to AWS with sessions that expire on their own, instead of a key that works forever.\n1. Run 'aws configure sso' once to connect the AWS CLI to IAM Identity Center.\n2. Start each work session with 'aws sso login'. The session expires after a few hours.\n3. In the AWS console, deactivate and delete the old access key.\n4. Remove the key from {{ credential_stores.path }}.\nCan't use Identity Center? Keep the key in a password manager (1Password, Bitwarden or KeePassXC) and let the AWS CLI fetch it when needed with 'credential_process'.\n",
-    "os": ["linux"],
+    "os": ["linux", "macos"],
     "profiles": []
   },
   {
     "id": "BLWK-CRED-002",
-    "title": "Git stores passwords and tokens in plain text",
+    "title": "Git stores passwords and tokens in plain text ({{ credential_stores.path }})",
     "category": "credential-exposure",
     "severity": "high",
     "collector": "credential_stores",
     "references": ["ATTACK-T1552.001"],
     "explain": "Git is saving your passwords and access tokens in a plain text file ({{ credential_stores.path }}). Any program running as you can read it, and a GitHub token usually lets someone push code to your repositories or publish packages in your name.",
     "fix": "Let Git keep your tokens in your computer's keychain instead of a plain file.\n1. For GitHub, run 'gh auth setup-git'. Git then uses the GitHub CLI's login, which is stored in your keychain.\n2. For other Git hosts, install Git Credential Manager. It works on Linux, macOS and Windows and uses the system keychain.\n3. Stop using the plain-file store: 'git config --global --unset credential.helper'.\n4. Delete ~/.git-credentials and revoke the tokens it contained, in case they were already copied.\nEven better: use SSH keys for Git, protected by a passphrase or a hardware key.\n",
-    "os": ["linux"],
+    "os": ["linux", "macos"],
     "profiles": []
   },
   {
@@ -92,7 +92,7 @@
     "references": ["ATTACK-T1552.001"],
     "explain": "Docker saved {{ credential_stores.inline_auths }} registry login(s) inside {{ credential_stores.path }}. They look scrambled, but it is only base64 encoding, not encryption: anyone who can read the file can decode your username and password or token in seconds.",
     "fix": "Let Docker keep registry logins in your computer's keychain.\n1. Install Docker's credential helper ('golang-docker-credential-helpers' on Ubuntu; built in on macOS and Windows, and Docker Desktop sets it up for you).\n2. In {{ credential_stores.path }}, set \"credsStore\" to \"secretservice\" (Linux), \"osxkeychain\" (macOS) or \"wincred\" (Windows).\n3. Delete the entries under \"auths\", then run 'docker login' again for each registry.\n4. Rotate any registry token that was stored in the file.\n",
-    "os": ["linux"],
+    "os": ["linux", "macos"],
     "profiles": []
   },
   {
@@ -104,7 +104,7 @@
     "references": ["CIS-6.1", "ATTACK-T1552.001"],
     "explain": "{{ credential_stores.path }} holds a login token for a tool ({{ credential_stores.kind }}), and other users or programs on this computer can read it (permissions {{ credential_stores.mode }}). Token files should be readable by you alone.",
     "fix": "Make the file private, then keep the token somewhere safer if the tool allows it.\n1. Run 'chmod 600 {{ credential_stores.path }}' so only you can read it.\n2. Move the token into a password manager and pass it to the tool when it runs: for example 'op run' (1Password) or 'bws run' (Bitwarden).\n3. For npm, write '//registry.npmjs.org/:_authToken=${NPM_TOKEN}' in .npmrc so the file holds no secret.\n4. For PyPI, let twine read the token from your keychain: 'pip install keyring'.\nIf other people use this computer, rotate the token too.\n",
-    "os": ["linux"],
+    "os": ["linux", "macos"],
     "profiles": []
   },
   {
@@ -117,6 +117,114 @@
     "explain": "A shell startup file sets HISTSIZE=0, clears HISTFILE, or unsets it \u2014 commands run in that shell leave no trace in history. This is either a deliberate defense-evasion step by an attacker with a shell on the box, or a privacy tweak you made yourself; worth confirming which.",
     "fix": "If unrecognized, remove the HISTSIZE/HISTFILE override from ~/.bashrc, ~/.zshrc, or ~/.profile.",
     "os": ["linux"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-DEV-001",
+    "title": "Git skips TLS certificate checks ({{ dev_tool_config.path }})",
+    "category": "developer-tools",
+    "severity": "high",
+    "collector": "dev_tool_config",
+    "references": ["ATTACK-T1557", "ATTACK-T1195.001"],
+    "explain": "{{ dev_tool_config.path }} sets http.sslVerify = false for every remote. Anyone on the network path \u2014 public Wi-Fi, a compromised router or proxy \u2014 can impersonate GitHub or your Git server, read the credentials Git sends, and hand you modified code that you then build and run.",
+    "fix": "Remove the line with 'git config --global --unset http.sslVerify'. If one server has a private certificate, trust its CA for that server only: git config --global http.https://git.example.com/.sslCAInfo /path/to/ca.pem",
+    "os": ["linux", "macos", "windows"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-DEV-002",
+    "title": "Git trusts repositories owned by anyone ({{ dev_tool_config.path }})",
+    "category": "developer-tools",
+    "severity": "medium",
+    "collector": "dev_tool_config",
+    "references": ["ATTACK-T1059", "ATTACK-T1204"],
+    "explain": "{{ dev_tool_config.path }} sets safe.directory = *, which turns off Git's protection against repositories owned by another user (CVE-2022-24765). A repository someone else controls \u2014 on a shared machine, in /tmp or a mounted drive \u2014 can then set core.fsmonitor or a hook that runs a command as you the moment you, your shell prompt or your editor runs git status there.",
+    "fix": "Replace the wildcard with the specific directories you need: git config --global --unset-all safe.directory, then git config --global --add safe.directory /path/to/that/repo for each one.",
+    "os": ["linux", "macos", "windows"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-DEV-003",
+    "title": "Git allows the ext:: transport, which runs commands from a URL ({{ dev_tool_config.path }})",
+    "category": "developer-tools",
+    "severity": "high",
+    "collector": "dev_tool_config",
+    "references": ["ATTACK-T1059", "ATTACK-T1195.001"],
+    "explain": "{{ dev_tool_config.path }} sets protocol.allow (or protocol.ext.allow) to always. An ext:: remote is a shell command, so a submodule URL or a link in a project can run arbitrary code on this machine when Git fetches it. Git disables it by default for exactly this reason.",
+    "fix": "Remove the setting: git config --global --unset protocol.allow and git config --global --unset protocol.ext.allow. If one tool needs ext::, pass -c protocol.ext.allow=always on that one command.",
+    "os": ["linux", "macos", "windows"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-DEV-004",
+    "title": "SSH doesn't check server identities ({{ dev_tool_config.path }})",
+    "category": "developer-tools",
+    "severity": "medium",
+    "collector": "dev_tool_config",
+    "references": ["ATTACK-T1557"],
+    "explain": "{{ dev_tool_config.path }} applies {{ dev_tool_config.detail }} to every host, so SSH connects without verifying it is talking to the real server. Anyone in the network path can pose as GitHub, a deploy target or a bastion, capture what you type and push you modified code.",
+    "fix": "Remove the line, or use 'StrictHostKeyChecking accept-new', which trusts a server the first time and still refuses a key that later changes. Keep any exception inside a Host block for the one throw-away machine that needs it.",
+    "os": ["linux", "macos", "windows"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-DEV-005",
+    "title": "SSH forwards your agent to every server ({{ dev_tool_config.path }})",
+    "category": "developer-tools",
+    "severity": "medium",
+    "collector": "dev_tool_config",
+    "references": ["ATTACK-T1563.001"],
+    "explain": "{{ dev_tool_config.path }} sets ForwardAgent yes for all hosts. While you are connected, root \u2014 or an attacker \u2014 on any server you log in to can use your loaded keys to sign in to every other machine and Git host those keys open, without ever seeing the key itself.",
+    "fix": "Remove ForwardAgent from Host * (and the top of the file). To reach a machine through another, use ProxyJump (ssh -J bastion target), which needs no forwarding; if one host truly needs it, set ForwardAgent yes in that host's block only.",
+    "os": ["linux", "macos", "windows"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-DEV-006",
+    "title": "npm/yarn installs packages without checking TLS certificates ({{ dev_tool_config.path }})",
+    "category": "developer-tools",
+    "severity": "high",
+    "collector": "dev_tool_config",
+    "references": ["ATTACK-T1195.001", "ATTACK-T1557"],
+    "explain": "{{ dev_tool_config.path }} turns off certificate checks for the package registry. Anyone on the network path can serve a modified package \u2014 whose install script runs on this machine \u2014 and read the registry token npm sends.",
+    "fix": "Remove strict-ssl=false (npm config delete strict-ssl), or enableStrictSsl: false for yarn. Behind a corporate proxy, point npm at its CA instead: npm config set cafile /path/to/proxy-ca.pem",
+    "os": ["linux", "macos", "windows"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-DEV-007",
+    "title": "Packages are installed from a plain-HTTP registry ({{ dev_tool_config.path }})",
+    "category": "developer-tools",
+    "severity": "high",
+    "collector": "dev_tool_config",
+    "references": ["ATTACK-T1195.001", "ATTACK-T1557"],
+    "explain": "{{ dev_tool_config.path }} installs from {{ dev_tool_config.detail }} over unencrypted HTTP. Anyone on the network path can swap in a package that runs its own code at install time, and can read any token sent with the request.",
+    "fix": "Change the address to https:// (npm config set registry https://\u2026, or index-url / extra-index-url in pip.conf). If the registry has no HTTPS, put it behind a TLS proxy rather than installing over plain HTTP.",
+    "os": ["linux", "macos", "windows"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-DEV-008",
+    "title": "pip skips certificate checks for a package index ({{ dev_tool_config.path }})",
+    "category": "developer-tools",
+    "severity": "medium",
+    "collector": "dev_tool_config",
+    "references": ["ATTACK-T1195.001", "ATTACK-T1557"],
+    "explain": "{{ dev_tool_config.path }} lists {{ dev_tool_config.detail }} as a trusted-host, which tells pip to accept any certificate \u2014 or none \u2014 from it. A spoofed or intercepted index can then serve packages that run code when installed.",
+    "fix": "Remove the trusted-host line and give pip the index's CA instead: pip config set global.cert /path/to/ca.pem",
+    "os": ["linux", "macos", "windows"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-DEV-009",
+    "title": "Docker's API is open to every program on this computer ({{ dev_tool_config.path }})",
+    "category": "developer-tools",
+    "severity": "high",
+    "collector": "dev_tool_config",
+    "references": ["ATTACK-T1610", "ATTACK-T1133"],
+    "explain": "{{ dev_tool_config.path }} opens the Docker API on {{ dev_tool_config.detail }} with no authentication. Any program running as any user on this computer \u2014 a malicious package's install script, another account \u2014 can start a container with this machine's disk mounted and become root here. (An API reachable from the network is reported separately, from the open port.)",
+    "fix": "Remove the tcp:// entry from daemon.json (or untick 'Expose daemon on tcp://localhost:2375 without TLS' in Docker Desktop \u2192 Settings \u2192 General) and use the default socket. For remote access use ssh://user@host as the Docker host, or TLS with client certificates on port 2376.",
+    "os": ["linux", "macos", "windows"],
     "profiles": []
   },
   {
@@ -150,7 +258,7 @@
     "severity": "info",
     "collector": "file_integrity",
     "references": [],
-    "explain": "{{ file_integrity.path }} is present but has no recorded baseline hash, so Bulwark can tell that it exists but not whether it has been tampered with. This fires per-file, on purpose: the previous version keyed on whether a baseline existed *at all*, which meant that once you had baselined anything, a critical file you had never actually recorded \u2014 including one added to the watch list later \u2014 read as \"verified clean\" rather than \"never checked\". A file nobody ever baselined is not a file known to be good.",
+    "explain": "{{ file_integrity.path }} is present but has no recorded baseline hash, so Bulwark can tell that it exists but not whether it has been tampered with. This fires per-file, on purpose: the previous version keyed on whether a baseline existed *at all*, which meant that once you had baselined anything, a critical file you had never actually recorded \u2014 including one added to the watch list later \u2014 read as \"verified clean\" rather than \"never checked\". A file nobody ever baselined is not a file known to be good. (With no baseline recorded at all, that single fact is reported once, as BLWK-FIM-009, instead of once per watched file.)",
     "fix": "Run 'bulwarkctl fim baseline' now, while you trust this host, to record a known-good hash for this file (add '--privileged' to also cover /etc/shadow and /etc/sudoers).",
     "os": ["linux"],
     "profiles": []
@@ -212,6 +320,18 @@
     "references": [],
     "explain": "{{ file_integrity_privileged.path }} (/etc/shadow or /etc/sudoers) exists but its hash could not be computed this scan, so its integrity is unverifiable. Rated high because on the two most sensitive files Bulwark tracks, an inability to read them is itself worth attention \u2014 it can mean a permissions change that a privileged scan should have handled, or something actively interfering with access. It is deliberately not reported as \"modified\": a failure to look is not evidence of a change.",
     "fix": "Re-run under privilege ('sudo bulwarkctl scan --privileged') so the file is readable, and confirm 'sha256sum' is installed. If it still can't be read as root, investigate why.\n",
+    "os": ["linux"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-FIM-009",
+    "title": "No file-integrity baseline recorded yet",
+    "category": "file-integrity",
+    "severity": "info",
+    "collector": "file_integrity",
+    "references": [],
+    "explain": "Bulwark watches {{ file_integrity.watched }} critical files (sshd_config, PAM, sudo, su, login settings and similar) for tampering, but no known-good baseline has been recorded on this machine, so it can see the files exist but not whether any of them has been changed.",
+    "fix": "Run 'bulwarkctl fim baseline' now, while you trust this machine, to record known-good hashes (add '--privileged' with sudo to also cover /etc/shadow and /etc/sudoers). In the desktop app: File changes \u2192 Record baseline.",
     "os": ["linux"],
     "profiles": []
   },
@@ -540,6 +660,78 @@
     "profiles": ["server"]
   },
   {
+    "id": "BLWK-MAC-001",
+    "title": "FileVault disk encryption is off",
+    "category": "macos-hardening",
+    "severity": "high",
+    "collector": "macos_security",
+    "references": ["ATTACK-T1005", "ATTACK-T1552.001"],
+    "explain": "The startup disk isn't encrypted. Anyone who gets hold of this Mac \u2014 lost bag, repair shop, theft \u2014 can read every file on it, including SSH keys, browser sessions and cloud credentials, without knowing your password.",
+    "fix": "Turn it on in System Settings \u2192 Privacy & Security \u2192 FileVault (or 'sudo fdesetup enable'). Keep the recovery key in your password manager, not on the Mac.",
+    "os": ["macos"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-MAC-002",
+    "title": "Gatekeeper is disabled",
+    "category": "macos-hardening",
+    "severity": "high",
+    "collector": "macos_security",
+    "references": ["ATTACK-T1553.001"],
+    "explain": "Gatekeeper checks that apps are signed and notarized before they run. With it off, a downloaded app \u2014 or one a malicious installer drops \u2014 runs without that check.",
+    "fix": "Run 'sudo spctl --master-enable', then confirm with 'spctl --status' (it should print 'assessments enabled').",
+    "os": ["macos"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-MAC-003",
+    "title": "System Integrity Protection is disabled",
+    "category": "macos-hardening",
+    "severity": "high",
+    "collector": "macos_security",
+    "references": ["ATTACK-T1562.001", "ATTACK-T1014"],
+    "explain": "System Integrity Protection stops even root from modifying macOS system files, kernel extensions and protected processes. With it off, malware that gets root can tamper with the operating system itself and hide there.",
+    "fix": "Restart into Recovery (hold the power button on Apple silicon), open Utilities \u2192 Terminal, run 'csrutil enable', and restart. 'csrutil status' should then print 'enabled'.",
+    "os": ["macos"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-MAC-004",
+    "title": "The macOS firewall is off",
+    "category": "macos-hardening",
+    "severity": "medium",
+    "collector": "macos_security",
+    "references": ["ATTACK-T1133"],
+    "explain": "The application firewall is off, so any service on this Mac that listens on the network can be reached from whatever network you're on.",
+    "fix": "Turn it on in System Settings \u2192 Network \u2192 Firewall (or 'sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate on'). Stealth mode is worth enabling too.",
+    "os": ["macos"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-MAC-005",
+    "title": "Automatic security updates are off",
+    "category": "macos-hardening",
+    "severity": "medium",
+    "collector": "macos_security",
+    "references": ["ATTACK-T1562.001"],
+    "explain": "macOS can install security responses and system data files (XProtect malware signatures among them) automatically. That's turned off, so protection against newly found malware arrives only when you update by hand.",
+    "fix": "In System Settings \u2192 General \u2192 Software Update \u2192 Automatic Updates, turn on 'Install Security Responses and system files'.",
+    "os": ["macos"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-MAC-006",
+    "title": "The guest account is enabled",
+    "category": "macos-hardening",
+    "severity": "low",
+    "collector": "macos_security",
+    "references": ["ATTACK-T1078.001"],
+    "explain": "Anyone can log in to this Mac as a guest without a password. Guest sessions are limited, but they still give a stranger a foothold on the machine.",
+    "fix": "Turn it off in System Settings \u2192 Users & Groups \u2192 Guest User.",
+    "os": ["macos"],
+    "profiles": []
+  },
+  {
     "id": "BLWK-NET-001",
     "title": "A VNC/remote-desktop port is listening",
     "category": "network-egress",
@@ -565,7 +757,7 @@
   },
   {
     "id": "BLWK-NET-003",
-    "title": "A database or development service is open to the network",
+    "title": "A database or development service is open to the network (port {{ listening_ports.port }})",
     "category": "network-egress",
     "severity": "high",
     "collector": "listening_ports",
@@ -584,6 +776,18 @@
     "references": ["CIS-3.5", "ATTACK-T1133"],
     "explain": "No firewall is blocking incoming connections, so every service that listens on the network can be reached from any network you join. A firewall is your safety net for the service you forgot was running.",
     "fix": "Turn on a firewall that blocks incoming connections by default.\n1. Ubuntu and Debian: 'sudo ufw default deny incoming', then 'sudo ufw enable'.\n2. If you log in to this machine remotely, allow SSH first: 'sudo ufw allow OpenSSH'.\n3. Fedora and RHEL: 'sudo systemctl enable --now firewalld'.\nNote: Docker opens its ports around ufw, so also bind containers to 127.0.0.1.\n",
+    "os": ["linux"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-NET-005",
+    "title": "A database or development service listens on all interfaces (port {{ listening_ports.port }}, behind the firewall)",
+    "category": "network-egress",
+    "severity": "medium",
+    "collector": "listening_ports",
+    "references": ["ATTACK-T1133"],
+    "explain": "A database or development service listens on every network interface (port {{ listening_ports.port }}, on {{ listening_ports.listen_address }}). The host firewall denies incoming connections by default, so it isn't directly reachable \u2014 but its safety now depends on that firewall. Ports published by Docker bypass ufw unless DOCKER-USER rules restrict them, and a single \"allow\" rule added later reopens it.",
+    "fix": "Bind it to this computer only, so it doesn't depend on the firewall.\n1. For Docker Compose, change the port line from '{{ listening_ports.port }}:{{ listening_ports.port }}' to '127.0.0.1:{{ listening_ports.port }}:{{ listening_ports.port }}' and restart the stack.\n2. For a service installed directly, set its listen or bind address to 127.0.0.1.\n3. If it must stay reachable from other machines, restrict it in DOCKER-USER (for Docker) or with a ufw rule scoped to your private network (e.g. your tailnet), and accept the risk here.\n",
     "os": ["linux"],
     "profiles": []
   },
@@ -613,13 +817,13 @@
   },
   {
     "id": "BLWK-PERSIST-003",
-    "title": "Unexpected LaunchAgent/LaunchDaemon found",
+    "title": "Suspicious LaunchAgent/LaunchDaemon: {{ launchd_persistence.label }}",
     "category": "persistence",
     "severity": "high",
     "collector": "launchd_persistence",
     "references": ["ATTACK-T1543.001"],
-    "explain": "The LaunchAgent/LaunchDaemon \"{{ launchd_persistence.label }}\" runs on every login/boot and isn't one this host's baseline recognizes \u2014 macOS's equivalent of a rogue systemd unit.",
-    "fix": "Review the plist under ~/Library/LaunchAgents or /Library/Launch{Agents,Daemons} and remove it if you didn't create it.",
+    "explain": "The launch job \"{{ launchd_persistence.label }}\" ({{ launchd_persistence.path }}) starts on every login or boot, and {{ launchd_persistence.reason }} \u2014 the shape macOS persistence malware takes rather than the shape installed software does. It runs: {{ launchd_persistence.program }}.",
+    "fix": "If you didn't create it, unload it with `launchctl bootout gui/$(id -u) {{ launchd_persistence.path }}` (or `sudo launchctl bootout system {{ launchd_persistence.path }}` for /Library/LaunchDaemons), move the plist and the program it runs aside, and check what else that program touched.",
     "os": ["macos"],
     "profiles": ["desktop"]
   },
@@ -853,14 +1057,14 @@
   },
   {
     "id": "BLWK-SSH-012",
-    "title": "SSH private key is not passphrase-protected",
+    "title": "SSH private key is not passphrase-protected: {{ ssh_private_keys.path }}",
     "category": "ssh-remote-access",
     "severity": "high",
     "collector": "ssh_private_keys",
     "references": ["CIS-5.2", "ATTACK-T1552.004", "ATTACK-T1078"],
     "explain": "Your SSH key {{ ssh_private_keys.path }} has no passphrase. It works like a password that is written down: anyone or any program that copies this one file can log in to every server and Git host that trusts it, with nothing else needed.",
     "fix": "Lock the key with a passphrase. It takes a minute and your servers need no changes.\n1. In the Bulwark app, open this issue and use \"Add a passphrase\". In a terminal, run 'ssh-keygen -p -f {{ ssh_private_keys.path }}'.\n2. To avoid typing it all the time, load the key once per session with 'ssh-add {{ ssh_private_keys.path }}'.\n3. Delete keys for machines you no longer use.\nStronger options: keep keys in a password manager's SSH agent (Bitwarden, 1Password, KeePassXC), or use a hardware key that cannot be copied at all ('ssh-keygen -t ed25519-sk' with a YubiKey).\n",
-    "os": ["linux"],
+    "os": ["linux", "macos"],
     "profiles": []
   },
   {
@@ -872,7 +1076,127 @@
     "references": ["CIS-5.2", "ATTACK-T1552.004"],
     "explain": "The file at {{ ssh_private_keys.path }} (format: {{ ssh_private_keys.key_format }}) is a private key, but its encryption header could not be parsed, so Bulwark cannot confirm whether it is passphrase-protected. Rather than guess \u2014 and risk reporting a plaintext key as safe \u2014 it is surfaced here for you to check by hand. A healthy key does not normally hit this state, so the file may be truncated, corrupted, or in a format this version doesn't fully recognize.",
     "fix": "Inspect the key directly: 'ssh-keygen -y -f {{ ssh_private_keys.path }}' will prompt for a passphrase if one is set (and error out plainly if the file is malformed). If it is unprotected, add a passphrase with 'ssh-keygen -p -f {{ ssh_private_keys.path }}'. If the file is corrupt or not actually a key you use, remove or restore it.\n",
-    "os": ["linux"],
+    "os": ["linux", "macos"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-WIN-001",
+    "title": "Microsoft Defender real-time protection is off",
+    "category": "windows-hardening",
+    "severity": "high",
+    "collector": "windows_security",
+    "references": ["ATTACK-T1562.001"],
+    "explain": "Real-time protection is what stops malware as it's downloaded or run. With it off, Defender only finds threats when a scan happens to run.",
+    "fix": "Turn it on in Windows Security \u2192 Virus & threat protection \u2192 Manage settings \u2192 Real-time protection. If it keeps switching off, check for another antivirus or a policy disabling it.",
+    "os": ["windows"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-WIN-002",
+    "title": "Microsoft Defender signatures are out of date",
+    "category": "windows-hardening",
+    "severity": "medium",
+    "collector": "windows_security",
+    "references": ["ATTACK-T1562.001"],
+    "explain": "Defender's malware signatures are {{ windows_security.defender_signature_age }} days old, so recently discovered threats aren't recognised.",
+    "fix": "Run 'Update-MpSignature' in PowerShell (or Windows Security \u2192 Virus & threat protection \u2192 Protection updates), and check that Windows Update can reach the internet.",
+    "os": ["windows"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-WIN-003",
+    "title": "Windows Firewall is off for a network profile",
+    "category": "windows-hardening",
+    "severity": "high",
+    "collector": "windows_security",
+    "references": ["ATTACK-T1562.004"],
+    "explain": "The firewall is off for: {{ windows_security.firewall_off_profiles }}. On a network of that type, every listening service on this machine can be reached.",
+    "fix": "Turn it back on in Windows Security \u2192 Firewall & network protection, or run 'Set-NetFirewallProfile -All -Enabled True' in an elevated PowerShell.",
+    "os": ["windows"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-WIN-004",
+    "title": "BitLocker is not protecting the system drive",
+    "category": "windows-hardening",
+    "severity": "high",
+    "collector": "windows_security",
+    "references": ["ATTACK-T1005"],
+    "explain": "The system drive isn't encrypted, so anyone with physical access to the disk can read every file on it \u2014 including saved credentials and SSH keys.",
+    "fix": "Turn on BitLocker (Control Panel \u2192 BitLocker Drive Encryption, or 'manage-bde -on C:' elevated) and store the recovery key somewhere other than this machine.",
+    "os": ["windows"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-WIN-005",
+    "title": "User Account Control is disabled",
+    "category": "windows-hardening",
+    "severity": "high",
+    "collector": "windows_security",
+    "references": ["ATTACK-T1548.002"],
+    "explain": "With UAC off, every program an administrator runs gets full administrator rights silently \u2014 a malicious download included.",
+    "fix": "Set EnableLUA to 1 under HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System (or restore the default in Control Panel \u2192 User Account Control Settings) and restart.",
+    "os": ["windows"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-WIN-006",
+    "title": "Remote Desktop is on without Network Level Authentication",
+    "category": "windows-hardening",
+    "severity": "high",
+    "collector": "windows_security",
+    "references": ["ATTACK-T1021.001"],
+    "explain": "Remote Desktop accepts connections, and without Network Level Authentication anyone who can reach it gets a login screen \u2014 and the pre-authentication attack surface \u2014 before proving who they are.",
+    "fix": "Turn on 'Require devices to use Network Level Authentication' in Settings \u2192 System \u2192 Remote Desktop, or turn Remote Desktop off if you don't use it. Limit it to your VPN or private network.",
+    "os": ["windows"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-WIN-007",
+    "title": "SMBv1 is enabled",
+    "category": "windows-hardening",
+    "severity": "high",
+    "collector": "windows_security",
+    "references": ["ATTACK-T1210"],
+    "explain": "SMBv1 is the obsolete file-sharing protocol behind WannaCry and NotPetya. Nothing modern needs it.",
+    "fix": "Run 'Set-SmbServerConfiguration -EnableSMB1Protocol $false' in an elevated PowerShell, or remove the 'SMB 1.0/CIFS File Sharing Support' Windows feature.",
+    "os": ["windows"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-WIN-008",
+    "title": "The Windows Guest account is enabled",
+    "category": "windows-hardening",
+    "severity": "medium",
+    "collector": "windows_security",
+    "references": ["ATTACK-T1078.001"],
+    "explain": "The built-in Guest account is switched on. Anyone who can reach this computer, at the keyboard or over the network, can sign in without a password of their own and reach shared folders and printers.",
+    "fix": "In an administrator PowerShell run: Get-LocalUser | Where-Object { $_.SID -like '*-501' } | Disable-LocalUser. Or open Computer Management \u2192 Local Users and Groups \u2192 Users \u2192 Guest and tick 'Account is disabled'.",
+    "os": ["windows"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-WIN-009",
+    "title": "Automatic sign-in keeps a password in the registry",
+    "category": "windows-hardening",
+    "severity": "high",
+    "collector": "windows_security",
+    "references": ["ATTACK-T1552.002"],
+    "explain": "Windows signs in by itself using a password stored in plain text in the registry (Winlogon's DefaultPassword). Anyone with administrator access, any malware running as administrator, and anyone with the disk can read that account's password.",
+    "fix": "Turn off automatic sign-in (run 'netplwiz' and tick 'Users must enter a user name and password', or set AutoAdminLogon to 0), then delete the DefaultPassword value under HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon and change that account's password.",
+    "os": ["windows"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-WIN-010",
+    "title": "Windows hasn't installed an update in {{ windows_security.last_update_days }} days",
+    "category": "windows-hardening",
+    "severity": "medium",
+    "collector": "windows_security",
+    "references": ["ATTACK-T1190"],
+    "explain": "The newest installed Windows update is {{ windows_security.last_update_days }} days old. Microsoft releases security fixes every month, so this computer is likely missing fixes for vulnerabilities that are already public.",
+    "fix": "Open Settings \u2192 Windows Update \u2192 Check for updates and install what's offered. If updates keep failing or are paused, check 'Pause updates' and any update policy set by your organisation.",
+    "os": ["windows"],
     "profiles": []
   }
 ]

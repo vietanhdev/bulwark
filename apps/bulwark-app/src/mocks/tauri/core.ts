@@ -2,6 +2,7 @@
 // apps/bulwark-app/src-tauri/src/lib.rs exactly (same field names), just backed by fixtures
 // instead of a real scan.
 import rulesFixture from "./fixtures/rules.json";
+import { machineHandlers } from "./machines";
 import {
   dashboardSnapshot,
   scanRunResult,
@@ -238,6 +239,13 @@ async function streamAiScan(channel: Channel<unknown>) {
 
 // In-memory suppression state for the browser-dev harness, mirroring the store's two-table split:
 // current state plus an append-only audit trail that survives un-suppression.
+let mockPlaceIgnores: {
+  rule_id: string;
+  location: string;
+  reason: string;
+  created_at: string;
+  created_by: string;
+}[] = [];
 let mockSuppressions: { rule_id: string; reason: string; created_at: string; created_by: string }[] = [];
 const mockAudit: {
   id: string;
@@ -481,9 +489,39 @@ const mockComplianceReport = {
 };
 
 const handlers: Record<string, (args: Args) => unknown> = {
+  ...machineHandlers,
   rules_list: () => rulesFixture,
+  // `?platform=windows|macos` previews the other desktop builds (dev mocks only).
+  host_platform: () => new URLSearchParams(location.search).get("platform") ?? "linux",
   compliance_report: () => mockComplianceReport,
   suppressions_list: () => mockSuppressions,
+  finding_ignores_list: () => mockPlaceIgnores,
+  custom_rules_info: () => ({
+    dir: "/home/user/.config/bulwark/rules",
+    exists: false,
+    loaded: 0,
+    errors: [],
+  }),
+  custom_rules_open: () => "/home/user/.config/bulwark/rules",
+  finding_ignore: (args) => {
+    const reason = String(args?.reason ?? "").trim();
+    if (!reason) throw new Error("ignoring an issue needs a reason");
+    const rule_id = String(args?.ruleId ?? "");
+    const location = String(args?.location ?? "");
+    mockPlaceIgnores = [
+      ...mockPlaceIgnores.filter((p) => !(p.rule_id === rule_id && p.location === location)),
+      { rule_id, location, reason, created_at: new Date().toISOString(), created_by: "desktop-user" },
+    ];
+    return null;
+  },
+  finding_unignore: (args) => {
+    const reason = String(args?.reason ?? "").trim();
+    if (!reason) throw new Error("un-ignoring an issue needs a reason");
+    mockPlaceIgnores = mockPlaceIgnores.filter(
+      (p) => !(p.rule_id === args?.ruleId && p.location === args?.location),
+    );
+    return null;
+  },
   suppression_audit: (args) => {
     const ruleId = args?.ruleId as string | null | undefined;
     const log = ruleId ? mockAudit.filter((e) => e.rule_id === ruleId) : mockAudit;
@@ -555,7 +593,18 @@ const handlers: Record<string, (args: Args) => unknown> = {
       errors: [],
     };
   },
-  dashboard_snapshot: () => ({ ...dashboardSnapshot, agent_scanned: true }),
+  dashboard_snapshot: () => ({
+    ...dashboardSnapshot,
+    agent_scanned: true,
+    // What a real unprivileged Linux scan records: every Linux rule whose collector wasn't skipped.
+    rules_evaluated: rulesFixture
+      .filter(
+        (r) =>
+          r.os.includes("linux") &&
+          !(dashboardSnapshot.meta?.privileged_collectors_skipped ?? []).includes(r.collector),
+      )
+      .map((r) => r.id),
+  }),
   history_count: () => historyRuns.length,
   history_list: () => historyRuns,
   monitoring_get_status: () => monitoringStatus,

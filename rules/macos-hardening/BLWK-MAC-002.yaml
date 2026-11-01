@@ -1,0 +1,12 @@
+id: BLWK-MAC-002
+title: Gatekeeper is disabled
+category: macos-hardening
+severity: high
+collector: macos_security
+os: [macos]
+# Only fires on a value actually read; "unknown" (command failed, unrecognised output) never does.
+condition: gatekeeper_on_known == true and gatekeeper_on == false
+explain: >
+  Gatekeeper checks that apps are signed and notarized before they run. With it off, a downloaded app — or one a malicious installer drops — runs without that check.
+fix: "Run 'sudo spctl --master-enable', then confirm with 'spctl --status' (it should print 'assessments enabled')."
+references: [ATTACK-T1553.001]

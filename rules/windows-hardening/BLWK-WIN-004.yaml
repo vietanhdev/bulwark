@@ -1,0 +1,12 @@
+id: BLWK-WIN-004
+title: BitLocker is not protecting the system drive
+category: windows-hardening
+severity: high
+collector: windows_security
+os: [windows]
+# Only fires on a value actually read; an unreadable setting (e.g. BitLocker without elevation) never does.
+condition: bitlocker_on_known == true and bitlocker_on == false
+explain: >
+  The system drive isn't encrypted, so anyone with physical access to the disk can read every file on it — including saved credentials and SSH keys.
+fix: "Turn on BitLocker (Control Panel → BitLocker Drive Encryption, or 'manage-bde -on C:' elevated) and store the recovery key somewhere other than this machine."
+references: [ATTACK-T1005]

@@ -6,6 +6,9 @@
 - `antivirus.png` — Virus scan: ClamAV signature status, folder watching, and a finished scan
 - `rules.png` — All checks: the full rule pack, searchable and filterable by severity
 - `settings.png` — Settings: theme, accent and sidebar colour, monitoring, AI assistant checks
+- `machines.png` — Remote: every monitored machine with its system, connection and last scan
+- `machine.png` — one remote machine opened: connection and last scan side by side, and its issues
+  grouped the same way Home groups this computer's
 - `hero-<chrome>.png` — Home in four sidebar/accent pairings for the website's theme fan;
   `hero-graphite.png` is the default (aqua on graphite)
 

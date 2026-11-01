@@ -1,0 +1,11 @@
+id: BLWK-DEV-001
+title: "Git skips TLS certificate checks ({{ dev_tool_config.path }})"
+category: developer-tools
+severity: high
+collector: dev_tool_config
+os: [linux, macos, windows]
+condition: kind == "git" and ssl_verify_off == true
+explain: >
+  {{ dev_tool_config.path }} sets http.sslVerify = false for every remote. Anyone on the network path — public Wi-Fi, a compromised router or proxy — can impersonate GitHub or your Git server, read the credentials Git sends, and hand you modified code that you then build and run.
+fix: "Remove the line with 'git config --global --unset http.sslVerify'. If one server has a private certificate, trust its CA for that server only: git config --global http.https://git.example.com/.sslCAInfo /path/to/ca.pem"
+references: [ATTACK-T1557, ATTACK-T1195.001]

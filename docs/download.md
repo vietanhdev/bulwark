@@ -57,6 +57,12 @@ const is = {
   cliDebArm: (n) => n.startsWith("bulwarkctl") && n.endsWith("_arm64.deb"),
   cliRpmArm: (n) => n.startsWith("bulwarkctl") && n.endsWith(".aarch64.rpm"),
   cliTarballArm: (n) => n.startsWith("bulwarkctl") && n.endsWith("-aarch64-linux.tar.gz"),
+  // macOS (Apple silicon) and Windows (x86_64). Same rule as above: every predicate names the
+  // platform AND the arch, so a future Intel-mac or Windows-on-ARM asset can't be handed out.
+  macDmg: (n) => n.startsWith("bulwark-desktop") && n.endsWith("-macos-aarch64.dmg"),
+  macCli: (n) => n.startsWith("bulwarkctl") && n.endsWith("-macos-aarch64.tar.gz"),
+  winSetup: (n) => n.startsWith("bulwark-desktop") && n.endsWith("-windows-x86_64-setup.exe"),
+  winCli: (n) => n.startsWith("bulwarkctl") && n.endsWith("-windows-x86_64.zip"),
 };
 
 // Always yields a working link: the direct asset once a release exists, the releases page
@@ -194,6 +200,37 @@ sudo apt update
 sudo apt install bulwarkctl
 bulwarkctl scan
 ```
+
+## macOS and Windows
+
+New: the desktop app and the CLI also run on **macOS (Apple silicon)** and **Windows (x86_64)**.
+Their checks cover each system's core security settings — FileVault, Gatekeeper, System Integrity
+Protection, firewall and automatic updates on a Mac; Defender, firewall, BitLocker, UAC, Remote
+Desktop, SMBv1, the Guest account, automatic sign-in and Windows Update on Windows — and on the Mac also the checks for plain-text credentials and
+unprotected SSH keys. Coverage is growing, and the score only ever counts checks that actually ran
+on that system. On Windows, Microsoft Defender is the virus scanner (Bulwark checks it stays on;
+ClamAV is optional), and File changes, which watches Linux and macOS system files, isn't
+available yet.
+
+<div class="dl-grid">
+  <a class="dl-card" :href="url(is.macDmg)">
+    <span class="dl-card-title">macOS app</span>
+    <span class="dl-card-sub">.dmg · Apple silicon</span>
+  </a>
+  <a class="dl-card" :href="url(is.winSetup)">
+    <span class="dl-card-title">Windows app</span>
+    <span class="dl-card-sub">installer · x86_64</span>
+  </a>
+</div>
+
+Command line: <a :href="url(is.macCli)">macOS tarball</a> · <a :href="url(is.winCli)">Windows zip</a>.
+Keep the `rules` folder next to the binary.
+
+::: warning Not code-signed yet
+The macOS and Windows builds aren't signed yet, so macOS Gatekeeper and Windows SmartScreen warn on
+first launch. On macOS, right-click the app and choose **Open**; on Windows, choose **More info →
+Run anyway**.
+:::
 
 ## Verify your download
 

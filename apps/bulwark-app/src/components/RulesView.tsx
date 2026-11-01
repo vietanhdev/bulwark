@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { invoke } from "@tauri-apps/api/core";
 import { Ban, Check, ChevronRight, History, RotateCcw, Search, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -14,13 +15,15 @@ import {
   severityLabel,
   type Severity,
 } from "@/components/Severity";
-import { computeHardeningIndex } from "@/lib/hardening";
+import { computeHardeningIndex, ruleRan, type RunEvidence } from "@/lib/hardening";
 import { useRevision } from "@/lib/revision";
 import { withPlaceholders } from "@/lib/fix-text";
 import { cn } from "@/lib/utils";
 
 interface RuleSummary {
   id: string;
+  /** From the user's own rules folder rather than the shipped pack. */
+  custom?: boolean;
   title: string;
   category: string;
   severity: Severity;
@@ -36,6 +39,16 @@ interface DashboardSnapshot {
   findings: { rule_id: string }[];
   suppressedFindings: { rule_id: string }[];
   meta: { privileged_collectors_skipped: string[] } | null;
+  agent_scanned: boolean;
+  rules_evaluated: string[];
+}
+
+interface PlaceIgnore {
+  rule_id: string;
+  location: string;
+  reason: string;
+  created_at: string;
+  created_by: string;
 }
 
 interface Suppression {
@@ -52,6 +65,8 @@ interface SuppressionEvent {
   reason: string;
   actor: string;
   at: string;
+  /** Set for a single-finding ignore: the one place it covered. */
+  location?: string;
 }
 
 /** How binding a control is. Only HIPAA draws this distinction; see `compliance::Obligation`. */
@@ -125,7 +140,7 @@ const OBLIGATION_NOTE: Record<Obligation, string> = {
 };
 
 export function RulesView() {
-  const { revision } = useRevision();
+  const { revision, bump } = useRevision();
   const [rules, setRules] = useState<RuleSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -137,8 +152,8 @@ export function RulesView() {
   // from what used to be a separate "Compliance" tab (the reference material about the rules, as
   // opposed to the scan-results Compliance tab that now shows the issues to fix).
   const [openRuleIds, setOpenRuleIds] = useState<Set<string>>(new Set());
-  const [skippedCollectors, setSkippedCollectors] = useState<Set<string>>(new Set());
   const [hasScanned, setHasScanned] = useState(false);
+  const [evidence, setEvidence] = useState<RunEvidence>({ rulesEvaluated: new Set(), agentScanned: false });
   // Two representations of the same rule pack, switched by a tab: the searchable catalog ("what
   // does Bulwark check, and how do I fix each thing"), and the framework/hardening view ("how does
   // that line up against CIS/MITRE, and how hardened is this host"). Both were requested as
@@ -149,6 +164,8 @@ export function RulesView() {
   // rule. Suppression never stops a rule running — it only changes how its findings are presented —
   // so this state lives alongside the catalog rather than gating it.
   const [suppressions, setSuppressions] = useState<Map<string, Suppression>>(new Map());
+  // Single findings ignored at one place (a rule + file/port), as opposed to whole rules.
+  const [placeIgnores, setPlaceIgnores] = useState<PlaceIgnore[]>([]);
   const [auditLog, setAuditLog] = useState<SuppressionEvent[]>([]);
   const [reasonDrafts, setReasonDrafts] = useState<Record<string, string>>({});
   const [actionError, setActionError] = useState<string | null>(null);
@@ -171,6 +188,9 @@ export function RulesView() {
     invoke<SuppressionEvent[]>("suppression_audit", { ruleId: null })
       .then(setAuditLog)
       .catch(() => {});
+    invoke<PlaceIgnore[]>("finding_ignores_list")
+      .then(setPlaceIgnores)
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -178,10 +198,8 @@ export function RulesView() {
       // Suppressed rules count as still-open for the hardening index and framework pass/fail:
       // accepting a risk is not fixing it, so a suppressed rule must not read as a passing control.
       setOpenRuleIds(new Set([...snap.findings, ...(snap.suppressedFindings ?? [])].map((f) => f.rule_id)));
-      if (snap.meta) {
-        setHasScanned(true);
-        setSkippedCollectors(new Set(snap.meta.privileged_collectors_skipped));
-      }
+      if (snap.meta) setHasScanned(true);
+      setEvidence({ rulesEvaluated: new Set(snap.rules_evaluated ?? []), agentScanned: snap.agent_scanned });
     });
     invoke<ComplianceView>("compliance_report")
       .then(setCompliance)
@@ -231,10 +249,31 @@ export function RulesView() {
     }
   }
 
+  async function unignorePlace(ruleId: string, location: string) {
+    const key = `${ruleId}@${location}`;
+    const reason = (reasonDrafts[key] ?? "").trim();
+    if (!reason) {
+      setActionError("A reason is required to stop ignoring an issue — it's an auditable decision.");
+      return;
+    }
+    setBusyRule(key);
+    setActionError(null);
+    try {
+      await invoke("finding_unignore", { ruleId, location, reason });
+      setReasonDrafts((d) => ({ ...d, [key]: "" }));
+      loadSuppressions();
+      bump();
+    } catch (e) {
+      setActionError(String(e));
+    } finally {
+      setBusyRule(null);
+    }
+  }
+
   const hardening = useMemo(() => {
     if (!rules || !hasScanned) return null;
-    return computeHardeningIndex(rules, openRuleIds, skippedCollectors);
-  }, [rules, openRuleIds, skippedCollectors, hasScanned]);
+    return computeHardeningIndex(rules, openRuleIds, evidence);
+  }, [rules, openRuleIds, evidence, hasScanned]);
 
   const frameworks = useMemo(() => {
     if (!rules) return [];
@@ -315,7 +354,12 @@ export function RulesView() {
               [
                 ["rules", "Rules"],
                 ["compliance", "Framework compliance"],
-                ["suppressed", suppressions.size > 0 ? `Suppressed (${suppressions.size})` : "Suppressed"],
+                [
+                  "suppressed",
+                  suppressions.size + placeIgnores.length > 0
+                    ? `Ignored (${suppressions.size + placeIgnores.length})`
+                    : "Ignored",
+                ],
               ] as const
             ).map(([id, label]) => {
               const on = tab === id;
@@ -396,7 +440,8 @@ export function RulesView() {
                         // either. Render neutral rather than a wall of green ticks claiming a clean
                         // bill of health nobody has earned.
                         const failing = openRuleIds.has(rule.id);
-                        const known = hasScanned;
+                        // A rule that never ran (another OS, a skipped collector) stays neutral too.
+                        const known = hasScanned && ruleRan(rule.id, openRuleIds, evidence);
                         return (
                           <div
                             key={`${reference}-${rule.id}`}
@@ -451,6 +496,8 @@ export function RulesView() {
             <SuppressedTab
               rules={rules}
               suppressions={suppressions}
+              placeIgnores={placeIgnores}
+              onUnignorePlace={unignorePlace}
               auditLog={auditLog}
               busyRule={busyRule}
               draftFor={(id) => reasonDrafts[id] ?? ""}
@@ -462,6 +509,7 @@ export function RulesView() {
 
           {tab === "rules" && (
             <>
+              <CustomRulesPanel revision={revision} />
               {/* 50+ rules with no way to narrow them down meant the only way to find one was to
               scroll and read. */}
               <div className="mb-6 flex flex-wrap items-center gap-2">
@@ -584,10 +632,15 @@ export function RulesView() {
                                           needs:{p}
                                         </span>
                                       ))}
+                                      {r.custom && (
+                                        <span className="rounded-sm bg-primary/10 px-1 font-mono text-[10px] text-primary">
+                                          custom
+                                        </span>
+                                      )}
                                       {suppressions.has(r.id) && (
                                         <span className="inline-flex items-center gap-1 rounded-sm bg-muted px-1 font-mono text-[10px] text-muted-foreground">
                                           <Ban className="h-2.5 w-2.5" />
-                                          suppressed
+                                          off
                                         </span>
                                       )}
                                     </span>
@@ -869,16 +922,16 @@ function SuppressionControl({
     <div className="mt-3 border-t border-border pt-3">
       {suppressed && (
         <p className="mb-2 text-[11px] leading-relaxed text-muted-foreground">
-          <span className="font-medium text-foreground">Suppressed</span> by {suppression.created_by} on{" "}
-          {new Date(suppression.created_at).toLocaleDateString()} — “{suppression.reason}”. The rule still
-          runs every scan; its findings just don't count against you until you re-enable it.
+          <span className="font-medium text-foreground">Turned off</span> by {suppression.created_by} on{" "}
+          {new Date(suppression.created_at).toLocaleDateString()} — “{suppression.reason}”. Its issues aren't
+          shown, counted against you or alerted on until you turn it back on.
         </p>
       )}
       <div className="flex items-start gap-2">
         <Input
           value={draft}
           onChange={(e) => onDraft(e.target.value)}
-          placeholder={suppressed ? "Reason for re-enabling…" : "Reason for accepting this risk…"}
+          placeholder={suppressed ? "Why turn it back on?" : "Why turn this check off?"}
           className="h-8 flex-1 text-xs"
           aria-label="Suppression reason"
         />
@@ -894,7 +947,7 @@ function SuppressionControl({
             )}
           >
             <RotateCcw className="h-3.5 w-3.5" />
-            Re-enable
+            Turn on
           </button>
         ) : (
           <button
@@ -908,7 +961,7 @@ function SuppressionControl({
             )}
           >
             <Ban className="h-3.5 w-3.5" />
-            Suppress
+            Turn off
           </button>
         )}
       </div>
@@ -922,6 +975,8 @@ function SuppressionControl({
 function SuppressedTab({
   rules,
   suppressions,
+  placeIgnores,
+  onUnignorePlace,
   auditLog,
   busyRule,
   draftFor,
@@ -931,6 +986,8 @@ function SuppressedTab({
 }: {
   rules: RuleSummary[];
   suppressions: Map<string, Suppression>;
+  placeIgnores: PlaceIgnore[];
+  onUnignorePlace: (ruleId: string, location: string) => void;
   auditLog: SuppressionEvent[];
   busyRule: string | null;
   draftFor: (id: string) => string;
@@ -944,16 +1001,16 @@ function SuppressedTab({
   return (
     <section className="flex flex-col gap-8">
       <div>
-        <SectionLabel>Active suppressions</SectionLabel>
+        <SectionLabel>Checks turned off</SectionLabel>
         {active.length === 0 ? (
           <Callout tone="info">
-            No rules are suppressed. To accept the risk a rule reports — a finding you've reviewed and decided
-            to live with — open it under the{" "}
+            No checks are turned off. To stop a check you don't need — one you've reviewed and decided doesn't
+            apply here — open it under the{" "}
             <button className="underline underline-offset-2" onClick={onGoToRules}>
               Rules
             </button>{" "}
-            tab and suppress it with a reason. Suppressing never stops a rule running; it just stops its
-            findings counting against you, and every decision is logged below.
+            tab and choose Turn off, with a reason. To hide just one finding, use Ignore next to it on Home.
+            Every decision is logged below, and nothing is deleted.
           </Callout>
         ) : (
           <div className="overflow-hidden rounded-lg border border-border bg-card">
@@ -971,7 +1028,7 @@ function SuppressedTab({
                     <Input
                       value={draftFor(s.rule_id)}
                       onChange={(e) => onDraft(s.rule_id, e.target.value)}
-                      placeholder="Reason to re-enable…"
+                      placeholder="Why turn it back on?"
                       className="h-8 w-52 text-xs"
                       aria-label={`Reason to re-enable ${s.rule_id}`}
                     />
@@ -986,7 +1043,7 @@ function SuppressedTab({
                       )}
                     >
                       <RotateCcw className="h-3.5 w-3.5" />
-                      Re-enable
+                      Turn on
                     </button>
                   </div>
                 </div>
@@ -995,6 +1052,54 @@ function SuppressedTab({
           </div>
         )}
       </div>
+
+      {placeIgnores.length > 0 && (
+        <div>
+          <SectionLabel>Ignored in one place</SectionLabel>
+          <div className="overflow-hidden rounded-lg border border-border bg-card">
+            {placeIgnores.map((p, i) => {
+              const key = `${p.rule_id}@${p.location}`;
+              return (
+                <div key={key} className={cn("p-3", i > 0 && "border-t border-border")}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{titleOf(p.rule_id)}</p>
+                      <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">
+                        {p.rule_id} · {p.location}
+                      </p>
+                      <p className="mt-1.5 text-xs text-muted-foreground">
+                        “{p.reason}” — {p.created_by}, {new Date(p.created_at).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 flex-col items-end gap-1.5">
+                      <Input
+                        value={draftFor(key)}
+                        onChange={(e) => onDraft(key, e.target.value)}
+                        placeholder="Reason to report it again…"
+                        className="h-8 w-52 text-xs"
+                        aria-label={`Reason to stop ignoring ${p.rule_id} at ${p.location}`}
+                      />
+                      <button
+                        type="button"
+                        disabled={busyRule === key || !draftFor(key).trim()}
+                        onClick={() => onUnignorePlace(p.rule_id, p.location)}
+                        className={cn(
+                          "inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-2.5 text-xs transition-colors",
+                          "hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+                          "disabled:cursor-not-allowed disabled:opacity-50",
+                        )}
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                        Stop ignoring
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div>
         <SectionLabel>
@@ -1025,10 +1130,19 @@ function SuppressedTab({
                   ) : (
                     <RotateCcw className="h-2.5 w-2.5" />
                   )}
-                  {e.action === "suppressed" ? "suppressed" : "re-enabled"}
+                  {e.action === "suppressed"
+                    ? e.location
+                      ? "ignored"
+                      : "turned off"
+                    : e.location
+                      ? "restored"
+                      : "turned on"}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <span className="font-mono text-[11px] text-muted-foreground">{e.rule_id}</span>
+                  <span className="font-mono text-[11px] text-muted-foreground">
+                    {e.rule_id}
+                    {e.location ? ` at ${e.location}` : ""}
+                  </span>
                   <span className="ml-2 text-muted-foreground">“{e.reason}”</span>
                 </div>
                 <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground/70">
@@ -1040,5 +1154,63 @@ function SuppressedTab({
         )}
       </div>
     </section>
+  );
+}
+
+interface CustomRulesInfo {
+  dir: string | null;
+  exists: boolean;
+  loaded: number;
+  errors: { path: string; message: string }[];
+}
+
+/** "Your own checks": where custom rules live, how many loaded, and why any were refused. */
+function CustomRulesPanel({ revision }: { revision: number }) {
+  const [info, setInfo] = useState<CustomRulesInfo | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const load = useCallback(() => {
+    invoke<CustomRulesInfo>("custom_rules_info")
+      .then(setInfo)
+      .catch(() => setInfo(null));
+  }, []);
+  useEffect(load, [load, revision]);
+  if (!info?.dir) return null;
+  return (
+    <div className="mb-6 flex flex-col gap-2 rounded-lg border border-border bg-card px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0 text-sm">
+          <span className="font-medium">Your own checks</span>{" "}
+          <span className="text-muted-foreground">
+            {info.loaded > 0
+              ? `· ${info.loaded} loaded from `
+              : "· add YAML rules in the same format as these, in "}
+          </span>
+          <code className="font-mono text-xs break-all text-muted-foreground">{info.dir}</code>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() =>
+              invoke("custom_rules_open")
+                .then(load)
+                .catch((e) => setErr(String(e)))
+            }
+          >
+            Open folder
+          </Button>
+        </div>
+      </div>
+      {info.errors.length > 0 && (
+        <ul className="flex flex-col gap-1 text-xs text-[var(--sev-medium-fg)]">
+          {info.errors.map((e) => (
+            <li key={e.path + e.message}>
+              <span className="font-mono break-all">{e.path}</span>: {e.message}
+            </li>
+          ))}
+        </ul>
+      )}
+      {err && <p className="text-xs text-[var(--sev-critical-fg)]">{err}</p>}
+    </div>
   );
 }

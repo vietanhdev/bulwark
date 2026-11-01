@@ -3,6 +3,9 @@ title: "Kernel module not blacklisted: {{ module_blacklist.module }}"
 category: kernel-hardening
 severity: low
 collector: module_blacklist
+# The Windows host owns this inside WSL (its kernel, network stack and console), so it is not
+# something the distro can act on: reported as not applicable there, never as passing.
+skip_on: [wsl]
 condition: blacklisted == false and loadable == true and module != "usb-storage"
 explain: >
   The '{{ module_blacklist.module }}' kernel module isn't blacklisted in /etc/modprobe.d/,

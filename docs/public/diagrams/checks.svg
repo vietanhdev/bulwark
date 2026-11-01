@@ -1,0 +1,125 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600" width="1200" height="600" font-family="-apple-system, 'Segoe UI', Ubuntu, Roboto, 'Helvetica Neue', Arial, sans-serif" role="img" aria-labelledby="t d">
+  <title id="t">What Bulwark checks</title>
+  <desc id="d">123 checks in seven groups: secrets and credentials (10), supply chain and developer tools (14), exposed services (6), AI coding agents (15), SSH (11), compromise indicators (17) and OS hardening (50), plus your own YAML checks, on Linux, macOS, Windows and WSL.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f7fafc"/><stop offset="1" stop-color="#eef3f8"/></linearGradient>
+    <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f2468f"/><stop offset="1" stop-color="#c2185b"/></linearGradient>
+    <linearGradient id="g2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffab3d"/><stop offset="1" stop-color="#ef6c1a"/></linearGradient>
+    <linearGradient id="g3" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3f8ef0"/><stop offset="1" stop-color="#1d5fc2"/></linearGradient>
+    <linearGradient id="g4" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8f6bff"/><stop offset="1" stop-color="#5b3fd6"/></linearGradient>
+    <linearGradient id="g5" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#19b3a3"/><stop offset="1" stop-color="#0b7f86"/></linearGradient>
+    <linearGradient id="g6" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ef5350"/><stop offset="1" stop-color="#b71c1c"/></linearGradient>
+    <linearGradient id="g7" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5cc15a"/><stop offset="1" stop-color="#2e8b3a"/></linearGradient>
+    <linearGradient id="g8" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4b5565"/><stop offset="1" stop-color="#262c36"/></linearGradient>
+    <filter id="sh" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#1b2a3a" flood-opacity="0.12"/></filter>
+    <clipPath id="c270"><rect width="270" height="230" rx="14"/></clipPath><clipPath id="c272"><rect width="272" height="230" rx="14"/></clipPath>
+    <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" fill="none" stroke="#dfe7ef" stroke-width="1"/></pattern>
+  </defs>
+  <rect width="1200" height="600" rx="18" fill="url(#bg)"/>
+  <rect width="1200" height="600" rx="18" fill="url(#grid)" opacity="0.6"/>
+
+  <text x="32" y="48" font-size="24" font-weight="700" fill="#16202c">123 checks, grouped by what an attacker goes after</text>
+  <text x="32" y="72" font-size="14" fill="#5b6b7d">Each one explains why it matters and how to fix it — every check has its own page at bulwark.nrl.ai/checks</text>
+
+  <!-- tile template: translate(x y); header colour band; count; title; 4 bullets -->
+  <g font-size="12.5">
+    <!-- 1 Secrets -->
+    <g transform="translate(32 96)" filter="url(#sh)">
+      <rect width="270" height="220" rx="14" fill="#fff" stroke="#e8d3dd"/>
+      <rect width="270" height="7" fill="url(#g1)" clip-path="url(#c270)"/>
+      <rect x="16" y="22" width="40" height="40" rx="11" fill="url(#g1)"/>
+      <circle cx="31" cy="44" r="6" fill="none" stroke="#fff" stroke-width="2.2"/><path d="M36 40l10-10M42 34l3 3" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>
+      <text x="254" y="52" font-size="30" font-weight="800" fill="#c2185b" text-anchor="end">10</text>
+      <text x="16" y="88" font-size="15" font-weight="700" fill="#16202c">Secrets &amp; credentials</text>
+      <g fill="#33414f"><text x="16" y="114">• AWS keys left on disk</text><text x="16" y="136">• Git passwords in plain text</text><text x="16" y="158">• Keys pasted into AI chats</text><text x="16" y="180">• SSH keys with no passphrase</text></g>
+      <text x="16" y="204" font-size="11" fill="#c2185b">one-click: add a passphrase, redact</text>
+    </g>
+    <!-- 2 Supply chain -->
+    <g transform="translate(320 96)" filter="url(#sh)">
+      <rect width="270" height="220" rx="14" fill="#fff" stroke="#f1dcc6"/>
+      <rect width="270" height="7" fill="url(#g2)" clip-path="url(#c270)"/>
+      <rect x="16" y="22" width="40" height="40" rx="11" fill="url(#g2)"/>
+      <path d="M26 34l10-6 10 6v12l-10 6-10-6z M26 34l10 6 10-6 M36 40v12" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/>
+      <text x="254" y="52" font-size="30" font-weight="800" fill="#ef6c1a" text-anchor="end">14</text>
+      <text x="16" y="88" font-size="15" font-weight="700" fill="#16202c">Supply chain &amp; dev tools</text>
+      <g fill="#33414f"><text x="16" y="114">• Malicious-package traces</text><text x="16" y="136">• Python startup hooks</text><text x="16" y="158">• Git / npm / pip skipping TLS</text><text x="16" y="180">• Unpinned MCP servers</text></g>
+      <text x="16" y="204" font-size="11" fill="#ef6c1a">new: 9 developer-tool settings</text>
+    </g>
+    <!-- 3 Exposed services -->
+    <g transform="translate(608 96)" filter="url(#sh)">
+      <rect width="270" height="220" rx="14" fill="#fff" stroke="#cfdcef"/>
+      <rect width="270" height="7" fill="url(#g3)" clip-path="url(#c270)"/>
+      <rect x="16" y="22" width="40" height="40" rx="11" fill="url(#g3)"/>
+      <circle cx="36" cy="42" r="11" fill="none" stroke="#fff" stroke-width="2"/><path d="M25 42h22M36 31c4 3 4 19 0 22M36 31c-4 3-4 19 0 22" fill="none" stroke="#fff" stroke-width="1.6"/>
+      <text x="254" y="52" font-size="30" font-weight="800" fill="#1d5fc2" text-anchor="end">6</text>
+      <text x="16" y="88" font-size="15" font-weight="700" fill="#16202c">Exposed services</text>
+      <g fill="#33414f"><text x="16" y="114">• Dev databases on 0.0.0.0</text><text x="16" y="136">• No host firewall</text><text x="16" y="158">• VNC or ngrok listening</text><text x="16" y="180">• Docker API open to anyone</text></g>
+      <text x="16" y="204" font-size="11" fill="#1d5fc2">knows when a firewall covers it</text>
+    </g>
+    <!-- 4 AI agents -->
+    <g transform="translate(896 96)" filter="url(#sh)">
+      <rect width="272" height="220" rx="14" fill="#fff" stroke="#ddd5f7"/>
+      <rect width="272" height="7" fill="url(#g4)" clip-path="url(#c272)"/>
+      <rect x="16" y="22" width="40" height="40" rx="11" fill="url(#g4)"/>
+      <rect x="26" y="32" width="20" height="16" rx="4" fill="none" stroke="#fff" stroke-width="2"/><circle cx="32" cy="40" r="1.8" fill="#fff"/><circle cx="40" cy="40" r="1.8" fill="#fff"/><path d="M36 28v4" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+      <text x="256" y="52" font-size="30" font-weight="800" fill="#5b3fd6" text-anchor="end">15</text>
+      <text x="16" y="88" font-size="15" font-weight="700" fill="#16202c">AI coding agents</text>
+      <g fill="#33414f"><text x="16" y="114">• Auto-approve, never asks</text><text x="16" y="136">• Hooks a repo can plant</text><text x="16" y="158">• Sandbox switched off</text><text x="16" y="180">• Agent account = root</text></g>
+      <text x="16" y="204" font-size="11" fill="#5b3fd6">Claude Code, Cursor, Codex + 22 more</text>
+    </g>
+
+    <!-- 5 SSH -->
+    <g transform="translate(32 334)" filter="url(#sh)">
+      <rect width="270" height="210" rx="14" fill="#fff" stroke="#c9e6e2"/>
+      <rect width="270" height="7" fill="url(#g5)" clip-path="url(#c270)"/>
+      <rect x="16" y="22" width="40" height="40" rx="11" fill="url(#g5)"/>
+      <path d="M27 36l7 6-7 6" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M37 49h9" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
+      <text x="254" y="52" font-size="30" font-weight="800" fill="#0b7f86" text-anchor="end">11</text>
+      <text x="16" y="88" font-size="15" font-weight="700" fill="#16202c">SSH</text>
+      <g fill="#33414f"><text x="16" y="114">• Password and root logins</text><text x="16" y="136">• Forwarding and tunnels</text><text x="16" y="158">• StrictModes, auth retries</text><text x="16" y="180">• Agent forwarding, GatewayPorts</text></g>
+      <text x="16" y="200" font-size="11" fill="#0b7f86">one-click sshd hardening, backed up</text>
+    </g>
+    <!-- 6 Compromise -->
+    <g transform="translate(320 334)" filter="url(#sh)">
+      <rect width="270" height="210" rx="14" fill="#fff" stroke="#f0d0cf"/>
+      <rect width="270" height="7" fill="url(#g6)" clip-path="url(#c270)"/>
+      <rect x="16" y="22" width="40" height="40" rx="11" fill="url(#g6)"/>
+      <path d="M36 30l12 21H24z" fill="none" stroke="#fff" stroke-width="2.2" stroke-linejoin="round"/><path d="M36 38v6" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/><circle cx="36" cy="47.5" r="1.4" fill="#fff"/>
+      <text x="254" y="52" font-size="30" font-weight="800" fill="#b71c1c" text-anchor="end">17</text>
+      <text x="16" y="88" font-size="15" font-weight="700" fill="#16202c">Compromise indicators</text>
+      <g fill="#33414f"><text x="16" y="114">• systemd, cron, launchd, Run keys</text><text x="16" y="136">• Tunnelling tools at boot</text><text x="16" y="158">• Changed system files</text><text x="16" y="180">• Rootkit signs, history tampering</text></g>
+      <text x="16" y="200" font-size="11" fill="#b71c1c">+ ClamAV, SSH brute-force in logs</text>
+    </g>
+    <!-- 7 Hardening -->
+    <g transform="translate(608 334)" filter="url(#sh)">
+      <rect width="270" height="210" rx="14" fill="#fff" stroke="#d3e8d2"/>
+      <rect width="270" height="7" fill="url(#g7)" clip-path="url(#c270)"/>
+      <rect x="16" y="22" width="40" height="40" rx="11" fill="url(#g7)"/>
+      <path d="M36 28l11 4.5v8c0 6.5-4.4 10.6-11 13-6.6-2.4-11-6.5-11-13v-8z" fill="none" stroke="#fff" stroke-width="2.2"/><path d="M31 41l3.4 3.4L41 38" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="254" y="52" font-size="30" font-weight="800" fill="#2e8b3a" text-anchor="end">50</text>
+      <text x="16" y="88" font-size="15" font-weight="700" fill="#16202c">OS hardening</text>
+      <g fill="#33414f"><text x="16" y="114">• Kernel &amp; sysctl, sudo, logging</text><text x="16" y="136">• macOS: FileVault, SIP, Gatekeeper</text><text x="16" y="158">• Windows: Defender, BitLocker</text><text x="16" y="180">• File permissions, accounts</text></g>
+      <text x="16" y="200" font-size="11" fill="#2e8b3a">mapped to PCI DSS, HIPAA, ISO 27001</text>
+    </g>
+    <!-- 8 Yours -->
+    <g transform="translate(896 334)" filter="url(#sh)">
+      <rect width="272" height="210" rx="14" fill="#fff" stroke="#c7ced8" stroke-dasharray="6 5"/>
+      <rect x="16" y="22" width="40" height="40" rx="11" fill="url(#g8)"/>
+      <path d="M36 32v20M26 42h20" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/>
+      <text x="256" y="52" font-size="30" font-weight="800" fill="#4b5565" text-anchor="end">+</text>
+      <text x="16" y="88" font-size="15" font-weight="700" fill="#16202c">Your own checks</text>
+      <g fill="#33414f"><text x="16" y="114">• Same YAML as the built-ins</text><text x="16" y="136">• Ignore one finding or a type</text><text x="16" y="158">• Turn checks off, with a reason</text><text x="16" y="180">• Every decision audited</text></g>
+      <text x="16" y="200" font-size="11" fill="#4b5565">~/.config/bulwark/rules</text>
+    </g>
+  </g>
+
+  <!-- OS strip -->
+  <g transform="translate(32 560)" font-size="12.5" fill="#33414f">
+    <text x="0" y="12" font-weight="700" fill="#16202c">Runs on</text>
+    <circle cx="70" cy="8" r="5" fill="#ef6c1a"/><text x="80" y="12">Linux</text>
+    <circle cx="132" cy="8" r="5" fill="#4b5565"/><text x="142" y="12">macOS</text>
+    <circle cx="200" cy="8" r="5" fill="#1d5fc2"/><text x="210" y="12">Windows</text>
+    <circle cx="276" cy="8" r="5" fill="#0b7f86"/><text x="286" y="12">WSL</text>
+    <text x="340" y="12" fill="#5b6b7d">— and scans the machines you manage over plain SSH, with nothing installed on a Linux server</text>
+  </g>
+</svg>

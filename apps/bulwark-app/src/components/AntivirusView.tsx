@@ -10,6 +10,7 @@ import { PathDropZone } from "@/components/PathDropZone";
 import { railStyle } from "@/components/Severity";
 import { useRevision } from "@/lib/revision";
 import { cn } from "@/lib/utils";
+import { usePlatform } from "@/lib/platform";
 
 interface ThreatDetection {
   path: string;
@@ -59,6 +60,7 @@ type RealtimeAvEvent =
   | { event: "error"; data: { path: string; message: string } };
 
 export function AntivirusView({ active }: { active: boolean }) {
+  const platform = usePlatform();
   const { revision, running } = useRevision();
   // True when an antivirus sweep is running here or was launched from the Overview.
   const antivirusRunning = running.has("antivirus");
@@ -237,7 +239,19 @@ export function AntivirusView({ active }: { active: boolean }) {
       <div className="flex flex-col gap-8">
         {/* Engine state first: whether ClamAV is even installed, and whether its signatures are
             current, decide whether anything below this is worth trusting. */}
-        {clamav && !clamav.version && (
+        {clamav && !clamav.version && platform === "windows" && (
+          <Callout tone="info">
+            <div className="font-medium">Microsoft Defender is this computer's virus scanner.</div>
+            <div className="mt-1.5 text-sm">
+              It scans files as they arrive, and Checkups tells you if its real-time protection is ever off.
+              ClamAV is optional here — a second opinion for files you want to double-check.
+            </div>
+            {clamav.install_command && (
+              <div className="mt-1.5 text-xs opacity-90">{clamav.install_command}</div>
+            )}
+          </Callout>
+        )}
+        {clamav && !clamav.version && platform !== "windows" && (
           <Callout tone="warning">
             {/* In a sandbox "ClamAV isn't installed" is the wrong diagnosis: it may well be
                 installed on the host, and this build still cannot reach it. Saying so sent
@@ -351,9 +365,16 @@ export function AntivirusView({ active }: { active: boolean }) {
         <section>
           <SectionLabel>Manual scan</SectionLabel>
           <p className="mb-3 text-sm leading-relaxed text-muted-foreground">
-            Checks Downloads and the world-writable temp directories (<code className="font-mono">/tmp</code>,{" "}
-            <code className="font-mono">/var/tmp</code>) by default — not the whole filesystem. Drop in your
-            own targets to scan those instead.
+            {platform === "windows" ? (
+              <>Checks Downloads and your temp folder by default — not the whole drive.</>
+            ) : (
+              <>
+                Checks Downloads and the world-writable temp directories (
+                <code className="font-mono">/tmp</code>, <code className="font-mono">/var/tmp</code>) by
+                default — not the whole filesystem.
+              </>
+            )}{" "}
+            Drop in your own targets to scan those instead.
           </p>
 
           <PathDropZone

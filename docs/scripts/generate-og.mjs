@@ -30,6 +30,8 @@ const CARD_TITLES = {
   "index.md": "Bulwark",
   "guide/architecture.md": "Architecture",
   "guide/agent-security.md": "AI Agent Security",
+  "guide/remote-monitoring.md": "Monitoring Other Machines",
+  "guide/custom-checks.md": "Choosing What Bulwark Checks",
   "guide/remediation.md": "Fixing Findings",
   "articles/ai-coding-assistant-security.md": "AI Coding Assistant Security",
   "articles/ai-context-threats.md": "The Context Is the Threat",
@@ -63,6 +65,8 @@ function pagesNeedingCards() {
     "index.md",
     "guide/architecture.md",
     "guide/agent-security.md",
+    "guide/remote-monitoring.md",
+    "guide/custom-checks.md",
     "guide/remediation.md",
     "checks/index.md",
   ];

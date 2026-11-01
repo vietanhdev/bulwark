@@ -111,7 +111,7 @@ bulwarkctl fim baseline --privileged   # records the known-good hashes, includin
 Bulwark never establishes this baseline automatically, and that's deliberate: a baseline recorded
 *after* a compromise would faithfully enshrine the compromised state as "known good" — which is
 worse than having no baseline at all, because it looks like a clean bill of health. Record it on a
-host you have reason to trust, and treat "no baseline yet" (`BLWK-FIM-003`) as the finding it is.
+host you have reason to trust, and treat "no baseline yet" (`BLWK-FIM-009`) as the finding it is.
 
 ## What to do if you find something real
 

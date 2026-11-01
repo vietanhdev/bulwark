@@ -1,0 +1,11 @@
+id: BLWK-DEV-005
+title: "SSH forwards your agent to every server ({{ dev_tool_config.path }})"
+category: developer-tools
+severity: medium
+collector: dev_tool_config
+os: [linux, macos, windows]
+condition: kind == "ssh" and agent_forwarding_all == true
+explain: >
+  {{ dev_tool_config.path }} sets ForwardAgent yes for all hosts. While you are connected, root — or an attacker — on any server you log in to can use your loaded keys to sign in to every other machine and Git host those keys open, without ever seeing the key itself.
+fix: "Remove ForwardAgent from Host * (and the top of the file). To reach a machine through another, use ProxyJump (ssh -J bastion target), which needs no forwarding; if one host truly needs it, set ForwardAgent yes in that host's block only."
+references: [ATTACK-T1563.001]

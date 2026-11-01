@@ -3,6 +3,9 @@ title: Magic SysRq key is fully enabled
 category: kernel-hardening
 severity: medium
 collector: sysctl_kernel
+# The Windows host owns this inside WSL (its kernel, network stack and console), so it is not
+# something the distro can act on: reported as not applicable there, never as passing.
+skip_on: [wsl]
 condition: sysrq == 1 or (sysrq > 1 and sysrq_dump_or_signal == true)
 explain: >
   kernel.sysrq exposes dangerous SysRq functions to anyone with keyboard or console access

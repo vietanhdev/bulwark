@@ -105,22 +105,18 @@ pub enum RealtimeAvEvent {
     Error { path: String, message: String },
 }
 
-// Duplicated from lib.rs's `db_path()` / monitoring.rs's `super_db_path()` deliberately — see
-// monitoring.rs's own comment on why this project keeps this small resolution helper local to
-// each call site rather than sharing it.
+/// The shared database path (`bulwark_core::paths` — one resolver for every module and both
+/// front-doors; this copy used to skip `XDG_DATA_HOME`, so inside a Flatpak it pointed at the
+/// read-only real home).
 fn db_path() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("BULWARK_DB_PATH") {
-        return Some(PathBuf::from(p));
-    }
-    let home = std::env::var("HOME").ok()?;
-    Some(PathBuf::from(home).join(".local/share/bulwark/bulwark.db"))
+    bulwark_core::paths::default_db_path().ok()
 }
 
 /// Loads persisted enabled/watched-folder state at app startup, falling back to sane defaults
 /// (disabled, `Downloads`+`Desktop`) whenever nothing's been saved yet or the DB can't be
 /// read — a fresh install or a locked-down `HOME` shouldn't prevent the app from starting.
 pub fn initial_state() -> Inner {
-    let home = std::env::var("HOME").ok().map(PathBuf::from);
+    let home = bulwark_core::paths::home_var().ok().map(PathBuf::from);
     let defaults = || {
         home.as_deref()
             .map(default_realtime_watch_targets)

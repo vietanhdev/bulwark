@@ -46,6 +46,34 @@ pub fn ufw_enabled_from_conf(conf: &str) -> Option<bool> {
         })
 }
 
+/// True when ufw is enabled with a deny/reject default for incoming traffic. Both files are
+/// world-readable, so an unprivileged scan can tell — unlike the packet filter itself. Used by the
+/// listening-ports collector so a service on 0.0.0.0 behind a default-deny firewall isn't reported
+/// as "reachable by anyone on the network". `/etc/default/ufw` ships `DEFAULT_INPUT_POLICY="DROP"`.
+pub fn ufw_denies_inbound(ufw_conf: &str, ufw_default: &str) -> bool {
+    let policy_denies = ufw_default
+        .lines()
+        .map(str::trim)
+        .find_map(|l| l.strip_prefix("DEFAULT_INPUT_POLICY="))
+        .map(|v| {
+            let v = v.trim_matches(|c| c == '"' || c == '\'');
+            v.eq_ignore_ascii_case("DROP") || v.eq_ignore_ascii_case("REJECT")
+        })
+        .unwrap_or(false);
+    ufw_enabled_from_conf(ufw_conf) == Some(true) && policy_denies
+}
+
+/// [`ufw_denies_inbound`] for this host.
+pub fn host_ufw_denies_inbound() -> bool {
+    match (
+        std::fs::read_to_string("/etc/ufw/ufw.conf"),
+        std::fs::read_to_string("/etc/default/ufw"),
+    ) {
+        (Ok(conf), Ok(default)) => ufw_denies_inbound(&conf, &default),
+        _ => false,
+    }
+}
+
 fn run(cmd: &str, args: &[&str]) -> Option<String> {
     let out = Command::new(cmd).args(args).output().ok()?;
     out.status
@@ -117,6 +145,27 @@ mod tests {
             "-P INPUT ACCEPT\n-A INPUT -p tcp -j REJECT\n"
         ));
         assert!(!iptables_filters_input("-P INPUT ACCEPT\n"));
+    }
+
+    #[test]
+    fn ufw_default_deny_is_recognised() {
+        assert!(ufw_denies_inbound(
+            "ENABLED=yes\n",
+            "DEFAULT_INPUT_POLICY=\"DROP\"\n"
+        ));
+        assert!(ufw_denies_inbound(
+            "ENABLED=yes\n",
+            "DEFAULT_INPUT_POLICY=\"REJECT\"\n"
+        ));
+        assert!(!ufw_denies_inbound(
+            "ENABLED=no\n",
+            "DEFAULT_INPUT_POLICY=\"DROP\"\n"
+        ));
+        assert!(!ufw_denies_inbound(
+            "ENABLED=yes\n",
+            "DEFAULT_INPUT_POLICY=\"ACCEPT\"\n"
+        ));
+        assert!(!ufw_denies_inbound("", ""));
     }
 
     #[test]

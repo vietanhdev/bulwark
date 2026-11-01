@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=Bulwark
-Comment=Linux security misconfiguration & intrusion scanner
+Comment=Security for your dev machines, the servers they reach, and your AI coding tools
 Exec=bulwark-app
 Icon=com.vietanhdev.bulwark
 Terminal=false

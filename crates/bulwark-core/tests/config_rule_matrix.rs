@@ -149,6 +149,7 @@ fn fim_uncovered_003_readable_vs_unreadable() {
         "file_integrity",
         vec![fact(&[
             ("path", Value::String("/etc/passwd".into())),
+            ("kind", Value::String("file".into())),
             ("in_baseline", Value::Bool(false)),
             ("currently_present", Value::Bool(true)),
             ("unreadable", Value::Bool(false)),
@@ -161,6 +162,7 @@ fn fim_uncovered_003_readable_vs_unreadable() {
     // uncovered — FIM-003 must stay quiet.
     let unreadable = vec![fact(&[
         ("path", Value::String("/etc/shadow".into())),
+        ("kind", Value::String("file".into())),
         ("in_baseline", Value::Bool(false)),
         ("currently_present", Value::Bool(true)),
         ("unreadable", Value::Bool(true)),
@@ -520,10 +522,12 @@ fn net_dev_service_on_all_interfaces_003() {
         &[
             ("port", Value::from(5432)),
             ("listen_address", s("0.0.0.0")),
+            ("inbound_firewalled", Value::Bool(false)),
         ],
         &[
             ("port", Value::from(5432)),
             ("listen_address", s("127.0.0.1")),
+            ("inbound_firewalled", Value::Bool(false)),
         ],
     );
     // A bind to one specific interface (a VPN address) is a deliberate choice.
@@ -531,7 +535,8 @@ fn net_dev_service_on_all_interfaces_003() {
         "listening_ports",
         vec![fact(&[
             ("port", Value::from(5432)),
-            ("listen_address", s("100.64.1.2"))
+            ("listen_address", s("100.64.1.2")),
+            ("inbound_firewalled", Value::Bool(false))
         ])],
         "BLWK-NET-003",
     ));
@@ -539,7 +544,8 @@ fn net_dev_service_on_all_interfaces_003() {
         "listening_ports",
         vec![fact(&[
             ("port", Value::from(6379)),
-            ("listen_address", s("::"))
+            ("listen_address", s("::")),
+            ("inbound_firewalled", Value::Bool(false))
         ])],
         "BLWK-NET-003",
     ));
@@ -595,4 +601,112 @@ fn rootkit_litellm_indicators_002() {
         &[("indicator", s("litellm_loader_lock"))],
         &[("indicator", s("something_else"))],
     );
+}
+
+#[test]
+fn net_firewalled_005_and_zabbix_are_not_overstated() {
+    let s = |v: &str| Value::String(v.into());
+    let row = |port: u64, firewalled: bool| {
+        vec![fact(&[
+            ("port", Value::from(port)),
+            ("listen_address", s("0.0.0.0")),
+            ("inbound_firewalled", Value::Bool(firewalled)),
+        ])]
+    };
+    // Behind a default-deny firewall: the medium twin fires, the high "anyone can connect" doesn't.
+    assert!(fires("listening_ports", row(5432, true), "BLWK-NET-005"));
+    assert!(!fires("listening_ports", row(5432, true), "BLWK-NET-003"));
+    // No firewall: the high one, not the twin.
+    assert!(fires("listening_ports", row(5432, false), "BLWK-NET-003"));
+    assert!(!fires("listening_ports", row(5432, false), "BLWK-NET-005"));
+    // A Zabbix agent/server port is monitoring infrastructure meant to listen on the network.
+    for port in [10050, 10051] {
+        assert!(!fires("listening_ports", row(port, false), "BLWK-NET-003"));
+        assert!(!fires("listening_ports", row(port, true), "BLWK-NET-005"));
+    }
+}
+
+#[test]
+fn fim_no_baseline_is_reported_once_009() {
+    let summary = fact(&[
+        ("path", Value::String("(no baseline)".into())),
+        ("kind", Value::String("summary".into())),
+        ("watched", Value::from(9)),
+        ("baseline_exists", Value::Bool(false)),
+        ("in_baseline", Value::Bool(false)),
+        ("currently_present", Value::Bool(false)),
+        ("changed", Value::Bool(false)),
+        ("unreadable", Value::Bool(false)),
+    ]);
+    let file_row = |p: &str| {
+        fact(&[
+            ("path", Value::String(p.into())),
+            ("kind", Value::String("file".into())),
+            ("baseline_exists", Value::Bool(false)),
+            ("in_baseline", Value::Bool(false)),
+            ("currently_present", Value::Bool(true)),
+            ("changed", Value::Bool(false)),
+            ("unreadable", Value::Bool(false)),
+        ])
+    };
+    let rows = vec![summary, file_row("/etc/passwd"), file_row("/usr/bin/sudo")];
+    assert!(fires("file_integrity", rows.clone(), "BLWK-FIM-009"));
+    // ...and the per-file rule stays quiet until a baseline exists, so it's one finding, not nine.
+    assert!(!fires("file_integrity", rows, "BLWK-FIM-003"));
+}
+
+#[test]
+fn developer_tool_settings_fire_only_on_their_own_kind_and_flag() {
+    const FLAGS: [&str; 9] = [
+        "ssl_verify_off",
+        "safe_directory_any",
+        "ext_protocol_allowed",
+        "host_key_checks_off",
+        "agent_forwarding_all",
+        "strict_ssl_off",
+        "http_registry",
+        "trusted_host",
+        "docker_api_unprotected",
+    ];
+    // A readable config row: every flag present, only `on` set.
+    let row = |kind: &str, on: Option<&str>| {
+        let mut f = fact(&[
+            ("kind", Value::String(kind.into())),
+            ("path", Value::String("/home/user/.config".into())),
+            ("detail", Value::String("http://registry.example".into())),
+        ]);
+        for flag in FLAGS {
+            f.insert(flag.into(), Value::Bool(Some(flag) == on));
+        }
+        vec![f]
+    };
+    let cases = [
+        ("BLWK-DEV-001", "git", "ssl_verify_off"),
+        ("BLWK-DEV-002", "git", "safe_directory_any"),
+        ("BLWK-DEV-003", "git", "ext_protocol_allowed"),
+        ("BLWK-DEV-004", "ssh", "host_key_checks_off"),
+        ("BLWK-DEV-005", "ssh", "agent_forwarding_all"),
+        ("BLWK-DEV-006", "npm", "strict_ssl_off"),
+        ("BLWK-DEV-007", "npm", "http_registry"),
+        ("BLWK-DEV-007", "pip", "http_registry"),
+        ("BLWK-DEV-008", "pip", "trusted_host"),
+        ("BLWK-DEV-009", "docker", "docker_api_unprotected"),
+    ];
+    for (rule, kind, flag) in cases {
+        assert!(
+            fires("dev_tool_config", row(kind, Some(flag)), rule),
+            "{rule} should fire"
+        );
+        // An ordinary config of the same kind raises nothing.
+        assert!(
+            !fires("dev_tool_config", row(kind, None), rule),
+            "{rule} on a clean {kind} config"
+        );
+        // The same flag on another kind of file doesn't cross over.
+        let other = if kind == "git" { "ssh" } else { "git" };
+        assert!(
+            !fires("dev_tool_config", row(other, Some(flag)), rule),
+            "{rule} on {other}"
+        );
+    }
 }

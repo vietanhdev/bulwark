@@ -1,0 +1,12 @@
+id: BLWK-WIN-006
+title: Remote Desktop is on without Network Level Authentication
+category: windows-hardening
+severity: high
+collector: windows_security
+os: [windows]
+# Only fires on a value actually read; an unreadable setting (e.g. BitLocker without elevation) never does.
+condition: rdp_enabled_known == true and rdp_enabled == true and rdp_nla_known == true and rdp_nla == false
+explain: >
+  Remote Desktop accepts connections, and without Network Level Authentication anyone who can reach it gets a login screen — and the pre-authentication attack surface — before proving who they are.
+fix: "Turn on 'Require devices to use Network Level Authentication' in Settings → System → Remote Desktop, or turn Remote Desktop off if you don't use it. Limit it to your VPN or private network."
+references: [ATTACK-T1021.001]

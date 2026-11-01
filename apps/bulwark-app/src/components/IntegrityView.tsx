@@ -8,6 +8,7 @@ import { FixSteps } from "@/components/FixSteps";
 import { PageShell, SectionLabel } from "@/components/PageShell";
 import { SeverityLabel, railStyle, type Severity } from "@/components/Severity";
 import { useRevision } from "@/lib/revision";
+import { usePlatform } from "@/lib/platform";
 
 interface Finding {
   id: string;
@@ -30,6 +31,7 @@ interface DashboardSnapshot {
 const FIM_RULE_PREFIX = "BLWK-FIM-";
 
 export function IntegrityView() {
+  const platform = usePlatform();
   const { revision, bump, running } = useRevision();
   // The compliance scan (launched from the Overview) is what recomputes file-integrity findings, and
   // it marks "fim" running for the duration — so this tab shows a live indicator instead of sitting
@@ -69,6 +71,27 @@ export function IntegrityView() {
     } finally {
       setBaselining(false);
     }
+  }
+
+  // The watched set is Unix system files (/etc/passwd, PAM, sshd_config, sudo). Windows has none of
+  // them, so a baseline would record nothing and "no file has changed" would be a claim with no
+  // check behind it.
+  if (platform === "windows") {
+    return (
+      <PageShell
+        title="File changes"
+        description="Bulwark hashes a curated set of security-critical files and tells you when one of them changes."
+      >
+        <div className="rounded-lg border border-dashed border-border px-6 py-14 text-center">
+          <FileCheck2 className="mx-auto h-7 w-7 text-muted-foreground/40" strokeWidth={1.5} />
+          <p className="mt-3 text-sm font-medium">Not available on Windows yet.</p>
+          <p className="mx-auto mt-1 max-w-xl text-sm text-muted-foreground">
+            The files this watches — accounts, sign-in and SSH configuration, sudo — are Linux and macOS
+            system files.
+          </p>
+        </div>
+      </PageShell>
+    );
   }
 
   return (

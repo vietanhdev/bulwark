@@ -3,6 +3,9 @@ title: "No custom legal warning banner is set (/etc/{{ banners.file }})"
 category: logging-auditing
 severity: info
 collector: banners
+# The Windows host owns this inside WSL (its kernel, network stack and console), so it is not
+# something the distro can act on: reported as not applicable there, never as passing.
+skip_on: [wsl]
 profiles: [server]
 condition: is_default == true
 explain: >

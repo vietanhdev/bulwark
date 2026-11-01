@@ -1,4 +1,5 @@
 mod ai_security;
+mod machines;
 mod monitoring;
 mod realtime_av;
 mod remediation;
@@ -58,6 +59,8 @@ fn scan_cancel(control: tauri::State<ScanControl>) {
 #[derive(Clone, Serialize)]
 struct RuleSummary {
     id: String,
+    /// From the user's own rules folder rather than the shipped pack.
+    custom: bool,
     title: String,
     category: String,
     severity: Severity,
@@ -133,7 +136,7 @@ fn find_exe_sibling_rules_dir() -> Option<PathBuf> {
 /// (Flatpak). A shipped build therefore resolves deterministically, independent of where it was
 /// launched from. `app` is `None` only in contexts with no AppHandle yet (there currently are
 /// none, but this keeps the function testable without one).
-fn resolve_rules_dir(app: Option<&tauri::AppHandle>) -> Result<PathBuf, String> {
+pub(crate) fn resolve_rules_dir(app: Option<&tauri::AppHandle>) -> Result<PathBuf, String> {
     if let Ok(p) = std::env::var("BULWARK_RULES_DIR") {
         return Ok(PathBuf::from(p));
     }
@@ -216,8 +219,10 @@ pub(crate) fn resolve_cli_binary() -> Result<PathBuf, String> {
         if let Some(dir) = exe.parent().and_then(|d| std::fs::canonicalize(d).ok()) {
             // `bulwark` is the bundled sidecar (see build.rs for why it is not called `bulwarkctl`
             // or `bulwark-app`); `bulwarkctl` covers an install where the CLI package sits alongside.
+            // `.exe` on Windows (EXE_SUFFIX is empty elsewhere): without it the Windows app never
+            // found its own sidecar, and every remote-machine and alert action failed.
             for name in ["bulwark", "bulwarkctl"] {
-                let sidecar = dir.join(name);
+                let sidecar = dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
                 if sidecar.is_file() {
                     return Ok(sidecar);
                 }
@@ -229,7 +234,10 @@ pub(crate) fn resolve_cli_binary() -> Result<PathBuf, String> {
     if let Ok(mut candidate) = std::env::current_dir() {
         for _ in 0..4 {
             for profile in ["debug", "release"] {
-                let bin = candidate.join("target").join(profile).join("bulwarkctl");
+                let bin = candidate
+                    .join("target")
+                    .join(profile)
+                    .join(format!("bulwarkctl{}", std::env::consts::EXE_SUFFIX));
                 if bin.is_file() {
                     return Ok(bin);
                 }
@@ -247,12 +255,18 @@ pub(crate) fn resolve_cli_binary() -> Result<PathBuf, String> {
     )
 }
 
-fn db_path() -> Result<PathBuf, String> {
-    if let Ok(p) = std::env::var("BULWARK_DB_PATH") {
-        return Ok(PathBuf::from(p));
-    }
-    let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
-    Ok(PathBuf::from(home).join(".local/share/bulwark/bulwark.db"))
+/// The shared database path — see `bulwark_core::paths`. This copy used to skip `XDG_DATA_HOME`,
+/// so inside a Flatpak a manual scan wrote to the read-only real home while monitoring wrote to
+/// the app's data dir.
+pub(crate) fn db_path() -> Result<PathBuf, String> {
+    bulwark_core::paths::default_db_path().map_err(|e| e.to_string())
+}
+
+/// The OS this app is running on ("linux", "macos", "windows"), so pages built around Linux files
+/// can say what applies here instead of describing paths that don't exist.
+#[tauri::command]
+fn host_platform() -> &'static str {
+    std::env::consts::OS
 }
 
 #[tauri::command]
@@ -274,15 +288,14 @@ async fn scan_start(
             }
         };
         let collectors = all_collectors();
-        let profile = Profile {
-            needs: needs.unwrap_or_default(),
-            ..Profile::current_host()
-        };
+        let profile = Profile::with_needs(needs.unwrap_or_default());
         // This first pass always runs unprivileged — [`scan_privileged`] is the separate,
         // explicit pkexec-elevated path the UI offers when `privileged_collectors_skipped`
         // below is non-empty (architecture doc §4).
-        let scan = engine::run_scan_cancellable(
+        let custom = bulwark_core::paths::custom_rules_dir().filter(|d| d.is_dir());
+        let scan = engine::run_scan_with_custom(
             &rules_dir,
+            custom.as_deref(),
             &collectors,
             false,
             &profile,
@@ -335,6 +348,10 @@ async fn scan_start(
                     // return value is the set of findings that *newly appeared* this run, which is
                     // exactly what a "new issue" notification should announce.
                     new_findings = store.persist_and_reconcile(&scan).unwrap_or_default();
+                    // Ignored issues and turned-off checks don't notify.
+                    if let Ok(ignores) = store.ignores() {
+                        new_findings.retain(|f| !ignores.covers(f));
+                    }
                 }
             }
         }
@@ -391,6 +408,26 @@ async fn scan_start(
 #[tauri::command]
 async fn scan_privileged(app: tauri::AppHandle) -> Result<ScanRun, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        // pkexec/polkit is Linux's way to ask for an administrator password from a desktop app.
+        // macOS and Windows have their own, and until the app uses them, say exactly how to run the
+        // same checks by hand rather than failing with "failed to launch pkexec".
+        if !cfg!(target_os = "linux") {
+            let cli = resolve_cli_binary()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| "bulwark".into());
+            return Err(if cfg!(target_os = "macos") {
+                format!(
+                    "On macOS, run the checks that need administrator access from Terminal: \
+                     sudo \"{cli}\" scan --privileged"
+                )
+            } else {
+                let _ = cli;
+                "On Windows every check runs in the normal scan. A few settings, such as BitLocker, \
+                 can only be read when Bulwark is started as administrator; otherwise they are \
+                 shown as not checked rather than as a problem."
+                    .to_string()
+            });
+        }
         // In a Flatpak there is no pkexec inside the sandbox, and reaching the host's would
         // need `--talk-name=org.freedesktop.Flatpak` (a sandbox escape) plus a host-installed
         // bulwarkctl to elevate. Neither exists yet, so say so in words the user can act on
@@ -437,6 +474,7 @@ async fn scan_privileged(app: tauri::AppHandle) -> Result<ScanRun, String> {
                 .arg("--privileged")
                 .arg("--json")
                 .arg("--no-persist")
+                .arg("--no-custom-rules")
                 .output()
                 .map_err(|e| format!("failed to launch pkexec on the host: {e}"))?
         } else {
@@ -448,6 +486,8 @@ async fn scan_privileged(app: tauri::AppHandle) -> Result<ScanRun, String> {
                 .arg("--privileged")
                 .arg("--json")
                 .arg("--no-persist")
+                // Root never evaluates the user-writable custom folder (see the CLI's `scan`).
+                .arg("--no-custom-rules")
                 .arg("--rules-dir")
                 .arg(&rules_dir)
                 .output()
@@ -511,7 +551,7 @@ async fn run_virus_scan(
         let targets = match paths {
             Some(p) if !p.is_empty() => p.into_iter().map(PathBuf::from).collect(),
             _ => {
-                let home = match std::env::var("HOME") {
+                let home = match bulwark_core::paths::home_var() {
                     Ok(h) => h,
                     Err(_) => {
                         let _ = on_event.send(AvScanEvent::Error {
@@ -733,10 +773,12 @@ async fn compliance_report() -> Result<ComplianceView, String> {
 #[tauri::command]
 async fn rules_list(app: tauri::AppHandle) -> Result<Vec<RuleSummary>, String> {
     let rules_dir = resolve_rules_dir(Some(&app))?;
-    let (rules, _errors) = engine::load_rules(&rules_dir);
+    let custom = bulwark_core::paths::custom_rules_dir().filter(|d| d.is_dir());
+    let (rules, _errors) = engine::load_rule_packs(&rules_dir, custom.as_deref());
     Ok(rules
         .into_iter()
         .map(|r| RuleSummary {
+            custom: r.custom,
             id: r.rule.id,
             title: r.rule.title,
             category: r.rule.category,
@@ -758,7 +800,7 @@ async fn rules_list(app: tauri::AppHandle) -> Result<Vec<RuleSummary>, String> {
 
 /// Who a suppression is attributed to in the audit trail. The desktop app has no `sudo` context,
 /// so the logged-in user's name is the honest actor.
-fn suppression_actor() -> String {
+pub(crate) fn suppression_actor() -> String {
     std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_else(|_| "desktop-user".to_string())
@@ -796,6 +838,106 @@ async fn rule_unsuppress(rule_id: String, reason: String) -> Result<(), String> 
     .await
     .map_err(|e| e.to_string())?
 }
+
+/// Ignores one finding — a rule at one place (file, port, …) — with a reason, leaving the rule
+/// itself on. `location` is the place as `bulwark_core::finding_location` derives it.
+#[tauri::command]
+async fn finding_ignore(rule_id: String, location: String, reason: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut store = Store::open(&db_path()?).map_err(|e| e.to_string())?;
+        store
+            .ignore_finding(&rule_id, &location, &reason, &suppression_actor())
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Stops ignoring one finding; needs a reason like every other change to what is hidden.
+#[tauri::command]
+async fn finding_unignore(rule_id: String, location: String, reason: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut store = Store::open(&db_path()?).map_err(|e| e.to_string())?;
+        store
+            .unignore_finding(&rule_id, &location, &reason, &suppression_actor())
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Every single-finding ignore on this computer, for the Ignored list.
+#[tauri::command]
+async fn finding_ignores_list() -> Result<Vec<bulwark_core::FindingIgnore>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let db_path = db_path()?;
+        if !db_path.exists() {
+            return Ok(Vec::new());
+        }
+        let mut store = Store::open(&db_path).map_err(|e| e.to_string())?;
+        store.list_finding_ignores().map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[derive(Serialize)]
+struct CustomRulesInfo {
+    /// Where your own rules live (created on first "Open folder").
+    dir: Option<String>,
+    exists: bool,
+    /// How many custom rules loaded, and why any were refused.
+    loaded: usize,
+    errors: Vec<bulwark_core::models::RuleLoadError>,
+}
+
+/// The user's own rules folder and what loading it produced, for All checks.
+#[tauri::command]
+async fn custom_rules_info(app: tauri::AppHandle) -> Result<CustomRulesInfo, String> {
+    let rules_dir = resolve_rules_dir(Some(&app))?;
+    let dir = bulwark_core::paths::custom_rules_dir();
+    let exists = dir.as_deref().is_some_and(|d| d.is_dir());
+    let (rules, errors) = engine::load_rule_packs(&rules_dir, dir.as_deref().filter(|_| exists));
+    let builtin_errors = engine::load_rules(&rules_dir).1.len();
+    Ok(CustomRulesInfo {
+        dir: dir.map(|d| d.display().to_string()),
+        exists,
+        loaded: rules.iter().filter(|r| r.custom).count(),
+        errors: errors.into_iter().skip(builtin_errors).collect(),
+    })
+}
+
+/// Creates the custom rules folder (with a commented example, the first time) and opens it.
+#[tauri::command]
+async fn custom_rules_open(app: tauri::AppHandle) -> Result<String, String> {
+    let dir = bulwark_core::paths::custom_rules_dir().ok_or("no home folder to put it in")?;
+    if !dir.is_dir() {
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let example = dir.join("EXAMPLE.yaml.txt");
+        let _ = std::fs::write(&example, CUSTOM_RULE_EXAMPLE);
+    }
+    let path = dir.display().to_string();
+    reveal::open_flagged_file(app, path.clone(), false)?;
+    Ok(path)
+}
+
+/// Written next to an empty custom-rules folder; `.txt` so it isn't loaded until renamed.
+const CUSTOM_RULE_EXAMPLE: &str = r#"# Your own Bulwark check. Copy this to a file ending in .yaml (e.g. MY-001.yaml) and edit it.
+# It uses the same format as the shipped checks: https://bulwark.nrl.ai/guide/custom-checks
+# Ids can't start with BLWK- (reserved for Bulwark's own checks) or reuse a built-in id.
+id: MY-001
+title: "My team's registry must use HTTPS ({{ dev_tool_config.path }})"
+category: developer-tools
+severity: medium
+collector: dev_tool_config
+os: [linux, macos, windows]
+condition: kind == "npm" and http_registry == true
+explain: >
+  {{ dev_tool_config.path }} installs packages from {{ dev_tool_config.detail }} over plain HTTP.
+fix: "Point npm at https://registry.example.com instead."
+references: []
+"#;
 
 /// The currently-active suppressions, for the Rules view's "Suppressed" tab.
 #[tauri::command]
@@ -850,6 +992,11 @@ struct DashboardSnapshot {
     /// "no agent issues" from "the agent scanner never ran" — and claiming a clean bill of
     /// health nobody earned is the one thing this codebase consistently refuses to do.
     agent_scanned: bool,
+    /// The rule IDs the latest config scan demonstrably ran (`ScanRun::rules_evaluated`, persisted).
+    /// The hardening index scores only these: a rule that never ran — wrong OS, skipped collector —
+    /// is neither a pass nor a fail. Empty for a database written before the set was stored, which
+    /// the UI shows as "not assessed" rather than guessing.
+    rules_evaluated: Vec<String>,
 }
 
 /// Projects an [`AiFinding`] into the common [`Finding`] shape so the Overview can render every
@@ -905,6 +1052,7 @@ async fn dashboard_snapshot() -> Result<DashboardSnapshot, String> {
             suppressed_findings: Vec::new(),
             meta: None,
             agent_scanned: false,
+            rules_evaluated: Vec::new(),
         });
     }
     let mut store = Store::open(&db_path).map_err(|e| e.to_string())?;
@@ -928,21 +1076,27 @@ async fn dashboard_snapshot() -> Result<DashboardSnapshot, String> {
     // combined config+agent set (rather than in `open_findings_split`, which only knows about
     // config findings) so suppression applies uniformly across every scanner — a suppressed
     // BLWK-AI-* rule is honored the same as a suppressed BLWK-KERNEL-* one.
-    let suppressed_ids = store.suppressed_rule_ids().map_err(|e| e.to_string())?;
-    let (suppressed_findings, findings): (Vec<_>, Vec<_>) = findings
-        .into_iter()
-        .partition(|f| suppressed_ids.contains(&f.rule_id));
+    // Whole rules and single findings alike (`Ignores::covers`).
+    let ignores = store.ignores().map_err(|e| e.to_string())?;
+    let (suppressed_findings, findings): (Vec<_>, Vec<_>) =
+        findings.into_iter().partition(|f| ignores.covers(f));
 
     Ok(DashboardSnapshot {
         findings,
         suppressed_findings,
         meta: store.latest_scan_run_meta().map_err(|e| e.to_string())?,
         agent_scanned,
+        rules_evaluated: store
+            .latest_rules_evaluated()
+            .map_err(|e| e.to_string())?
+            .map(|s| s.into_iter().collect())
+            .unwrap_or_default(),
     })
 }
 
-/// Total past scan runs — backs a small "N scans recorded" line rather than a full history
-/// browser, which is intentionally out of scope for this pass (see AGENTS.md's status notes).
+/// Total past scan runs. The sidebar used to show this as "N scans recorded" under the monitoring
+/// state; that line was removed as confusing, and the command is kept for any caller that needs a
+/// count without loading the history.
 #[tauri::command]
 async fn history_count() -> Result<i64, String> {
     let db_path = db_path()?;
@@ -983,6 +1137,8 @@ pub fn run() {
         .manage(ScanControl::default())
         .manage(MonitoringState(Mutex::new(monitoring::initial_inner())))
         .manage(RealtimeAvState(Mutex::new(realtime_av::initial_state())))
+        .manage(machines::MachinesState::default())
+        .manage(machines::ScanSlots::default())
         .setup(|app| {
             // Resolves and logs the rule pack location on every launch, dev or packaged.
             // This is the one code path that genuinely differs between `cargo tauri dev`
@@ -990,6 +1146,10 @@ pub fn run() {
             // it at startup means a real "why can't Bulwark find its rules" report is
             // diagnosable from a log line instead of a guess.
             let handle = app.handle().clone();
+            // Remote machines are scanned by the bundled CLI; the rule pack is only needed when a
+            // machine has no Bulwark of its own and the CLI copies itself over, so a missing pack
+            // must not stop the scheduler (machines with Bulwark installed still work).
+            machines::spawn_scheduler(handle.clone(), resolve_rules_dir(Some(&handle)).ok());
             match resolve_rules_dir(Some(&handle)) {
                 Ok(dir) => {
                     println!("[bulwark] rules directory resolved: {}", dir.display());
@@ -1113,6 +1273,12 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            host_platform,
+            custom_rules_info,
+            custom_rules_open,
+            finding_ignore,
+            finding_unignore,
+            finding_ignores_list,
             scan_start,
             scan_cancel,
             scan_privileged,
@@ -1146,7 +1312,26 @@ pub fn run() {
             remediation::fix_rule,
             remediation::fix_all,
             reveal::open_flagged_file,
-            reveal::open_check_page
+            reveal::open_check_page,
+            machines::machines_list,
+            machines::machine_add,
+            machines::machine_update,
+            machines::machine_remove,
+            machines::machine_findings,
+            machines::machine_suppress,
+            machines::machine_unsuppress,
+            machines::machines_set_enabled,
+            machines::machine_test,
+            machines::machine_trust,
+            machines::machine_setup_key,
+            machines::machine_scan_now,
+            machines::machines_scan_all,
+            machines::ssh_suggestions,
+            machines::notify_status,
+            machines::notify_configure,
+            machines::notify_test,
+            machines::notify_report,
+            machines::notify_telegram_chats
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

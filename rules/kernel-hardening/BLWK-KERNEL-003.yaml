@@ -3,6 +3,9 @@ title: No mandatory access control framework is enforcing
 category: kernel-hardening
 severity: medium
 collector: mac_status
+# The Windows host owns this inside WSL (its kernel, network stack and console), so it is not
+# something the distro can act on: reported as not applicable there, never as passing.
+skip_on: [wsl]
 condition: any_mac_enforcing == false and enforcement_known == true
 explain: >
   Neither AppArmor nor SELinux has any profile in enforcing mode. Without MAC, a

@@ -1,0 +1,11 @@
+id: BLWK-DEV-008
+title: "pip skips certificate checks for a package index ({{ dev_tool_config.path }})"
+category: developer-tools
+severity: medium
+collector: dev_tool_config
+os: [linux, macos, windows]
+condition: kind == "pip" and trusted_host == true
+explain: >
+  {{ dev_tool_config.path }} lists {{ dev_tool_config.detail }} as a trusted-host, which tells pip to accept any certificate — or none — from it. A spoofed or intercepted index can then serve packages that run code when installed.
+fix: "Remove the trusted-host line and give pip the index's CA instead: pip config set global.cert /path/to/ca.pem"
+references: [ATTACK-T1195.001, ATTACK-T1557]

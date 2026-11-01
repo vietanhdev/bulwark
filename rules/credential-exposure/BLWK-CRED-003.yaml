@@ -3,6 +3,7 @@ title: Docker registry logins are stored in the config file
 category: credential-exposure
 severity: medium
 collector: credential_stores
+os: [linux, macos]
 condition: kind == "docker_config" and inline_auths > 0 and creds_store == false
 explain: >
   Docker saved {{ credential_stores.inline_auths }} registry login(s) inside {{ credential_stores.path }}. They look

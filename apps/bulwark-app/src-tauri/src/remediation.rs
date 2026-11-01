@@ -32,7 +32,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn ssh_dir() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
+    let home = bulwark_core::paths::home_var().map_err(|_| "HOME not set".to_string())?;
     Ok(PathBuf::from(home).join(".ssh"))
 }
 

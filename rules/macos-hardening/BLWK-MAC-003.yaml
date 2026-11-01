@@ -1,0 +1,12 @@
+id: BLWK-MAC-003
+title: System Integrity Protection is disabled
+category: macos-hardening
+severity: high
+collector: macos_security
+os: [macos]
+# Only fires on a value actually read; "unknown" (command failed, unrecognised output) never does.
+condition: sip_on_known == true and sip_on == false
+explain: >
+  System Integrity Protection stops even root from modifying macOS system files, kernel extensions and protected processes. With it off, malware that gets root can tamper with the operating system itself and hide there.
+fix: "Restart into Recovery (hold the power button on Apple silicon), open Utilities → Terminal, run 'csrutil enable', and restart. 'csrutil status' should then print 'enabled'."
+references: [ATTACK-T1562.001, ATTACK-T1014]

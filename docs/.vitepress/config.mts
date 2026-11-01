@@ -37,7 +37,7 @@ function ogSlugFor(relativePath: string): string {
 export default withMermaid({
   title: "Bulwark",
   description:
-    "A security scanner for Linux developer machines, with a native CLI and desktop app.",
+    "Security for your dev machines, the servers they reach, and your AI coding tools — a native CLI and desktop app that also watches your other machines over SSH.",
   lang: "en-US",
   cleanUrls: true,
   // Default to light on first visit (no stored preference / no system-preference match yet)
@@ -112,16 +112,19 @@ export default withMermaid({
           "A free, open-source security scanner for Linux developer machines and servers, with " +
           "a native CLI and a Tauri desktop GUI. Checks plaintext credentials, supply-chain " +
           "startup hooks, exposed dev services, SSH, sudoers, kernel/sysctl hardening, " +
-          "persistence, file permissions, logging and rootkit indicators against 73 declarative rules; " +
+          "persistence, file permissions, logging and rootkit indicators against 88 declarative rules; " +
           "scans AI coding assistants (Claude Code, Cursor, Copilot, Codex) for leaked secrets " +
-          "and prompt-injection-exploitable config; integrates ClamAV; and monitors continuously.",
+          "and prompt-injection-exploitable config; integrates ClamAV; monitors continuously; and " +
+          "watches other machines over SSH, agentless, with Telegram and e-mail alerts.",
         featureList: [
-          "93 checks, each with a plain-language explanation page and fix",
+          "111 checks, each with a plain-language explanation page and fix",
           "AI coding-assistant security scan (secrets in context, malicious MCP, YOLO mode)",
           "ClamAV antivirus integration",
           "Systemd-journal log correlation (SSH brute-force, sudo abuse)",
           "File-integrity monitoring",
           "Continuous background re-scanning",
+          "Agentless monitoring of other machines over SSH",
+          "Telegram and e-mail alerts",
           "CIS Benchmark and MITRE ATT&CK mapping",
         ],
         license: "https://www.apache.org/licenses/LICENSE-2.0",
@@ -140,7 +143,7 @@ export default withMermaid({
         name: "Bulwark",
         url: SITE_URL,
         description:
-          "Documentation and downloads for Bulwark, an open-source Linux host security scanner.",
+          "Documentation and downloads for Bulwark, an open-source security scanner for Linux, macOS and Windows.",
       }),
     ],
   ],
@@ -239,6 +242,8 @@ export default withMermaid({
         text: "Guide",
         items: [
           { text: "Architecture & design", link: "/guide/architecture" },
+          { text: "Monitoring other machines", link: "/guide/remote-monitoring" },
+          { text: "Choosing what Bulwark checks", link: "/guide/custom-checks" },
           { text: "Agent Security", link: "/guide/agent-security" },
           { text: "Fixing findings", link: "/guide/remediation" },
           { text: "Contributing", link: "/guide/contributing" },

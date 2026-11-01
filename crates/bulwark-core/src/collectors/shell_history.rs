@@ -60,7 +60,7 @@ pub fn detect_history_suppression(rc_text: &str) -> Fact {
 /// included too.
 fn user_homes() -> Vec<String> {
     let mut homes = Vec::new();
-    if let Ok(home) = std::env::var("HOME") {
+    if let Ok(home) = crate::paths::home_var() {
         if !home.is_empty() {
             homes.push(home);
         }

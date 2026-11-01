@@ -3,6 +3,9 @@ title: Martian packet logging is disabled
 category: kernel-hardening
 severity: low
 collector: sysctl_kernel
+# The Windows host owns this inside WSL (its kernel, network stack and console), so it is not
+# something the distro can act on: reported as not applicable there, never as passing.
+skip_on: [wsl]
 # Martian-packet logging is a network-monitoring control for hosts on untrusted segments — a
 # server concern (CIS scopes it there). Low-value noise on a single-user desktop, so gate it to
 # the server profile (still fires on any host running sshd or a server chassis).

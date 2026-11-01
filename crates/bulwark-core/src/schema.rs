@@ -144,6 +144,44 @@ diesel::table! {
         reason -> Text,
         actor -> Text,
         at -> Text,
+        location -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
+    finding_ignores (rule_id, location) {
+        rule_id -> Text,
+        location -> Text,
+        reason -> Text,
+        created_at -> Text,
+        created_by -> Text,
+    }
+}
+
+diesel::table! {
+    // Machines monitored over SSH. Added by 2026-11-01-000000_remote_hosts; see that migration
+    // for why there is no free-form ssh-options column and what `expected_hostname` guards.
+    remote_hosts (id) {
+        id -> Text,
+        name -> Text,
+        spec -> Text,
+        port -> Nullable<BigInt>,
+        identity_file -> Nullable<Text>,
+        jump_host -> Nullable<Text>,
+        privileged -> Bool,
+        enabled -> Bool,
+        interval_minutes -> BigInt,
+        created_at -> Text,
+        expected_hostname -> Nullable<Text>,
+        last_attempt_at -> Nullable<Text>,
+        last_success_at -> Nullable<Text>,
+        last_status -> Nullable<Text>,
+        last_error -> Nullable<Text>,
+        consecutive_failures -> BigInt,
+        engine -> Nullable<Text>,
+        // Added by 2026-11-02-000000_remote_hosts_os.
+        os_kind -> Nullable<Text>,
+        os_name -> Nullable<Text>,
     }
 }
 
@@ -161,4 +199,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     ai_findings,
     rule_suppressions,
     rule_suppression_events,
+    finding_ignores,
+    remote_hosts,
 );

@@ -1,0 +1,12 @@
+id: BLWK-WIN-005
+title: User Account Control is disabled
+category: windows-hardening
+severity: high
+collector: windows_security
+os: [windows]
+# Only fires on a value actually read; an unreadable setting (e.g. BitLocker without elevation) never does.
+condition: uac_enabled_known == true and uac_enabled == false
+explain: >
+  With UAC off, every program an administrator runs gets full administrator rights silently — a malicious download included.
+fix: "Set EnableLUA to 1 under HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System (or restore the default in Control Panel → User Account Control Settings) and restart."
+references: [ATTACK-T1548.002]

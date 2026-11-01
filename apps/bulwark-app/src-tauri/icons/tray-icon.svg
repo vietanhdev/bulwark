@@ -1,0 +1,17 @@
+<!--
+  The tray icon: a symbolic (monochrome) glyph, because the GNOME/Ubuntu top bar draws its status
+  icons as white symbols — the full-colour app icon shrunk to 22 px reads as a dark blob there.
+  A white shield with the check cut out, so it stays legible at panel size. Rendered to
+  tray-icon.rgba (raw RGBA, embedded by tray.rs) by scripts/render-app-icons.py.
+-->
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <mask id="cut">
+      <rect width="64" height="64" fill="#fff"/>
+      <path d="M21 33.5 L28.5 41 L43 26" fill="none" stroke="#000" stroke-width="6"
+            stroke-linecap="round" stroke-linejoin="round"/>
+    </mask>
+  </defs>
+  <path mask="url(#cut)" fill="#ffffff" stroke="#ffffff" stroke-width="2" stroke-linejoin="round"
+        d="M10 6 H20 V13 H27 V6 H37 V13 H44 V6 H54 V30 C54 44 44 54 32 59 C20 54 10 44 10 30 Z"/>
+</svg>

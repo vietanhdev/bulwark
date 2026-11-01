@@ -45,6 +45,10 @@ const SHOTS = [
   // One problem opened: why it matters, the one-click fix, and Details. Replaces the old separate
   // AI assistants screen, which is now part of Checkups.
   { tab: null, file: "fix.png", open: /ssh private key is not passphrase-protected/i },
+  { tab: "Remote", file: "machines.png" },
+  // One machine opened: its connection and last scan side by side, and its issues grouped the same
+  // way Home groups this computer's.
+  { tab: "Remote", file: "machine.png", open: /web-1/ },
   { tab: "Checkups", file: "compliance.png" },
   { tab: "Virus scan", file: "antivirus.png", run: "Run a virus scan", settleMs: 8000 },
   { tab: "All checks", file: "rules.png" },

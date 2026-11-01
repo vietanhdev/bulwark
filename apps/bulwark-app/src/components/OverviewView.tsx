@@ -41,6 +41,7 @@ interface DashboardSnapshot {
   suppressedFindings: Finding[];
   meta: LatestScanMeta | null;
   agent_scanned: boolean;
+  rules_evaluated: string[];
 }
 
 type ScanEvent =
@@ -122,6 +123,8 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
   const [host, setHost] = useState<string | null>(null);
   const [privilegedRunDone, setPrivilegedRunDone] = useState(false);
   const [hasScanned, setHasScanned] = useState(false);
+  // What the last stored scan actually ran — the hardening index scores only these.
+  const [rulesEvaluated, setRulesEvaluated] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [rules, setRules] = useState<RuleSummary[] | null>(null);
   const [activeNeeds, setActiveNeeds] = useState<Set<string>>(new Set());
@@ -132,7 +135,7 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
   const [progress, setProgress] = useState<string | null>(null);
   // ClamAV detections from this run. Not findings — no rule fired, a signature matched.
   const [threats, setThreats] = useState<{ path: string; signature: string }[]>([]);
-  const [, setAgentScanned] = useState(false);
+  const [agentScanned, setAgentScanned] = useState(false);
   // Whether an antivirus sweep ran in this session. Unlike compliance/agent findings, ClamAV
   // results aren't persisted to the dashboard snapshot, so on a fresh open the Antivirus tile has
   // no stored state to restore — it stays "unknown" until a sweep runs, rather than faking a tick.
@@ -166,6 +169,7 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
         setSuppressed([...(snap.suppressedFindings ?? [])].sort(bySeverity));
         setHost(snap.meta.host_fingerprint);
         setSkippedPrivileged(snap.meta.privileged_collectors_skipped);
+        setRulesEvaluated(new Set(snap.rules_evaluated ?? []));
         setHasScanned(true);
         setStreamed(false);
       })
@@ -189,8 +193,8 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
 
   const hardening = useMemo(() => {
     if (!rules || !hasScanned) return null;
-    return computeHardeningIndex(rules, openRuleIds, new Set(skippedPrivileged));
-  }, [rules, openRuleIds, skippedPrivileged, hasScanned]);
+    return computeHardeningIndex(rules, openRuleIds, { rulesEvaluated, agentScanned });
+  }, [rules, openRuleIds, rulesEvaluated, agentScanned, hasScanned]);
 
   const ruleCategoryById = useMemo(() => {
     const m = new Map<string, string>();
@@ -472,6 +476,15 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
     }
   }
 
+  async function ignorePlace(ruleId: string, location: string, reason: string) {
+    try {
+      await invoke("finding_ignore", { ruleId, location, reason });
+      bump();
+    } catch (e) {
+      setErrors((prev) => [...prev, String(e)]);
+    }
+  }
+
   return (
     <PageShell
       title="Home"
@@ -743,6 +756,7 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
                 onToggle={() => toggleCategory(category)}
                 actions={{
                   onIgnoreType: ignoreType,
+                  onIgnorePlace: ignorePlace,
                   onRecheck: runScan,
                   fixCapabilities,
                   onFixed: runScan,
@@ -780,6 +794,7 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
                       onToggle={() => {}}
                       actions={{
                         onIgnoreType: ignoreType,
+                        onIgnorePlace: ignorePlace,
                         onRecheck: runScan,
                         fixCapabilities,
                         onFixed: runScan,

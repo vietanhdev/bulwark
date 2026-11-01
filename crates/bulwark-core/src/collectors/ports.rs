@@ -103,6 +103,21 @@ impl Collector for ListeningPortsCollector {
             );
             seen.insert(key)
         });
+        // Whether a default-deny host firewall (ufw) sits in front of these. Recorded per row so
+        // BLWK-NET-003 (anyone on the network can connect) and BLWK-NET-005 (all interfaces, but
+        // behind the firewall) can tell the two apart without a cross-collector join.
+        // Whether a default-deny host firewall (ufw) sits in front of these. Recorded per row so
+        // BLWK-NET-003 (anyone on the network can connect) and BLWK-NET-005 (all interfaces, but
+        // behind a default-deny policy) can tell the two apart without a cross-collector join.
+        //
+        // Deliberately not refined by ufw's per-port `allow` rules: those files are root-only, so
+        // privileged and unprivileged scans would disagree about the same port, and reconciliation
+        // would close the high finding and open the medium one (with a fresh alert) every time the
+        // two alternated. BLWK-NET-005 says plainly that an allow rule or Docker can reopen the port.
+        let firewalled = super::host_firewall::host_ufw_denies_inbound();
+        for f in &mut rows {
+            f.insert("inbound_firewalled".to_string(), Value::Bool(firewalled));
+        }
         Ok(rows)
     }
 }

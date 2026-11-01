@@ -1,0 +1,14 @@
+id: BLWK-FIM-009
+title: No file-integrity baseline recorded yet
+category: file-integrity
+severity: info
+collector: file_integrity
+# One finding for "nothing has been baselined", instead of one per watched file. Once a baseline
+# exists, files missing from it are reported individually by BLWK-FIM-003 / BLWK-FIM-006.
+condition: kind == "summary" and baseline_exists == false
+explain: >
+  Bulwark watches {{ file_integrity.watched }} critical files (sshd_config, PAM, sudo, su, login
+  settings and similar) for tampering, but no known-good baseline has been recorded on this machine,
+  so it can see the files exist but not whether any of them has been changed.
+fix: "Run 'bulwarkctl fim baseline' now, while you trust this machine, to record known-good hashes (add '--privileged' with sudo to also cover /etc/shadow and /etc/sudoers). In the desktop app: File changes → Record baseline."
+references: []

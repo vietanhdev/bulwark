@@ -26,23 +26,13 @@ const KEY_AUTO_SCAN: &str = "ai_auto_scan_enabled";
 /// heavier than a config tick — six hours keeps the tab fresh without being background noise.
 const AUTO_SCAN_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 
-// Same local db-path resolver every module in this app keeps private to itself — see
-// monitoring.rs's comment on why it isn't factored into a shared helper.
+/// The shared database path — see `bulwark_core::paths`.
 fn db_path() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("BULWARK_DB_PATH") {
-        return Some(PathBuf::from(p));
-    }
-    // XDG_DATA_HOME before ~/.local/share — see monitoring.rs's resolver for why this
-    // matters (Flatpak: $HOME is read-only, XDG_DATA_HOME is the writable app dir).
-    if let Some(dir) = std::env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()) {
-        return Some(PathBuf::from(dir).join("bulwark/bulwark.db"));
-    }
-    let home = std::env::var("HOME").ok()?;
-    Some(PathBuf::from(home).join(".local/share/bulwark/bulwark.db"))
+    bulwark_core::paths::default_db_path().ok()
 }
 
 fn home_dir() -> Option<PathBuf> {
-    std::env::var("HOME").ok().map(PathBuf::from)
+    bulwark_core::paths::home_var().ok().map(PathBuf::from)
 }
 
 fn read_roots(key: &str) -> Vec<PathBuf> {

@@ -113,7 +113,22 @@ await hold(900);
 await scrollBy(-260);
 await hold(300);
 
-// 4. Live theme + colour switching.
+// 4. Remote machines: each one's system at a glance, then one opened — its connection and last
+//    scan side by side, and its issues grouped like Home's.
+await clickNav("Remote");
+await hold(1500);
+await page
+  .getByRole("button", { name: /web-1/ })
+  .first()
+  .click()
+  .catch(() => {});
+await hold(1400);
+await scrollBy(420);
+await hold(1100);
+await scrollBy(-420);
+await hold(300);
+
+// 5. Live theme + colour switching.
 await clickNav("Settings");
 await hold(1000);
 await clickBtn("Dark", true);
@@ -127,7 +142,7 @@ await hold(600);
 await clickBtn("Graphite sidebar");
 await hold(800);
 
-// 5. Back to a light Home.
+// 6. Back to a light Home.
 await clickBtn("Light", true);
 await hold(450);
 await clickNav("Home");

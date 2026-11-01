@@ -3,6 +3,7 @@ pub(crate) mod banners;
 mod clamav;
 mod credential_stores;
 mod cron;
+mod dev_tools;
 pub mod file_integrity;
 mod file_permissions;
 mod grub;
@@ -11,6 +12,7 @@ mod logging;
 mod login_defs;
 mod mac;
 mod macos_launchd;
+mod macos_security;
 mod module_blacklist;
 mod network_interfaces;
 mod ports;
@@ -18,6 +20,7 @@ mod process_accounting;
 mod python_startup;
 mod shell_history;
 pub(crate) mod ssh_keys;
+mod windows_security;
 pub use ssh_keys::{
     protect_unencrypted_keys, BulkProtectionReport, KeyProtectionOutcome, KeyProtectionResult,
 };
@@ -32,6 +35,10 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const LINUX_ONLY: &[OperatingSystem] = &[OperatingSystem::Linux];
+/// For collectors that only read files in the user's home directory (credential stores, SSH keys),
+/// which look the same on macOS. Verified against a real Mac before being widened.
+pub(crate) const LINUX_AND_MACOS: &[OperatingSystem] =
+    &[OperatingSystem::Linux, OperatingSystem::Macos];
 
 /// Upper bound on how much of a file a collector reads into memory. Config and history files are
 /// kilobytes in practice; the cap only matters for user-writable inputs (`~/.ssh/authorized_keys`,
@@ -54,7 +61,7 @@ pub(crate) fn read_capped(path: &Path) -> std::io::Result<String> {
 /// GUI elevates). Only directories that exist are returned, deduplicated, in a stable order.
 pub(crate) fn user_homes() -> Vec<PathBuf> {
     let mut homes: Vec<PathBuf> = Vec::new();
-    if let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty()) {
+    if let Some(home) = crate::paths::home_var_os().filter(|h| !h.is_empty()) {
         homes.push(PathBuf::from(home));
     }
     let passwd = std::fs::read_to_string("/etc/passwd").unwrap_or_default();
@@ -137,11 +144,14 @@ pub fn all_collectors() -> Vec<Box<dyn Collector>> {
         Box::new(module_blacklist::ModuleBlacklistCollector),
         Box::new(grub::GrubPasswordCollector),
         Box::new(macos_launchd::LaunchdPersistenceCollector),
+        Box::new(macos_security::MacosSecurityCollector),
         Box::new(windows_persistence::WindowsRunKeysCollector),
+        Box::new(windows_security::WindowsSecurityCollector),
         Box::new(credential_stores::CredentialStoresCollector),
         Box::new(python_startup::PythonStartupHooksCollector),
         Box::new(python_startup::SupplyChainIocsCollector),
         Box::new(host_firewall::HostFirewallCollector),
+        Box::new(dev_tools::DevToolConfigCollector),
     ]
 }
 
@@ -152,7 +162,7 @@ mod tests {
     #[test]
     fn all_collectors_have_unique_non_empty_names() {
         let collectors = all_collectors();
-        assert_eq!(collectors.len(), 27);
+        assert_eq!(collectors.len(), 30);
         let mut names: Vec<&str> = collectors.iter().map(|c| c.name()).collect();
         names.sort_unstable();
         names.dedup();

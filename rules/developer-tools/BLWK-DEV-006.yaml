@@ -1,0 +1,11 @@
+id: BLWK-DEV-006
+title: "npm/yarn installs packages without checking TLS certificates ({{ dev_tool_config.path }})"
+category: developer-tools
+severity: high
+collector: dev_tool_config
+os: [linux, macos, windows]
+condition: kind == "npm" and strict_ssl_off == true
+explain: >
+  {{ dev_tool_config.path }} turns off certificate checks for the package registry. Anyone on the network path can serve a modified package — whose install script runs on this machine — and read the registry token npm sends.
+fix: "Remove strict-ssl=false (npm config delete strict-ssl), or enableStrictSsl: false for yarn. Behind a corporate proxy, point npm at its CA instead: npm config set cafile /path/to/proxy-ca.pem"
+references: [ATTACK-T1195.001, ATTACK-T1557]

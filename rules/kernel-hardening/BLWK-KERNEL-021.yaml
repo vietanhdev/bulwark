@@ -3,6 +3,9 @@ title: "Kernel module not blacklisted: usb-storage"
 category: kernel-hardening
 severity: low
 collector: module_blacklist
+# The Windows host owns this inside WSL (its kernel, network stack and console), so it is not
+# something the distro can act on: reported as not applicable there, never as passing.
+skip_on: [wsl]
 profiles: [server]
 condition: blacklisted == false and loadable == true and module == "usb-storage"
 explain: >

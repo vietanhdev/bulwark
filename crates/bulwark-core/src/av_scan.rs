@@ -112,6 +112,14 @@ pub fn detect_install_command() -> &'static str {
         return "Virus scanning isn't available in this snap. Use the .deb, .rpm or \
                 AppImage, or scan with the bulwarkctl command-line tool.";
     }
+    if cfg!(target_os = "macos") {
+        return "brew install clamav";
+    }
+    if cfg!(windows) {
+        return "Optional on Windows — Microsoft Defender already scans files as they arrive, and \
+                Checkups confirms it is on. For a second opinion, install ClamAV from \
+                https://www.clamav.net/downloads and make sure clamscan is on your PATH.";
+    }
     std::fs::read_to_string("/etc/os-release")
         .map(|text| install_command_for_os_release(&text))
         .unwrap_or("See https://docs.clamav.net/manual/Installing.html for your distro")
@@ -200,14 +208,16 @@ pub fn parse_clamscan_output(stdout: &str) -> Vec<ThreatDetection> {
 /// malware actually lands: browser downloads and the world-writable temp directories every
 /// local user and process can drop a file into.
 pub fn default_scan_targets(home: &Path) -> Vec<PathBuf> {
-    vec![
-        home.join("Downloads"),
-        PathBuf::from("/tmp"),
-        PathBuf::from("/var/tmp"),
-    ]
-    .into_iter()
-    .filter(|p| p.exists())
-    .collect()
+    // Windows has no /tmp; its per-user temp folder is the equivalent drop zone.
+    let temps = if cfg!(windows) {
+        vec![std::env::temp_dir()]
+    } else {
+        vec![PathBuf::from("/tmp"), PathBuf::from("/var/tmp")]
+    };
+    std::iter::once(home.join("Downloads"))
+        .chain(temps)
+        .filter(|p| p.exists())
+        .collect()
 }
 
 /// Default folders for *real-time* protection to watch — deliberately narrower than

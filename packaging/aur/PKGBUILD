@@ -27,7 +27,9 @@ makedepends=('cargo')
 options=('!lto')
 # ClamAV powers the optional antivirus scan; everything else works without it and
 # Bulwark prints a distro-aware install hint when it is absent.
-optdepends=('clamav: antivirus scanning support')
+optdepends=('clamav: antivirus scanning support'
+            'openssh: monitoring other machines over SSH (bulwarkctl hosts)'
+            'curl: Telegram and e-mail alerts (bulwarkctl notify)')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('6e8bcb696c3dfe3aa63c5df01088aa0ac2edf9656b3a4425cfd8fc083bcd2142')
 

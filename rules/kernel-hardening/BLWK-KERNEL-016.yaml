@@ -3,6 +3,9 @@ title: This host sends ICMP redirects
 category: kernel-hardening
 severity: low
 collector: sysctl_kernel
+# The Windows host owns this inside WSL (its kernel, network stack and console), so it is not
+# something the distro can act on: reported as not applicable there, never as passing.
+skip_on: [wsl]
 # Sending ICMP redirects only has any effect on a host that forwards packets (a router/gateway),
 # and CIS scopes this to servers. On a proven single-user desktop the setting is inert noise —
 # gate it to the server profile (which also fires on any host running sshd or a server chassis).
