@@ -108,7 +108,10 @@ export function AppearanceSettings() {
               aria-pressed={chrome === id}
               className={cn(
                 "flex h-8 w-8 items-center justify-center rounded-full transition-transform hover:scale-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
-                chrome === id && "ring-2 ring-ring ring-offset-2 ring-offset-card",
+                // The sidebar colours are all dark, so on a dark card they need an edge to be seen.
+                chrome === id
+                  ? "ring-2 ring-ring ring-offset-2 ring-offset-card"
+                  : "ring-1 ring-inset ring-foreground/20",
               )}
               style={{ background: swatch }}
             >
