@@ -550,7 +550,9 @@ jobs:
           - runner: macos-15
             os: macos
             arch: aarch64
-            bundle: dmg
+            # `app` too: with `dmg` alone Tauri deletes the intermediate Bulwark.app, and the
+            # artifact check below inspects the app's contents (CLI sidecar, rule pack).
+            bundle: app,dmg
           - runner: windows-2022
             os: windows
             arch: x86_64
