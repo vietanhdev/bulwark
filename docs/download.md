@@ -250,7 +250,7 @@ available yet.
 </div>
 
 Command line: <a :href="url(is.macCli)">macOS tarball</a> · <a :href="url(is.winCli)">Windows zip</a>.
-Keep the `rules` folder next to the binary.
+Each is a single file with every check built in.
 
 ::: warning Not code-signed yet
 The macOS and Windows builds aren't signed yet, so macOS Gatekeeper and Windows SmartScreen warn on

@@ -748,10 +748,12 @@ jobs:
             sudo dnf install ./bulwarkctl-${{ steps.version.outputs.version }}.x86_64.rpm    # x86_64
             sudo dnf install ./bulwarkctl-${{ steps.version.outputs.version }}.aarch64.rpm   # arm64
             ```
+            Any Linux, Alpine included: `bulwarkctl-${{ steps.version.outputs.version }}-x86_64-linux.tar.gz`
+            (or `-aarch64-linux`) holds a static, single-file `bulwarkctl` with every check built in.
 
             **macOS (Apple silicon)** — desktop app: open `bulwark-desktop-${{ steps.version.outputs.version }}-macos-aarch64.dmg`
             and drag Bulwark to Applications. CLI: `bulwarkctl-${{ steps.version.outputs.version }}-macos-aarch64.tar.gz`
-            (keep `rules/` next to the binary, or under `~/.local/lib/bulwark/rules`).
+            (a single file with every check built in — copy `bulwarkctl` anywhere on your `PATH`).
 
             **Windows (x86_64)** — desktop app: run `bulwark-desktop-${{ steps.version.outputs.version }}-windows-x86_64-setup.exe`.
             CLI: unzip `bulwarkctl-${{ steps.version.outputs.version }}-windows-x86_64.zip` and run `bulwarkctl.exe scan`.
