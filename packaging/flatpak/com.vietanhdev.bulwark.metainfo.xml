@@ -108,6 +108,15 @@
   </branding>
 
   <releases>
+    <release version="0.13.1" date="2026-11-02">
+      <description>
+        <p>Ubuntu 24.04 packages, and a clearer colour picker in dark mode.</p>
+        <ul>
+          <li>The Ubuntu PPA now builds for 24.04 LTS as well as 26.04 and 26.10</li>
+          <li>The sidebar colour swatches in Settings are easy to see in dark mode</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.13.0" date="2026-11-01">
       <description>
         <p>Reports you can read at a glance, and a command-line tool that is a single file.</p>

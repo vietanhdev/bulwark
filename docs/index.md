@@ -104,7 +104,7 @@ hero:
 <div class="bw-term" role="img" aria-label="Terminal output of bulwarkctl ai scan: four problems, worst first, each with why it matters and the fix">
 <div class="bw-term-bar"><span></span><span></span><span></span><em>bulwarkctl ai scan</em></div>
 <pre><span class="t-dim">$</span> bulwarkctl ai scan
-<b>Bulwark 0.13.0</b> <span class="t-dim">· AI coding agents · 1 project · 4 agent files checked</span>
+<b>Bulwark 0.13.1</b> <span class="t-dim">· AI coding agents · 1 project · 4 agent files checked</span>
 <span></span>
 <b>4 problems to fix</b>  <span class="t-crit">1 critical</span><span class="t-dim"> · </span><span class="t-high">3 high</span>
 <span></span>
