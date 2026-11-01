@@ -37,7 +37,7 @@ function ogSlugFor(relativePath: string): string {
 export default withMermaid({
   title: "Bulwark",
   description:
-    "Security for your dev machines, the servers they reach, and your AI coding tools — a native CLI and desktop app that also watches your other machines over SSH.",
+    "Local-first security for developers and their AI coding agents — risky agent hooks and MCP servers, keys leaked into AI sessions, plaintext credentials and exposed dev services, found and fixed on your own machine.",
   lang: "en-US",
   cleanUrls: true,
   // Default to light on first visit (no stored preference / no system-preference match yet)
@@ -228,7 +228,7 @@ export default withMermaid({
     nav: [
       { text: "Download", link: "/download" },
       { text: "Checks", link: "/checks/" },
-      { text: "Guide", link: "/guide/architecture" },
+      { text: "Guide", link: "/guide/agent-security" },
       { text: "Articles", link: "/articles/ssh-hardening-checklist" },
       { text: "Collaborate", link: "/collaborate" },
       { text: "GitHub", link: "https://github.com/vietanhdev/bulwark" },
@@ -241,11 +241,11 @@ export default withMermaid({
       {
         text: "Guide",
         items: [
-          { text: "Architecture & design", link: "/guide/architecture" },
-          { text: "Monitoring other machines", link: "/guide/remote-monitoring" },
+          { text: "AI agent security", link: "/guide/agent-security" },
           { text: "Choosing what Bulwark checks", link: "/guide/custom-checks" },
-          { text: "Agent Security", link: "/guide/agent-security" },
           { text: "Fixing findings", link: "/guide/remediation" },
+          { text: "Monitoring other machines", link: "/guide/remote-monitoring" },
+          { text: "Architecture & design", link: "/guide/architecture" },
           { text: "Contributing", link: "/guide/contributing" },
           { text: "Collaborate", link: "/collaborate" },
         ],

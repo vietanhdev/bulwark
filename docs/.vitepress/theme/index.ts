@@ -27,13 +27,13 @@ export default {
       "home-hero-info-before": () =>
         h("div", { class: "hero-eyebrow" }, [
           h("span", { class: "hero-eyebrow-dot" }),
-          "Built for developers, servers & AI-assisted machines",
+          "For developers and the AI agents they run",
         ]),
       "home-hero-actions-after": () =>
         h("div", { class: "hero-trust" }, [
           h("span", { class: "hero-trust-chip" }, "Apache-2.0"),
           h("span", { class: "hero-trust-chip" }, "100% local — no telemetry"),
-          h("span", { class: "hero-trust-chip" }, "Ubuntu · Fedora · Debian · Arch"),
+          h("span", { class: "hero-trust-chip" }, "Linux · macOS · Windows"),
         ]),
       // A full-width demo video directly under the hero headline — the product in motion, above the
       // fold, before the feature grid.

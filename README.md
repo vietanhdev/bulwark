@@ -5,8 +5,8 @@
 <h1 align="center">Bulwark</h1>
 
 <p align="center">
-  <strong>Security for your dev machines, the servers they reach, and your AI coding tools.</strong><br>
-  Plaintext keys, risky packages, exposed dev services and AI-assistant leaks — on this computer and, over plain SSH, on the machines you manage — explained in plain language and fixed in one click.
+  <strong>Local-first security for developers and their AI coding agents.</strong><br>
+  Finds the risky agent settings and leaked keys attackers look for, and fixes them. Nothing leaves your machine.
 </p>
 
 <p align="center">
@@ -16,24 +16,44 @@
   <a href="https://bulwark.nrl.ai/checks/"><img src="https://img.shields.io/badge/checks-123-1f8a8c" alt="123 checks"></a>
 </p>
 
-Bulwark looks where attacks on developer machines start: long-lived cloud keys and Git or Docker
-passwords stored in plain text, SSH keys without a passphrase, Python startup hooks and known
-malicious-package traces, dev databases listening on every network interface, and API keys pasted
-into **AI coding assistant** sessions and memory (Claude Code, Cursor, Copilot, Codex, Gemini and
-more). It also checks SSH, sudo, kernel, persistence and file permissions, and scans for viruses
-with ClamAV. And it keeps watch over your other machines — Linux servers, a home lab, a Mac, a
-Windows PC — over the SSH access you already have, with no agent and no server (a Linux server needs
-nothing installed at all) and alerts to Telegram or e-mail.
+Bulwark checks what an attacker would use on a developer machine:
 
-Problems are grouped by cause and ranked by severity. Each one says why it matters in a sentence
-and offers the fix: one click when Bulwark can do it safely (previewed and backed up), numbered
-steps with copyable commands otherwise. [Every check has its own page](https://bulwark.nrl.ai/checks/)
-with the full explanation. It scans other machines over SSH too.
+- **AI coding agents** (Claude Code, Cursor, Copilot, Codex, Gemini and 20 more): project hooks,
+  auto-approve modes, unpinned MCP servers, hidden instructions, keys left in chats.
+- **Secrets and supply chain:** plaintext cloud keys, SSH keys without a passphrase, malicious packages.
+- **The system underneath:** exposed dev services, SSH, sudo, kernel, persistence.
+- **Your other machines,** over the SSH you already use. No agent, no server.
 
-Built with Tauri v2 + Rust + React, for Linux, macOS and Windows. One rule engine, one rule pack, two
-front-doors: the desktop app and the CLI (`bulwark` when installed with the app, `bulwarkctl` from the
-CLI-only package). Local-first — no account, no telemetry; nothing leaves the machine unless you turn
-on alerts or point it at another machine.
+Each problem says why it matters and how to fix it, often in one click. No account, no telemetry.
+
+## Try it
+
+[Download](https://bulwark.nrl.ai/download) the CLI (a single file) or the desktop app, then:
+
+```bash
+bulwarkctl ai scan      # your AI coding agents: settings, MCP servers, leaked keys
+bulwarkctl scan         # this computer
+bulwarkctl ai redact    # preview removing leaked keys from agent files (--apply to do it)
+```
+
+```text
+Bulwark 0.12.0 · AI coding agents · 1 project · 4 agent files checked
+
+4 problems to fix  1 critical · 3 high
+
+  ● Critical Project-supplied agent hooks run shell commands automatically
+             This project settings file defines hooks. Claude Code hooks run shell commands
+             automatically on tool/session events — a project-supplied hook can execute …
+             → Remove the hooks from the repository's agent config (for example the hooks
+               block in .claude/settings.json, .cursor/hooks.json, .kiro/hooks/, or a …
+             in: ~/Projects/api/.claude/settings.json:1
+             more: https://bulwark.nrl.ai/checks/blwk-ai-002
+  …
+
+→ 1 agent file holds leaked secrets Bulwark can remove — preview with bulwarkctl ai redact, then add --apply
+```
+
+`--all` shows everything, `--json` is for scripts, and the exit code works in CI.
 
 ## Demo
 
@@ -74,13 +94,6 @@ as such and never counted as a pass, so a green result means something.
 
 ## Features
 
-- **100 rules** across 15 categories (credential exposure, SSH/remote access, persistence, network
-  egress, kernel hardening, filesystem permissions, privilege escalation, logging/auditing,
-  accounts/services, defense evasion, rootkit/malware, file integrity, developer-tool settings, macOS and
-  Windows settings), each carrying a severity,
-  a plain-language explanation with live values interpolated in, step-by-step fix, and CIS/MITRE
-  ATT&CK references. Every check, including the 23 AI assistant checks, has its own page at
-  [bulwark.nrl.ai/checks](https://bulwark.nrl.ai/checks/).
 - **AI assistant security** — scans the AI coding assistants on the machine (Claude Code, Claude
   Desktop, Cursor, Copilot, Codex, Gemini, Qwen Code, Zed, Goose, OpenCode, Kilo Code, Crush, Amp,
   Kiro, Amazon Q, Cline, Roo, Windsurf / Devin Desktop, Continue, Augment, JetBrains Junie, Aider,
@@ -92,6 +105,13 @@ as such and never counted as a pass, so a green result means something.
   base-URL exfil overrides, and world-readable credential stores. Workspaces are auto-discovered;
   leaked secrets are opt-in redactable (dry-run first, `0600` backup, permissions preserved). A
   highlighted tab in the GUI and `bulwarkctl ai scan` / `bulwarkctl ai redact` in the CLI.
+- **100 rules** across 15 categories (credential exposure, SSH/remote access, persistence, network
+  egress, kernel hardening, filesystem permissions, privilege escalation, logging/auditing,
+  accounts/services, defense evasion, rootkit/malware, file integrity, developer-tool settings, macOS and
+  Windows settings), each carrying a severity,
+  a plain-language explanation with live values interpolated in, step-by-step fix, and CIS/MITRE
+  ATT&CK references. Every check, including the 23 AI assistant checks, has its own page at
+  [bulwark.nrl.ai/checks](https://bulwark.nrl.ai/checks/).
 - **Monitor other machines, agentless** — add servers and other computers you can SSH into, and
   Bulwark scans them on a schedule with the same checks and plain-language fixes. Nothing is
   installed on or listens on a monitored machine, and there is no server to run: it uses your own
@@ -125,9 +145,10 @@ as such and never counted as a pass, so a green result means something.
   (`==`, `!=`, `in`, `contains`, `matches`, `<`/`>`/`<=`/`>=`, `and`/`or`/`not`), not Rust code.
   No plugin API to learn.
 
-## How it compares
+## How it compares with host auditors
 
-Bulwark fills a specific gap: a *desktop-native, continuously-monitoring* host scanner with a
+This table covers the host-hardening side; the AI-agent checks and what each one is grounded in are in
+the [AI agent security guide](https://bulwark.nrl.ai/guide/agent-security). On the host side Bulwark fills a specific gap: a *desktop-native, continuously-monitoring* host scanner with a
 real GUI — most established open-source Linux auditors are CLI-only, snapshot-style tools, and
 most tools with a real-time/EDR story are commercial, cloud-connected, and built for fleets, not
 a single desktop.
@@ -163,7 +184,7 @@ a one-shot batch command today; continuous follow-mode is the next step (see the
 [^4]: [Wazuh platform overview](https://wazuh.com/platform/overview/) and [Wazuh malware detection](https://opennix.org/en/docs/wazuh/capabilities/wazuh-malware-detection/) — FIM (scheduled/real-time/who-data modes), rootcheck, ClamAV/YARA/VirusTotal-integrated malware detection, SCA compliance module.
 [^5]: [SentinelOne vs. CrowdStrike](https://www.sentinelone.com/vs/crowdstrike/) and [CrowdStrike Falcon EDR](https://www.crowdstrike.com/en-us/compare/crowdstrike-vs-sentinelone/) — CrowdStrike is cloud-native/cloud-dependent for analytics; SentinelOne's agent runs detection locally and works offline.
 
-## Quick start
+## Build from source
 
 ```bash
 # Core + CLI
