@@ -277,3 +277,27 @@ fn a_secret_in_another_agents_transcript_is_found_and_redactable() {
         "a transcript inside ~/.qwen is a leak surface in an agent dir"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn home_recorded_as_a_project_does_not_turn_the_users_own_hooks_into_findings() {
+    let home = tempfile::tempdir().unwrap();
+    let h = home.path();
+    // Claude Code was once run in ~ itself, so discovery treats home as a workspace.
+    let encoded = h.to_string_lossy().replace('/', "-");
+    write(
+        &h.join(format!(".claude/projects/{encoded}/s.jsonl")),
+        "{}\n",
+    );
+    // The user's own Cursor hook and Augment local settings live only in the project tables.
+    write(
+        &h.join(".cursor/hooks.json"),
+        r#"{"version":1,"hooks":{"afterFileEdit":[{"command":"prettier --write"}]}}"#,
+    );
+    write(
+        &h.join(".augment/settings.local.json"),
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"notify-send done"}]}]}}"#,
+    );
+    let f = run(h, &[]);
+    assert!(!f.iter().any(|x| x.rule_id == "BLWK-AI-002"), "{f:#?}");
+}

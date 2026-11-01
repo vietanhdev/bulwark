@@ -302,6 +302,17 @@ fn sweep_root(root: &Path, found: &mut BTreeSet<PathBuf>) {
     }
 }
 
+/// Inside an agent folder only *dependency and VCS* trees are skipped (an installed plugin can bundle
+/// a whole `node_modules`). The wider `SWEEP_SKIP_DIRS` list (`build`, `dist`, `vendor`, …) is for
+/// finding workspaces; applied here it would silently drop `.claude/skills/build/SKILL.md`.
+const WALK_SKIP_DIRS: &[&str] = &["node_modules", ".git", ".venv", "__pycache__"];
+
+fn is_dependency_dir(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| WALK_SKIP_DIRS.contains(&n))
+}
+
 fn is_skip_dir(path: &Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
@@ -320,6 +331,9 @@ enum Find {
     /// Every file with exactly this name anywhere under this directory (bounded) — for manifests
     /// nested inside installed plugins/extensions (`<plugin>/.mcp.json`).
     Named(&'static str),
+    /// Like `Dir`, but only files below one of these folder names — an installed plugin's
+    /// `commands/`, `agents/`, `skills/` are what the model loads; its README and CHANGELOG are not.
+    DirUnder(&'static [&'static str], &'static [&'static str]),
 }
 
 /// One known artifact location, relative to a workspace root or to `$HOME`.
@@ -329,7 +343,7 @@ use ArtifactKind::{
     CodexConfig, Credential, DotEnv, Hooks, Instructions, McpConfig, Memory, Settings, Tasks,
     Transcript,
 };
-use Find::{Dir, File, Named};
+use Find::{Dir, DirUnder, File, Named};
 use Tool::*;
 
 const MD: &[&str] = &["md"];
@@ -492,7 +506,12 @@ const GLOBAL_SPECS: &[Spec] = &[
     // Installed plugins (`cache/<marketplace>/<plugin>/<version>/`) carry their own commands,
     // agents, skills and MCP servers. Only the installed cache — `marketplaces/` is a clone of the
     // whole catalog, most of which the user never enabled.
-    Spec(".claude/plugins/cache", ClaudeCode, Instructions, Dir(MD)),
+    Spec(
+        ".claude/plugins/cache",
+        ClaudeCode,
+        Instructions,
+        DirUnder(MD, &["commands", "agents", "skills"]),
+    ),
     Spec(
         ".claude/plugins/cache",
         ClaudeCode,
@@ -540,14 +559,26 @@ const GLOBAL_SPECS: &[Spec] = &[
     Spec(".gemini/commands", Gemini, Instructions, Dir(&["toml"])),
     Spec(".gemini/agents", Gemini, Instructions, Dir(MD)),
     Spec(".gemini/skills", Gemini, Instructions, Dir(MD)),
-    Spec(".gemini/extensions", Gemini, Instructions, Dir(MD)),
+    Spec(
+        ".gemini/extensions",
+        Gemini,
+        Instructions,
+        Named("GEMINI.md"),
+    ),
+    Spec(
+        ".gemini/extensions",
+        Gemini,
+        Instructions,
+        DirUnder(&["toml"], &["commands"]),
+    ),
     Spec(
         ".gemini/extensions",
         Gemini,
         McpConfig,
         Named("gemini-extension.json"),
     ),
-    Spec(".gemini/tmp", Gemini, Transcript, Dir(&["jsonl"])),
+    // Chats are `chats/session-*.jsonl`; releases before that wrote `.json`.
+    Spec(".gemini/tmp", Gemini, Transcript, Dir(&["jsonl", "json"])),
     Spec(".gemini/.env", Gemini, DotEnv, File),
     Spec(".gemini/oauth_creds.json", Gemini, Credential, File),
     Spec(".gemini/mcp-oauth-tokens.json", Gemini, Credential, File),
@@ -705,6 +736,21 @@ fn apply_specs(out: &mut Vec<Artifact>, base: &Path, specs: &[Spec], ws: Option<
         match find {
             File => push_if_exists(out, path, *tool, *kind, ws),
             Dir(exts) => collect_dir(out, &path, |p| has_ext(p, exts), *tool, *kind, ws),
+            DirUnder(exts, parents) => collect_dir(
+                out,
+                &path,
+                |p| {
+                    has_ext(p, exts)
+                        && p.strip_prefix(&path).is_ok_and(|rel| {
+                            rel.components().any(|c| {
+                                c.as_os_str().to_str().is_some_and(|c| parents.contains(&c))
+                            })
+                        })
+                },
+                *tool,
+                *kind,
+                ws,
+            ),
             Named(name) => collect_dir(
                 out,
                 &path,
@@ -811,7 +857,7 @@ fn collect_dir(
             }
             let path = entry.path();
             if file_type.is_dir() {
-                if !is_skip_dir(&path) {
+                if !is_dependency_dir(&path) {
                     walk(out, &path, want, tool, kind, ws, depth + 1);
                 }
             } else if want(&path) {
@@ -1199,5 +1245,26 @@ mod tests {
         assert!(!arts
             .iter()
             .any(|a| a.path.to_string_lossy().contains("node_modules")));
+    }
+
+    #[test]
+    fn agent_folders_named_like_build_dirs_are_still_walked() {
+        let ws = tempfile::tempdir().unwrap();
+        touch(&ws.path().join(".claude/skills/build/SKILL.md"));
+        touch(&ws.path().join(".cursor/rules/dist/x.mdc"));
+        let arts = workspace_artifacts(ws.path());
+        assert!(arts.iter().any(|a| a.path.ends_with("build/SKILL.md")));
+        assert!(arts.iter().any(|a| a.path.ends_with("dist/x.mdc")));
+    }
+
+    #[test]
+    fn only_a_plugins_loaded_folders_are_instructions() {
+        let home = tempfile::tempdir().unwrap();
+        let plug = home.path().join(".claude/plugins/cache/mk/p/1.0.0");
+        touch(&plug.join("README.md"));
+        touch(&plug.join("skills/s/SKILL.md"));
+        let arts = global_artifacts(home.path());
+        assert!(arts.iter().any(|a| a.path.ends_with("skills/s/SKILL.md")));
+        assert!(!arts.iter().any(|a| a.path.ends_with("1.0.0/README.md")));
     }
 }

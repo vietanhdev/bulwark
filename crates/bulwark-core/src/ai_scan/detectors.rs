@@ -578,18 +578,27 @@ pub(super) fn is_dangerous_permission(entry: &str) -> bool {
     // A network/exec command with a wildcard argument: Bash(curl:*), Bash(sh:*), Bash(eval:*)…
     let lower = e.to_ascii_lowercase();
     const EXEC_CMDS: &[&str] = &[
-        "curl", "wget", "nc", "bash", "sh", "eval", "python", "node", "rm",
+        "curl", "wget", "nc", "bash", "sh", "zsh", "eval", "python", "python3", "node", "perl",
+        "ruby", "rm",
     ];
-    // `Bash(…)` (Claude Code, Qwen), `Shell(…)` (Cursor CLI), `run_shell_command(…)` (Gemini CLI).
-    if let Some(inner) = ["bash(", "shell(", "run_shell_command("]
+    // Claude Code / Qwen `Bash(cmd:*)`: an exact command unless it carries a wildcard.
+    if let Some(inner) = lower
+        .strip_prefix("bash(")
+        .and_then(|s| s.strip_suffix(")"))
+    {
+        let cmd = inner.split(':').next().unwrap_or("");
+        return EXEC_CMDS.contains(&cmd) && inner.contains('*');
+    }
+    // Cursor CLI `Shell(cmd)` and Gemini/Qwen `run_shell_command(cmd)` match by command *prefix*:
+    // naming an interpreter or a downloader admits any arguments (`bash -c '<anything>'`), and a
+    // wildcard admits any command at all.
+    if let Some(inner) = ["shell(", "run_shell_command("]
         .iter()
         .find_map(|p| lower.strip_prefix(p))
         .and_then(|s| s.strip_suffix(")"))
     {
-        let cmd = inner.split(':').next().unwrap_or("");
-        if EXEC_CMDS.contains(&cmd) && inner.contains('*') {
-            return true;
-        }
+        let cmd = inner.split([' ', ':']).next().unwrap_or("").trim();
+        return inner.contains('*') || EXEC_CMDS.contains(&cmd);
     }
     false
 }
@@ -732,6 +741,10 @@ struct McpServer {
     /// Why every tool of this server runs without approval, if it does: Gemini/Qwen `trust: true`,
     /// or a `"*"` in Kiro's `autoApprove` / Cline's and Roo's `alwaysAllow`.
     auto_trust: Option<&'static str>,
+    /// Switched off in config (`disabled: true` — Claude Code, Cline/Roo, Kiro, Crush; `enabled:
+    /// false` — Goose, OpenCode). It never launches, so launch-risk checks don't apply; an inline
+    /// credential in its config is still exposed at rest and is still reported.
+    disabled: bool,
 }
 
 /// The keys different agents keep their MCP server set under. Each value is a map of
@@ -822,6 +835,8 @@ fn normalize_server(name: &str, def: &serde_json::Value) -> Option<McpServer> {
     {
         s.auto_trust = Some("alwaysAllow: [\"*\"]");
     }
+    s.disabled = obj.get("disabled").and_then(|d| d.as_bool()) == Some(true)
+        || obj.get("enabled").and_then(|d| d.as_bool()) == Some(false);
     if obj.get("bearer_token").and_then(|t| t.as_str()).is_some() {
         s.auth_keys.push("bearer_token".to_string());
     }
@@ -880,6 +895,7 @@ pub(super) fn detect_mcp_value(content: &str, v: &serde_json::Value) -> Vec<Dete
             url,
             auth_keys,
             auto_trust,
+            disabled,
         } = server;
         let name = name.as_str();
         let command = command.as_str();
@@ -897,6 +913,35 @@ pub(super) fn detect_mcp_value(content: &str, v: &serde_json::Value) -> Vec<Dete
             .take(120)
             .collect();
         let line = find_key_line(content, name).unwrap_or(1);
+
+        // Remote (HTTP/SSE) MCP server: a `type: "http"|"sse"` + `url`, or a bare `url` field. A
+        // non-localhost endpoint sees every request the agent sends it, and an inline auth token is
+        // exposed to anything that can read the config.
+        if let Some(url) = url.as_deref() {
+            let has_inline_auth = auth_keys.iter().any(|k| {
+                let k = k.to_ascii_lowercase();
+                k == "authorization"
+                    || k == "bearer_token"
+                    || k.contains("token")
+                    || k.contains("api-key")
+                    || k.contains("apikey")
+            });
+            if is_remote_url(url) && has_inline_auth {
+                out.push(Detection {
+                    rule_id: "BLWK-AI-018",
+                    explanation: format!(
+                        "MCP server \"{name}\" connects to the remote endpoint {url} with a credential written inline in its config."
+                    ),
+                    line: Some(line),
+                    evidence: evidence.clone(),
+                });
+            }
+        }
+
+        // Everything below is about what the server does when it *runs*; a disabled one doesn't.
+        if disabled {
+            continue;
+        }
 
         if let Some(why) = auto_trust {
             out.push(Detection {
@@ -942,30 +987,6 @@ pub(super) fn detect_mcp_value(content: &str, v: &serde_json::Value) -> Vec<Dete
                 line: Some(line),
                 evidence: evidence.clone(),
             });
-        }
-
-        // Remote (HTTP/SSE) MCP server: a `type: "http"|"sse"` + `url`, or a bare `url` field. A
-        // non-localhost endpoint sees every request the agent sends it, and an inline auth token is
-        // exposed to anything that can read the config.
-        if let Some(url) = url.as_deref() {
-            let has_inline_auth = auth_keys.iter().any(|k| {
-                let k = k.to_ascii_lowercase();
-                k == "authorization"
-                    || k == "bearer_token"
-                    || k.contains("token")
-                    || k.contains("api-key")
-                    || k.contains("apikey")
-            });
-            if is_remote_url(url) && has_inline_auth {
-                out.push(Detection {
-                    rule_id: "BLWK-AI-018",
-                    explanation: format!(
-                        "MCP server \"{name}\" connects to the remote endpoint {url} with a credential written inline in its config."
-                    ),
-                    line: Some(line),
-                    evidence: evidence.clone(),
-                });
-            }
         }
 
         // Container-launched MCP server with host-level privilege: --privileged, the Docker socket,
@@ -1085,20 +1106,54 @@ pub fn detect_codex_config(content: &str) -> Vec<Detection> {
     out
 }
 
+/// Codex's effective `(approval_policy, sandbox_mode)`: the top-level keys, overridden by the
+/// profile the file selects with `profile = "<name>"`. Other `[profiles.*]` tables are inactive
+/// unless chosen with `--profile` at launch, so they are not the configured posture. If the file
+/// won't parse as TOML, falls back to reading the top-level lines (those before the first table).
+fn codex_effective(content: &str) -> (Option<String>, Option<String>) {
+    let get = |v: &toml::Value, k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
+    if let Ok(t) = toml::from_str::<toml::Value>(content) {
+        let mut approval = get(&t, "approval_policy");
+        let mut sandbox = get(&t, "sandbox_mode");
+        if let Some(p) = t
+            .get("profile")
+            .and_then(|p| p.as_str())
+            .and_then(|name| t.get("profiles").and_then(|ps| ps.get(name)))
+        {
+            approval = get(p, "approval_policy").or(approval);
+            sandbox = get(p, "sandbox_mode").or(sandbox);
+        }
+        return (approval, sandbox);
+    }
+    let top_level = content
+        .lines()
+        .map(str::trim)
+        .take_while(|l| !l.starts_with('['));
+    let mut approval = None;
+    let mut sandbox = None;
+    for l in top_level {
+        if let Some((k, v)) = l.split_once('=') {
+            let v = v.trim().trim_matches('"').to_string();
+            match k.trim() {
+                "approval_policy" => approval = Some(v),
+                "sandbox_mode" => sandbox = Some(v),
+                _ => {}
+            }
+        }
+    }
+    (approval, sandbox)
+}
+
 fn detect_codex_sandbox(content: &str) -> Vec<Detection> {
-    // The two keys that matter are unambiguous on their own line, so a line-oriented check is both
-    // sufficient and robust to formatting (and to a file the TOML parser would reject).
-    let approval_never = content.lines().any(|l| {
-        let l = l.trim();
-        l.starts_with("approval_policy") && l.contains("never")
-    });
-    let danger_access = content.lines().any(|l| {
-        let l = l.trim();
-        l.starts_with("sandbox_mode") && l.contains("danger-full-access")
-    });
+    let (approval, sandbox) = codex_effective(content);
+    let approval_never = approval.as_deref() == Some("never");
+    let danger_access = sandbox.as_deref() == Some("danger-full-access");
+    // Point at the line that actually sets the unsafe value, not merely the first mention of the key.
+    let line = content
+        .lines()
+        .position(|l| l.contains("sandbox_mode") && l.contains("danger-full-access"))
+        .map(|i| i + 1);
     if approval_never && danger_access {
-        let line = find_key_line(content, "sandbox_mode")
-            .or_else(|| find_key_line(content, "approval_policy"));
         return vec![Detection {
             rule_id: "BLWK-AI-017",
             explanation: "Codex is set to approval_policy = \"never\" together with sandbox_mode = \"danger-full-access\" — the agent can run any command, unprompted, with full filesystem access.".to_string(),
@@ -1109,7 +1164,6 @@ fn detect_codex_sandbox(content: &str) -> Vec<Detection> {
     // The sandbox off on its own is still a posture finding: approvals are the only thing left
     // between the model and the machine, and one approved command runs unconfined.
     if danger_access {
-        let line = find_key_line(content, "sandbox_mode");
         return vec![Detection {
             rule_id: "BLWK-AI-021",
             explanation: "Codex is set to sandbox_mode = \"danger-full-access\": commands it runs are not confined to the workspace, so any command you approve can read and change anything your account can.".to_string(),
@@ -1561,6 +1615,56 @@ mod tests {
     fn new_rule_ids_are_in_the_catalog() {
         for id in ["BLWK-AI-021", "BLWK-AI-022", "BLWK-AI-023"] {
             assert_eq!(meta(id).id, id);
+        }
+    }
+
+    #[test]
+    fn a_disabled_server_skips_launch_checks_but_keeps_its_inline_token_finding() {
+        let off = r#"{"mcpServers":{"s":{"command":"npx","args":["-y","some-server"],"alwaysAllow":["*"],"disabled":true}}}"#;
+        assert!(detect_mcp(off).is_empty(), "{:?}", detect_mcp(off));
+        let goose_off = "extensions:\n  x:\n    type: stdio\n    enabled: false\n    cmd: npx\n    args: [some-server]\n";
+        assert!(detect_mcp_yaml(goose_off).is_empty());
+        let remote_off = r#"{"mcpServers":{"r":{"url":"https://mcp.example.com/mcp","headers":{"Authorization":"Bearer x"},"disabled":true}}}"#;
+        assert!(detect_mcp(remote_off)
+            .iter()
+            .any(|d| d.rule_id == "BLWK-AI-018"));
+    }
+
+    #[test]
+    fn codex_posture_follows_the_selected_profile_not_every_profile() {
+        // An unselected profile with full access is not the configured posture.
+        let inactive = "sandbox_mode = \"workspace-write\"\n[profiles.yolo]\nsandbox_mode = \"danger-full-access\"\n";
+        assert!(
+            detect_codex_config(inactive).is_empty(),
+            "{:?}",
+            detect_codex_config(inactive)
+        );
+        // Selecting it makes it the posture, and the line points at the unsafe value.
+        let selected = format!("profile = \"yolo\"\n{inactive}");
+        let d = detect_codex_config(&selected);
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert_eq!(d[0].rule_id, "BLWK-AI-021");
+        assert_eq!(d[0].line, Some(4));
+    }
+
+    #[test]
+    fn prefix_matched_shell_permissions_naming_an_interpreter_are_dangerous() {
+        for e in [
+            "Shell(bash)",
+            "Shell(python3)",
+            "run_shell_command(sh)",
+            "run_shell_command(*)",
+            "Shell(git *)",
+        ] {
+            assert!(is_dangerous_permission(e), "{e}");
+        }
+        for e in [
+            "Shell(git)",
+            "run_shell_command(git status)",
+            "Shell(npm test)",
+            "Bash(npm run test)",
+        ] {
+            assert!(!is_dangerous_permission(e), "{e}");
         }
     }
 }

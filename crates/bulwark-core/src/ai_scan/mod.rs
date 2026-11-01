@@ -243,7 +243,18 @@ pub fn scan_cancellable(
         artifacts.extend(discovery::global_artifacts(&opts.home));
     }
     for ws in &workspaces {
-        artifacts.extend(discovery::workspace_artifacts(ws));
+        let mut found = discovery::workspace_artifacts(ws);
+        // Home itself becomes a "workspace" whenever an agent was once run in `~` (Claude Code
+        // records it under ~/.claude/projects). Its files are the user's own — `~/.cursor/hooks.json`
+        // is their automation, not a cloned repository's — so they must never take the
+        // project-only paths (AI-002 hooks, AI-013 injection), which would report the user's own
+        // config as an attack.
+        if same_dir(ws, &opts.home) {
+            for a in &mut found {
+                a.workspace = None;
+            }
+        }
+        artifacts.extend(found);
     }
 
     // De-duplicate by path — a directory that's both a discovered workspace and a configured
@@ -302,18 +313,27 @@ pub fn scan_cancellable(
     // "The real current user's home" comes from the password database, not `$HOME`, which a caller
     // can point anywhere.
     let mut host_findings = Vec::new();
+    // A check that could not run is reported in `errors`, never dropped silently (architecture §8);
+    // a scan of a home that simply isn't this account's is out of scope, not a failure.
     if opts.explicit_targets.is_empty() && !cancelled {
-        if let Some((user, home)) = current_account() {
-            if home == opts.home {
-                if let Ok(groups) = std::fs::read_to_string("/etc/group") {
-                    host_findings.extend(check_root_equivalent_groups(
+        match current_account() {
+            Some(account) if same_dir(&account.home, &opts.home) => {
+                match std::fs::read_to_string("/etc/group") {
+                    Ok(groups) => host_findings.extend(check_root_equivalent_groups(
                         &artifacts,
-                        &user,
+                        &account,
                         &groups,
                         "/etc/group",
-                    ));
+                    )),
+                    Err(e) => errors.push(format!(
+                        "BLWK-AI-022 not checked: /etc/group could not be read: {e}"
+                    )),
                 }
             }
+            Some(_) => {}
+            None => errors.push(
+                "BLWK-AI-022 not checked: the current account could not be looked up".to_string(),
+            ),
         }
     }
     // Collect in input order (rayon's `collect` preserves it), so the later dedup keeps a
@@ -685,14 +705,32 @@ fn finding_from_detection(artifact: &Artifact, tool: &str, d: detectors::Detecti
     }
 }
 
-/// The real (not effective, not `$HOME`-claimed) account: its login name and home directory.
+/// The real (not effective, not `$HOME`-claimed) account.
+struct Account {
+    name: String,
+    home: PathBuf,
+    /// Primary group id — membership through it never appears in `/etc/group`'s member list.
+    gid: u32,
+}
+
+/// Two paths name the same directory once symlinks are resolved (`/home` is a symlink on some
+/// systems, so `$HOME` and the passwd entry can differ textually).
+fn same_dir(a: &Path, b: &Path) -> bool {
+    a == b
+        || matches!(
+            (std::fs::canonicalize(a), std::fs::canonicalize(b)),
+            (Ok(x), Ok(y)) if x == y
+        )
+}
+
 #[cfg(unix)]
-fn current_account() -> Option<(String, PathBuf)> {
+fn current_account() -> Option<Account> {
     use std::ffi::CStr;
     use std::os::unix::ffi::OsStrExt;
     // The reentrant variant: the GUI can run a manual scan and a background sweep at once, and
-    // `getpwuid`'s shared static buffer would race between them.
-    let mut buf = vec![0 as libc::c_char; 16 * 1024];
+    // `getpwuid`'s shared static buffer would race between them. 64 KiB fits any real passwd entry
+    // (glibc's own sysconf hint is 1 KiB); ERANGE beyond that yields None, which is reported.
+    let mut buf = vec![0 as libc::c_char; 64 * 1024];
     // SAFETY: `pwd` and `buf` outlive every pointer getpwuid_r writes into them, and the strings are
     // copied out before either is dropped. A null `result` means "no entry" or an error.
     unsafe {
@@ -710,12 +748,16 @@ fn current_account() -> Option<(String, PathBuf)> {
         }
         let name = CStr::from_ptr(pwd.pw_name).to_str().ok()?.to_string();
         let dir = std::ffi::OsStr::from_bytes(CStr::from_ptr(pwd.pw_dir).to_bytes());
-        Some((name, PathBuf::from(dir)))
+        Some(Account {
+            name,
+            home: PathBuf::from(dir),
+            gid: pwd.pw_gid,
+        })
     }
 }
 
 #[cfg(not(unix))]
-fn current_account() -> Option<(String, PathBuf)> {
+fn current_account() -> Option<Account> {
     None
 }
 
@@ -729,10 +771,11 @@ const ROOT_EQUIVALENT_GROUPS: &[&str] = &["docker", "lxd", "incus-admin"];
 /// Pure over the `/etc/group` text so it is testable without touching the real host.
 fn check_root_equivalent_groups(
     artifacts: &[Artifact],
-    user: &str,
+    account: &Account,
     group_file: &str,
     group_path: &str,
 ) -> Vec<AiFinding> {
+    let user = account.name.as_str();
     let mut agents: Vec<&'static str> = artifacts
         .iter()
         .filter(|a| !matches!(a.tool, Tool::Generic | Tool::VsCode))
@@ -759,8 +802,10 @@ fn check_root_equivalent_groups(
         .filter_map(|(i, line)| {
             let mut parts = line.split(':');
             let name = parts.next()?;
-            let members = parts.nth(2)?;
-            (ROOT_EQUIVALENT_GROUPS.contains(&name) && members.split(',').any(|m| m.trim() == user))
+            let gid = parts.nth(1)?.parse::<u32>().ok();
+            let members = parts.next()?;
+            let member = members.split(',').any(|m| m.trim() == user) || gid == Some(account.gid);
+            (ROOT_EQUIVALENT_GROUPS.contains(&name) && member)
                 .then(|| AiFinding {
                     id: Uuid::new_v4(),
                     rule_id: meta.id.to_string(),
@@ -1426,9 +1471,14 @@ mod tests {
             kind: ArtifactKind::Settings,
             workspace: None,
         };
+        let acct = |name: &str, gid: u32| Account {
+            name: name.to_string(),
+            home: PathBuf::from("/home/x"),
+            gid,
+        };
         let f = check_root_equivalent_groups(
             std::slice::from_ref(&claude),
-            "alice",
+            &acct("alice", 1000),
             groups,
             "/etc/group",
         );
@@ -1439,13 +1489,24 @@ mod tests {
         // Not a member of a root-equivalent group (wheel is not one, and `al` is not `alice`).
         assert!(check_root_equivalent_groups(
             std::slice::from_ref(&claude),
-            "al",
+            &acct("al", 1000),
             groups,
             "/etc/group"
         )
         .is_empty());
+        // Membership through the primary group never shows in the member list.
+        let primary = check_root_equivalent_groups(
+            std::slice::from_ref(&claude),
+            &acct("dave", 998),
+            groups,
+            "/etc/group",
+        );
+        assert_eq!(primary.len(), 1, "{primary:?}");
         // No agent on the machine: nothing to abuse the membership.
-        assert!(check_root_equivalent_groups(&[], "alice", groups, "/etc/group").is_empty());
+        assert!(
+            check_root_equivalent_groups(&[], &acct("alice", 1000), groups, "/etc/group")
+                .is_empty()
+        );
     }
 
     #[test]

@@ -116,9 +116,13 @@ Only locations confirmed in an agent's own docs or source are listed. Zed, Goose
 Amazon Q keep their chat history in SQLite databases, which the text secret scanner can't read, so
 those transcripts are not secret-scanned.
 
+An MCP server switched off in its config (`disabled: true`, `enabled: false`) never launches, so
+only its at-rest risk, an inline token, is reported for it.
+
 **Hooks are reported only when a repository supplies them.** A hook in your own home directory is
 your automation. A hook that arrives in a repository you cloned runs its authors' commands on your
-machine (the CVE-2025-59536 pattern), whichever agent it targets.
+machine (the CVE-2025-59536 pattern), whichever agent it targets. Your home folder is never treated as a cloned
+repository, even when an agent was once run there.
 
 ## Sandbox posture
 
