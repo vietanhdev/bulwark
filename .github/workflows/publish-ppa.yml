@@ -169,6 +169,13 @@ jobs:
               echo "dput failed (attempt $attempt), retrying in 20s"
               sleep 20
             done
+            # A fresh .orig travels only with the first series; the others reference it. If
+            # Launchpad rejects that first upload (it has, with a server-side 500), uploading
+            # the rest immediately gets each of them rejected too ("Unable to find …orig").
+            # So wait until the first is accepted before uploading the series that depend on it.
+            if [ -z "$ORIG" ] && [ "$s" = "${SERIES%% *}" ] && [ "$s" != "$SERIES" ]; then
+              scripts/ppa-launchpad.py accepted --upstream "$UPSTREAM" --rev "$PPA_REV" --series "$s"
+            fi
             echo "::endgroup::"
           done
 

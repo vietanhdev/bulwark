@@ -8,6 +8,9 @@ a rejected or failed upload looks exactly like a successful one in CI. Subcomman
   fetch-orig --upstream V --out DIR        download V's published .orig into DIR, verified
                                            against its .dsc; prints the path, or nothing if
                                            V has never been uploaded
+  accepted   --upstream V --rev N --series S [--timeout-min M]
+                                           wait until Launchpad has accepted series S's upload
+                                           (not built); exit 1 if it never appears
   wait       --upstream V --rev N --series "a b" [--timeout-min M]
                                            wait until each series' upload is accepted, built
                                            on every architecture the PPA enables, and its
@@ -96,10 +99,28 @@ def cmd_fetch_orig(a):
     print(path)
 
 
+REJECTED_HINT = (
+    "Launchpad rejected it; the reason is in the uploader's email. A rejection reading "
+    "\"Server said: 500 Internal server error\" is a Launchpad fault: re-run this workflow."
+)
+
+
+def cmd_accepted(a):
+    version = f"{a.upstream}-0ppa{a.rev}~{a.series}1"
+    deadline = time.time() + a.timeout_min * 60
+    print(f">> waiting for Launchpad to accept {version}", flush=True)
+    while time.time() < deadline:
+        if any(s["source_package_version"] == version for s in sources(a.upstream)):
+            print(f"   {version} accepted", flush=True)
+            return
+        time.sleep(POLL_SECONDS)
+    sys.exit(f"::error::{version} was not accepted within {a.timeout_min} minutes. {REJECTED_HINT}")
+
+
 def cmd_wait(a):
     arches = sorted(p["name"] for p in entries(f"{PPA}/processors"))
     pending = {f"{a.upstream}-0ppa{a.rev}~{s}1": s for s in a.series.split()}
-    print(f">> waiting for {', '.join(pending)} on {', '.join(arches)}")
+    print(f">> waiting for {', '.join(pending)} on {', '.join(arches)}", flush=True)
     deadline = time.time() + a.timeout_min * 60
     # Launchpad usually accepts an upload within ~5 minutes; one that never appears was rejected.
     accept_deadline = time.time() + 30 * 60
@@ -110,8 +131,7 @@ def cmd_wait(a):
             pub = accepted.get(version)
             if pub is None:
                 if time.time() > accept_deadline:
-                    sys.exit(f"::error::{version} was not accepted within 30 minutes — Launchpad "
-                             "rejected it; the reason is in the uploader's email")
+                    sys.exit(f"::error::{version} was not accepted within 30 minutes. {REJECTED_HINT}")
                 continue
             builds = {b["arch_tag"]: b for b in entries(pub["self_link"], **{"ws.op": "getBuilds"})}
             for arch, b in builds.items():
@@ -147,6 +167,12 @@ def main():
     s.add_argument("--upstream", required=True)
     s.add_argument("--out", required=True)
     s.set_defaults(fn=cmd_fetch_orig)
+    s = sub.add_parser("accepted")
+    s.add_argument("--upstream", required=True)
+    s.add_argument("--rev", required=True)
+    s.add_argument("--series", required=True)
+    s.add_argument("--timeout-min", type=int, default=30)
+    s.set_defaults(fn=cmd_accepted)
     s = sub.add_parser("wait")
     s.add_argument("--upstream", required=True)
     s.add_argument("--rev", required=True)
