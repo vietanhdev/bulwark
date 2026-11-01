@@ -17,6 +17,12 @@ on:
         type: choice
         options: [resolute, noble, stonking]
         default: resolute
+  # Called by publish-ppa.yml once every series it uploaded is built and published.
+  workflow_call:
+    inputs:
+      series:
+        type: string
+        required: true
   schedule:
     - cron: "17 6 * * 1" # weekly — catch a PPA that silently stops working
 
@@ -44,7 +50,7 @@ jobs:
     name: install-from-ppa (${{ matrix.arch }})
     # Clean container of the target series (Ubuntu images carry codename tags, and are
     # multi-arch, so this resolves to the runner's architecture).
-    container: ubuntu:${{ github.event.inputs.series || 'resolute' }}
+    container: ubuntu:${{ inputs.series || 'resolute' }}
     steps:
       - name: Add the PPA and install bulwarkctl
         run: |
@@ -75,4 +81,4 @@ jobs:
           grep -q '"rules_loaded"' /tmp/scan.json
           grep -q '"rules_loaded": *0' /tmp/scan.json && { echo "::error::scan loaded 0 rules"; exit 1; } || true
           bulwarkctl fix list | grep -i "Available autofixes" >/dev/null && echo "fix preview OK"
-          echo "PPA package installs and runs on ${{ github.event.inputs.series || 'resolute' }} (${{ matrix.arch }}) ✅"
+          echo "PPA package installs and runs on ${{ inputs.series || 'resolute' }} (${{ matrix.arch }}) ✅"

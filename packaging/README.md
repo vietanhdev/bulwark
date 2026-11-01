@@ -515,7 +515,7 @@ is always a deliberate click.
 
 | Workflow | What it does | Secrets used |
 |---|---|---|
-| `publish-ppa.yml` | Builds the signed source package(s) and `dput`s to `ppa:vietanhng/bulwark`. Inputs: `series`, `ppa_rev`. | `LAUNCHPAD_GPG_PRIVATE_KEY`, `LAUNCHPAD_GPG_PASSPHRASE` |
+| `publish-ppa.yml` | Builds the signed source package(s), `dput`s them to `ppa:vietanhng/bulwark`, waits until Launchpad has accepted, built and published every series on every enabled architecture, then runs `test-ppa.yml` against the live PPA. Inputs: `series`, `ppa_rev` (`auto` picks the next free revision), `dry_run`. A re-upload of a version reuses its published `.orig`, so it can run from any commit. | `LAUNCHPAD_GPG_PRIVATE_KEY`, `LAUNCHPAD_GPG_PASSPHRASE` |
 | `publish-snap.yml` | Builds the snap and releases to a channel. Input: `channel` (default `edge`). | `SNAPCRAFT_STORE_CREDENTIALS` |
 | `publish-flatpak.yml` | Builds `bulwark.flatpak`, uploads it as an artifact; attaches to a release if `release_tag` is given. | none |
 
