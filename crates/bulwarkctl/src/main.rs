@@ -383,6 +383,13 @@ enum ConfigRulesAction {
 /// optional polish, it's what makes the packaged binary work at all.
 const INSTALLED_RULES_DIR: &str = "/usr/share/bulwark/rules";
 
+/// Root reached from another account (sudo sets SUDO_USER, pkexec sets PKEXEC_UID), as opposed
+/// to a real root login.
+fn elevated_from_another_user() -> bool {
+    std::env::var_os("SUDO_USER").is_some_and(|v| !v.is_empty())
+        || std::env::var_os("PKEXEC_UID").is_some_and(|v| !v.is_empty())
+}
+
 /// The user's own rules folder for this run: an explicit `--custom-rules-dir`, else the default
 /// location when it exists; nothing with `--no-custom-rules`.
 fn custom_rules(explicit: Option<PathBuf>, disabled: bool) -> Option<PathBuf> {
@@ -581,13 +588,14 @@ fn main() -> anyhow::Result<()> {
             // here refers to the *remote* scan needing root, so we deliberately do NOT gate on local
             // root — the remote invocation uses `sudo -n` on the far side (see remote::run_scan_cmd).
             if let Some(spec) = ssh {
-                // A root scan never opens SSH: `--ssh-opt` takes arbitrary ssh options
-                // (ProxyCommand runs a command), so under sudo it would be a way out of any rule
-                // that allows `bulwarkctl scan`. Remote scans run as you.
-                if engine::is_running_as_root() {
+                // Elevated through sudo or pkexec, never open SSH: `--ssh-opt` takes arbitrary ssh
+                // options (ProxyCommand runs a command), so it would be a way out of any rule that
+                // lets a user run `bulwarkctl scan` as root. A real root login is not an escalation
+                // and may scan other machines; everyone else scans them as themselves.
+                if engine::is_running_as_root() && elevated_from_another_user() {
                     anyhow::bail!(
-                        "refusing to scan another machine as root — run `bulwarkctl scan --ssh` as \
-                         your own user (root checks on the far side use sudo there)"
+                        "refusing to scan another machine through sudo/pkexec — run `bulwarkctl scan \
+                         --ssh` as your own user (root checks on the far side use sudo there)"
                     );
                 }
                 let worst = run_ssh_scan(
