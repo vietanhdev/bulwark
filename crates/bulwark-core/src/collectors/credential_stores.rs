@@ -12,7 +12,6 @@ use crate::models::Fact;
 use regex::Regex;
 use serde_json::Value;
 use std::path::Path;
-use std::process::Command;
 use std::sync::OnceLock;
 
 pub struct CredentialStoresCollector;
@@ -145,7 +144,7 @@ fn store_fact(home: &Path, kind: &str, rel: &str) -> Option<Fact> {
 /// Git's global credential helper for `home`, asked of git itself so includes and XDG config are
 /// honoured. `None` when git isn't installed or the answer couldn't be read.
 fn git_helper_fact(home: &Path) -> Option<Fact> {
-    let out = Command::new("git")
+    let out = crate::sandbox::quiet_command("git")
         .args(["config", "--global", "--get-all", "credential.helper"])
         .env("HOME", home)
         .env_remove("GIT_CONFIG_GLOBAL")

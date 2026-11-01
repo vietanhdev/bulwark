@@ -116,7 +116,7 @@ impl JournaldSource {
     /// PATH (i.e. not a systemd host) — the CLI turns that into a clear "use --from-file"
     /// message rather than an empty result that looks like "nothing to report."
     pub fn batch(range: JournalRange) -> anyhow::Result<Self> {
-        let mut cmd = Command::new("journalctl");
+        let mut cmd = crate::sandbox::quiet_command("journalctl");
         cmd.arg("-o").arg("json").arg("--no-pager");
         match range {
             JournalRange::CurrentBoot => {

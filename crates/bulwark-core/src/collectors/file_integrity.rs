@@ -21,7 +21,6 @@ use crate::models::Fact;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// World-readable on a stock install — verified against this project's own dev machine.
 /// `/etc/ssh/sshd_config` isn't installed here (no sshd on this dev box) but is `644` on any
@@ -78,7 +77,11 @@ fn compute_hashes(paths: &[PathBuf]) -> HashMap<String, String> {
     // `--` ends option parsing. Today these paths are curated constants, but keeping the
     // separator means a future caller that passes a path beginning with `-` (or the `-`
     // stdin sentinel) can't accidentally turn a watched path into a flag for sha256sum.
-    let Ok(output) = Command::new("sha256sum").arg("--").args(paths).output() else {
+    let Ok(output) = crate::sandbox::quiet_command("sha256sum")
+        .arg("--")
+        .args(paths)
+        .output()
+    else {
         return HashMap::new();
     };
     parse_hash_lines(&String::from_utf8_lossy(&output.stdout))

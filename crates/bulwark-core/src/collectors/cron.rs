@@ -2,7 +2,6 @@ use super::Collector;
 use crate::models::Fact;
 use serde_json::Value;
 use std::path::Path;
-use std::process::Command;
 
 pub struct CronEntriesCollector;
 
@@ -58,7 +57,7 @@ impl Collector for CronEntriesCollector {
         let mut rows = Vec::new();
 
         // Personal crontab — absence (exit status, "no crontab for user") is normal, not an error.
-        if let Ok(output) = Command::new("crontab").arg("-l").output() {
+        if let Ok(output) = crate::sandbox::quiet_command("crontab").arg("-l").output() {
             if output.status.success() {
                 let text = String::from_utf8_lossy(&output.stdout);
                 rows.extend(parse_cron_text(&text, "crontab", false));

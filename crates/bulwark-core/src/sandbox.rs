@@ -79,6 +79,7 @@ pub fn host_command(program: &str) -> std::process::Command {
     }
     let mut cmd = std::process::Command::new(program);
     no_console(&mut cmd);
+    host_env(&mut cmd);
     cmd
 }
 
@@ -86,10 +87,83 @@ pub fn host_command(program: &str) -> std::process::Command {
 /// that spawns a console program (PowerShell, `cmd`, `git`, the CLI sidecar) gets a terminal
 /// window flashing up for each one — on every scan and every background tick — unless the child is
 /// created with `CREATE_NO_WINDOW`. Elsewhere this is plain `Command::new`.
+///
+/// It also runs `program` with the host's environment, not an AppImage's — see [`host_env`]. Every
+/// system tool Bulwark starts (`sha256sum`, `systemctl`, `git`, `ssh`, the CLI sidecar) should be
+/// created through this or [`host_command`], never a bare `Command::new`.
 pub fn quiet_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
     let mut cmd = std::process::Command::new(program);
     no_console(&mut cmd);
+    host_env(&mut cmd);
     cmd
+}
+
+/// Inside an AppImage, removes the AppImage's own paths from a child's environment, so a system
+/// tool runs against the system's libraries and data.
+///
+/// An AppImage starts the app with `LD_LIBRARY_PATH` (and GTK/GIO/GDK/XDG variables) pointing into
+/// its mount, so the bundled libraries win. Children inherit that. The app's bundled libraries come
+/// from its build image (Ubuntu 22.04), and a newer system tool linked against a newer version of
+/// one of them then fails to start: on a current Ubuntu, `sha256sum` died with
+/// "libsystemd.so.0: version `LIBSYSTEMD_254' not found" and every file-integrity check reported
+/// "could not verify". Any check that runs a system program was exposed the same way.
+///
+/// Every variable is filtered, not a fixed list: each `:`-separated entry inside `$APPDIR` is
+/// dropped, and a variable left empty is removed. The AppImage's own markers (`APPDIR`,
+/// `APPIMAGE`, `ARGV0`, `OWD`) are kept. Outside an AppImage this does nothing.
+pub fn host_env(cmd: &mut std::process::Command) -> &mut std::process::Command {
+    let Some(appdir) = std::env::var_os("APPDIR").filter(|d| !d.is_empty()) else {
+        return cmd;
+    };
+    for (key, value) in bundle_env_fixes(&appdir.to_string_lossy(), std::env::vars_os()) {
+        match value {
+            Some(v) => cmd.env(key, v),
+            None => cmd.env_remove(key),
+        };
+    }
+    cmd
+}
+
+/// The environment changes [`host_env`] makes: `(variable, Some(new value) | None to remove)`.
+/// Pure, so it is tested without being inside an AppImage.
+fn bundle_env_fixes(
+    appdir: &str,
+    vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> Vec<(std::ffi::OsString, Option<String>)> {
+    const KEEP: &[&str] = &["APPDIR", "APPIMAGE", "ARGV0", "OWD"];
+    let appdir = appdir.trim_end_matches('/');
+    if appdir.is_empty() {
+        return Vec::new();
+    }
+    let inside = |entry: &str| entry == appdir || entry.starts_with(&format!("{appdir}/"));
+    let mut fixes = Vec::new();
+    for (key, value) in vars {
+        if KEEP.iter().any(|k| key == *k) {
+            continue;
+        }
+        let Some(value) = value.to_str() else {
+            continue;
+        };
+        if !value.contains(appdir) {
+            continue;
+        }
+        let kept: Vec<&str> = value
+            .split(':')
+            .filter(|e| !e.is_empty() && !inside(e))
+            .collect();
+        if kept.len() == value.split(':').filter(|e| !e.is_empty()).count() {
+            continue; // mentions the path only in passing, not as an entry — leave it alone
+        }
+        fixes.push((
+            key,
+            if kept.is_empty() {
+                None
+            } else {
+                Some(kept.join(":"))
+            },
+        ));
+    }
+    fixes
 }
 
 /// Applies `CREATE_NO_WINDOW` on Windows; a no-op on every other OS.
@@ -143,6 +217,67 @@ pub fn unavailable_reason(tool: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
+
+    fn fixes(vars: &[(&str, &str)]) -> Vec<(String, Option<String>)> {
+        super::bundle_env_fixes(
+            "/tmp/.mount_bulwarkX",
+            vars.iter()
+                .map(|(k, v)| (OsString::from(k), OsString::from(v))),
+        )
+        .into_iter()
+        .map(|(k, v)| (k.to_string_lossy().into_owned(), v))
+        .collect()
+    }
+
+    #[test]
+    fn appimage_paths_are_removed_from_a_childs_environment() {
+        let got = fixes(&[
+            (
+                "LD_LIBRARY_PATH",
+                "/tmp/.mount_bulwarkX/usr/lib:/tmp/.mount_bulwarkX/usr/lib/x86_64-linux-gnu",
+            ),
+            (
+                "XDG_DATA_DIRS",
+                "/tmp/.mount_bulwarkX/usr/share:/usr/local/share:/usr/share",
+            ),
+            ("PATH", "/tmp/.mount_bulwarkX/usr/bin:/usr/bin:/bin"),
+            (
+                "GDK_PIXBUF_MODULE_FILE",
+                "/tmp/.mount_bulwarkX/usr/lib/gdk-pixbuf/loaders.cache",
+            ),
+            ("HOME", "/home/u"),
+            ("APPDIR", "/tmp/.mount_bulwarkX"),
+            ("APPIMAGE", "/home/u/Bulwark.AppImage"),
+            // A look-alike prefix is not inside the mount.
+            ("SOMETHING", "/tmp/.mount_bulwarkXYZ/lib"),
+        ]);
+        assert_eq!(
+            got,
+            vec![
+                ("LD_LIBRARY_PATH".into(), None),
+                (
+                    "XDG_DATA_DIRS".into(),
+                    Some("/usr/local/share:/usr/share".into())
+                ),
+                ("PATH".into(), Some("/usr/bin:/bin".into())),
+                ("GDK_PIXBUF_MODULE_FILE".into(), None),
+            ]
+        );
+    }
+
+    #[test]
+    fn outside_an_appimage_nothing_changes() {
+        assert!(super::bundle_env_fixes(
+            "",
+            [(
+                OsString::from("LD_LIBRARY_PATH"),
+                OsString::from("/opt/x/lib")
+            )]
+        )
+        .is_empty());
+    }
+
     use super::*;
 
     #[test]

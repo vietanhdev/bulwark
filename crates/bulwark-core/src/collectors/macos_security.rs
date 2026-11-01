@@ -12,14 +12,16 @@
 use super::Collector;
 use crate::models::{Fact, OperatingSystem};
 use serde_json::Value;
-use std::process::Command;
 
 const MACOS_ONLY: &[OperatingSystem] = &[OperatingSystem::Macos];
 
 pub struct MacosSecurityCollector;
 
 fn output(cmd: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new(cmd).args(args).output().ok()?;
+    let out = crate::sandbox::quiet_command(cmd)
+        .args(args)
+        .output()
+        .ok()?;
     // Some of these tools (sysadminctl) print their answer on stderr.
     let mut s = String::from_utf8_lossy(&out.stdout).into_owned();
     s.push_str(&String::from_utf8_lossy(&out.stderr));

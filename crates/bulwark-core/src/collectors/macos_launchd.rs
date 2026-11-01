@@ -107,7 +107,7 @@ enum Plist {
 }
 
 fn read_plist(path: &Path) -> Plist {
-    let Ok(out) = std::process::Command::new("/usr/bin/plutil")
+    let Ok(out) = crate::sandbox::quiet_command("/usr/bin/plutil")
         .args(["-convert", "json", "-o", "-", "--"])
         .arg(path)
         .output()

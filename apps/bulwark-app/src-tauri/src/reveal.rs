@@ -35,7 +35,7 @@ fn in_flatpak_sandbox() -> bool {
 /// applies to plain *opening* too, not only revealing — an earlier fix that redirected "reveal" to
 /// open the parent directory did not help, because it went through the same rejected call.
 fn open_via_portal_shim(path: &str) -> Result<(), String> {
-    let status = std::process::Command::new("xdg-open")
+    let status = bulwark_core::sandbox::quiet_command("xdg-open")
         .arg(path)
         .status()
         .map_err(|e| format!("couldn't launch xdg-open for {path}: {e}"))?;

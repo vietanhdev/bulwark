@@ -403,7 +403,7 @@ fn harden_with(
 fn validate_sshd(path: &Path) -> Option<bool> {
     // `sshd` usually lives in /usr/sbin, which isn't always on a login PATH; try both.
     for cand in ["sshd", "/usr/sbin/sshd", "/sbin/sshd"] {
-        if let Ok(out) = std::process::Command::new(cand)
+        if let Ok(out) = crate::sandbox::quiet_command(cand)
             .arg("-t")
             .arg("-f")
             .arg(path)
