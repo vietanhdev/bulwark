@@ -183,16 +183,20 @@ toolchain you develop with:
 
 | Series | archive `rustc`/`cargo` | PPA support |
 |---|---|---|
-| 24.04 noble (LTS) | 1.75.0 | ❌ **unsupported** — see below |
+| 24.04 noble (LTS) | 1.75.0 (default), 1.91 as `rustc-1.91` | ✅ with `cargo-1.91` — see below |
 | 26.04 resolute (LTS) | 1.93.1 | ✅ |
 | 26.10 stonking (devel) | newest | ✅ |
 
-**noble (24.04 LTS) cannot be supported.** Its cargo 1.75 cannot even *parse* this
-workspace's `Cargo.lock` (lockfile format v4, which needs cargo ≥ 1.78) — the build
-dies in ~38 s with `error: failed to parse lock file`. Downgrading the lockfile to
-v3 would only move the failure into the compile, since rustc 1.75 (Dec 2023) is far
-older than the dependency tree requires. noble users should install the
-GitHub-release `.deb` instead.
+**noble (24.04 LTS) builds with a versioned toolchain.** Its default cargo 1.75 cannot
+even *parse* this workspace's `Cargo.lock` (lockfile format v4 needs cargo ≥ 1.78), and the
+dependency tree needs rustc ≥ 1.89 (`uuid`'s rust-version). noble's archive also carries
+versioned toolchains (`rustc-1.89`, `rustc-1.91`, …), so `scripts/build-ppa-source.sh`
+rewrites noble's Build-Depends to `cargo-1.91, rustc-1.91` and puts
+`/usr/lib/rust-1.91/bin` first on `PATH` in `debian/rules`. Rewritten per series, not as
+`cargo | cargo-1.91`: Launchpad's resolver only ever installs the first alternative.
+Rehearsed for 0.13.0 the way Launchpad builds — `dpkg-source -x` of the real source package
+in an `ubuntu:24.04` container with only the declared Build-Depends installed and
+`--network none` — and the resulting `.deb` installed and scanned on a clean noble.
 
 ### ⚠️ Upload every series of a version in ONE run
 

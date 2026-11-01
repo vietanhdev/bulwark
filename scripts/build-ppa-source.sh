@@ -146,6 +146,28 @@ echo ">> installing debian/ packaging"
 cp -r "${REPO_ROOT}/packaging/ppa/debian" "$SRC_DIR/debian"
 chmod +x "$SRC_DIR/debian/rules"
 
+# The toolchain each series builds with. The dependency tree needs Rust >= 1.89 (uuid's
+# rust-version) and Cargo.lock v4 needs cargo >= 1.78, so a series whose default `cargo`/`rustc`
+# is older builds with one of its archive's versioned toolchains instead (noble's default is
+# 1.75; noble-updates carries rustc-1.89/1.91). Launchpad's resolver only ever takes the FIRST
+# alternative of a Build-Depends, so "cargo (>= 1.89) | cargo-1.91" would not work — the
+# dependency is rewritten per series, and debian/rules puts that toolchain first on PATH.
+case "$SERIES" in
+  noble) RUST_TOOLCHAIN="1.91" ;;
+  *)     RUST_TOOLCHAIN="" ;;   # the series' default cargo/rustc is new enough
+esac
+if [[ -n "$RUST_TOOLCHAIN" ]]; then
+  echo ">> ${SERIES}: building with rustc-${RUST_TOOLCHAIN}/cargo-${RUST_TOOLCHAIN}"
+  sed -i -e "s/^ cargo,\$/ cargo-${RUST_TOOLCHAIN},/" -e "s/^ rustc,\$/ rustc-${RUST_TOOLCHAIN},/" \
+    "$SRC_DIR/debian/control"
+  grep -q "^ cargo-${RUST_TOOLCHAIN},\$" "$SRC_DIR/debian/control" \
+    || { echo "ERROR: could not pin cargo-${RUST_TOOLCHAIN} in debian/control" >&2; exit 1; }
+  sed -i "s|^export CARGO_NET_OFFLINE = true\$|&\nexport PATH := /usr/lib/rust-${RUST_TOOLCHAIN}/bin:\$(PATH)|" \
+    "$SRC_DIR/debian/rules"
+  grep -q "rust-${RUST_TOOLCHAIN}/bin" "$SRC_DIR/debian/rules" \
+    || { echo "ERROR: could not put rust-${RUST_TOOLCHAIN} on PATH in debian/rules" >&2; exit 1; }
+fi
+
 # devscripts (dch) may be absent; write the changelog directly. RFC2822 date.
 CHANGELOG_DATE="$(date -R)"
 cat > "$SRC_DIR/debian/changelog" <<EOF

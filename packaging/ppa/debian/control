@@ -6,8 +6,9 @@ Maintainer: Viet Anh Nguyen <vietanh.dev@gmail.com>
 # source tarball (see scripts/build-ppa-source.sh) and the build runs with
 # CARGO_NET_OFFLINE=true. Build-Depends therefore lists only the toolchain, not
 # individual librust-* packages. `cargo`/`rustc` come from the target series'
-# archive — verify the series' rustc is new enough for the dependency tree before
-# uploading (24.04 noble ships ~1.75); the bundled SQLite in libsqlite3-sys needs
+# archive; where the default is too old (noble ships 1.75, the tree needs 1.89),
+# scripts/build-ppa-source.sh swaps in a versioned toolchain (cargo-1.91) for that
+# series. The bundled SQLite in libsqlite3-sys needs
 # only a C compiler, which build-essential (always present on builders) provides.
 Build-Depends:
  debhelper-compat (= 13),

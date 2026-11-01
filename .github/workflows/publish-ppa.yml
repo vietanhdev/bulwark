@@ -19,12 +19,12 @@ name: Publish PPA (CLI)
 on:
   workflow_dispatch:
     inputs:
-      # Upload every series of a version in ONE run. noble is deliberately absent — its
-      # cargo 1.75 can't parse Cargo.lock v4.
+      # Upload every series of a version in ONE run. noble builds with its archive's versioned
+      # cargo-1.91 (its default cargo 1.75 can't parse Cargo.lock v4) — see build-ppa-source.sh.
       series:
         description: "Ubuntu series, space-separated"
         required: true
-        default: "resolute stonking"
+        default: "noble resolute stonking"
       ppa_rev:
         description: "PPA revision. auto = one above the highest already uploaded for this version"
         required: true
