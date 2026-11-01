@@ -108,6 +108,18 @@
   </branding>
 
   <releases>
+    <release version="0.12.0" date="2026-11-01">
+      <description>
+        <p>Watch your other machines, and Bulwark on macOS and Windows.</p>
+        <ul>
+          <li>Keep watch over Linux servers, Macs, Windows PCs and WSL over the SSH you already use, with no agent and no server, and get alerts on Telegram or by e-mail</li>
+          <li>A desktop app and command-line tool for macOS and Windows, with checks for FileVault, Gatekeeper, Defender, BitLocker, Windows Update and more</li>
+          <li>Nine new checks for developer tools that quietly switch security off in Git, SSH, npm, pip and Docker</li>
+          <li>Ignore a single finding or a whole type, turn checks off, and add checks of your own, with every decision kept alongside its reason</li>
+          <li>The score only counts checks that actually ran; menus no longer get cut off, and the Auto-fix label opens the fix</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.11.1" date="2026-11-01">
       <description>
         <p>Fixes found by testing on a Mac, and a more dependable Ubuntu PPA.</p>
