@@ -2882,6 +2882,7 @@ mod tests {
             read_errors: vec![],
             rule_eval_errors: vec![],
             warnings: vec![],
+            lines_unrecognized: 0,
             findings: vec![crate::logs::LogFinding {
                 id: Uuid::new_v4(),
                 rule_id: "BLWK-LOG-SSH-001".into(),

@@ -81,6 +81,10 @@ pub struct LogScanRun {
     /// must surface these; "0 findings" with a warning here is "couldn't analyze", not "clean".
     #[serde(default)]
     pub warnings: Vec<String>,
+    /// Non-blank input lines that weren't log entries the source understands (see
+    /// `LogSource::lines_unrecognized`).
+    #[serde(default)]
+    pub lines_unrecognized: u64,
     pub findings: Vec<LogFinding>,
 }
 
@@ -97,6 +101,17 @@ impl LogScanRun {
         }
         if self.rules_loaded == 0 {
             w.push("no log rules were loaded — nothing is being checked for".to_string());
+        }
+        // Every line skipped as unrecognisable: the source read nothing it could use, so "no
+        // findings" would be a guess. Without this, a file in a format the reader doesn't know
+        // produced 0 events read, no warning, and a clean-looking result.
+        if self.events_read == 0 && self.lines_unrecognized > 0 {
+            w.push(format!(
+                "none of the {} line(s) in this input look like a log entry Bulwark reads \
+                 (syslog with a classic or ISO timestamp) — nothing was analyzed, so this is not a \
+                 clean log",
+                self.lines_unrecognized
+            ));
         }
         if self.events_read > 0 && self.events_decoded == 0 {
             w.push(format!(
@@ -234,6 +249,7 @@ pub fn run_log_scan<'d, 'r>(
         read_errors,
         rule_eval_errors,
         warnings: Vec::new(),
+        lines_unrecognized: source.lines_unrecognized(),
         findings,
     };
     run.warnings = run.compute_warnings();
@@ -302,6 +318,26 @@ mod tests {
     fn scan_bundled(text: &str) -> LogScanRun {
         let mut src = syslog_source(text);
         run_log_scan(&bundled("decoders"), &bundled("log-rules"), &mut src)
+    }
+
+    #[test]
+    fn input_with_no_recognisable_line_is_a_warning_not_a_clean_log() {
+        let run = scan_bundled("this is not a log\nneither is this\n\n");
+        assert_eq!(run.events_read, 0);
+        assert_eq!(run.lines_unrecognized, 2, "blank lines aren't counted");
+        assert!(
+            run.warnings
+                .iter()
+                .any(|w| w.contains("nothing was analyzed")),
+            "{:?}",
+            run.warnings
+        );
+        // Real log lines alongside a stray one: analysed, and no warning.
+        let run = scan_bundled(
+            "Jan 10 10:00:01 h sshd[1]: Accepted publickey for u from 10.0.0.1 port 1 ssh2\nstray\n",
+        );
+        assert_eq!((run.events_read, run.lines_unrecognized), (1, 1));
+        assert!(run.warnings.is_empty(), "{:?}", run.warnings);
     }
 
     #[cfg(target_os = "linux")]

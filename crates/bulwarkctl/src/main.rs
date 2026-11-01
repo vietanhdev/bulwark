@@ -1,8 +1,8 @@
 use anyhow::Context;
 use bulwark_core::{
     all_collectors, engine, fim_baseline_path, fim_establish_baseline, load_decoders,
-    load_log_rules, models::Severity, run_log_scan, JournalRange, JournaldSource, LogScanRun,
-    LogSource, Profile, Store, SyslogLinesSource, FIM_PRIVILEGED_WATCHED_PATHS,
+    load_log_rules, models::Severity, run_log_scan, JournalRange, JournaldSource, LogSource,
+    Profile, Store, SyslogLinesSource, FIM_PRIVILEGED_WATCHED_PATHS,
     FIM_UNPRIVILEGED_WATCHED_PATHS,
 };
 use clap::{Parser, Subcommand};
@@ -275,9 +275,12 @@ enum AiAction {
 enum LogsAction {
     /// Decode and correlate a batch of log events, printing any findings
     Scan {
-        /// Machine-readable JSON output instead of a table
+        /// Machine-readable JSON output instead of the report
         #[arg(long)]
         json: bool,
+        /// Show low-priority items too, and every place each problem was found
+        #[arg(long)]
+        all: bool,
         /// Skip persisting this run to the local findings database
         #[arg(long)]
         no_persist: bool,
@@ -1897,6 +1900,7 @@ fn run_logs(action: LogsAction, db_path: Option<PathBuf>) -> anyhow::Result<()> 
     match action {
         LogsAction::Scan {
             json,
+            all,
             no_persist,
             boot: _,
             since,
@@ -1954,13 +1958,22 @@ fn run_logs(action: LogsAction, db_path: Option<PathBuf>) -> anyhow::Result<()> 
             if json {
                 println!("{}", serde_json::to_string_pretty(&scan)?);
             } else {
-                print_log_scan_table(&scan);
+                let opts = report::ReportOptions {
+                    all,
+                    color: report::ReportOptions::color_for_stdout(),
+                    target: String::new(),
+                };
+                print!("{}", report::render_logs(&scan, &opts));
             }
             // A scan that loaded no decoders or no rules never actually analyzed anything — exit
             // with an error so a script gating on the exit code can't mistake it for a clean run
             // (the finding-severity exit code below would otherwise report success).
             if scan.decoders_loaded == 0 || scan.rules_loaded == 0 {
                 eprintln!("error: log scan could not run — no decoders and/or rules were loaded");
+                std::process::exit(2);
+            }
+            // Same for input that held nothing usable: "no findings" from it is not a clean log.
+            if report::nothing_analyzed(&scan) {
                 std::process::exit(2);
             }
             std::process::exit(exit_code_for(scan.worst_severity()));
@@ -2058,72 +2071,6 @@ fn report_load_errors(errors: &[bulwark_core::models::RuleLoadError]) -> anyhow:
         std::process::exit(1);
     }
     Ok(())
-}
-
-fn print_log_scan_table(scan: &LogScanRun) {
-    println!(
-        "Bulwark log scan — host {} — {} event(s) read, {} decoded — {} decoder(s), {} rule(s)",
-        scan.host_fingerprint,
-        scan.events_read,
-        scan.events_decoded,
-        scan.decoders_loaded,
-        scan.rules_loaded,
-    );
-    for (label, errs) in [
-        ("decoder", &scan.decoder_load_errors),
-        ("rule", &scan.rule_load_errors),
-    ] {
-        if !errs.is_empty() {
-            println!("⚠ {} {label}(s) failed to load:", errs.len());
-            for e in errs {
-                println!("  {}: {}", e.path, e.message);
-            }
-        }
-    }
-    if !scan.read_errors.is_empty() {
-        println!("⚠ {} line(s) could not be read", scan.read_errors.len());
-    }
-    if !scan.rule_eval_errors.is_empty() {
-        println!(
-            "⚠ {} rule evaluation error(s):",
-            scan.rule_eval_errors.len()
-        );
-        for e in &scan.rule_eval_errors {
-            println!("  {e}");
-        }
-    }
-    // Health warnings make an empty result untrustworthy — surface them prominently so "No findings"
-    // is never read as "clean" when the scan couldn't actually analyze the input.
-    for w in &scan.warnings {
-        println!("⚠ {w}");
-    }
-    println!();
-    if scan.findings.is_empty() {
-        if scan.warnings.is_empty() {
-            println!("No findings.");
-        } else {
-            println!("No findings — but see the warnings above: this scan could not reliably analyze the input.");
-        }
-        return;
-    }
-    let mut sorted = scan.findings.clone();
-    sorted.sort_by_key(|f| std::cmp::Reverse(f.severity));
-    for f in &sorted {
-        println!(
-            "[{:<8}] {} — {}",
-            severity_label(f.severity),
-            f.rule_id,
-            f.title
-        );
-        println!(
-            "           at {} · {} matching event(s)",
-            f.observed_at.to_rfc3339(),
-            f.match_count
-        );
-        println!("           {}", f.explanation.trim());
-        println!("           fix: {}", f.fix_hint.trim());
-    }
-    println!("\n{} finding(s) total.", scan.findings.len());
 }
 
 /// Text that came from another machine (finding titles and explanations, error output), made safe

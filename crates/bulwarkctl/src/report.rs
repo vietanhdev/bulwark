@@ -401,7 +401,9 @@ struct Body<'a> {
     subtitle: String,
     problems: Vec<Problem<'a>>,
     /// Shown when nothing was found ("Nothing to fix from the checks that ran.").
-    clean: &'a str,
+    /// Shown when nothing was found. `None` for a scan that couldn't analyze its input: then the
+    /// empty list is no result at all, and no checkmark is drawn.
+    clean: Result<&'a str, &'a str>,
     /// One-line next steps after the list (e.g. the redaction command).
     actions: Vec<String>,
     /// What this scan could not tell you.
@@ -428,7 +430,10 @@ fn render_body(body: Body<'_>, opts: &ReportOptions) -> String {
 
     // ---- the list ---------------------------------------------------------------------------
     if problems.is_empty() {
-        let _ = writeln!(out, "{} {}", st.green("✓"), st.bold(body.clean));
+        let _ = match body.clean {
+            Ok(text) => writeln!(out, "{} {}", st.green("✓"), st.bold(text)),
+            Err(text) => writeln!(out, "{} {}", st.yellow("!"), st.bold(text)),
+        };
     } else {
         let n = problems.len();
         let mut counts = Vec::new();
@@ -605,7 +610,135 @@ pub fn render(scan: &ScanRun, ignores: &Ignores, opts: &ReportOptions) -> String
                 scan.rules_loaded
             ),
             problems: group(items),
-            clean: "Nothing to fix from the checks that ran.",
+            clean: Ok("Nothing to fix from the checks that ran."),
+            actions: Vec::new(),
+            gaps,
+        },
+        opts,
+    )
+}
+
+/// A monitored machine's stored findings (`bulwarkctl hosts show`), in the same shape as a scan
+/// report. `findings` are the active ones (ignores already applied by the store); `ignored` is how
+/// many were hidden.
+pub fn render_stored(
+    findings: &[Finding],
+    ignored: usize,
+    subtitle: String,
+    scanned: bool,
+    opts: &ReportOptions,
+) -> String {
+    let st = Style { on: opts.color };
+    let mut gaps = Vec::new();
+    if ignored > 0 {
+        gaps.push(format!(
+            "{ignored} {} you chose to ignore — {}",
+            plural(ignored, "finding", "findings"),
+            st.bold("bulwarkctl hosts unignore")
+        ));
+    }
+    render_body(
+        Body {
+            subtitle,
+            problems: group(findings.iter().map(Item::from).collect()),
+            clean: if scanned {
+                Ok("Nothing to fix from its last scan.")
+            } else {
+                Err("Not scanned yet.")
+            },
+            actions: Vec::new(),
+            gaps,
+        },
+        opts,
+    )
+}
+
+/// A log scan that analyzed nothing: no decoders or rules, or input with no usable event (only
+/// unrecognisable lines, or a source that failed). Its empty result is no result.
+pub fn nothing_analyzed(scan: &bulwark_core::LogScanRun) -> bool {
+    scan.decoders_loaded == 0
+        || scan.rules_loaded == 0
+        || (scan.events_read == 0 && (scan.lines_unrecognized > 0 || !scan.read_errors.is_empty()))
+}
+
+/// The log scan report (`bulwarkctl logs scan`). Each finding's place is what triggered it (the
+/// source address of a brute-force burst, say) and how many events it took.
+pub fn render_logs(scan: &bulwark_core::LogScanRun, opts: &ReportOptions) -> String {
+    let st = Style { on: opts.color };
+    let safe = crate::term_safe;
+    let items = scan
+        .findings
+        .iter()
+        .map(|f| Item {
+            rule_id: &f.rule_id,
+            severity: f.severity,
+            title: &f.title,
+            explanation: &f.explanation,
+            fix_hint: &f.fix_hint,
+            place: {
+                let n = f.match_count;
+                let events = format!("{n} {}", plural(n as usize, "event", "events"));
+                if f.group_key.is_empty() {
+                    format!("{events}, {}", f.observed_at.format("%Y-%m-%d %H:%M"))
+                } else {
+                    format!("{} ({events})", f.group_key)
+                }
+            },
+            evidence: None,
+            raw_path: None,
+            tool: None,
+        })
+        .collect();
+
+    // What makes an empty result untrustworthy comes first, in yellow: "nothing found" from input
+    // the scanner couldn't read is not "nothing happened".
+    let mut gaps: Vec<String> = scan.warnings.iter().map(|w| st.yellow(&safe(w))).collect();
+    for (label, errs) in [
+        ("decoder", &scan.decoder_load_errors),
+        ("rule", &scan.rule_load_errors),
+    ] {
+        for e in errs {
+            gaps.push(st.yellow(&format!(
+                "{label} {} didn't load: {}",
+                safe(&e.path),
+                clip(&safe(&e.message), 140)
+            )));
+        }
+    }
+    // Lines that weren't log entries, when others were: normal for a file with multi-line
+    // payloads, but worth knowing. (When nothing was recognised, a warning above says so.)
+    if scan.lines_unrecognized > 0 && scan.events_read > 0 {
+        let n = scan.lines_unrecognized as usize;
+        gaps.push(format!(
+            "{n} {} weren't log entries and were skipped",
+            plural(n, "line", "lines")
+        ));
+    }
+    if !scan.read_errors.is_empty() {
+        let n = scan.read_errors.len();
+        gaps.push(format!(
+            "{n} {} couldn't be read",
+            plural(n, "line", "lines")
+        ));
+    }
+    for e in &scan.rule_eval_errors {
+        gaps.push(st.yellow(&clip(&safe(e), 160)));
+    }
+
+    render_body(
+        Body {
+            subtitle: format!(
+                "logs · {} {} read, {} understood",
+                scan.events_read,
+                plural(scan.events_read as usize, "event", "events"),
+                scan.events_decoded
+            ),
+            problems: group(items),
+            clean: if nothing_analyzed(scan) {
+                Err("Couldn't analyze this input — see below.")
+            } else {
+                Ok("Nothing suspicious in the events read.")
+            },
             actions: Vec::new(),
             gaps,
         },
@@ -715,7 +848,7 @@ pub fn render_ai(report: &AiScanReport, home: Option<&str>, opts: &ReportOptions
                 }
             },
             problems: group(items),
-            clean: "No leaked secrets or risky agent settings in the files checked.",
+            clean: Ok("No leaked secrets or risky agent settings in the files checked."),
             actions,
             gaps,
         },
@@ -1068,6 +1201,41 @@ mod tests {
         );
         assert_eq!(tilde("/home/u/x", Some("/home/u")), "~/x");
         assert_eq!(tilde("/home/user2/x", Some("/home/u")), "/home/user2/x");
+    }
+
+    fn log_scan(events_read: u64, unrecognized: u64) -> bulwark_core::LogScanRun {
+        serde_json::from_value(json!({
+            "id": NIL, "started_at": NOW, "finished_at": NOW, "host_fingerprint": "h",
+            "events_read": events_read, "events_decoded": events_read, "decoders_loaded": 4,
+            "rules_loaded": 8, "decoder_load_errors": [], "rule_load_errors": [],
+            "read_errors": [], "rule_eval_errors": [],
+            "warnings": if events_read == 0 && unrecognized > 0 { vec!["nothing was analyzed"] } else { vec![] },
+            "lines_unrecognized": unrecognized, "findings": [],
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_log_scan_that_read_nothing_usable_draws_no_checkmark() {
+        let bad = log_scan(0, 5);
+        assert!(nothing_analyzed(&bad));
+        let r = render_logs(&bad, &opts(false));
+        assert!(r.contains("! Couldn't analyze this input"), "{r}");
+        assert!(!r.contains('✓'), "{r}");
+        assert!(r.contains("nothing was analyzed"), "{r}");
+
+        let ok = log_scan(120, 3);
+        assert!(!nothing_analyzed(&ok));
+        let r = render_logs(&ok, &opts(false));
+        assert!(
+            r.contains("✓ Nothing suspicious in the events read."),
+            "{r}"
+        );
+        assert!(
+            r.contains("3 lines weren't log entries and were skipped"),
+            "{r}"
+        );
+        assert!(r.contains("120 events read"), "{r}");
     }
 
     #[test]

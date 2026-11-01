@@ -20,6 +20,12 @@ use std::sync::LazyLock;
 /// aborts a whole scan, matching the engine's "never a silent drop, never a fatal one" stance.
 pub trait LogSource {
     fn next_event(&mut self) -> Option<anyhow::Result<RawEvent>>;
+    /// Non-blank input lines skipped because they weren't log entries this source understands.
+    /// Counted so that input made of nothing recognisable is reported as "couldn't analyze", not
+    /// as a clean log (see `LogScanRun::compute_warnings`).
+    fn lines_unrecognized(&self) -> u64 {
+        0
+    }
 }
 
 /// Max bytes retained for a single log line. Log input can be attacker-influenced (a crafted or
@@ -295,6 +301,7 @@ static SYSLOG_ISO_RE: LazyLock<Regex> = LazyLock::new(|| {
 pub struct SyslogLinesSource<R: BufRead> {
     lines: CappedLines<R>,
     reference: chrono::DateTime<Utc>,
+    unrecognized: u64,
 }
 
 impl<R: BufRead> SyslogLinesSource<R> {
@@ -302,6 +309,7 @@ impl<R: BufRead> SyslogLinesSource<R> {
         Self {
             lines: CappedLines { reader },
             reference,
+            unrecognized: 0,
         }
     }
 
@@ -355,12 +363,21 @@ impl<R: BufRead> SyslogLinesSource<R> {
 }
 
 impl<R: BufRead> LogSource for SyslogLinesSource<R> {
+    fn lines_unrecognized(&self) -> u64 {
+        self.unrecognized
+    }
+
     fn next_event(&mut self) -> Option<anyhow::Result<RawEvent>> {
         loop {
             match self.lines.next() {
                 Some(Ok(line)) => match self.parse_line(&line) {
                     Ok(Some(ev)) => return Some(Ok(ev)),
-                    Ok(None) => continue,
+                    Ok(None) => {
+                        if !line.trim().is_empty() {
+                            self.unrecognized += 1;
+                        }
+                        continue;
+                    }
                     Err(e) => return Some(Err(e)),
                 },
                 Some(Err(e)) => return Some(Err(e.into())),
