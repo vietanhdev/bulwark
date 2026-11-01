@@ -40,11 +40,9 @@ hero:
 
 <section class="bw-section">
 
-<p class="bw-eyebrow">What Bulwark checks</p>
+<p class="bw-eyebrow">What it checks</p>
 
-<h2 class="bw-h2">What attackers look for on a developer machine</h2>
-
-<p class="bw-sub">Your AI agents run with your keys and your shell. That's where attacks start now.</p>
+<h2 class="bw-h2">What attackers look for first</h2>
 
 <div class="bw-bento">
   <article class="bw-card bw-card-hero">
@@ -96,12 +94,13 @@ hero:
 
 <section class="bw-section">
 
+<div class="bw-split">
+<div class="bw-split-text">
 <p class="bw-eyebrow">From the terminal</p>
-
-<h2 class="bw-h2">A report you can read in ten seconds</h2>
-
+<h2 class="bw-h2">Read it in ten seconds</h2>
 <p class="bw-sub">What to fix, why, and how. Worst first.</p>
-
+<p class="bw-sub"><a href="/guide/agent-security">AI agent checks →</a><br><a href="/download">Install the CLI →</a></p>
+</div>
 <div class="bw-term" role="img" aria-label="Terminal output of bulwarkctl ai scan: four problems, worst first, each with why it matters and the fix">
 <div class="bw-term-bar"><span></span><span></span><span></span><em>bulwarkctl ai scan</em></div>
 <pre><span class="t-dim">$</span> bulwarkctl ai scan
@@ -123,8 +122,7 @@ hero:
 <span></span>
 <span class="t-ok">→</span> 1 agent file holds leaked secrets Bulwark can remove — <b>bulwarkctl ai redact</b></pre>
 </div>
-
-<p class="bw-sub"><a href="/guide/agent-security">AI agent checks →</a> · <a href="/download">Install the CLI →</a></p>
+</div>
 
 </section>
 
@@ -132,22 +130,8 @@ hero:
 
 <p class="bw-eyebrow">Remote machines</p>
 
-<h2 class="bw-h2">Keep watch over your servers too</h2>
-
-<p class="bw-sub">Over the SSH you already use. No agent, no server. Alerts on Telegram or e-mail.</p>
-
 <p><img src="/diagrams/remote.svg" alt="Agentless remote monitoring: Bulwark signs in over your SSH, scans Linux servers, Macs, Windows PCs and WSL, and alerts on Telegram or e-mail" class="bw-diagram" /></p>
 
-<div class="bw-gallery">
-  <figure>
-    <img src="/screenshots/machines.png" alt="Remote: each machine with its system, connection state and last scan" />
-    <figcaption>Every machine at a glance.</figcaption>
-  </figure>
-  <figure>
-    <img src="/screenshots/machine.png" alt="One remote machine: connection and last scan side by side, and its issues grouped by cause" />
-    <figcaption>One machine, its issues grouped.</figcaption>
-  </figure>
-</div>
 
 <p class="bw-sub"><a href="/guide/remote-monitoring">How remote monitoring works →</a></p>
 
@@ -157,39 +141,11 @@ hero:
 
 <p class="bw-eyebrow">Under the hood</p>
 
-<h2 class="bw-h2">One engine, nothing hidden</h2>
-
-<p class="bw-sub">Every check is a small YAML rule you can read or write.</p>
+<h2 class="bw-h2">Every check is a YAML rule you can read</h2>
 
 <p><img src="/diagrams/architecture.svg" alt="Bulwark architecture: the desktop app and the CLI share one Rust engine; collectors, the AI-assistant scanner, the log scanner and ClamAV feed a rule engine of 100 YAML rules plus your own; findings are explained, scored honestly and stored locally; remote machines are scanned over SSH; alerts go to Telegram or e-mail" class="bw-diagram" /></p>
 
 <p class="bw-sub"><a href="/guide/architecture">Read the architecture →</a> · <a href="https://github.com/vietanhdev/bulwark">Contribute a check →</a></p>
-
-</section>
-
-<section class="bw-section bw-how">
-
-<p class="bw-eyebrow">How it works</p>
-
-<h2 class="bw-h2">Scan, understand, fix</h2>
-
-<div class="bw-steps">
-  <div class="bw-step">
-    <span class="bw-step-num">01</span>
-    <h3>Scan</h3>
-    <p>One click, or <code>bulwarkctl scan</code>.</p>
-  </div>
-  <div class="bw-step">
-    <span class="bw-step-num">02</span>
-    <h3>Understand</h3>
-    <p>Each problem says why it matters, in a sentence.</p>
-  </div>
-  <div class="bw-step">
-    <span class="bw-step-num">03</span>
-    <h3>Fix</h3>
-    <p>One click, or copyable steps.</p>
-  </div>
-</div>
 
 </section>
 
@@ -199,40 +155,11 @@ hero:
 
 <h2 class="bw-h2">Light, dark, and your colours</h2>
 
-<p class="bw-sub">Eight accents, six sidebars, light or dark.</p>
-
 <div class="bw-fan">
   <img src="/screenshots/hero-aubergine.png" alt="Bulwark with an orange accent on an aubergine sidebar" class="bw-fan-img bw-fan-4" />
   <img src="/screenshots/hero-green.png" alt="Bulwark with a green theme" class="bw-fan-img bw-fan-3" />
   <img src="/screenshots/hero-blue.png" alt="Bulwark with a blue theme" class="bw-fan-img bw-fan-2" />
   <img src="/screenshots/hero-graphite.png" alt="Bulwark with the default aqua on graphite theme" class="bw-fan-img bw-fan-1" />
-</div>
-
-</section>
-
-<section class="bw-section">
-
-<p class="bw-eyebrow">A closer look</p>
-
-<h2 class="bw-h2">See it in action</h2>
-
-<div class="bw-gallery">
-  <figure>
-    <img src="/screenshots/overview.png" alt="Home: the problems to fix, grouped by cause and ranked by severity" />
-    <figcaption>What to fix, worst first.</figcaption>
-  </figure>
-  <figure>
-    <img src="/screenshots/fix.png" alt="An opened problem: why it matters, a one-click fix, and details" />
-    <figcaption>Why it matters, and the fix.</figcaption>
-  </figure>
-  <figure>
-    <img src="/screenshots/overview-dark.png" alt="Home in dark mode" />
-    <figcaption>Dark mode.</figcaption>
-  </figure>
-  <figure>
-    <img src="/screenshots/antivirus.png" alt="Virus scan with ClamAV, showing a detected test file" />
-    <figcaption>ClamAV virus scan.</figcaption>
-  </figure>
 </div>
 
 </section>
@@ -266,7 +193,7 @@ hero:
 .bw-section {
   margin-top: 5rem;
 }
-.bw-eyebrow {
+.bw-home .bw-eyebrow {
   text-align: center;
   text-transform: uppercase;
   letter-spacing: 0.12em;
@@ -275,7 +202,7 @@ hero:
   color: var(--vp-c-brand-1);
   margin: 0 0 0.5rem;
 }
-.bw-h2 {
+.bw-home .bw-h2 {
   text-align: center;
   border: 0 !important;
   padding-top: 0;
@@ -357,13 +284,13 @@ hero:
 .dark .bw-card:hover {
   box-shadow: 0 16px 36px -14px rgba(0, 0, 0, 0.6);
 }
-.bw-card h3 {
+.bw-home .bw-card h3 {
   margin: 0 0 0.5rem;
   font-size: 1.15rem;
   font-weight: 650;
   line-height: 1.3;
 }
-.bw-card p {
+.bw-home .bw-card p {
   margin: 0;
   font-size: 0.92rem;
   line-height: 1.6;
@@ -439,48 +366,8 @@ hero:
 .dark .bw-card-tag {
   color: var(--vp-c-brand-1);
 }
-/* The two stacked cards after the hero fall into the right column beside the tall hero tile;
-   the remaining four flow as two balanced rows underneath. Auto-placement handles the rest. */
-
-/* How it works — a genuine three-step sequence, so the numbering carries real order. */
-.bw-steps {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 1.5rem;
-  margin-top: 2.75rem;
-  counter-reset: step;
-}
-.bw-step {
-  position: relative;
-  padding: 1.75rem 1.5rem;
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 16px;
-  background: var(--vp-c-bg-soft);
-}
-.bw-step-num {
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: var(--vp-c-brand-1);
-}
-.bw-step h3 {
-  margin: 0.6rem 0 0.5rem;
-  font-size: 1.2rem;
-  font-weight: 650;
-}
-.bw-step p {
-  margin: 0;
-  font-size: 0.92rem;
-  line-height: 1.6;
-  color: var(--vp-c-text-2);
-}
-.bw-how .bw-steps { position: relative; }
-.bw-step code {
-  font-size: 0.82em;
-  padding: 0.1em 0.4em;
-  border-radius: 5px;
-  background: var(--vp-c-default-soft);
-}
+/* Bento: the hero tile spans two rows on the left, the two cards after it stack on the right,
+   and the last two share a row underneath. Auto-placement does this; keep the card count even. */
 
 /* Colours fan (unchanged behaviour, restyled container). */
 .bw-fan {
@@ -506,22 +393,6 @@ hero:
 .bw-fan:hover .bw-fan-2 { transform: translateX(-78%) rotate(-9deg) translateY(10px); }
 .bw-fan:hover .bw-fan-3 { transform: translateX(-22%) rotate(9deg) translateY(10px); }
 
-.bw-gallery {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 1.75rem;
-  margin-top: 2.75rem;
-}
-.bw-gallery img {
-  width: 100%;
-  border-radius: 12px;
-  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.3);
-}
-.bw-gallery figcaption {
-  margin-top: 0.7rem;
-  font-size: 0.875rem;
-  color: var(--vp-c-text-2);
-}
 
 /* Closing CTA band. */
 .bw-cta {
@@ -535,7 +406,7 @@ hero:
     radial-gradient(70% 120% at 50% 0%, color-mix(in srgb, var(--vp-c-brand-1) 14%, transparent), transparent 70%),
     var(--vp-c-bg-soft);
 }
-.bw-cta h2 {
+.bw-home .bw-cta h2 {
   border: 0 !important;
   padding-top: 0;
   margin: 0 auto;
@@ -545,7 +416,7 @@ hero:
   letter-spacing: -0.02em;
   font-weight: 700;
 }
-.bw-cta p {
+.bw-home .bw-cta p {
   margin: 0.75rem auto 0;
   color: var(--vp-c-text-2);
 }
@@ -614,7 +485,7 @@ hero:
   color: #8b98a8;
   font-family: var(--vp-font-family-mono);
 }
-.bw-term pre {
+.bw-home .bw-term pre {
   margin: 0;
   padding: 1.1rem 1.3rem 1.3rem;
   overflow-x: auto;
@@ -630,6 +501,21 @@ hero:
 .bw-term .t-high { color: #ff9a6b; }
 .bw-term .t-ok { color: #4fd18b; }
 
+/* Text beside the terminal on wide screens; stacked on narrow ones. */
+.bw-split {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.6fr);
+  gap: 2.5rem;
+  align-items: center;
+}
+.bw-home .bw-split-text .bw-eyebrow,
+.bw-home .bw-split-text .bw-h2,
+.bw-home .bw-split-text .bw-sub {
+  text-align: left;
+  margin-left: 0;
+}
+.bw-split .bw-term { margin: 0; max-width: none; }
+
 /* Tablet: collapse the bento and grids to two columns. */
 @media (max-width: 900px) {
   .bw-bento { grid-template-columns: repeat(2, 1fr); }
@@ -640,20 +526,22 @@ hero:
     grid-column: span 1;
   }
   .bw-card-hero { grid-row: auto; grid-column: 1 / -1; }
-  .bw-steps { grid-template-columns: 1fr; }
-  .bw-gallery { grid-template-columns: 1fr; }
+  .bw-split { grid-template-columns: 1fr; gap: 1.5rem; }
+  .bw-home .bw-split-text .bw-eyebrow,
+  .bw-home .bw-split-text .bw-h2,
+  .bw-home .bw-split-text .bw-sub { text-align: center; margin-left: auto; }
 }
 
 /* Phone: single column throughout. */
 @media (max-width: 640px) {
   .bw-section { margin-top: 4rem; }
-  .bw-h2 { font-size: 1.85rem; }
+  .bw-home .bw-h2 { font-size: 1.85rem; }
   .bw-stats { grid-template-columns: repeat(2, 1fr); gap: 1.25rem 1rem; }
   .bw-bento { grid-template-columns: 1fr; }
   .bw-fan { height: 300px; }
   .bw-fan-2, .bw-fan-3, .bw-fan-4 { display: none; }
   .bw-cta { padding: 3rem 1.5rem; }
-  .bw-cta h2 { font-size: 1.6rem; }
-  .bw-term pre { font-size: 0.66rem; padding: 0.9rem 1rem 1rem; }
+  .bw-home .bw-cta h2 { font-size: 1.6rem; }
+  .bw-home .bw-term pre { font-size: 0.66rem; padding: 0.9rem 1rem 1rem; }
 }
 </style>
