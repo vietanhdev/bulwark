@@ -194,7 +194,7 @@ bulwarkctl scan --all            # also low-priority items, and every place each
 The report is short on purpose — the problems worth fixing first, one line each, with why and how:
 
 ```text
-Bulwark 0.12.0 · this computer · 55 of 73 checks ran
+Bulwark 0.13.0 · this computer · 55 of 73 checks ran
 
 1 problem to fix  1 medium
 

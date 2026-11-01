@@ -108,6 +108,19 @@
   </branding>
 
   <releases>
+    <release version="0.13.0" date="2026-11-01">
+      <description>
+        <p>Reports you can read at a glance, and a command-line tool that is a single file.</p>
+        <ul>
+          <li>The command-line scan and AI agent scan show one line per problem, worst first, with why it matters and how to fix it, and say plainly what they could not check</li>
+          <li>The command-line tool carries every check inside it, so it runs from anywhere; the Linux download is a static build that also runs on Alpine</li>
+          <li>Fewer false alarms in the AI agent checks: commit hashes are no longer reported as leaked tokens, and OpenRouter or Vercel AI Gateway are no longer flagged</li>
+          <li>A problem found in several places is named for all of them, not for the first one</li>
+          <li>The AppImage runs system tools with the system's own libraries, so file-integrity and other checks work on current distributions</li>
+          <li>A log file Bulwark cannot read is reported as not analyzed, never as clean</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.12.0" date="2026-11-01">
       <description>
         <p>Watch your other machines, and Bulwark on macOS and Windows.</p>

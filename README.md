@@ -37,7 +37,7 @@ bulwarkctl ai redact    # preview removing leaked keys from agent files (--apply
 ```
 
 ```text
-Bulwark 0.12.0 · AI coding agents · 1 project · 4 agent files checked
+Bulwark 0.13.0 · AI coding agents · 1 project · 4 agent files checked
 
 4 problems to fix  1 critical · 3 high
 
