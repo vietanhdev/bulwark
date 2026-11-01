@@ -46,3 +46,8 @@ updates:
     groups:
       docs:
         patterns: ["*"]
+    ignore:
+      # vitepress-plugin-mermaid accepts mermaid 10 || 11 as a peer, so a mermaid major bump makes
+      # `npm ci` fail with ERESOLVE. Take majors by hand once the plugin supports them.
+      - dependency-name: mermaid
+        update-types: ["version-update:semver-major"]
