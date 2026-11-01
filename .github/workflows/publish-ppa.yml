@@ -3,6 +3,13 @@ name: Publish PPA (CLI)
 # Manual only — a Launchpad upload is IRREVERSIBLE (a version can be superseded,
 # never deleted), so this never fires automatically. See packaging/README.md.
 #
+# One run does the whole job: picks the next free PPA revision, reuses the version's
+# published .orig if Launchpad already has one (so a re-upload from any commit matches it),
+# uploads every series, waits until Launchpad has accepted, built and published each one on
+# every architecture the PPA enables, then installs it from the live PPA on both arches.
+# Launchpad reports rejections and build failures only by email; the wait turns them into a
+# red run here.
+#
 # Required repository secrets:
 #   LAUNCHPAD_GPG_PRIVATE_KEY  — ASCII-armored private key registered on the
 #                                Launchpad account that owns ppa:vietanhng/bulwark.
@@ -12,23 +19,18 @@ name: Publish PPA (CLI)
 on:
   workflow_dispatch:
     inputs:
-      # Upload EVERY series of a version in ONE run: a version has a single shared
-      # .orig, and a later run (at a different commit) produces a different orig,
-      # which Launchpad rejects. noble is deliberately absent — see below.
+      # Upload every series of a version in ONE run. noble is deliberately absent — its
+      # cargo 1.75 can't parse Cargo.lock v4.
       series:
-        description: "Ubuntu series, space-separated. Upload all series of a version in ONE run. (noble unsupported: cargo 1.75 can't parse Cargo.lock v4)"
+        description: "Ubuntu series, space-separated"
         required: true
         default: "resolute stonking"
       ppa_rev:
-        description: "PPA revision — bump to re-upload the SAME version to the SAME series"
+        description: "PPA revision. auto = one above the highest already uploaded for this version"
         required: true
-        default: "1"
+        default: "auto"
       dry_run:
         description: "Build + sign only; skip the (irreversible) dput upload"
-        type: boolean
-        default: false
-      orig_uploaded:
-        description: "The .orig for this version is already in the PPA (use -sd for ALL series, e.g. a retry that only adds series)"
         type: boolean
         default: false
 
@@ -40,11 +42,18 @@ jobs:
   publish-ppa:
     if: github.triggering_actor == 'vietanhdev'
     runs-on: ubuntu-24.04
+    # Launchpad builds the vendored Rust tree from scratch; arm64 can take well over an hour.
+    timeout-minutes: 300
+    outputs:
+      series: ${{ steps.upload.outputs.series }}
     steps:
       - uses: actions/checkout@v7
 
       - name: Install packaging toolchain
         run: |
+          # Prefer IPv4: runners have no IPv6 route, and dput's FTP to Launchpad has failed
+          # with "Network is unreachable" when the resolver handed it an IPv6 address first.
+          echo 'precedence ::ffff:0:0/96 100' | sudo tee -a /etc/gai.conf >/dev/null
           sudo apt-get update
           # build-essential: the binary-build install-test compiles the bundled
           # SQLite (libsqlite3-sys) which needs a C compiler; also satisfies
@@ -89,25 +98,34 @@ jobs:
           echo "GPG signing self-test passed (key $KEYID)"
 
       - name: Build and upload source package(s)
+        id: upload
         env:
           SERIES: ${{ github.event.inputs.series }}
           PPA_REV: ${{ github.event.inputs.ppa_rev }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}
-          ORIG_UPLOADED: ${{ github.event.inputs.orig_uploaded }}
           DEBEMAIL: "vietanh.dev@gmail.com"
           DEBFULLNAME: "Viet Anh Nguyen"
         run: |
           set -euo pipefail
-          # A version's .orig is uploaded ONCE. The first series includes it (-sa);
-          # every later series references it (-sd) — re-uploading the same orig
-          # filename 550s in Launchpad's incoming. If the orig is already in the PPA
-          # (a retry that only adds series), force -sd for all via orig_uploaded.
+          UPSTREAM=$(python3 -c 'import re;print(re.search(r"\[workspace\.package\][^\[]*?version\s*=\s*\"([^\"]+)\"",open("Cargo.toml").read(),re.S).group(1))')
+          [ "$PPA_REV" = "auto" ] && PPA_REV=$(scripts/ppa-launchpad.py next-rev --upstream "$UPSTREAM")
+          echo "upstream $UPSTREAM, PPA revision $PPA_REV"
+          echo "UPSTREAM=$UPSTREAM" >> "$GITHUB_ENV"
+          echo "PPA_REV=$PPA_REV" >> "$GITHUB_ENV"
+          echo "series=$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1].split()))' "$SERIES")" >> "$GITHUB_OUTPUT"
+          # A version has ONE .orig, shared by every series and revision. If Launchpad already
+          # has it, build from those exact bytes (a tree rebuilt from this commit would differ
+          # and be rejected). Otherwise the first series uploads a fresh one (-sa) and the rest
+          # reference it (-sd).
+          mkdir -p target/ppa
+          ORIG=$(scripts/ppa-launchpad.py fetch-orig --upstream "$UPSTREAM" --out target/ppa)
+          [ -n "$ORIG" ] && echo "reusing the published $ORIG"
           first=1
           for s in $SERIES; do
-            sd_flag=""
-            if [ "$ORIG_UPLOADED" = "true" ] || [ "$first" = "0" ]; then sd_flag="--sd"; fi
-            echo "::group::build $s ${sd_flag:+(-sd)}"
-            scripts/build-ppa-source.sh --series "$s" --ppa-rev "$PPA_REV" --sign-key "$SIGN_KEY" $sd_flag
+            src_flags=()
+            if [ -n "$ORIG" ]; then src_flags=(--orig "$ORIG"); elif [ "$first" = "0" ]; then src_flags=(--sd); fi
+            echo "::group::build $s ${src_flags[*]}"
+            scripts/build-ppa-source.sh --series "$s" --ppa-rev "$PPA_REV" --sign-key "$SIGN_KEY" "${src_flags[@]}"
             echo "::endgroup::"
             first=0
             if [ "$DRY_RUN" = "true" ]; then
@@ -139,7 +157,33 @@ jobs:
               continue
             fi
             echo "::group::dput $s"
-            # `ppa:` shortcut is understood by modern dput; upload is irreversible.
-            dput ppa:vietanhng/bulwark "target/ppa/bulwark_"*"~${s}"*"_source.changes"
+            # `ppa:` shortcut is understood by modern dput; upload is irreversible. Retried:
+            # the FTP connection to Launchpad sometimes fails outright ("Network is
+            # unreachable"), and dput only records a completed upload, so a retry is safe.
+            changes=$(ls target/ppa/bulwark_*"-0ppa${PPA_REV}~${s}1_source.changes")
+            for attempt in 1 2 3 4; do
+              dput ppa:vietanhng/bulwark "$changes" && break
+              [ "$attempt" = 4 ] && { echo "::error::dput failed 4 times for $s"; exit 1; }
+              echo "dput failed (attempt $attempt), retrying in $((attempt * 30))s"
+              sleep $((attempt * 30))
+            done
             echo "::endgroup::"
           done
+
+      - name: Wait for Launchpad to accept, build and publish every series
+        if: github.event.inputs.dry_run != 'true'
+        env:
+          SERIES: ${{ github.event.inputs.series }}
+        run: scripts/ppa-launchpad.py wait --upstream "$UPSTREAM" --rev "$PPA_REV" --series "$SERIES" --timeout-min 270
+
+  # Install what users get: the published package, from the live PPA, on both architectures.
+  install-test:
+    needs: publish-ppa
+    if: github.triggering_actor == 'vietanhdev' && github.event.inputs.dry_run != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        series: ${{ fromJSON(needs.publish-ppa.outputs.series) }}
+    uses: ./.github/workflows/test-ppa.yml
+    with:
+      series: ${{ matrix.series }}

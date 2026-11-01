@@ -30,6 +30,8 @@ SIGN_KEY=""             # gpg key id/email; empty => unsigned (-us -uc), NOT upl
 SOURCE_OPT="-sa"        # -sa: include the .orig in the upload (FIRST series of a version).
                         # -sd: exclude it (subsequent series — the orig is already uploaded;
                         #      re-uploading the same filename 550s in Launchpad's incoming).
+ORIG_IN=""              # an .orig Launchpad already has for this version: build from it
+                        # instead of from HEAD (see "staging" below)
 MAINTAINER="Viet Anh Nguyen <vietanh.dev@gmail.com>"
 
 while [[ $# -gt 0 ]]; do
@@ -38,6 +40,7 @@ while [[ $# -gt 0 ]]; do
     --ppa-rev)  PPA_REV="$2"; shift 2 ;;
     --sign-key) SIGN_KEY="$2"; shift 2 ;;
     --sd)       SOURCE_OPT="-sd"; shift ;;
+    --orig)     ORIG_IN="$2"; SOURCE_OPT="-sd"; shift 2 ;;
     -h|--help)  grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -67,7 +70,17 @@ BUILD_DIR="${REPO_ROOT}/target/ppa"
 SRC_DIR="${BUILD_DIR}/bulwark-${UPSTREAM}"
 rm -rf "$SRC_DIR"
 mkdir -p "$SRC_DIR"
+ORIG="${BUILD_DIR}/bulwark_${UPSTREAM}.orig.tar.xz"
 
+if [[ -n "$ORIG_IN" ]]; then
+# A version's .orig is fixed the moment Launchpad accepts it, and any later upload of that
+# version (a new series, a new PPA revision, a newly enabled architecture) must reference the
+# same bytes. Rebuilding from HEAD only reproduces them at the exact original commit, so a
+# re-upload builds from the published orig itself: same upstream tree, current debian/.
+echo ">> building from the published orig: $ORIG_IN"
+tar -xJf "$ORIG_IN" -C "$SRC_DIR" --strip-components=1
+[[ "$(realpath "$ORIG_IN")" == "$(realpath -m "$ORIG")" ]] || cp "$ORIG_IN" "$ORIG"
+else
 echo ">> exporting clean tree (git archive HEAD)"
 git archive --format=tar HEAD | tar -x -C "$SRC_DIR"
 cp Cargo.lock "$SRC_DIR/"
@@ -105,7 +118,6 @@ echo ">> vendor size: $(du -sh "$SRC_DIR/vendor" | cut -f1)"
 # tarball breaks all series after the first ("already exists but uploaded version
 # has different contents"). Fixed sort/mtime/owner + xz -T0-off make every run
 # byte-identical. (cargo vendor is itself deterministic for a fixed Cargo.lock.)
-ORIG="${BUILD_DIR}/bulwark_${UPSTREAM}.orig.tar.xz"
 # REUSE an orig already built in this run. A version has exactly ONE orig, shared by
 # every series, and Launchpad rejects any later series whose .dsc references a
 # different one ("already exists, but uploaded version has different contents").
@@ -126,6 +138,7 @@ tar --create \
     --transform "s,^\./,bulwark-${UPSTREAM}/," \
     -C "$SRC_DIR" . \
   | xz -6 -T1 > "$ORIG"
+fi
 fi
 
 # ---- debian/ packaging + changelog -------------------------------------------
