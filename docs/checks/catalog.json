@@ -1093,10 +1093,10 @@
   },
   {
    "id": "BLWK-NET-005",
-   "title": "A database or development service listens on all interfaces (port {{ listening_ports.port }}, behind the firewall)",
+   "title": "A database or development service listens on all interfaces (port {{ listening_ports.port }}, default-deny firewall)",
    "category": "network-egress",
    "severity": "medium",
-   "explain": "A database or development service listens on every network interface (port {{ listening_ports.port }}, on {{ listening_ports.listen_address }}). The host firewall denies incoming connections by default, so it isn't directly reachable — but its safety now depends on that firewall. Ports published by Docker bypass ufw unless DOCKER-USER rules restrict them, and a single \"allow\" rule added later reopens it.",
+   "explain": "A database or development service listens on every network interface (port {{ listening_ports.port }}, on {{ listening_ports.listen_address }}). The host firewall denies incoming connections by default, so unless something opened this port it isn't directly reachable — but its safety now depends on that firewall. Bulwark can't see your allow rules: if you (or a tool) allowed this port, it is open to the network, and ports published by Docker bypass ufw unless DOCKER-USER rules restrict them. Check with: sudo ufw status numbered",
    "fix": "Bind it to this computer only, so it doesn't depend on the firewall.\n1. For Docker Compose, change the port line from '{{ listening_ports.port }}:{{ listening_ports.port }}' to '127.0.0.1:{{ listening_ports.port }}:{{ listening_ports.port }}' and restart the stack.\n2. For a service installed directly, set its listen or bind address to 127.0.0.1.\n3. If it must stay reachable from other machines, restrict it in DOCKER-USER (for Docker) or with a ufw rule scoped to your private network (e.g. your tailnet), and accept the risk here.",
    "references": [
     "ATTACK-T1133"

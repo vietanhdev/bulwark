@@ -2,6 +2,8 @@
  *  and Compliance views can pass their own richer `RuleSummary` straight in. */
 export interface GateableRule {
   id: string;
+  /** The user's own rule — not part of the score, which measures Bulwark's checks. */
+  custom?: boolean;
   collector: string;
   os: string[];
   profiles: string[];
@@ -52,7 +54,8 @@ export function computeHardeningIndex(
 ): HardeningIndex | null {
   // Without the record, rules with open findings alone would make a 0% score out of a partial view.
   if (evidence.rulesEvaluated.size === 0 && !evidence.agentScanned) return null;
-  const evaluated = rules.filter((r) => ruleRan(r.id, openRuleIds, evidence));
+  // Custom checks are the user's own and could only inflate (or deflate) the score at will.
+  const evaluated = rules.filter((r) => !r.custom && ruleRan(r.id, openRuleIds, evidence));
   if (evaluated.length === 0) return null;
 
   const passing = evaluated.filter((r) => !openRuleIds.has(r.id)).length;
@@ -60,7 +63,7 @@ export function computeHardeningIndex(
     score: Math.round((passing / evaluated.length) * 100),
     passing,
     evaluated: evaluated.length,
-    skipped: rules.length - evaluated.length,
+    skipped: rules.filter((r) => !r.custom).length - evaluated.length,
   };
 }
 

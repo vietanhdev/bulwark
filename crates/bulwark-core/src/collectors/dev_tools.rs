@@ -72,14 +72,26 @@ fn remote_http(url: &str) -> bool {
     let Some(rest) = u.strip_prefix("http://") else {
         return false;
     };
-    let host = rest.split(['/', ':']).next().unwrap_or("");
-    !matches!(host, "localhost" | "127.0.0.1" | "[::1]" | "::1" | "")
+    !is_local(authority_host(rest))
+}
+
+/// The host of `host[:port]`, `[v6]:port` or `user@host…` (anything after the authority dropped).
+fn authority_host(rest: &str) -> &str {
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let hostport = authority.rsplit('@').next().unwrap_or("");
+    match hostport.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or(""),
+        None => hostport.split(':').next().unwrap_or(""),
+    }
+}
+
+fn is_local(host: &str) -> bool {
+    matches!(host, "localhost" | "127.0.0.1" | "::1" | "")
 }
 
 fn local_host(h: &str) -> bool {
     let h = h.trim().trim_matches('"').to_ascii_lowercase();
-    let h = h.split(':').next().unwrap_or("");
-    matches!(h, "localhost" | "127.0.0.1" | "::1" | "[::1]" | "")
+    is_local(authority_host(&h))
 }
 
 // ---- Git ----------------------------------------------------------------------------------------
@@ -524,6 +536,15 @@ mod tests {
         let local =
             "[global]\nindex-url = http://localhost:3141/root/pypi\ntrusted-host = localhost\n";
         assert_eq!(parse_pip_conf(local), Flags::default());
+        // IPv6 loopback, with and without a port, is local too.
+        assert_eq!(
+            parse_pip_conf(
+                "[global]\nindex-url = http://[::1]:3141/simple\ntrusted-host = [::1]:3141\n"
+            ),
+            Flags::default()
+        );
+        assert!(!parse_npmrc("registry=http://[::1]:4873/\n").http_registry);
+        assert!(parse_npmrc("registry=http://[2001:db8::1]:4873/\n").http_registry);
     }
 
     #[test]

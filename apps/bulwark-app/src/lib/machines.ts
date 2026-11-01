@@ -22,6 +22,7 @@ export type ErrorKind =
   | "identity_changed"
   | "unsupported_os"
   | "nothing_assessed"
+  | "local_storage"
   | "other";
 
 export interface Problem {

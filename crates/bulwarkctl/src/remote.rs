@@ -35,12 +35,10 @@ use anyhow::{Context, Result};
 use bulwark_core::fleet::{self, RemoteErrorKind};
 use bulwark_core::ScanRun;
 use serde::Serialize;
-#[cfg(not(windows))]
-use std::io::Read;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Deadline for a quick command (probe, mktemp, chmod, cleanup, keyscan).
 const QUICK_TIMEOUT: Duration = Duration::from_secs(45);
@@ -309,57 +307,23 @@ fn run_captured(
         }
         Err(e) => return Err(e).with_context(|| format!("failed to start {program} for {spec}")),
     };
-    #[cfg(not(windows))]
-    let out_t = {
-        let mut stdout = child.stdout.take().expect("piped");
-        std::thread::spawn(move || {
-            let mut b = Vec::new();
-            let _ = stdout.read_to_end(&mut b);
-            b
-        })
+    let Some(out) = crate::proc::wait_with_deadline(&mut child, timeout)? else {
+        return fail(
+            RemoteErrorKind::Timeout,
+            format!(
+                "{program} to {spec} did not finish within {}s",
+                timeout.as_secs()
+            ),
+        );
     };
-    #[cfg(not(windows))]
-    let err_t = {
-        let mut stderr = child.stderr.take().expect("piped");
-        std::thread::spawn(move || {
-            let mut b = Vec::new();
-            let _ = stderr.read_to_end(&mut b);
-            b
-        })
-    };
-    let start = Instant::now();
-    let status = loop {
-        if let Some(s) = child.try_wait()? {
-            break s;
-        }
-        if start.elapsed() >= timeout {
-            let _ = child.kill();
-            let _ = child.wait();
-            return fail(
-                RemoteErrorKind::Timeout,
-                format!(
-                    "{program} to {spec} did not finish within {}s",
-                    timeout.as_secs()
-                ),
-            );
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    };
-    #[cfg(not(windows))]
-    let (stdout, stderr) = (
-        out_t.join().unwrap_or_default(),
-        err_t.join().unwrap_or_default(),
-    );
+    // On Windows the streams went to files (see above); read them now that ssh has exited.
     #[cfg(windows)]
-    let (stdout, stderr) = (
-        std::fs::read(&err_file.2).unwrap_or_default(),
-        std::fs::read(&err_file.1).unwrap_or_default(),
-    );
-    Ok(Output {
-        status,
-        stdout,
-        stderr,
-    })
+    let out = Output {
+        status: out.status,
+        stdout: std::fs::read(&err_file.2).unwrap_or_default(),
+        stderr: std::fs::read(&err_file.1).unwrap_or_default(),
+    };
+    Ok(out)
 }
 
 /// ssh exits 255 for its own failures (connect, auth, host key) and otherwise passes through the
@@ -519,6 +483,11 @@ impl Probe {
 /// A non-interactive SSH session gets a minimal `PATH` (on macOS, just the system directories), so
 /// an installed Bulwark in Homebrew's prefix, `~/.local/bin` or `~/.cargo/bin` is invisible to
 /// `command -v`; those common locations are checked explicitly before concluding none is installed.
+/// The exact arguments a privileged scan of an installed engine runs as root, and therefore the
+/// only ones a scoped sudoers rule should allow. Kept in one place so the suggested rule, the probe
+/// that checks it and the command that uses it can't drift apart.
+pub const SCOPED_SUDO_ARGS: &str = "scan --json --no-persist --privileged";
+
 fn probe_script(check_sudo: bool) -> String {
     let mut s = String::from(
         "B=$(command -v bulwarkctl 2>/dev/null || command -v bulwark 2>/dev/null); \
@@ -538,7 +507,7 @@ fn probe_script(check_sudo: bool) -> String {
         // `sudo -n -l <bin> scan` succeeds for a sudoers rule scoped to just the scanner (the one
         // we recommend); `sudo -n true` covers blanket NOPASSWD.
         s.push_str(
-            "if [ -n \"$B\" ] && sudo -n -l \"$B\" scan >/dev/null 2>&1; then echo sudo=ok; \
+            "if [ -n \"$B\" ] && sudo -n -l \"$B\" scan --json --no-persist --privileged >/dev/null 2>&1; then echo sudo=ok; \
              elif sudo -n true >/dev/null 2>&1; then echo sudo=ok; else echo sudo=no; fi; \
              if sudo -n -l 2>/dev/null | grep -q 'NOPASSWD: *ALL *$'; then echo sudo_blanket=yes; fi; ",
         );
@@ -1411,6 +1380,34 @@ pub fn ensure_dedicated_key(key_path: &Path) -> Result<String> {
     Ok(format!("restrict {}", pubkey.trim()))
 }
 
+/// The jump hop for a password sign-in. `-J` starts the hop as a child ssh that inherits this
+/// process's askpass environment, so a password prompt from the *jump host* would be answered with
+/// the *target's* one-time password. A `ProxyCommand` ssh in `BatchMode` never asks for a password
+/// at all — the jump host must accept the user's key — so the password only ever reaches the
+/// target. One hop only (a chain would reintroduce the inherited prompt), and Unix only, where the
+/// command is run by `sh` and the spec can be quoted; the spec itself is validated not to be
+/// option-shaped and is passed after `--`.
+fn password_safe_proxy(jump: &str) -> Result<String> {
+    if jump.contains(',') {
+        anyhow::bail!(
+            "signing in with a password through a chain of jump hosts isn't supported — set up key \
+             access to the machine with your own key instead, or use a single jump host"
+        );
+    }
+    if cfg!(windows) {
+        anyhow::bail!(
+            "signing in with a password through a jump host isn't supported on Windows yet — set up \
+             key access to the machine with your own key instead"
+        );
+    }
+    bulwark_core::fleet::validate_jump(jump).map_err(|e| anyhow::anyhow!(e))?;
+    // ssh:// accepts the same [user@]host[:port] a -J hop does.
+    Ok(format!(
+        "ProxyCommand=ssh -o BatchMode=yes -o ConnectTimeout=15 -W %h:%p -- {}",
+        sh_quote(&format!("ssh://{}", jump.trim()))
+    ))
+}
+
 /// Append `authorized_line` to `~/.ssh/authorized_keys` on the machine, signing in once with a
 /// password (or, with `password: None`, however ssh normally would — a terminal prompt, the agent).
 /// Idempotent. The password is handed to ssh through a 0600 temp file read by this binary in
@@ -1429,7 +1426,11 @@ pub fn install_key(
     let mut cmd = bulwark_core::sandbox::host_command("ssh");
     let mut args: Vec<String> = Vec::new();
     if let Some(j) = &target.jump {
-        args.extend(["-J".to_string(), j.clone()]);
+        if password.is_some() {
+            args.extend(["-o".to_string(), password_safe_proxy(j)?]);
+        } else {
+            args.extend(["-J".to_string(), j.clone()]);
+        }
     }
     if let Some(p) = target.port {
         args.extend(["-p".to_string(), p.to_string()]);
@@ -1700,6 +1701,37 @@ mod tests {
     }
 
     #[test]
+    fn a_root_scan_runs_exactly_the_scoped_sudo_command() {
+        // The suggested sudoers rule allows exactly SCOPED_SUDO_ARGS; the command must match it
+        // byte for byte, and the probe must ask sudo about the same arguments.
+        let engine = RemoteEngine::Installed {
+            path: "/usr/bin/bulwarkctl".into(),
+            version: "0.12.0".into(),
+        };
+        assert_eq!(
+            scan_command(&engine, true, &[]),
+            format!("sudo -n '/usr/bin/bulwarkctl' {SCOPED_SUDO_ARGS}")
+        );
+        assert!(probe_script(true).contains(&format!("sudo -n -l \"$B\" {SCOPED_SUDO_ARGS}")));
+    }
+
+    #[test]
+    fn a_password_sign_in_never_lets_the_jump_host_prompt() {
+        if cfg!(windows) {
+            assert!(password_safe_proxy("me@bastion").is_err());
+            return;
+        }
+        let p = password_safe_proxy("me@bastion.example.com:2222").unwrap();
+        assert!(p.starts_with("ProxyCommand=ssh -o BatchMode=yes"), "{p}");
+        assert!(p.ends_with("-- 'ssh://me@bastion.example.com:2222'"), "{p}");
+        // A chain, or anything option- or shell-shaped, is refused rather than quoted around.
+        assert!(password_safe_proxy("a@b,c@d").is_err());
+        assert!(password_safe_proxy("-oProxyCommand=x").is_err());
+        let q = password_safe_proxy("me@host'; touch /tmp/x; '").unwrap_or_default();
+        assert!(q.is_empty() || q.contains("'\\''"), "{q}");
+    }
+
+    #[test]
     fn the_scanner_is_only_copied_where_it_can_run() {
         let here = std::env::consts::ARCH.to_string();
         let linux = Probe {
@@ -1910,7 +1942,7 @@ mod tests {
     fn a_hung_command_is_killed_at_its_deadline() {
         let mut cmd = Command::new("sleep");
         cmd.arg("30");
-        let start = Instant::now();
+        let start = std::time::Instant::now();
         let err = run_captured(cmd, Duration::from_millis(300), "sleep", "x", true).unwrap_err();
         assert_eq!(kind_of(&err), RemoteErrorKind::Timeout);
         assert!(start.elapsed() < Duration::from_secs(5));

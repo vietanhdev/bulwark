@@ -106,8 +106,36 @@ pub fn finding_location(f: &Finding) -> String {
             None => format!("port {port}"),
         };
     }
+    // List-shaped collectors without a file: the fields that tell one item from the next. Without
+    // them a fixed-title rule ("systemd unit runs a tunneling tool") would key on its title, and
+    // ignoring your own tunnel would also hide an attacker's added later.
+    let identity: Vec<String> = IDENTITY_FIELDS
+        .iter()
+        .filter_map(|k| match c.get(*k)? {
+            serde_json::Value::String(v) if !v.is_empty() => Some(format!("{k}={v}")),
+            serde_json::Value::Number(n) => Some(format!("{k}={n}")),
+            _ => None,
+        })
+        .collect();
+    if !identity.is_empty() {
+        return identity.join(" · ");
+    }
+    // A finding about the machine as a whole: one thing, so the title identifies it.
     f.title.clone()
 }
+
+/// Facts that identify one item of a list-shaped collector (see [`finding_location`]); the app's
+/// `ignoreKeyOf` uses the same list in the same order.
+pub const IDENTITY_FIELDS: &[&str] = &[
+    "unit_name",
+    "label",
+    "module",
+    "interface",
+    "indicator",
+    "source",
+    "line",
+    "command",
+];
 
 /// What the user chose not to see: whole rules, and single findings.
 #[derive(Debug, Clone, Default)]

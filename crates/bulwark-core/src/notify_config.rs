@@ -211,11 +211,24 @@ pub fn validate_smtp_url(url: &str) -> Result<(), String> {
     {
         return Err("the server address contains characters that aren't allowed".into());
     }
+    // No user name, password, query or fragment in the address: credentials live in the 0600
+    // secrets file, and `user@host` is exactly how `smtp://127.0.0.1:25@mail.example.com` would
+    // pass for localhost while curl sends the password to mail.example.com without TLS.
+    if rest.contains(['@', '?', '#']) {
+        return Err(
+            "put only the server in the address (smtps://host:port) — the user name and password \
+             go in their own fields"
+                .into(),
+        );
+    }
     Ok(())
 }
 
 fn smtp_host(rest: &str) -> &str {
-    let hostport = rest.split('/').next().unwrap_or("");
+    // The authority ends at the first '/', '?' or '#'; any userinfo before the last '@' is not the
+    // host curl will connect to.
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let hostport = authority.rsplit('@').next().unwrap_or("");
     if let Some(v6) = hostport.strip_prefix('[') {
         return v6.split(']').next().unwrap_or("");
     }
@@ -254,6 +267,22 @@ pub fn load_secrets(path: &Path) -> NotifySecrets {
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
+}
+
+/// [`load_secrets`] for a caller about to change and save the file: a missing file is empty, but
+/// one that exists and can't be read or parsed is an error. Treating a damaged file as empty would
+/// let the next save silently overwrite whatever it still held (the SMTP password, say).
+pub fn try_load_secrets(path: &Path) -> anyhow::Result<NotifySecrets> {
+    match std::fs::read_to_string(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(NotifySecrets::default()),
+        Err(e) => anyhow::bail!("can't read {}: {e} — not overwriting it", path.display()),
+        Ok(text) => serde_json::from_str(&text).map_err(|e| {
+            anyhow::anyhow!(
+                "{} is damaged ({e}) — not overwriting it; fix or delete it and set the alerts up again",
+                path.display()
+            )
+        }),
+    }
 }
 
 /// Writes the secrets file owner-only (0600), creating it that way rather than tightening after
@@ -336,6 +365,13 @@ mod tests {
         assert!(is_local_plain_smtp("smtp://localhost:25"));
         assert!(!is_local_plain_smtp("smtp://mail.example.com:25"));
         assert!(!is_local_plain_smtp("smtps://localhost:465"));
+        // Userinfo that looks like localhost must neither pass validation nor count as local:
+        // curl would connect to mail.example.com and send the password without TLS.
+        let sneaky = "smtp://127.0.0.1:25@mail.example.com";
+        assert!(validate_smtp_url(sneaky).is_err());
+        assert!(!is_local_plain_smtp(sneaky));
+        assert!(!is_local_plain_smtp("smtp://localhost@mail.example.com:25"));
+        assert!(validate_smtp_url("smtps://smtp.example.com:465?x=1").is_err());
     }
 
     #[test]
@@ -377,6 +413,12 @@ mod tests {
         };
         save_secrets(&p, &s).unwrap();
         assert_eq!(load_secrets(&p), s);
+        // A damaged file is an error for anyone about to save, never an empty slate.
+        std::fs::write(&p, "{not json").unwrap();
+        assert!(try_load_secrets(&p).is_err());
+        assert!(
+            try_load_secrets(&p.with_extension("missing")).unwrap() == NotifySecrets::default()
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

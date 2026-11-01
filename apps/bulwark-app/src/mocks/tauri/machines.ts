@@ -206,7 +206,7 @@ const testReport = (id: string) => {
         detail:
           "Root checks only need the scanner. Narrow the rule so this account can run nothing else as root without a password.",
         command:
-          "echo 'deploy ALL=(root) NOPASSWD: /usr/bin/bulwarkctl scan *' | sudo tee /etc/sudoers.d/bulwark && sudo chmod 440 /etc/sudoers.d/bulwark",
+          "echo 'deploy ALL=(root) NOPASSWD: /usr/bin/bulwarkctl scan --json --no-persist --privileged' | sudo tee /etc/sudoers.d/bulwark && sudo chmod 440 /etc/sudoers.d/bulwark",
       },
     ],
   };

@@ -182,7 +182,7 @@ safer option one click (or one command) away.
 |---|---|
 | **A dedicated, restricted key** | *Set up key access* / `hosts setup-key`. The key is installed as `restrict ssh-ed25519 …`: it can run commands, but not forward ports, reach your agent, or open a terminal. Revoke it by deleting that one line from the machine's `authorized_keys`. |
 | **A regular account, not root** | Bulwark warns when it signs in as root. |
-| **sudo limited to the scanner** for root-only checks | With Bulwark installed on the machine: `<user> ALL=(root) NOPASSWD: /usr/bin/bulwarkctl scan *` in `/etc/sudoers.d/bulwark`. Bulwark warns when sudo allows everything without a password. |
+| **sudo limited to the scanner** for root-only checks | With Bulwark installed on the machine: `<user> ALL=(root) NOPASSWD: /usr/bin/bulwarkctl scan --json --no-persist --privileged` in `/etc/sudoers.d/bulwark` — exactly that command, never `scan *`, which would also allow options that run other commands as root. |
 | **Bulwark installed on the machine** | Faster scans, updated with the system, and the only way to scope sudo to the scanner. |
 
 ### Root-only checks

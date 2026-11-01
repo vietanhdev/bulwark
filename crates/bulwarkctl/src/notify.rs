@@ -145,7 +145,7 @@ pub fn run(action: NotifyAction, db: &Path) -> Result<i32> {
                 chat_id,
             });
             cfgmod::save(&mut store, &cfg)?;
-            let mut secrets = cfgmod::load_secrets(&secrets_path);
+            let mut secrets = cfgmod::try_load_secrets(&secrets_path)?;
             secrets.telegram_bot_token = Some(token);
             cfgmod::save_secrets(&secrets_path, &secrets)?;
             finish_config(db, json, "Telegram alerts are on.")
@@ -193,7 +193,7 @@ pub fn run(action: NotifyAction, db: &Path) -> Result<i32> {
                 to,
             });
             cfgmod::save(&mut store, &cfg)?;
-            let mut secrets = cfgmod::load_secrets(&secrets_path);
+            let mut secrets = cfgmod::try_load_secrets(&secrets_path)?;
             secrets.smtp_password = password;
             cfgmod::save_secrets(&secrets_path, &secrets)?;
             finish_config(db, json, "E-mail alerts are on.")
@@ -211,7 +211,7 @@ pub fn run(action: NotifyAction, db: &Path) -> Result<i32> {
             let mut raw = String::new();
             std::io::stdin().read_to_string(&mut raw)?;
             let input: Input = serde_json::from_str(&raw).context("reading configuration JSON")?;
-            let mut secrets = cfgmod::load_secrets(&secrets_path);
+            let mut secrets = cfgmod::try_load_secrets(&secrets_path)?;
             if let Some(t) = input.telegram_bot_token {
                 let t = t.filter(|s| !s.trim().is_empty());
                 if let Some(tok) = &t {
@@ -230,7 +230,7 @@ pub fn run(action: NotifyAction, db: &Path) -> Result<i32> {
         NotifyAction::Disable { channel } => {
             let mut store = Store::open(db)?;
             let mut cfg = cfgmod::load(&mut store)?;
-            let mut secrets = cfgmod::load_secrets(&secrets_path);
+            let mut secrets = cfgmod::try_load_secrets(&secrets_path)?;
             match channel.as_str() {
                 "telegram" => {
                     cfg.telegram = None;
@@ -600,31 +600,33 @@ fn curl(config: &str, protos: &str, scrub: Option<&str>) -> Result<String> {
 }
 
 fn wait_timeout(mut child: std::process::Child, t: Duration) -> Result<std::process::Output> {
-    let start = std::time::Instant::now();
-    loop {
-        if child.try_wait()?.is_some() {
-            return Ok(child.wait_with_output()?);
-        }
-        if start.elapsed() > t {
-            let _ = child.kill();
-            anyhow::bail!("timed out after {}s", t.as_secs());
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    crate::proc::wait_with_deadline(&mut child, t)?
+        .ok_or_else(|| anyhow::anyhow!("timed out after {}s", t.as_secs()))
 }
 
 /// The Bot API base. Overridable only for tests, and only to https — or plain http on localhost.
 fn telegram_base() -> String {
     match std::env::var("BULWARK_TELEGRAM_API") {
-        Ok(b)
-            if b.starts_with("https://")
-                || b.starts_with("http://127.0.0.1")
-                || b.starts_with("http://localhost") =>
-        {
-            b.trim_end_matches('/').to_string()
-        }
+        Ok(b) if telegram_base_allowed(&b) => b.trim_end_matches('/').to_string(),
         _ => "https://api.telegram.org".into(),
     }
+}
+
+/// https anywhere; plain http only when the host is exactly localhost/127.0.0.1 — a prefix test
+/// would also accept `http://localhost.example.com` and send the bot token in the clear.
+fn telegram_base_allowed(base: &str) -> bool {
+    if base.starts_with("https://") {
+        return true;
+    }
+    let Some(rest) = base.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.contains('@') {
+        return false;
+    }
+    let host = authority.split(':').next().unwrap_or("");
+    matches!(host, "localhost" | "127.0.0.1")
 }
 
 fn telegram_protos() -> &'static str {
@@ -1017,5 +1019,16 @@ mod tests {
         let m = compose(&[&x, &y]);
         assert!(m.subject.starts_with("Security warning"));
         assert!(m.text.find("key changed").unwrap() < m.text.find("low").unwrap());
+    }
+
+    #[test]
+    fn a_plain_http_telegram_api_must_really_be_local() {
+        assert!(telegram_base_allowed("https://api.telegram.org"));
+        assert!(telegram_base_allowed("http://127.0.0.1:8081"));
+        assert!(telegram_base_allowed("http://localhost:8081/"));
+        assert!(!telegram_base_allowed("http://localhost.example.com"));
+        assert!(!telegram_base_allowed("http://127.0.0.1.example.com"));
+        assert!(!telegram_base_allowed("http://localhost@example.com"));
+        assert!(!telegram_base_allowed("ftp://localhost"));
     }
 }

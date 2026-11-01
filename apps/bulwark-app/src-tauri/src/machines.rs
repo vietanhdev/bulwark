@@ -549,7 +549,7 @@ pub async fn notify_configure(
     let mut store = Store::open(&path).map_err(err)?;
     notify_config::save(&mut store, &config).map_err(err)?;
     let sp = notify_config::secrets_path(&path);
-    let mut secrets = notify_config::load_secrets(&sp);
+    let mut secrets = notify_config::try_load_secrets(&sp).map_err(err)?;
     if let Some(t) = telegram_bot_token {
         secrets.telegram_bot_token = Some(t.trim().to_string()).filter(|s| !s.is_empty());
     }

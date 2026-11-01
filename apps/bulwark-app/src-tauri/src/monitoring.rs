@@ -330,7 +330,7 @@ fn run_tick(app: &AppHandle, rules_dir: &Path) {
     // Default profile (host OS, no opted-in needs) — the background loop doesn't currently
     // know the user's active profile selection from the Dashboard; see the Profiles section
     // of the architecture doc's open questions for wiring a persisted selection through here.
-    let custom = bulwark_core::paths::custom_rules_dir();
+    let custom = bulwark_core::paths::custom_rules_dir().filter(|d| d.is_dir());
     let scan = engine::run_scan_with_custom(
         rules_dir,
         custom.as_deref(),
@@ -340,9 +340,24 @@ fn run_tick(app: &AppHandle, rules_dir: &Path) {
         &|| false,
     );
 
-    let new_findings = if let Ok(db_path) = super_db_path() {
+    // The same guard as a manual scan: a tick that loaded no rules examined nothing, and persisting
+    // it would let reconciliation mark every open issue resolved. It is skipped — but the tick still
+    // falls through to the scheduling below, so the next one waits its interval instead of firing
+    // again a second later.
+    let new_findings = if scan.rules_loaded == 0 {
+        eprintln!(
+            "[bulwark] monitoring tick loaded 0 rules from {} — not recording it",
+            rules_dir.display()
+        );
+        Vec::new()
+    } else if let Ok(db_path) = super_db_path() {
+        // Only what the user hasn't ignored or turned off is worth a notification.
         Store::open(&db_path)
-            .and_then(|mut store| store.persist_and_reconcile(&scan))
+            .and_then(|mut store| {
+                let fresh = store.persist_and_reconcile(&scan)?;
+                let ignores = store.ignores()?;
+                Ok(fresh.into_iter().filter(|f| !ignores.covers(f)).collect())
+            })
             .unwrap_or_default()
     } else {
         Vec::new()

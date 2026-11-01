@@ -558,7 +558,12 @@ fn show(db: &Path, key: &str, json: bool) -> Result<i32> {
     let mut active = active;
     active.sort_by_key(|b| std::cmp::Reverse(b.severity));
     for f in &active {
-        println!("  [{:?}] {} ({})", f.severity, f.title, f.rule_id);
+        println!(
+            "  [{:?}] {} ({})",
+            f.severity,
+            crate::term_safe(&f.title),
+            f.rule_id
+        );
     }
     if active.is_empty() && view.host.last_success_at.is_some() {
         println!("  No open issues.");
@@ -843,7 +848,9 @@ pub fn test(
     let (os_kind, os_name) = probe.os();
     report.os = Some(os_name.clone());
     if let Some(h) = &registered {
-        let _ = Store::open(db)?.set_remote_os(&h.id, &os_kind, &os_name);
+        if let Ok(mut st) = Store::open(db) {
+            let _ = st.set_remote_os(&h.id, &os_kind, &os_name);
+        }
     }
 
     // 3. Engine: installed, or copyable.
@@ -995,13 +1002,17 @@ fn connection_advice(
                 "Root checks only need the scanner. Narrow the rule so this account can run \
                  nothing else as root without a password.",
                 Some(format!(
-                    "echo '{} ALL=(root) NOPASSWD: /usr/bin/bulwarkctl scan *' | sudo tee \
+                    // Exactly the command a root scan runs — never a wildcard: `scan *` would also
+                    // allow `scan --ssh x --ssh-opt ProxyCommand=…`, a root shell for anyone who
+                    // holds the monitoring key.
+                    "echo '{} ALL=(root) NOPASSWD: /usr/bin/bulwarkctl {}' | sudo tee \
                      /etc/sudoers.d/bulwark && sudo chmod 440 /etc/sudoers.d/bulwark",
                     if probe.user.is_empty() {
                         "<user>"
                     } else {
                         &probe.user
-                    }
+                    },
+                    remote::SCOPED_SUDO_ARGS
                 )),
             ));
         } else {
@@ -1067,7 +1078,7 @@ fn print_test_steps(r: &TestReport) {
             StepStatus::Fail => "✗",
             StepStatus::Skipped => "·",
         };
-        println!("  {mark} {:<24} {}", s.label, s.detail);
+        println!("  {mark} {:<24} {}", s.label, crate::term_safe(&s.detail));
         if let Some(p) = &s.problem {
             println!("      {}.", p.title);
             println!("      {}", p.hint);
@@ -1309,7 +1320,9 @@ pub fn scan_host(
         match remote::run_remote_scan(&target, host.privileged, &[], local_binary, rules_dir) {
             Ok(rs) => {
                 let (os_kind, os_name) = rs.probe.os();
-                let _ = Store::open(db)?.set_remote_os(&host.id, &os_kind, &os_name);
+                if let Ok(mut st) = Store::open(db) {
+                    let _ = st.set_remote_os(&host.id, &os_kind, &os_name);
+                }
                 let hostname = fleet::hostname_of_fingerprint(&rs.scan.host_fingerprint);
                 if rs.scan.rules_loaded > 0 && rs.scan.rules_evaluated.is_empty() {
                     // It ran, and nothing could be checked. Recorded as "nothing for this system yet",
@@ -1329,10 +1342,8 @@ pub fn scan_host(
                         kind: RemoteErrorKind::NoRules,
                         message: "the scan on the machine loaded 0 rules".into(),
                     }
-                } else if let Some(expected) = host
-                    .expected_hostname
-                    .as_deref()
-                    .filter(|e| !hostname.is_empty() && *e != hostname)
+                } else if let Some((expected, hostname)) =
+                    fleet::identity_mismatch(host, &rs.scan.host_fingerprint)
                 {
                     AttemptOutcome::Failure {
                         kind: RemoteErrorKind::IdentityChanged,
@@ -1342,26 +1353,49 @@ pub fn scan_host(
                         ),
                     }
                 } else {
+                    // Saving can fail (a locked or damaged per-machine database). That is recorded
+                    // as this machine's failed attempt — never allowed to abort the run, which would
+                    // leave the attempt unrecorded and the scheduler re-scanning it every tick.
                     let hdb = paths::remote_host_db_path(db, &host.id);
-                    let fresh = Store::open(&hdb)?.persist_and_reconcile(&rs.scan)?;
-                    new_findings = fresh
-                        .into_iter()
-                        .map(|f| NewFindingBrief {
-                            rule_id: f.rule_id,
-                            title: f.title,
-                            severity: f.severity,
-                        })
-                        .collect();
-                    AttemptOutcome::Success {
-                        hostname,
-                        engine: rs.engine.describe(),
+                    let saved = Store::open(&hdb).and_then(|mut store| {
+                        let fresh = store.persist_and_reconcile(&rs.scan)?;
+                        // Ignored issues and turned-off checks don't alert, here or anywhere.
+                        let ignores = store.ignores()?;
+                        Ok(fresh
+                            .into_iter()
+                            .filter(|f| !ignores.covers(f))
+                            .collect::<Vec<_>>())
+                    });
+                    match saved {
+                        Ok(fresh) => {
+                            new_findings = fresh
+                                .into_iter()
+                                .map(|f| NewFindingBrief {
+                                    rule_id: f.rule_id,
+                                    title: f.title,
+                                    severity: f.severity,
+                                })
+                                .collect();
+                            AttemptOutcome::Success {
+                                hostname,
+                                engine: rs.engine.describe(),
+                            }
+                        }
+                        Err(e) => AttemptOutcome::Failure {
+                            kind: RemoteErrorKind::LocalStorage,
+                            message: format!(
+                                "the scan ran but its results couldn't be saved: {e:#}"
+                            ),
+                        },
                     }
                 }
             }
             Err(e) => {
                 let kind = remote::kind_of(&e);
                 if kind == RemoteErrorKind::UnsupportedOs {
-                    let _ = Store::open(db)?.set_remote_os(&host.id, "windows", "Windows");
+                    if let Ok(mut st) = Store::open(db) {
+                        let _ = st.set_remote_os(&host.id, "windows", "Windows");
+                    }
                 }
                 AttemptOutcome::Failure {
                     kind,
@@ -1430,6 +1464,7 @@ fn scan(db: &Path, rules_dir: Option<PathBuf>, sel: ScanSelection) -> Result<i32
     let local_binary = std::env::current_exe().context("cannot locate this bulwarkctl binary")?;
 
     let mut results: Vec<HostScanResult> = Vec::new();
+    let mut run_errors = 0usize;
     for chunk in targets.chunks(PARALLEL_SCANS) {
         let chunk_results: Vec<Result<HostScanResult>> = std::thread::scope(|s| {
             let handles: Vec<_> = chunk
@@ -1450,9 +1485,23 @@ fn scan(db: &Path, rules_dir: Option<PathBuf>, sel: ScanSelection) -> Result<i32
                 })
                 .collect()
         });
-        for r in chunk_results {
-            results.push(r?);
+        // One machine's error (its database, say) is reported and the run goes on: the other
+        // machines still get scanned, saved and alerted on.
+        for (r, h) in chunk_results.into_iter().zip(chunk) {
+            match r {
+                Ok(v) => results.push(v),
+                Err(e) => {
+                    run_errors += 1;
+                    eprintln!("error: {}: {e:#}", h.name);
+                }
+            }
         }
+    }
+
+    // Nothing came back at all (the app scans one machine per call): report the error itself, so a
+    // caller reading `--json` doesn't mistake an empty list for "nothing to do".
+    if results.is_empty() && run_errors > 0 {
+        anyhow::bail!("{run_errors} machine(s) couldn't be scanned — see the errors above");
     }
 
     if !no_notify {
@@ -1466,7 +1515,7 @@ fn scan(db: &Path, rules_dir: Option<PathBuf>, sel: ScanSelection) -> Result<i32
         }
     }
 
-    let any_failed = results.iter().any(|r| !r.ok);
+    let any_failed = run_errors > 0 || results.iter().any(|r| !r.ok);
     let worst = results
         .iter()
         .filter(|r| r.ok)
@@ -1505,12 +1554,18 @@ fn scan(db: &Path, rules_dir: Option<PathBuf>, sel: ScanSelection) -> Result<i32
                     }
                 );
                 for f in &r.new_findings {
-                    println!("    new: [{:?}] {} ({})", f.severity, f.title, f.rule_id);
+                    println!(
+                        "    new: [{:?}] {} ({})",
+                        f.severity,
+                        crate::term_safe(&f.title),
+                        f.rule_id
+                    );
                 }
             } else if let Some(p) = &m.problem {
                 println!("{}: {}.", m.host.name, p.title);
                 if let Some(d) = &p.detail {
-                    println!("    {d}");
+                    // ssh's own error output, partly written by the far side.
+                    println!("    {}", crate::term_safe(d));
                 }
                 println!("    {}", p.hint);
             }

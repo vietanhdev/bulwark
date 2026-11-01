@@ -73,6 +73,8 @@ pub enum RemoteErrorKind {
     UnsupportedOs,
     /// The scan ran, but none of Bulwark's checks apply to or could run on this system yet.
     NothingAssessed,
+    /// The scan ran, but this computer couldn't save its results (the machine's history database).
+    LocalStorage,
     /// Anything else; the raw message is kept alongside.
     Other,
 }
@@ -96,6 +98,7 @@ impl RemoteErrorKind {
             Self::IdentityChanged => "identity_changed",
             Self::UnsupportedOs => "unsupported_os",
             Self::NothingAssessed => "nothing_assessed",
+            Self::LocalStorage => "local_storage",
             Self::Other => "other",
         }
     }
@@ -142,6 +145,7 @@ impl RemoteErrorKind {
             Self::IdentityChanged => "This address now belongs to a different machine",
             Self::UnsupportedOs => "Bulwark can't scan this operating system yet",
             Self::NothingAssessed => "No checks for this system yet",
+            Self::LocalStorage => "Couldn't save this machine's results",
             Self::Other => "The scan failed",
         }
     }
@@ -207,7 +211,8 @@ impl RemoteErrorKind {
                 "Root checks run unattended, so sudo there must not ask for a password. With \
                  Bulwark installed on the machine, allow just the scanner: run `sudo visudo -f \
                  /etc/sudoers.d/bulwark` there and add `<user> ALL=(root) NOPASSWD: \
-                 /usr/bin/bulwarkctl scan *`. Or turn root checks off for this machine."
+                 /usr/bin/bulwarkctl scan --json --no-persist --privileged` (exactly that command — \
+                 never a wildcard). Or turn root checks off for this machine."
                     .into()
             }
             Self::IncompatibleEngine => {
@@ -237,6 +242,13 @@ impl RemoteErrorKind {
                 "The connection works and the scan ran, but none of Bulwark's checks apply to this \
                  system yet, so there's nothing to report — which is not the same as clean. \
                  Bulwark checks back once a day and will start reporting when checks for it land."
+                    .into()
+            }
+            Self::LocalStorage => {
+                "The machine answered and the scan ran; the problem is on this computer, which \
+                 couldn't write the machine's history (its database under Bulwark's data folder). \
+                 Check free disk space and that nothing else holds the file open — the next scan \
+                 tries again."
                     .into()
             }
             Self::Other => format!("Try `{ssh}` from a terminal to see the full error."),
@@ -846,6 +858,15 @@ pub fn list_views(main_db: &Path) -> anyhow::Result<Vec<RemoteHostView>> {
         .into_iter()
         .map(|h| build_view(h, main_db, now))
         .collect())
+}
+
+/// The hostname this machine was pinned to and the one a scan answered with, when they differ — the
+/// "this address now belongs to a different machine" guard. Shared by every path that saves a scan
+/// into a registered machine's history, so they can't disagree about what counts as a change.
+pub fn identity_mismatch(host: &RemoteHost, scan_fingerprint: &str) -> Option<(String, String)> {
+    let actual = hostname_of_fingerprint(scan_fingerprint);
+    let expected = host.expected_hostname.as_deref()?;
+    (!actual.is_empty() && expected != actual).then(|| (expected.to_string(), actual))
 }
 
 /// The hostname part of a [`crate::ScanRun::host_fingerprint`] (`hostname/kernel`). The kernel half

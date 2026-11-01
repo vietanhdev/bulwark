@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 mod hosts;
 mod notify;
+mod proc;
 mod remote;
 
 #[derive(Parser)]
@@ -388,7 +389,9 @@ fn custom_rules(explicit: Option<PathBuf>, disabled: bool) -> Option<PathBuf> {
     if disabled {
         return None;
     }
-    explicit.or_else(bulwark_core::paths::custom_rules_dir)
+    // An explicit folder is passed through even if it's missing, so the engine reports the typo;
+    // the default one is simply optional.
+    explicit.or_else(|| bulwark_core::paths::custom_rules_dir().filter(|d| d.is_dir()))
 }
 
 pub(crate) fn resolve_rules_dir(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
@@ -546,12 +549,7 @@ pub(crate) fn exit_code_for(worst: Option<Severity>) -> i32 {
 /// `bulwarkctl scan` silently skipped every `profiles:`-tagged rule (all the server checks on
 /// Linux, the launchd check on macOS) while the app, which uses the detected roles, ran them.
 fn scan_profile(needs: Vec<String>) -> Profile {
-    let host = Profile::current_host();
-    if needs.is_empty() {
-        host
-    } else {
-        Profile { needs, ..host }
-    }
+    Profile::with_needs(needs)
 }
 
 fn main() -> anyhow::Result<()> {
@@ -583,6 +581,15 @@ fn main() -> anyhow::Result<()> {
             // here refers to the *remote* scan needing root, so we deliberately do NOT gate on local
             // root — the remote invocation uses `sudo -n` on the far side (see remote::run_scan_cmd).
             if let Some(spec) = ssh {
+                // A root scan never opens SSH: `--ssh-opt` takes arbitrary ssh options
+                // (ProxyCommand runs a command), so under sudo it would be a way out of any rule
+                // that allows `bulwarkctl scan`. Remote scans run as you.
+                if engine::is_running_as_root() {
+                    anyhow::bail!(
+                        "refusing to scan another machine as root — run `bulwarkctl scan --ssh` as \
+                         your own user (root checks on the far side use sudo there)"
+                    );
+                }
                 let worst = run_ssh_scan(
                     remote::RemoteTarget::interactive(spec, ssh_port, ssh_identity, ssh_opts),
                     privileged,
@@ -604,7 +611,9 @@ fn main() -> anyhow::Result<()> {
             // A root scan never picks up the user-writable custom folder on its own: a rule planted
             // there could template root-only facts (sudoers lines, privileged file hashes) into its
             // output. Only a folder named explicitly on the command line is used.
-            let custom = if privileged {
+            // Decided by who we run as, not by the flag: `sudo bulwarkctl scan` without
+            // `--privileged` is still root, and may still see $HOME's folder.
+            let custom = if privileged || engine::is_running_as_root() {
                 if cli.no_custom_rules {
                     None
                 } else {
@@ -675,6 +684,8 @@ fn main() -> anyhow::Result<()> {
                 // cause of a real "I see duplicated issues now" bug report: this command
                 // kept inserting a fresh row every run against the same shared DB.
                 let fresh = store.persist_and_reconcile(&scan)?;
+                // Ignored issues and turned-off checks never alert.
+                let fresh: Vec<_> = fresh.into_iter().filter(|f| !ignores.covers(f)).collect();
                 drop(store);
                 if !no_notify && !fresh.is_empty() {
                     notify_local(&db_path, &scan, &fresh);
@@ -775,7 +786,8 @@ fn main() -> anyhow::Result<()> {
                 // becomes a suppression that silently matches nothing, which is indistinguishable
                 // from a working one until the day the real rule fires anyway and confuses everyone.
                 let rules_dir = resolve_rules_dir(cli.rules_dir)?;
-                let (rules, _) = engine::load_rules(&rules_dir);
+                let custom = custom_rules(cli.custom_rules_dir, cli.no_custom_rules);
+                let (rules, _) = engine::load_rule_packs(&rules_dir, custom.as_deref());
                 if !rules.iter().any(|r| r.rule.id == rule_id) {
                     anyhow::bail!(
                         "no rule '{rule_id}' in the loaded pack — check the id with: bulwarkctl rules list"
@@ -965,15 +977,43 @@ fn run_ssh_scan(
         );
     }
 
+    // Same invariant as `hosts scan`: a scan that ran no check is the absence of an opinion, never
+    // a clean result — whether or not it is saved.
+    if scan.rules_evaluated.is_empty() {
+        anyhow::bail!(
+            "no check could run on {spec} ({} loaded, none applied) — refusing to report a clean \
+             result from a scan that examined nothing",
+            scan.rules_loaded
+        );
+    }
+
+    let mut ignores = bulwark_core::Ignores::default();
     if !no_persist {
-        let db_path = remote_db_path(&resolve_db_path(db_path)?, &spec)?;
-        if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent).ok();
-        }
-        let mut store = Store::open(&db_path)?;
-        store.persist_and_reconcile(&scan)?;
-        if !json {
-            eprintln!("History for {spec}: {}", db_path.display());
+        let (db_path, registered) = remote_db_path(&resolve_db_path(db_path)?, &spec)?;
+        // An address that now answers as a different machine must not resolve the registered
+        // machine's issues: the results are shown, but not saved into its history.
+        let mismatch = registered
+            .as_ref()
+            .and_then(|h| bulwark_core::fleet::identity_mismatch(h, &scan.host_fingerprint))
+            .zip(registered.as_ref());
+        if let Some(((expected, actual), h)) = mismatch {
+            eprintln!(
+                "warning: {spec} is registered as {}, which answers as \"{expected}\", but this \
+                 scan answered as \"{actual}\" — showing the results without saving them into that \
+                 machine's history. Check the address; if the machine was rebuilt, accept its new \
+                 identity under Remote.",
+                h.name
+            );
+        } else {
+            if let Some(parent) = db_path.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+            let mut store = Store::open(&db_path)?;
+            store.persist_and_reconcile(&scan)?;
+            ignores = store.ignores()?;
+            if !json {
+                eprintln!("History for {spec}: {}", db_path.display());
+            }
         }
     }
 
@@ -988,9 +1028,14 @@ fn run_ssh_scan(
                 eprintln!("Pushed this bulwarkctl ({arch}) to a temp dir and cleaned it up.");
             }
         }
-        print_scan_table(&scan, &bulwark_core::Ignores::default());
+        print_scan_table(&scan, &ignores);
     }
-    Ok(scan.worst_severity())
+    Ok(scan
+        .findings
+        .iter()
+        .filter(|f| !ignores.covers(f))
+        .map(|f| f.severity)
+        .max())
 }
 
 /// Alert on issues a local scan newly opened, if the user set up alerts and included this computer.
@@ -1028,13 +1073,22 @@ fn notify_local(db: &Path, scan: &bulwark_core::ScanRun, fresh: &[bulwark_core::
 /// findings and this machine's dashboard stays pristine. A machine registered with `hosts add`
 /// keeps its history under its stable id, so an ad-hoc `scan --ssh` of the same address lands in
 /// the same history the scheduler and the GUI read; anything else gets a slug of the address.
-fn remote_db_path(main_db: &Path, spec: &str) -> anyhow::Result<PathBuf> {
+fn remote_db_path(
+    main_db: &Path,
+    spec: &str,
+) -> anyhow::Result<(PathBuf, Option<bulwark_core::fleet::RemoteHost>)> {
     if main_db.exists() {
         if let Some(h) = Store::open(main_db)?.find_remote_host(spec)? {
-            return Ok(bulwark_core::paths::remote_host_db_path(main_db, &h.id));
+            return Ok((
+                bulwark_core::paths::remote_host_db_path(main_db, &h.id),
+                Some(h),
+            ));
         }
     }
-    Ok(bulwark_core::paths::adhoc_remote_db_path(main_db, spec))
+    Ok((
+        bulwark_core::paths::adhoc_remote_db_path(main_db, spec),
+        None,
+    ))
 }
 
 fn run_fix(action: FixAction) -> anyhow::Result<()> {
@@ -2062,6 +2116,21 @@ fn print_log_scan_table(scan: &LogScanRun) {
     println!("\n{} finding(s) total.", scan.findings.len());
 }
 
+/// Text that came from another machine (finding titles and explanations, error output), made safe
+/// to print: control characters other than newline and tab become U+FFFD, so a hostile machine
+/// can't embed escape sequences that rewrite the terminal, its title or the clipboard.
+pub(crate) fn term_safe(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_control() && c != '\n' && c != '\t' {
+                '\u{FFFD}'
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
 fn print_scan_table(scan: &bulwark_core::ScanRun, ignores: &bulwark_core::Ignores) {
     println!(
         "Bulwark scan — host {} — {} rule(s) loaded",
@@ -2105,10 +2174,10 @@ fn print_scan_table(scan: &bulwark_core::ScanRun, ignores: &bulwark_core::Ignore
             "[{:<8}] {} — {}",
             severity_label(f.severity),
             f.rule_id,
-            f.title
+            term_safe(&f.title)
         );
-        println!("           {}", f.explanation);
-        println!("           fix: {}", f.fix_hint);
+        println!("           {}", term_safe(&f.explanation));
+        println!("           fix: {}", term_safe(&f.fix_hint));
     }
     if ignored.is_empty() {
         println!("\n{} finding(s) total.", sorted.len());
@@ -2124,6 +2193,14 @@ fn print_scan_table(scan: &bulwark_core::ScanRun, ignores: &bulwark_core::Ignore
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_text_cannot_drive_the_terminal() {
+        let hostile = "Title\x1b]0;pwned\x07 \x1b[2Jtext\nnext\tline";
+        let safe = term_safe(hostile);
+        assert!(!safe.contains('\x1b') && !safe.contains('\x07'));
+        assert!(safe.contains("\nnext\tline"), "newlines and tabs survive");
+    }
 
     #[test]
     fn no_needs_flag_keeps_the_detected_roles() {

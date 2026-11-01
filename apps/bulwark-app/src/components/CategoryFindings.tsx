@@ -165,8 +165,28 @@ export function ignoreKeyOf(f: Finding): string {
     const addr = typeof c.listen_address === "string" ? c.listen_address : null;
     return addr ? `port ${String(c.port)} on ${addr}` : `port ${String(c.port)}`;
   }
+  // The item's identifying facts (bulwark_core::models::IDENTITY_FIELDS, same order), so ignoring
+  // one systemd unit or sudoers line never hides another that a fixed-title rule reports later.
+  const identity = IDENTITY_FIELDS.flatMap((k) => {
+    const v = c[k];
+    if (typeof v === "string" && v) return [`${k}=${v}`];
+    if (typeof v === "number") return [`${k}=${v}`];
+    return [];
+  });
+  if (identity.length > 0) return identity.join(" · ");
   return f.title;
 }
+
+const IDENTITY_FIELDS = [
+  "unit_name",
+  "label",
+  "module",
+  "interface",
+  "indicator",
+  "source",
+  "line",
+  "command",
+];
 
 function locationOf(f: Finding): string {
   if (f.file) return f.line ? `${f.file}:${f.line}` : f.file;

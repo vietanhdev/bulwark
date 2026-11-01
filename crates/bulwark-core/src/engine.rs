@@ -16,6 +16,9 @@ pub struct LoadedRule {
     pub custom: bool,
 }
 
+/// Detected facts about where the scan runs, as opposed to roles a user may choose.
+const ENVIRONMENT_TRAITS: &[&str] = &["wsl"];
+
 /// Which OS to scan as, and which opt-in "needs" are active — the two axes rules are
 /// filtered by (docs/guide/architecture.md's Profiles section). `os` is a hard filter (a
 /// macOS-tagged rule never runs on Linux, full stop); `needs` is additive opt-in (a rule
@@ -46,6 +49,27 @@ impl Profile {
             // `OperatingSystem::current` returns `None` precisely so this can fail closed.
             os: OperatingSystem::current(),
             needs: detect_host_roles(&RoleEvidence::from_host()),
+        }
+    }
+
+    /// This host with `needs` chosen by the user. Chosen needs replace the detected *roles*
+    /// (server, desktop), but never facts about the environment: on WSL the `wsl` trait stays, or a
+    /// scan with chosen needs would evaluate the rules WSL skips while background scans skip them,
+    /// and the same findings would resolve and reopen (with a notification) every time.
+    pub fn with_needs(needs: Vec<String>) -> Self {
+        let host = Self::current_host();
+        if needs.is_empty() {
+            return host;
+        }
+        let mut merged = needs;
+        for trait_ in ENVIRONMENT_TRAITS {
+            if host.needs.iter().any(|n| n == trait_) && !merged.iter().any(|n| n == trait_) {
+                merged.push((*trait_).to_string());
+            }
+        }
+        Self {
+            needs: merged,
+            ..host
         }
     }
 }
@@ -298,9 +322,28 @@ pub fn load_rule_packs(
     custom: Option<&Path>,
 ) -> (Vec<LoadedRule>, Vec<RuleLoadError>) {
     let (mut loaded, mut errors) = load_rules(builtin);
-    let Some(dir) = custom.filter(|d| d.is_dir()) else {
+    let Some(dir) = custom else {
         return (loaded, errors);
     };
+    if !dir.is_dir() {
+        // An absent default folder is normal; callers only pass a path they mean to use, so one
+        // that isn't there (a typo, a moved folder) is reported rather than silently skipped.
+        errors.push(RuleLoadError {
+            path: dir.display().to_string(),
+            message: "the custom rules folder doesn't exist — none of your own checks ran".into(),
+        });
+        return (loaded, errors);
+    }
+    // Custom checks only ever add to a working pack. With the shipped pack missing or empty, one
+    // custom rule would make "0 rules loaded" look like a real scan — and a clean one — so they
+    // are held back and the scan reports the empty pack as the error it is.
+    if loaded.is_empty() {
+        errors.push(RuleLoadError {
+            path: dir.display().to_string(),
+            message: "custom rules not loaded: the built-in rule pack loaded no rules".into(),
+        });
+        return (loaded, errors);
+    }
     let builtin_ids: std::collections::HashSet<String> =
         loaded.iter().map(|r| r.rule.id.clone()).collect();
     let (extra, extra_errors) = load_rules(dir);
@@ -473,6 +516,14 @@ pub fn run_scan_with_custom(
         // skipped collector: absence of a finding only means "fixed" when the check actually ran.
         let mut evaluated_cleanly = true;
         for row in rows {
+            // A value the collector couldn't read (`<field>_known: false`) leaves the rule
+            // undecided, so it is not "evaluated": a scan that couldn't see BitLocker must not
+            // resolve the BitLocker finding an earlier, elevated scan raised. Not an error either —
+            // an unreadable setting is expected, and is reported by its own `_known` flag.
+            if loaded.condition.reads_unknown_field(row) {
+                evaluated_cleanly = false;
+                continue;
+            }
             match loaded.condition.eval(row) {
                 Ok(true) => findings.push(Finding {
                     id: Uuid::new_v4(),
@@ -682,9 +733,16 @@ mod tests {
         assert_eq!(errors.len(), 2, "{errors:?}");
         assert!(errors.iter().all(|e| e.message.contains("BLWK-")));
 
-        // No folder, or none given: just the pack.
+        // A folder that was asked for but isn't there is reported, not skipped silently.
         let (rules, errors) = load_rule_packs(builtin.path(), Some(Path::new("/nonexistent/x")));
-        assert_eq!((rules.len(), errors.len()), (1, 0));
+        assert_eq!((rules.len(), errors.len()), (1, 1));
+        // An empty shipped pack never lets a custom rule pass for a real scan.
+        let empty = tempfile::tempdir().unwrap();
+        let (rules, errors) = load_rule_packs(empty.path(), Some(custom.path()));
+        assert!(rules.is_empty());
+        assert!(errors
+            .iter()
+            .any(|e| e.message.contains("built-in rule pack")));
     }
 
     #[test]
@@ -1039,6 +1097,55 @@ fix: "f"
             "a rule that errored must not be treated as having run clean — otherwise it would \
              resolve the very findings it can no longer check for"
         );
+    }
+
+    /// An unreadable value (`x_known: false`) leaves its rule undecided. With the usual
+    /// `x_known == true and …` guard the condition would evaluate to a clean `false`, and an
+    /// unprivileged scan that couldn't read BitLocker would then resolve the "BitLocker is off"
+    /// finding an elevated scan had raised.
+    #[test]
+    fn a_rule_reading_an_undetermined_value_is_not_evaluated() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_rule(
+            tmp.path(),
+            "guarded.yaml",
+            r#"
+id: BLWK-GUARD-001
+title: t
+category: c
+severity: high
+collector: sshd_config
+condition: bitlocker_on_known == true and bitlocker_on == false
+explain: "e"
+fix: "f"
+"#,
+        );
+        let row = |known: bool, on: bool| {
+            let mut f = crate::models::Fact::new();
+            f.insert("bitlocker_on_known".into(), serde_json::Value::Bool(known));
+            f.insert("bitlocker_on".into(), serde_json::Value::Bool(on));
+            f
+        };
+        let scan_with = |rows| {
+            let collectors: Vec<Box<dyn Collector>> = vec![Box::new(FixedCollector { rows })];
+            run_scan(tmp.path(), &collectors, false, &linux_profile())
+        };
+
+        let unknown = scan_with(vec![row(false, false)]);
+        assert!(unknown.findings.is_empty());
+        assert!(
+            unknown.collector_errors.is_empty(),
+            "expected, not an error"
+        );
+        assert!(!unknown
+            .rules_evaluated
+            .contains(&"BLWK-GUARD-001".to_string()));
+
+        // Known: an ordinary pass, or an ordinary finding.
+        let on = scan_with(vec![row(true, true)]);
+        assert!(on.rules_evaluated.contains(&"BLWK-GUARD-001".to_string()));
+        let off = scan_with(vec![row(true, false)]);
+        assert_eq!(off.findings.len(), 1);
     }
 
     #[test]

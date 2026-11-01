@@ -219,8 +219,10 @@ pub(crate) fn resolve_cli_binary() -> Result<PathBuf, String> {
         if let Some(dir) = exe.parent().and_then(|d| std::fs::canonicalize(d).ok()) {
             // `bulwark` is the bundled sidecar (see build.rs for why it is not called `bulwarkctl`
             // or `bulwark-app`); `bulwarkctl` covers an install where the CLI package sits alongside.
+            // `.exe` on Windows (EXE_SUFFIX is empty elsewhere): without it the Windows app never
+            // found its own sidecar, and every remote-machine and alert action failed.
             for name in ["bulwark", "bulwarkctl"] {
-                let sidecar = dir.join(name);
+                let sidecar = dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
                 if sidecar.is_file() {
                     return Ok(sidecar);
                 }
@@ -232,7 +234,10 @@ pub(crate) fn resolve_cli_binary() -> Result<PathBuf, String> {
     if let Ok(mut candidate) = std::env::current_dir() {
         for _ in 0..4 {
             for profile in ["debug", "release"] {
-                let bin = candidate.join("target").join(profile).join("bulwarkctl");
+                let bin = candidate
+                    .join("target")
+                    .join(profile)
+                    .join(format!("bulwarkctl{}", std::env::consts::EXE_SUFFIX));
                 if bin.is_file() {
                     return Ok(bin);
                 }
@@ -283,14 +288,11 @@ async fn scan_start(
             }
         };
         let collectors = all_collectors();
-        let profile = Profile {
-            needs: needs.unwrap_or_default(),
-            ..Profile::current_host()
-        };
+        let profile = Profile::with_needs(needs.unwrap_or_default());
         // This first pass always runs unprivileged — [`scan_privileged`] is the separate,
         // explicit pkexec-elevated path the UI offers when `privileged_collectors_skipped`
         // below is non-empty (architecture doc §4).
-        let custom = bulwark_core::paths::custom_rules_dir();
+        let custom = bulwark_core::paths::custom_rules_dir().filter(|d| d.is_dir());
         let scan = engine::run_scan_with_custom(
             &rules_dir,
             custom.as_deref(),
@@ -346,6 +348,10 @@ async fn scan_start(
                     // return value is the set of findings that *newly appeared* this run, which is
                     // exactly what a "new issue" notification should announce.
                     new_findings = store.persist_and_reconcile(&scan).unwrap_or_default();
+                    // Ignored issues and turned-off checks don't notify.
+                    if let Ok(ignores) = store.ignores() {
+                        new_findings.retain(|f| !ignores.covers(f));
+                    }
                 }
             }
         }
@@ -767,7 +773,7 @@ async fn compliance_report() -> Result<ComplianceView, String> {
 #[tauri::command]
 async fn rules_list(app: tauri::AppHandle) -> Result<Vec<RuleSummary>, String> {
     let rules_dir = resolve_rules_dir(Some(&app))?;
-    let custom = bulwark_core::paths::custom_rules_dir();
+    let custom = bulwark_core::paths::custom_rules_dir().filter(|d| d.is_dir());
     let (rules, _errors) = engine::load_rule_packs(&rules_dir, custom.as_deref());
     Ok(rules
         .into_iter()
@@ -892,7 +898,7 @@ async fn custom_rules_info(app: tauri::AppHandle) -> Result<CustomRulesInfo, Str
     let rules_dir = resolve_rules_dir(Some(&app))?;
     let dir = bulwark_core::paths::custom_rules_dir();
     let exists = dir.as_deref().is_some_and(|d| d.is_dir());
-    let (rules, errors) = engine::load_rule_packs(&rules_dir, dir.as_deref());
+    let (rules, errors) = engine::load_rule_packs(&rules_dir, dir.as_deref().filter(|_| exists));
     let builtin_errors = engine::load_rules(&rules_dir).1.len();
     Ok(CustomRulesInfo {
         dir: dir.map(|d| d.display().to_string()),

@@ -1873,6 +1873,67 @@ mod tests {
     }
 
     #[test]
+    fn ignoring_one_unit_never_hides_another_with_the_same_title() {
+        // BLWK-PERSIST-001 has a fixed title. Ignoring your own tunnel must not hide one an
+        // attacker adds later, so the place is the unit, not the title.
+        let unit = |name: &str| {
+            let scan = sample_scan();
+            let mut f = scan.findings[0].clone();
+            f.rule_id = "BLWK-PERSIST-001".into();
+            f.title = "systemd unit runs a tunneling tool".into();
+            f.context = [
+                (
+                    "unit_name".to_string(),
+                    serde_json::Value::String(name.into()),
+                ),
+                (
+                    "exec_start".to_string(),
+                    serde_json::Value::String("cloudflared tunnel run".into()),
+                ),
+            ]
+            .into_iter()
+            .collect();
+            crate::models::finding_location(&f)
+        };
+        assert_eq!(unit("my-tunnel.service"), "unit_name=my-tunnel.service");
+        assert_ne!(unit("my-tunnel.service"), unit("evil.service"));
+
+        let mut store = Store::open_in_memory().unwrap();
+        store
+            .ignore_finding("BLWK-PERSIST-001", &unit("my-tunnel.service"), "mine", "a")
+            .unwrap();
+        let mut scan = sample_scan();
+        let template = scan.findings[0].clone();
+        scan.findings = ["my-tunnel.service", "evil.service"]
+            .iter()
+            .map(|n| {
+                let mut f = template.clone();
+                f.id = Uuid::new_v4();
+                f.rule_id = "BLWK-PERSIST-001".into();
+                f.title = "systemd unit runs a tunneling tool".into();
+                f.context = [(
+                    "unit_name".to_string(),
+                    serde_json::Value::String((*n).into()),
+                )]
+                .into_iter()
+                .collect();
+                f
+            })
+            .collect();
+        scan.rules_evaluated = vec!["BLWK-PERSIST-001".into()];
+        store.persist_and_reconcile(&scan).unwrap();
+        let split = store.open_findings_split().unwrap();
+        assert_eq!(split.active.len(), 1);
+        assert_eq!(
+            split.active[0]
+                .context
+                .get("unit_name")
+                .and_then(|v| v.as_str()),
+            Some("evil.service")
+        );
+    }
+
+    #[test]
     fn adding_finding_ignores_preserves_suppressions_and_their_history() {
         let tmp = tempfile::tempdir().unwrap();
         let mut store = Store::open(&tmp.path().join("u.db")).unwrap();
