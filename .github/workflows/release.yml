@@ -588,13 +588,13 @@ jobs:
 
             **Desktop app (GUI)** — Debian/Ubuntu:
             ```bash
-            sudo dpkg -i bulwark-desktop_${{ steps.version.outputs.version }}_amd64.deb   # x86_64
-            sudo dpkg -i bulwark-desktop_${{ steps.version.outputs.version }}_arm64.deb   # arm64
+            sudo apt install ./bulwark-desktop_${{ steps.version.outputs.version }}_amd64.deb   # x86_64 (also installs the CLI as `bulwark`)
+            sudo apt install ./bulwark-desktop_${{ steps.version.outputs.version }}_arm64.deb   # arm64
             ```
             Fedora/RHEL:
             ```bash
-            sudo rpm -i bulwark-desktop-${{ steps.version.outputs.version }}.x86_64.rpm    # x86_64
-            sudo rpm -i bulwark-desktop-${{ steps.version.outputs.version }}.aarch64.rpm   # arm64
+            sudo dnf install ./bulwark-desktop-${{ steps.version.outputs.version }}.x86_64.rpm    # x86_64
+            sudo dnf install ./bulwark-desktop-${{ steps.version.outputs.version }}.aarch64.rpm   # arm64
             ```
             Any distro (portable, no install) — swap `x86_64` for `aarch64` on arm64:
             ```bash
@@ -605,15 +605,15 @@ jobs:
             **CLI (headless / over SSH)** — available for **x86_64 and arm64**. Debian/Ubuntu:
             ```bash
             # x86_64
-            sudo dpkg -i bulwarkctl_${{ steps.version.outputs.version }}_amd64.deb
+            sudo apt install ./bulwarkctl_${{ steps.version.outputs.version }}_amd64.deb
             # arm64 (Raspberry Pi, Ampere, Graviton, Apple-silicon VMs)
-            sudo dpkg -i bulwarkctl_${{ steps.version.outputs.version }}_arm64.deb
+            sudo apt install ./bulwarkctl_${{ steps.version.outputs.version }}_arm64.deb
             bulwarkctl scan
             ```
             Fedora/RHEL:
             ```bash
-            sudo rpm -i bulwarkctl-${{ steps.version.outputs.version }}.x86_64.rpm    # x86_64
-            sudo rpm -i bulwarkctl-${{ steps.version.outputs.version }}.aarch64.rpm   # arm64
+            sudo dnf install ./bulwarkctl-${{ steps.version.outputs.version }}.x86_64.rpm    # x86_64
+            sudo dnf install ./bulwarkctl-${{ steps.version.outputs.version }}.aarch64.rpm   # arm64
             ```
 
             Verify your download against `SHA256SUMS`:
