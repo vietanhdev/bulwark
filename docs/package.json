@@ -13,13 +13,13 @@
   },
   "devDependencies": {
     "mermaid": "^11.16.0",
-    "playwright": "^1.61.1",
+    "playwright": "^1.64.1",
     "vitepress": "^1.6.4",
     "vitepress-plugin-mermaid": "^2.0.17"
   },
   "dependencies": {
-    "@fontsource-variable/archivo": "^5.2.8",
-    "@fontsource/ibm-plex-mono": "^5.2.7"
+    "@fontsource-variable/archivo": "^5.3.0",
+    "@fontsource/ibm-plex-mono": "^5.3.0"
   },
   "overrides": {
     "vite": "^6.4.4",
