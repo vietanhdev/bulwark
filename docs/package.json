@@ -20,5 +20,9 @@
   "dependencies": {
     "@fontsource-variable/archivo": "^5.2.8",
     "@fontsource/ibm-plex-mono": "^5.2.7"
+  },
+  "overrides": {
+    "vite": "^6.4.4",
+    "katex": "^0.18.2"
   }
 }
