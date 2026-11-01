@@ -108,6 +108,17 @@
   </branding>
 
   <releases>
+    <release version="0.11.1" date="2026-11-01">
+      <description>
+        <p>Fixes found by testing on a Mac, and a more dependable Ubuntu PPA.</p>
+        <ul>
+          <li>The command-line scan now runs the checks meant for the kind of machine it is on: Linux servers get their server checks, and a Mac is recognised as a desktop</li>
+          <li>When no check applies to the operating system, the scan says so instead of pointing at the rules folder</li>
+          <li>The Ubuntu PPA now builds for arm64 as well as amd64</li>
+          <li>Updated dependencies clear the outstanding security advisories in the app and the documentation site</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.11.0" date="2026-10-31">
       <description>
         <p>One clear list of problems, new credential and supply-chain checks, and a calmer design.</p>
