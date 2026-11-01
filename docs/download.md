@@ -160,6 +160,9 @@ For servers and headless machines, the CLI-only package installs `bulwarkctl`: n
 session needed, so it works over plain SSH. Same engine and same checks as the desktop app.
 (If you installed the desktop app, you already have the CLI as `bulwark`.)
 
+`bulwarkctl` is a single file with every check built in. The tarball's binary is statically
+linked, so it runs on any Linux (Alpine included): copy it into `~/.local/bin` and you're done.
+
 <div class="dl-grid">
   <a class="dl-card" :href="url(is.cliDeb)">
     <span class="dl-card-title">Debian / Ubuntu</span>
@@ -185,7 +188,30 @@ sudo apt install ./bulwarkctl_*_arm64.deb    # or: sudo dnf install ./bulwarkctl
 bulwarkctl scan                  # checks that need no root
 sudo bulwarkctl scan --privileged   # adds the checks that read root-only files
 bulwarkctl scan --ssh user@host  # scan a server over your existing SSH
+bulwarkctl scan --all            # also low-priority items, and every place each was found
 ```
+
+The report is short on purpose — the problems worth fixing first, one line each, with why and how:
+
+```text
+Bulwark 0.13.0 · this computer · 55 of 73 checks ran
+
+1 problem to fix  1 medium
+
+  ● Medium   A database or development service listens on all interfaces  ×5
+             The host firewall denies incoming connections by default, so unless something
+             opened this port it isn't directly reachable — but its safety now depends on …
+             → Bind it to this computer only, so it doesn't depend on the firewall.
+             in: port 5432 on 0.0.0.0, port 6379 on 0.0.0.0, port 9200 on 0.0.0.0, +2 more
+             more: https://bulwark.nrl.ai/checks/blwk-net-005
+
+Not covered by this scan:
+  · 4 check areas need admin rights — run sudo bulwarkctl scan --privileged
+  · 18 checks couldn't run here — not counted as passing
+```
+
+`--json` gives the full result for scripts; the exit code is `0` when nothing medium or worse is
+open, `1` for medium or high, `2` for critical.
 
 Direct arm64 downloads:
 <span v-if="find(is.cliDebArm)"><a :href="url(is.cliDebArm)">.deb</a> · </span><span v-if="find(is.cliRpmArm)"><a :href="url(is.cliRpmArm)">.rpm</a> · </span><a :href="url(is.cliTarballArm)">tarball</a>
@@ -224,7 +250,7 @@ available yet.
 </div>
 
 Command line: <a :href="url(is.macCli)">macOS tarball</a> · <a :href="url(is.winCli)">Windows zip</a>.
-Keep the `rules` folder next to the binary.
+Each is a single file with every check built in.
 
 ::: warning Not code-signed yet
 The macOS and Windows builds aren't signed yet, so macOS Gatekeeper and Windows SmartScreen warn on

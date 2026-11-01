@@ -195,6 +195,9 @@ pub enum HostsAction {
         host: String,
         #[arg(long)]
         json: bool,
+        /// Show low-priority items too, and every place each problem was found
+        #[arg(long)]
+        all: bool,
     },
 }
 
@@ -343,7 +346,7 @@ pub fn run(action: HostsAction, db: &Path, rules_dir: Option<PathBuf>) -> Result
                 json,
             },
         ),
-        HostsAction::Show { host, json } => show(db, &host, json),
+        HostsAction::Show { host, json, all } => show(db, &host, json, all),
         HostsAction::Ignore {
             host,
             rule,
@@ -527,7 +530,7 @@ struct ShowOutput {
     suppressed: Vec<bulwark_core::Finding>,
 }
 
-fn show(db: &Path, key: &str, json: bool) -> Result<i32> {
+fn show(db: &Path, key: &str, json: bool, all: bool) -> Result<i32> {
     let mut store = Store::open(db)?;
     let h = find(&mut store, key)?;
     let hdb = paths::remote_host_db_path(db, &h.id);
@@ -546,34 +549,35 @@ fn show(db: &Path, key: &str, json: bool) -> Result<i32> {
         })?;
         return Ok(0);
     }
-    println!(
-        "{} — {} (last scan {})",
+    // A connection problem comes first: it is why the findings below may be out of date.
+    if let Some(p) = &view.problem {
+        println!(
+            "{}. {}\n",
+            crate::term_safe(&p.title),
+            crate::term_safe(&p.hint)
+        );
+    }
+    let opts = crate::report::ReportOptions {
+        all,
+        color: crate::report::ReportOptions::color_for_stdout(),
+        target: view.host.name.clone(),
+    };
+    let subtitle = format!(
+        "{} · {} · last scan {}",
         view.host.name,
         health_label(view.health),
         ago(view.host.last_success_at)
     );
-    if let Some(p) = &view.problem {
-        println!("  {}. {}", p.title, p.hint);
-    }
-    let mut active = active;
-    active.sort_by_key(|b| std::cmp::Reverse(b.severity));
-    for f in &active {
-        println!(
-            "  [{:?}] {} ({})",
-            f.severity,
-            crate::term_safe(&f.title),
-            f.rule_id
-        );
-    }
-    if active.is_empty() && view.host.last_success_at.is_some() {
-        println!("  No open issues.");
-    }
-    if !suppressed.is_empty() {
-        println!(
-            "  ({} ignored issue(s) not listed — `bulwarkctl hosts unignore` to restore)",
-            suppressed.len()
-        );
-    }
+    print!(
+        "{}",
+        crate::report::render_stored(
+            &active,
+            suppressed.len(),
+            subtitle,
+            view.host.last_success_at.is_some(),
+            &opts
+        )
+    );
     Ok(0)
 }
 
@@ -1308,7 +1312,7 @@ pub struct HostScanResult {
 pub fn scan_host(
     db: &Path,
     host: &RemoteHost,
-    rules_dir: &Path,
+    rules_dir: &crate::Pack,
     local_binary: &Path,
 ) -> Result<HostScanResult> {
     let kh = paths::known_hosts_path(db);
@@ -1458,9 +1462,10 @@ fn scan(db: &Path, rules_dir: Option<PathBuf>, sel: ScanSelection) -> Result<i32
             .collect::<Result<Vec<_>>>()?
     };
 
-    // Only needed if a machine lacks Bulwark and we copy ourselves there; a missing local pack
-    // must not stop machines that have their own.
-    let rules_dir = crate::resolve_rules_dir(rules_dir).unwrap_or_default();
+    // Only used if a machine lacks Bulwark and we copy ourselves there. Without --rules-dir this
+    // is the pack built into this binary, so it always resolves; a --rules-dir that isn't a folder
+    // is a mistake and stops the run, as it does for every other command.
+    let rules_dir = crate::resolve_rules_dir(rules_dir)?;
     let local_binary = std::env::current_exe().context("cannot locate this bulwarkctl binary")?;
 
     let mut results: Vec<HostScanResult> = Vec::new();

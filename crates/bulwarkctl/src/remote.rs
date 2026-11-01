@@ -28,8 +28,10 @@
 //!   1. One probe round-trip reports whether `bulwarkctl`/`bulwark` is installed (and its version),
 //!      the CPU arch, the OS, and — when root checks were asked for — whether `sudo -n` works.
 //!   2. If installed, run it in place (it resolves its own `/usr/share/bulwark/rules`).
-//!   3. Otherwise verify the arch matches ours, `scp` this binary and the local rule pack into a
-//!      fresh `mktemp -d`, run from there with an explicit `--rules-dir`, and `rm -rf` it afterwards.
+//!   3. Otherwise verify the arch matches ours, `scp` this binary into a fresh `mktemp -d`, run it
+//!      from there, and `rm -rf` it afterwards. The binary carries its rule pack built in, so
+//!      nothing else is copied — unless a rules folder was named locally (`--rules-dir`), which is
+//!      then copied beside it and passed with `--rules-dir`.
 
 use anyhow::{Context, Result};
 use bulwark_core::fleet::{self, RemoteErrorKind};
@@ -689,8 +691,14 @@ fn looks_like_windows_shell(stdout: &str, stderr: &str) -> bool {
 pub enum RemoteEngine {
     /// An already-installed `bulwarkctl`/`bulwark` was invoked in place.
     Installed { path: String, version: String },
-    /// This binary + rule pack were pushed to the given temp dir and removed afterwards.
-    Pushed { remote_dir: String, arch: String },
+    /// This binary (and, when one was named locally, a rules folder) was pushed to the given temp
+    /// dir and removed afterwards.
+    Pushed {
+        remote_dir: String,
+        arch: String,
+        /// A rules folder was copied beside the binary; otherwise it uses its built-in pack.
+        rules_copied: bool,
+    },
 }
 
 impl RemoteEngine {
@@ -778,13 +786,14 @@ fn os_label(os: &str) -> &str {
 }
 
 /// Run a scan on `target` and bring the results home. `local_binary` is the path to *this*
-/// `bulwarkctl` (used only if a push is needed); `rules_dir` is the local rule pack to push.
+/// `bulwarkctl` (used only if a push is needed); `rules` is the local rule pack, copied along only
+/// when it is a folder rather than the pack built into the binary.
 pub fn run_remote_scan(
     target: &RemoteTarget,
     privileged: bool,
     needs: &[String],
     local_binary: &Path,
-    rules_dir: &Path,
+    rules: &crate::Pack,
 ) -> Result<RemoteScan> {
     // 1. One round-trip: reachability, installed engine, arch, sudo.
     let probe = probe(target, privileged)?;
@@ -801,7 +810,7 @@ pub fn run_remote_scan(
             path: path.clone(),
             version: version.clone(),
         },
-        _ => push_binary(target, &probe, local_binary, rules_dir)?,
+        _ => push_binary(target, &probe, local_binary, rules)?,
     };
 
     // 3. Run the scan. `--no-persist` because history for the remote host is kept locally in an
@@ -830,12 +839,13 @@ pub fn run_remote_scan(
     })
 }
 
-/// Verify arch compatibility, create a remote temp dir, and `scp` the binary + rule pack into it.
+/// Verify arch compatibility, create a remote temp dir, and `scp` the binary (plus a rules folder,
+/// if one was named) into it.
 fn push_binary(
     target: &RemoteTarget,
     probe: &Probe,
     local_binary: &Path,
-    rules_dir: &Path,
+    rules: &crate::Pack,
 ) -> Result<RemoteEngine> {
     // Gate before any upload: a binary that can't execute there must never be copied and run.
     if let Some((kind, why)) = push_blocker(probe) {
@@ -849,9 +859,15 @@ fn push_binary(
             local_binary.display()
         );
     }
-    if !rules_dir.is_dir() {
-        anyhow::bail!("local rules dir {} not found to push", rules_dir.display());
-    }
+    let rules_dir = match rules {
+        crate::Pack::Dir(d) => {
+            if !d.is_dir() {
+                anyhow::bail!("local rules dir {} not found to push", d.display());
+            }
+            Some(d.as_path())
+        }
+        crate::Pack::BuiltIn(_) => None,
+    };
 
     // `mktemp -d` gives a private (0700) dir with an unpredictable name — no symlink/pre-created
     // path races, and nothing to collide with a concurrent run.
@@ -870,7 +886,9 @@ fn push_binary(
 
     let copy = (|| -> Result<()> {
         scp_to(target, local_binary, &format!("{remote_dir}/bulwarkctl"))?;
-        scp_to(target, rules_dir, &format!("{remote_dir}/rules"))?;
+        if let Some(dir) = rules_dir {
+            scp_to(target, dir, &format!("{remote_dir}/rules"))?;
+        }
         // scp does not preserve the executable bit reliably across all platforms; set it explicitly.
         let chmod = target.run(
             &format!("chmod 0755 {}/bulwarkctl", sh_quote(&remote_dir)),
@@ -894,6 +912,7 @@ fn push_binary(
     Ok(RemoteEngine::Pushed {
         remote_dir,
         arch: probe.arch.clone(),
+        rules_copied: rules_dir.is_some(),
     })
 }
 
@@ -924,9 +943,17 @@ fn scp_to(target: &RemoteTarget, local: &Path, remote: &str) -> Result<()> {
 fn scan_command(engine: &RemoteEngine, privileged: bool, needs: &[String]) -> String {
     let (bin, rules_flag) = match engine {
         RemoteEngine::Installed { path, .. } => (sh_quote(path), String::new()),
-        RemoteEngine::Pushed { remote_dir, .. } => (
+        RemoteEngine::Pushed {
+            remote_dir,
+            rules_copied,
+            ..
+        } => (
             format!("{}/bulwarkctl", sh_quote(remote_dir)),
-            format!(" --rules-dir {}/rules", sh_quote(remote_dir)),
+            if *rules_copied {
+                format!(" --rules-dir {}/rules", sh_quote(remote_dir))
+            } else {
+                String::new()
+            },
         ),
     };
 
@@ -1818,6 +1845,7 @@ mod tests {
         let pushed = RemoteEngine::Pushed {
             remote_dir: "/tmp/bulwark.x".into(),
             arch: "x86_64".into(),
+            rules_copied: false,
         };
         assert!(windows_scan_command(&pushed, &[]).is_none());
     }
@@ -1885,12 +1913,20 @@ mod tests {
         let pushed = RemoteEngine::Pushed {
             remote_dir: "/tmp/bulwark.abc123".into(),
             arch: "x86_64".into(),
+            rules_copied: true,
         };
         let cmd = scan_command(&pushed, true, &["server".into(), "x'y".into()]);
         assert!(
             cmd.starts_with("sudo -n '/tmp/bulwark.abc123'/bulwarkctl scan --json --no-persist")
         );
         assert!(cmd.contains("--rules-dir '/tmp/bulwark.abc123'/rules"));
+        // Without a copied folder the pushed binary scans with the pack built into it.
+        let builtin = RemoteEngine::Pushed {
+            remote_dir: "/tmp/bulwark.abc123".into(),
+            arch: "x86_64".into(),
+            rules_copied: false,
+        };
+        assert!(!scan_command(&builtin, false, &[]).contains("--rules-dir"));
         assert!(cmd.contains("--needs 'server','x'\\''y'"));
     }
 

@@ -9,7 +9,6 @@
 use super::Collector;
 use crate::models::Fact;
 use serde_json::Value;
-use std::process::Command;
 
 pub struct HostFirewallCollector;
 
@@ -75,7 +74,10 @@ pub fn host_ufw_denies_inbound() -> bool {
 }
 
 fn run(cmd: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new(cmd).args(args).output().ok()?;
+    let out = crate::sandbox::quiet_command(cmd)
+        .args(args)
+        .output()
+        .ok()?;
     out.status
         .success()
         .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
@@ -99,7 +101,7 @@ impl Collector for HostFirewallCollector {
         if let Some(enabled) = ufw {
             fact.insert("ufw_enabled".into(), Value::Bool(enabled));
         }
-        if let Ok(state) = Command::new("systemctl")
+        if let Ok(state) = crate::sandbox::quiet_command("systemctl")
             .args(["is-active", "firewalld"])
             .output()
         {

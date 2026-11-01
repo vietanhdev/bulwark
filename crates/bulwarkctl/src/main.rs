@@ -1,8 +1,8 @@
 use anyhow::Context;
 use bulwark_core::{
     all_collectors, engine, fim_baseline_path, fim_establish_baseline, load_decoders,
-    load_log_rules, models::Severity, run_log_scan, JournalRange, JournaldSource, LogScanRun,
-    LogSource, Profile, Store, SyslogLinesSource, FIM_PRIVILEGED_WATCHED_PATHS,
+    load_log_rules, models::Severity, run_log_scan, JournalRange, JournaldSource, LogSource,
+    Profile, Store, SyslogLinesSource, FIM_PRIVILEGED_WATCHED_PATHS,
     FIM_UNPRIVILEGED_WATCHED_PATHS,
 };
 use clap::{Parser, Subcommand};
@@ -13,6 +13,7 @@ mod hosts;
 mod notify;
 mod proc;
 mod remote;
+mod report;
 
 #[derive(Parser)]
 #[command(
@@ -21,7 +22,7 @@ mod remote;
     about = "Linux host security scanner — CLI front-door over bulwark-core"
 )]
 struct Cli {
-    /// Directory containing YAML rule files (defaults to auto-detected ./rules)
+    /// Directory containing YAML rule files (defaults to the pack built into this binary)
     #[arg(long, global = true)]
     rules_dir: Option<PathBuf>,
 
@@ -47,6 +48,9 @@ enum Commands {
     /// Run a scan and print findings
     Scan {
         /// Machine-readable JSON output instead of a table
+        /// Show low-priority items too, and every place each problem was found
+        #[arg(long)]
+        all: bool,
         #[arg(long)]
         json: bool,
         /// Skip persisting this run to the local findings database
@@ -232,9 +236,12 @@ enum SshAction {
 enum AiAction {
     /// Discover and scan AI-assistant artifacts across your workspaces and home directory
     Scan {
-        /// Machine-readable JSON output instead of a table
+        /// Machine-readable JSON output instead of the report
         #[arg(long)]
         json: bool,
+        /// Show low-priority items too, and every file each problem was found in
+        #[arg(long)]
+        all: bool,
         /// Skip persisting this run to the local findings database
         #[arg(long)]
         no_persist: bool,
@@ -268,9 +275,12 @@ enum AiAction {
 enum LogsAction {
     /// Decode and correlate a batch of log events, printing any findings
     Scan {
-        /// Machine-readable JSON output instead of a table
+        /// Machine-readable JSON output instead of the report
         #[arg(long)]
         json: bool,
+        /// Show low-priority items too, and every place each problem was found
+        #[arg(long)]
+        all: bool,
         /// Skip persisting this run to the local findings database
         #[arg(long)]
         no_persist: bool,
@@ -287,10 +297,10 @@ enum LogsAction {
         /// works on non-systemd hosts and for offline analysis
         #[arg(long)]
         from_file: Option<PathBuf>,
-        /// Directory of decoder YAML files (defaults to auto-detected ./decoders)
+        /// Directory of decoder YAML files (defaults to the pack built into this binary)
         #[arg(long)]
         decoders_dir: Option<PathBuf>,
-        /// Directory of log-rule YAML files (defaults to auto-detected ./log-rules)
+        /// Directory of log-rule YAML files (defaults to the pack built into this binary)
         #[arg(long)]
         log_rules_dir: Option<PathBuf>,
     },
@@ -376,13 +386,6 @@ enum ConfigRulesAction {
     },
 }
 
-/// Standard installed location — `cargo-deb`'s `assets` entry in `Cargo.toml` puts the
-/// bundled rule pack here. Caught by actually building and inspecting a real `.deb`: a
-/// packaged `bulwarkctl` run from an arbitrary directory (the common case — a real user isn't
-/// sitting in the workspace root) has no `rules/` to walk up to, so this fallback isn't
-/// optional polish, it's what makes the packaged binary work at all.
-const INSTALLED_RULES_DIR: &str = "/usr/share/bulwark/rules";
-
 /// Root reached from another account (sudo sets SUDO_USER, pkexec sets PKEXEC_UID), as opposed
 /// to a real root login.
 fn elevated_from_another_user() -> bool {
@@ -401,55 +404,95 @@ fn custom_rules(explicit: Option<PathBuf>, disabled: bool) -> Option<PathBuf> {
     explicit.or_else(|| bulwark_core::paths::custom_rules_dir().filter(|d| d.is_dir()))
 }
 
-pub(crate) fn resolve_rules_dir(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
-    // An explicitly-named directory that isn't there is a typo, not a reason to fall back to the
-    // auto-detected pack: silently scanning a *different* rule set than the one asked for is its own
-    // kind of lie. Both of these used to be returned unchecked, and a path that didn't exist then
-    // produced a scan that loaded zero rules and reported "no findings" — see `run_scan` below.
+/// The packs compiled into this binary by `build.rs`: `EMBEDDED_RULES`, `EMBEDDED_LOG_RULES`,
+/// `EMBEDDED_DECODERS`.
+mod embedded {
+    include!(concat!(env!("OUT_DIR"), "/embedded_packs.rs"));
+}
+
+/// A resolved content pack: a folder, or the one built into this binary.
+#[derive(Debug, Clone)]
+pub(crate) enum Pack {
+    Dir(PathBuf),
+    BuiltIn(&'static [(&'static str, &'static str)]),
+}
+
+impl Pack {
+    pub(crate) fn source(&self) -> bulwark_core::PackSource<'_> {
+        match self {
+            Pack::Dir(d) => bulwark_core::PackSource::Dir(d),
+            Pack::BuiltIn(files) => bulwark_core::PackSource::Embedded(files),
+        }
+    }
+    pub(crate) fn describe(&self) -> String {
+        self.source().describe()
+    }
+}
+
+/// The config rule pack for this run. See [`resolve_pack`].
+pub(crate) fn resolve_rules_dir(explicit: Option<PathBuf>) -> anyhow::Result<Pack> {
+    resolve_pack(
+        explicit,
+        "BULWARK_RULES_DIR",
+        "rules",
+        "--rules-dir",
+        embedded::EMBEDDED_RULES,
+    )
+}
+
+/// Where a pack comes from, in order: an explicit flag, the environment variable, then **the pack
+/// built into this binary**. The built-in pack is exactly the one this binary was built and tested
+/// with, so it wins over anything merely found on disk — a binary copied to `~/.local/bin` on a
+/// machine with an older package installed must not quietly scan with that package's older rules.
+/// The on-disk search (a workspace checkout, `/usr/share/bulwark/<subdir>`, beside the executable)
+/// is kept only for a binary built without its packs.
+///
+/// An explicitly named folder (flag or variable) that isn't there is an error, never a fallback:
+/// silently scanning a *different* rule set than the one asked for is its own kind of lie, and a
+/// missing folder used to produce a scan that loaded nothing and reported "no findings".
+fn resolve_pack(
+    explicit: Option<PathBuf>,
+    env_var: &str,
+    subdir: &str,
+    flag: &str,
+    builtin: &'static [(&'static str, &'static str)],
+) -> anyhow::Result<Pack> {
     if let Some(p) = explicit {
         if !p.is_dir() {
-            anyhow::bail!("--rules-dir {} is not a directory", p.display());
+            anyhow::bail!("{flag} {} is not a directory", p.display());
         }
-        return Ok(p);
+        return Ok(Pack::Dir(p));
     }
-    if let Ok(p) = std::env::var("BULWARK_RULES_DIR") {
+    if let Some(p) = std::env::var_os(env_var).filter(|v| !v.is_empty()) {
         let p = PathBuf::from(p);
         if !p.is_dir() {
-            anyhow::bail!("BULWARK_RULES_DIR {} is not a directory", p.display());
+            anyhow::bail!("{env_var} {} is not a directory", p.display());
         }
-        return Ok(p);
+        return Ok(Pack::Dir(p));
     }
-    // Dev-mode heuristic: running from inside the workspace (cargo run / cargo test).
+    if !builtin.is_empty() {
+        return Ok(Pack::BuiltIn(builtin));
+    }
+    // A binary built without its packs: look on disk, as releases before the built-in pack did.
     let mut candidate = std::env::current_dir()?;
     for _ in 0..4 {
-        let rules = candidate.join("rules");
-        if rules.is_dir() {
-            return Ok(rules);
+        let dir = candidate.join(subdir);
+        if dir.is_dir() {
+            return Ok(Pack::Dir(dir));
         }
         if !candidate.pop() {
             break;
         }
     }
-    let installed = PathBuf::from(INSTALLED_RULES_DIR);
+    let installed = PathBuf::from("/usr/share/bulwark").join(subdir);
     if installed.is_dir() {
-        return Ok(installed);
+        return Ok(Pack::Dir(installed));
     }
-    // Last resort: the rule pack shipped beside this executable. The GUI bundles this same binary
-    // as the `bulwark` Tauri sidecar and installs the rules into the app's resource directory
-    // (`/usr/bin/bulwark` + `/usr/lib/bulwark/rules`), so on a GUI-only install none of the
-    // paths above exist. The GUI itself always passes `--rules-dir`, so this changes nothing for
-    // it — but the sidecar also lands on `PATH`, and a user who ran it got
-    // "couldn't find a 'rules' directory" on a machine that plainly had them.
-    //
-    // Deliberately the *last* candidate, so it can never shadow an explicit flag, the env var, a
-    // workspace checkout, or the packaged `/usr/share` pack: it only speaks up when the answer
-    // would otherwise be an error.
-    if let Some(dir) = exe_relative_dir("rules") {
-        return Ok(dir);
+    // The GUI bundles this binary as its sidecar and ships the packs in its resource directory.
+    if let Some(dir) = exe_relative_dir(subdir) {
+        return Ok(Pack::Dir(dir));
     }
-    anyhow::bail!(
-        "couldn't find a 'rules' directory — pass --rules-dir explicitly or set BULWARK_RULES_DIR"
-    )
+    anyhow::bail!("couldn't find a '{subdir}' directory — pass {flag} explicitly or set {env_var}")
 }
 
 /// A content directory shipped alongside this executable, for the Tauri-sidecar layout
@@ -474,44 +517,6 @@ fn exe_relative_dir(subdir: &str) -> Option<PathBuf> {
         .into_iter()
         .find(|c| c.is_dir())
         .and_then(|c| c.canonicalize().ok())
-}
-
-/// Shared resolution for the log pipeline's content dirs (`decoders`, `log-rules`), following
-/// exactly the same precedence as [`resolve_rules_dir`]: explicit flag → env var → walk up from
-/// the CWD (dev mode) → installed `/usr/share/bulwark/<subdir>`.
-fn resolve_content_dir(
-    explicit: Option<PathBuf>,
-    env_var: &str,
-    subdir: &str,
-) -> anyhow::Result<PathBuf> {
-    if let Some(p) = explicit {
-        return Ok(p);
-    }
-    if let Ok(p) = std::env::var(env_var) {
-        return Ok(PathBuf::from(p));
-    }
-    let mut candidate = std::env::current_dir()?;
-    for _ in 0..4 {
-        let dir = candidate.join(subdir);
-        if dir.is_dir() {
-            return Ok(dir);
-        }
-        if !candidate.pop() {
-            break;
-        }
-    }
-    let installed = PathBuf::from("/usr/share/bulwark").join(subdir);
-    if installed.is_dir() {
-        return Ok(installed);
-    }
-    // Same last-resort as `resolve_rules_dir`: the GUI bundles this binary as a sidecar and ships
-    // `decoders`/`log-rules` in its resource dir, where none of the paths above exist.
-    if let Some(dir) = exe_relative_dir(subdir) {
-        return Ok(dir);
-    }
-    anyhow::bail!(
-        "couldn't find a '{subdir}' directory — pass the corresponding --*-dir flag or set {env_var}"
-    )
 }
 
 fn resolve_db_path(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
@@ -579,6 +584,7 @@ fn main() -> anyhow::Result<()> {
             no_notify,
             privileged,
             needs,
+            all,
             ssh,
             ssh_port,
             ssh_identity,
@@ -602,7 +608,11 @@ fn main() -> anyhow::Result<()> {
                     remote::RemoteTarget::interactive(spec, ssh_port, ssh_identity, ssh_opts),
                     privileged,
                     &needs,
-                    json,
+                    if json {
+                        ScanOutput::Json
+                    } else {
+                        ScanOutput::Report { all }
+                    },
                     no_persist,
                     cli.rules_dir,
                     cli.db_path,
@@ -633,7 +643,7 @@ fn main() -> anyhow::Result<()> {
             let collectors = all_collectors();
             let profile = scan_profile(needs);
             let scan = engine::run_scan_with_custom(
-                &rules_dir,
+                rules_dir.source(),
                 custom.as_deref(),
                 &collectors,
                 privileged,
@@ -656,20 +666,20 @@ fn main() -> anyhow::Result<()> {
                 // Tell "nothing on disk" apart from "nothing for this OS": the fix for one is the
                 // path, for the other there is none, and pointing at the path sends people the
                 // wrong way.
-                let on_disk = engine::load_rules(&rules_dir).0.len();
+                let on_disk = engine::load_rules(rules_dir.source()).0.len();
                 if on_disk > 0 {
                     anyhow::bail!(
                         "none of the {on_disk} rules in {} apply to this host ({}) — refusing to \
                          report a clean result from a scan that examined nothing. The config \
                          checks cover Linux; `bulwarkctl ai scan` works here",
-                        rules_dir.display(),
+                        rules_dir.describe(),
                         std::env::consts::OS
                     );
                 }
                 anyhow::bail!(
                     "scan loaded 0 rules from {} — refusing to report a clean result from a scan \
                      that examined nothing (check the path, or pass --rules-dir)",
-                    rules_dir.display()
+                    rules_dir.describe()
                 );
             }
 
@@ -709,7 +719,7 @@ fn main() -> anyhow::Result<()> {
             if json {
                 println!("{}", serde_json::to_string_pretty(&scan)?);
             } else {
-                print_scan_table(&scan, &ignores);
+                print_scan_table(&scan, &ignores, all, "this computer");
             }
 
             std::process::exit(exit_code_for(worst));
@@ -718,7 +728,8 @@ fn main() -> anyhow::Result<()> {
             ConfigRulesAction::List => {
                 let rules_dir = resolve_rules_dir(cli.rules_dir)?;
                 let custom = custom_rules(cli.custom_rules_dir, cli.no_custom_rules);
-                let (rules, errors) = engine::load_rule_packs(&rules_dir, custom.as_deref());
+                let (rules, errors) =
+                    engine::load_rule_packs(rules_dir.source(), custom.as_deref());
                 for r in &rules {
                     let os_tag = r
                         .rule
@@ -795,7 +806,7 @@ fn main() -> anyhow::Result<()> {
                 // from a working one until the day the real rule fires anyway and confuses everyone.
                 let rules_dir = resolve_rules_dir(cli.rules_dir)?;
                 let custom = custom_rules(cli.custom_rules_dir, cli.no_custom_rules);
-                let (rules, _) = engine::load_rule_packs(&rules_dir, custom.as_deref());
+                let (rules, _) = engine::load_rule_packs(rules_dir.source(), custom.as_deref());
                 if !rules.iter().any(|r| r.rule.id == rule_id) {
                     anyhow::bail!(
                         "no rule '{rule_id}' in the loaded pack — check the id with: bulwarkctl rules list"
@@ -944,8 +955,13 @@ fn resolve_home() -> anyhow::Result<PathBuf> {
     Ok(PathBuf::from(home))
 }
 
-/// Handles the `ssh` subcommand group. Calls the linked `bulwark-core` remediation directly —
-/// the CLI is just a front-door over the same in-process function the GUI uses.
+/// How a scan's result is printed: the raw `ScanRun` for scripts, or the human report.
+#[derive(Clone, Copy)]
+enum ScanOutput {
+    Json,
+    Report { all: bool },
+}
+
 /// Drive a remote scan over SSH: run it, print it, persist it to an isolated per-host history DB,
 /// and return the worst severity so `main` can pick the process exit code. Kept separate from the
 /// local scan path because the persistence target differs — a remote host's findings must never
@@ -955,11 +971,12 @@ fn run_ssh_scan(
     target: remote::RemoteTarget,
     privileged: bool,
     needs: &[String],
-    json: bool,
+    output: ScanOutput,
     no_persist: bool,
     rules_dir: Option<PathBuf>,
     db_path: Option<PathBuf>,
 ) -> anyhow::Result<Option<Severity>> {
+    let json = matches!(output, ScanOutput::Json);
     let rules_dir = resolve_rules_dir(rules_dir)?;
     let local_binary = std::env::current_exe().context("cannot locate this bulwarkctl binary")?;
 
@@ -1036,7 +1053,8 @@ fn run_ssh_scan(
                 eprintln!("Pushed this bulwarkctl ({arch}) to a temp dir and cleaned it up.");
             }
         }
-        print_scan_table(&scan, &ignores);
+        let all = matches!(output, ScanOutput::Report { all: true });
+        print_scan_table(&scan, &ignores, all, &spec);
     }
     Ok(scan
         .findings
@@ -1711,6 +1729,8 @@ fn print_sshd_report(report: &bulwark_core::SshdHardeningReport, apply: bool) {
     }
 }
 
+/// Handles the `ssh` subcommand group. Calls the linked `bulwark-core` remediation directly —
+/// the CLI is just a front-door over the same in-process function the GUI uses.
 fn run_ssh(action: SshAction) -> anyhow::Result<()> {
     use bulwark_core::{protect_unencrypted_keys, KeyProtectionOutcome};
     match action {
@@ -1782,13 +1802,15 @@ fn run_ai(action: AiAction, db_path: Option<PathBuf>) -> anyhow::Result<()> {
     match action {
         AiAction::Scan {
             json,
+            all,
             no_persist,
             roots,
             excludes,
             targets,
         } => {
+            let home = resolve_home()?;
             let opts = AiScanOptions {
-                home: resolve_home()?,
+                home: home.clone(),
                 configured_roots: roots,
                 excluded_roots: excludes,
                 explicit_targets: targets,
@@ -1805,7 +1827,12 @@ fn run_ai(action: AiAction, db_path: Option<PathBuf>) -> anyhow::Result<()> {
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
-                print_ai_report(&report);
+                let opts = report::ReportOptions {
+                    all,
+                    color: report::ReportOptions::color_for_stdout(),
+                    target: String::new(),
+                };
+                print!("{}", report::render_ai(&report, home.to_str(), &opts));
             }
             std::process::exit(exit_code_for(report.worst_severity()));
         }
@@ -1834,54 +1861,6 @@ fn run_ai(action: AiAction, db_path: Option<PathBuf>) -> anyhow::Result<()> {
         }
     }
     Ok(())
-}
-
-fn print_ai_report(report: &bulwark_core::AiScanReport) {
-    println!(
-        "Bulwark AI-artifact scan — host {} — {} workspace(s), {} artifact(s) examined",
-        report.host_fingerprint,
-        report.workspaces_scanned.len(),
-        report.artifacts_scanned,
-    );
-    if report.workspaces_capped {
-        println!(
-            "⚠ workspace cap reached — some projects weren't scanned. Narrow with --target, or raise the cap."
-        );
-    }
-    if !report.errors.is_empty() {
-        println!("⚠ {} artifact(s) could not be read:", report.errors.len());
-        for e in &report.errors {
-            println!("  {e}");
-        }
-    }
-    println!();
-    if report.findings.is_empty() {
-        println!("No findings.");
-        return;
-    }
-    for f in &report.findings {
-        let loc = match f.line {
-            Some(l) => format!("{}:{}", f.file, l),
-            None => f.file.clone(),
-        };
-        println!(
-            "[{:<8}] {} — {} ({})",
-            severity_label(f.severity),
-            f.rule_id,
-            f.title,
-            f.tool,
-        );
-        println!("           {loc}");
-        println!("           {}", f.explanation.trim());
-        if !f.evidence.is_empty() {
-            println!("           evidence: {}", f.evidence);
-        }
-        println!("           fix: {}", f.fix_hint.trim());
-        if f.redactable {
-            println!("           ↳ redactable: run 'bulwarkctl ai redact --apply'");
-        }
-    }
-    println!("\n{} finding(s) total.", report.findings.len());
 }
 
 fn print_redaction_report(report: &bulwark_core::RedactionReport, apply: bool) {
@@ -1921,6 +1900,7 @@ fn run_logs(action: LogsAction, db_path: Option<PathBuf>) -> anyhow::Result<()> 
     match action {
         LogsAction::Scan {
             json,
+            all,
             no_persist,
             boot: _,
             since,
@@ -1928,10 +1908,20 @@ fn run_logs(action: LogsAction, db_path: Option<PathBuf>) -> anyhow::Result<()> 
             decoders_dir,
             log_rules_dir,
         } => {
-            let decoders_dir =
-                resolve_content_dir(decoders_dir, "BULWARK_DECODERS_DIR", "decoders")?;
-            let rules_dir =
-                resolve_content_dir(log_rules_dir, "BULWARK_LOG_RULES_DIR", "log-rules")?;
+            let decoders_dir = resolve_pack(
+                decoders_dir,
+                "BULWARK_DECODERS_DIR",
+                "decoders",
+                "--decoders-dir",
+                embedded::EMBEDDED_DECODERS,
+            )?;
+            let rules_dir = resolve_pack(
+                log_rules_dir,
+                "BULWARK_LOG_RULES_DIR",
+                "log-rules",
+                "--log-rules-dir",
+                embedded::EMBEDDED_LOG_RULES,
+            )?;
 
             let mut source: Box<dyn LogSource> = match from_file {
                 Some(path) => {
@@ -1957,7 +1947,7 @@ fn run_logs(action: LogsAction, db_path: Option<PathBuf>) -> anyhow::Result<()> 
                 }
             };
 
-            let scan = run_log_scan(&decoders_dir, &rules_dir, source.as_mut());
+            let scan = run_log_scan(decoders_dir.source(), rules_dir.source(), source.as_mut());
 
             if !no_persist {
                 let db_path = resolve_db_path(db_path)?;
@@ -1968,7 +1958,12 @@ fn run_logs(action: LogsAction, db_path: Option<PathBuf>) -> anyhow::Result<()> 
             if json {
                 println!("{}", serde_json::to_string_pretty(&scan)?);
             } else {
-                print_log_scan_table(&scan);
+                let opts = report::ReportOptions {
+                    all,
+                    color: report::ReportOptions::color_for_stdout(),
+                    target: String::new(),
+                };
+                print!("{}", report::render_logs(&scan, &opts));
             }
             // A scan that loaded no decoders or no rules never actually analyzed anything — exit
             // with an error so a script gating on the exit code can't mistake it for a clean run
@@ -1977,12 +1972,22 @@ fn run_logs(action: LogsAction, db_path: Option<PathBuf>) -> anyhow::Result<()> 
                 eprintln!("error: log scan could not run — no decoders and/or rules were loaded");
                 std::process::exit(2);
             }
+            // Same for input that held nothing usable: "no findings" from it is not a clean log.
+            if report::nothing_analyzed(&scan) {
+                std::process::exit(2);
+            }
             std::process::exit(exit_code_for(scan.worst_severity()));
         }
         LogsAction::Rules { action } => match action {
             RulesAction::List => {
-                let dir = resolve_content_dir(None, "BULWARK_LOG_RULES_DIR", "log-rules")?;
-                let (rules, errors) = load_log_rules(&dir);
+                let dir = resolve_pack(
+                    None,
+                    "BULWARK_LOG_RULES_DIR",
+                    "log-rules",
+                    "--log-rules-dir",
+                    embedded::EMBEDDED_LOG_RULES,
+                )?;
+                let (rules, errors) = load_log_rules(dir.source());
                 for r in &rules {
                     let corr = if r.rule.correlate.is_some() {
                         " [correlated]"
@@ -2003,10 +2008,14 @@ fn run_logs(action: LogsAction, db_path: Option<PathBuf>) -> anyhow::Result<()> 
                 // Cross-check that every rule's `decoder:` names a real decoder — the log analog
                 // of the config path's "unknown collector" validate-time guard. A typo there
                 // would load cleanly but then silently never match an event.
-                if let Ok(decoders_dir) =
-                    resolve_content_dir(None, "BULWARK_DECODERS_DIR", "decoders")
-                {
-                    let (decoders, _) = load_decoders(&decoders_dir);
+                if let Ok(decoders_dir) = resolve_pack(
+                    None,
+                    "BULWARK_DECODERS_DIR",
+                    "decoders",
+                    "--decoders-dir",
+                    embedded::EMBEDDED_DECODERS,
+                ) {
+                    let (decoders, _) = load_decoders(decoders_dir.source());
                     let ids: std::collections::HashSet<&str> =
                         decoders.iter().map(|d| d.id.as_str()).collect();
                     for r in &rules {
@@ -2029,8 +2038,14 @@ fn run_logs(action: LogsAction, db_path: Option<PathBuf>) -> anyhow::Result<()> 
         },
         LogsAction::Decoders { action } => match action {
             RulesAction::List => {
-                let dir = resolve_content_dir(None, "BULWARK_DECODERS_DIR", "decoders")?;
-                let (decoders, errors) = load_decoders(&dir);
+                let dir = resolve_pack(
+                    None,
+                    "BULWARK_DECODERS_DIR",
+                    "decoders",
+                    "--decoders-dir",
+                    embedded::EMBEDDED_DECODERS,
+                )?;
+                let (decoders, errors) = load_decoders(dir.source());
                 for d in &decoders {
                     let prog = d.program.as_deref().unwrap_or("(any)");
                     println!("{:<16} program={prog}", d.id);
@@ -2058,72 +2073,6 @@ fn report_load_errors(errors: &[bulwark_core::models::RuleLoadError]) -> anyhow:
     Ok(())
 }
 
-fn print_log_scan_table(scan: &LogScanRun) {
-    println!(
-        "Bulwark log scan — host {} — {} event(s) read, {} decoded — {} decoder(s), {} rule(s)",
-        scan.host_fingerprint,
-        scan.events_read,
-        scan.events_decoded,
-        scan.decoders_loaded,
-        scan.rules_loaded,
-    );
-    for (label, errs) in [
-        ("decoder", &scan.decoder_load_errors),
-        ("rule", &scan.rule_load_errors),
-    ] {
-        if !errs.is_empty() {
-            println!("⚠ {} {label}(s) failed to load:", errs.len());
-            for e in errs {
-                println!("  {}: {}", e.path, e.message);
-            }
-        }
-    }
-    if !scan.read_errors.is_empty() {
-        println!("⚠ {} line(s) could not be read", scan.read_errors.len());
-    }
-    if !scan.rule_eval_errors.is_empty() {
-        println!(
-            "⚠ {} rule evaluation error(s):",
-            scan.rule_eval_errors.len()
-        );
-        for e in &scan.rule_eval_errors {
-            println!("  {e}");
-        }
-    }
-    // Health warnings make an empty result untrustworthy — surface them prominently so "No findings"
-    // is never read as "clean" when the scan couldn't actually analyze the input.
-    for w in &scan.warnings {
-        println!("⚠ {w}");
-    }
-    println!();
-    if scan.findings.is_empty() {
-        if scan.warnings.is_empty() {
-            println!("No findings.");
-        } else {
-            println!("No findings — but see the warnings above: this scan could not reliably analyze the input.");
-        }
-        return;
-    }
-    let mut sorted = scan.findings.clone();
-    sorted.sort_by_key(|f| std::cmp::Reverse(f.severity));
-    for f in &sorted {
-        println!(
-            "[{:<8}] {} — {}",
-            severity_label(f.severity),
-            f.rule_id,
-            f.title
-        );
-        println!(
-            "           at {} · {} matching event(s)",
-            f.observed_at.to_rfc3339(),
-            f.match_count
-        );
-        println!("           {}", f.explanation.trim());
-        println!("           fix: {}", f.fix_hint.trim());
-    }
-    println!("\n{} finding(s) total.", scan.findings.len());
-}
-
 /// Text that came from another machine (finding titles and explanations, error output), made safe
 /// to print: control characters other than newline and tab become U+FFFD, so a hostile machine
 /// can't embed escape sequences that rewrite the terminal, its title or the clipboard.
@@ -2139,63 +2088,18 @@ pub(crate) fn term_safe(s: &str) -> String {
         .collect()
 }
 
-fn print_scan_table(scan: &bulwark_core::ScanRun, ignores: &bulwark_core::Ignores) {
-    println!(
-        "Bulwark scan — host {} — {} rule(s) loaded",
-        scan.host_fingerprint, scan.rules_loaded
-    );
-    if !scan.rule_load_errors.is_empty() {
-        println!("⚠ {} rule(s) failed to load:", scan.rule_load_errors.len());
-        for e in &scan.rule_load_errors {
-            println!("  {}: {}", e.path, e.message);
-        }
-    }
-    if !scan.collector_errors.is_empty() {
-        println!(
-            "⚠ {} collector error(s) (partial results):",
-            scan.collector_errors.len()
-        );
-        for e in &scan.collector_errors {
-            println!("  {}: {}", e.collector, e.message);
-        }
-    }
-    if !scan.privileged_collectors_skipped.is_empty() {
-        println!(
-            "⚠ {} check(s) skipped (no privilege) — re-run with 'sudo bulwarkctl scan --privileged': {}",
-            scan.privileged_collectors_skipped.len(),
-            scan.privileged_collectors_skipped.join(", ")
-        );
-    }
-    println!();
-    if scan.findings.is_empty() {
-        println!("No findings.");
-        return;
-    }
-    let (ignored, mut sorted): (Vec<_>, Vec<_>) = scan
-        .findings
-        .iter()
-        .cloned()
-        .partition(|f| ignores.covers(f));
-    sorted.sort_by_key(|f| std::cmp::Reverse(f.severity));
-    for f in &sorted {
-        println!(
-            "[{:<8}] {} — {}",
-            severity_label(f.severity),
-            f.rule_id,
-            term_safe(&f.title)
-        );
-        println!("           {}", term_safe(&f.explanation));
-        println!("           fix: {}", term_safe(&f.fix_hint));
-    }
-    if ignored.is_empty() {
-        println!("\n{} finding(s) total.", sorted.len());
-    } else {
-        println!(
-            "\n{} finding(s), plus {} you've chosen to ignore (bulwarkctl rules suppressions).",
-            sorted.len(),
-            ignored.len()
-        );
-    }
+fn print_scan_table(
+    scan: &bulwark_core::ScanRun,
+    ignores: &bulwark_core::Ignores,
+    all: bool,
+    target: &str,
+) {
+    let opts = report::ReportOptions {
+        all,
+        color: report::ReportOptions::color_for_stdout(),
+        target: target.to_string(),
+    };
+    print!("{}", report::render(scan, ignores, &opts));
 }
 
 #[cfg(test)]

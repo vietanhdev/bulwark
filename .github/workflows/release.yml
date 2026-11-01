@@ -80,7 +80,7 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends \
             ca-certificates curl file git pkg-config build-essential \
-            libssl-dev rpm xz-utils
+            libssl-dev rpm xz-utils musl-tools
           # The GTK/WebKit stack is needed only to build the GUI, and is a slow install that
           # bulwark-core and bulwarkctl link none of. Both arches currently set gui: true, so
           # this branch is not skipped today — it exists so that setting gui: false for an arch
@@ -123,6 +123,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
           toolchain: stable
+          # The tarball's CLI is a static musl build (see "Build static CLI" below).
+          targets: ${{ matrix.arch }}-unknown-linux-musl
       - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
           # Explicit, even though the action already folds the matrix into its key: an x86_64
@@ -149,19 +151,48 @@ jobs:
       - name: Build CLI
         run: cargo build --release -p bulwarkctl
 
+      # The tarball is for "any distro", so its binary must not depend on the build image's glibc:
+      # a static musl build runs on Alpine, on glibc older than 22.04's, and in a scratch
+      # container. With the rule packs compiled in (crates/bulwarkctl/build.rs) it is one file
+      # that works wherever it is copied. The .deb/.rpm keep the glibc build their distros expect.
+      - name: Build static CLI
+        run: |
+          set -euo pipefail
+          T="${{ matrix.arch }}-unknown-linux-musl"
+          cargo build --release -p bulwarkctl --target "$T"
+          BIN="target/$T/release/bulwarkctl"
+          file "$BIN" | tee /dev/stderr | grep -q "static" \
+            || { echo "::error::$BIN is not statically linked"; exit 1; }
+          # Prove it is self-contained: a copy alone in an empty directory, no pack variables,
+          # must find its built-in rules (the old failure here was "couldn't find a 'rules'
+          # directory"), and a scan must load them without errors.
+          D="$(mktemp -d)"
+          cp "$BIN" "$D/"
+          (
+            cd "$D"
+            unset BULWARK_RULES_DIR BULWARK_LOG_RULES_DIR BULWARK_DECODERS_DIR
+            ./bulwarkctl --version
+            N="$(./bulwarkctl rules list --no-custom-rules | grep -c '^BLWK-' || true)"
+            echo "built-in rules: $N"
+            [ "$N" -ge 50 ] || { echo "::error::static CLI lists only $N built-in rules"; exit 1; }
+            ./bulwarkctl scan --json --no-persist --no-notify --no-custom-rules --db-path "$D/db" > scan.json || true
+            grep -q '"rule_load_errors": \[\]' scan.json \
+              || { echo "::error::static CLI scan did not load its rules cleanly"; head -c 2000 scan.json; exit 1; }
+          )
+          rm -rf "$D"
+
       - name: Package CLI (.deb, .rpm, tarball)
         run: |
           set -euo pipefail
           cargo deb -p bulwarkctl --no-build
           cargo generate-rpm -p crates/bulwarkctl
 
-          # Plain tarball for distros with neither dpkg nor rpm. Ships the rule pack alongside
-          # the binary — bulwarkctl resolves /usr/share/bulwark/rules when installed, so a
-          # bare binary with no rules is useless on its own.
+          # Plain tarball for distros with neither dpkg nor rpm: the static binary, which carries
+          # its rule packs built in. The rules/ folder is still included as readable reference.
           V="${{ steps.version.outputs.version }}"
           STAGE="bulwarkctl-${V}-${{ matrix.arch }}-linux"
           mkdir -p "${STAGE}"
-          cp target/release/bulwarkctl "${STAGE}/"
+          cp "target/${{ matrix.arch }}-unknown-linux-musl/release/bulwarkctl" "${STAGE}/"
           cp -r rules "${STAGE}/"
           cp README.md LICENSE "${STAGE}/"
           tar -czf "${STAGE}.tar.gz" "${STAGE}"
@@ -717,10 +748,12 @@ jobs:
             sudo dnf install ./bulwarkctl-${{ steps.version.outputs.version }}.x86_64.rpm    # x86_64
             sudo dnf install ./bulwarkctl-${{ steps.version.outputs.version }}.aarch64.rpm   # arm64
             ```
+            Any Linux, Alpine included: `bulwarkctl-${{ steps.version.outputs.version }}-x86_64-linux.tar.gz`
+            (or `-aarch64-linux`) holds a static, single-file `bulwarkctl` with every check built in.
 
             **macOS (Apple silicon)** — desktop app: open `bulwark-desktop-${{ steps.version.outputs.version }}-macos-aarch64.dmg`
             and drag Bulwark to Applications. CLI: `bulwarkctl-${{ steps.version.outputs.version }}-macos-aarch64.tar.gz`
-            (keep `rules/` next to the binary, or under `~/.local/lib/bulwark/rules`).
+            (a single file with every check built in — copy `bulwarkctl` anywhere on your `PATH`).
 
             **Windows (x86_64)** — desktop app: run `bulwark-desktop-${{ steps.version.outputs.version }}-windows-x86_64-setup.exe`.
             CLI: unzip `bulwarkctl-${{ steps.version.outputs.version }}-windows-x86_64.zip` and run `bulwarkctl.exe scan`.

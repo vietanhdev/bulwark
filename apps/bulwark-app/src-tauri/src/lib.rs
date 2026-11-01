@@ -480,7 +480,7 @@ async fn scan_privileged(app: tauri::AppHandle) -> Result<ScanRun, String> {
         } else {
             let rules_dir = resolve_privileged_rules_dir(&app)?;
             let cli = resolve_cli_binary()?;
-            std::process::Command::new("pkexec")
+            bulwark_core::sandbox::quiet_command("pkexec")
                 .arg(&cli)
                 .arg("scan")
                 .arg("--privileged")

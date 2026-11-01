@@ -5,6 +5,7 @@ import { FindingCard, type Finding } from "@/components/FindingCard";
 import { FixIssueButton } from "@/components/FixActions";
 import { FixSteps } from "@/components/FixSteps";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu";
+import { sharedTitle } from "@/lib/findings";
 import { recommendation } from "@/lib/fix-text";
 import { type FixCapability } from "@/lib/fixes";
 import { SEVERITY_ORDER, SeverityLabel, type Severity } from "@/components/Severity";
@@ -310,7 +311,9 @@ function IssueTypeGroup({
           />
           <SeverityLabel severity={group.worst} className="w-16 justify-center" />
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-sm font-medium">{first.title}</span>
+            <span className="block truncate text-sm font-medium">
+              {sharedTitle(group.items.map((f) => f.title))}
+            </span>
             <span className="block truncate text-xs text-muted-foreground">
               {recommendation(first.fix_hint)}
             </span>

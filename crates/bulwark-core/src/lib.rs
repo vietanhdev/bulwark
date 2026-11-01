@@ -8,6 +8,7 @@ pub mod fleet;
 pub mod logs;
 pub mod models;
 pub mod notify_config;
+pub mod pack;
 pub mod paths;
 pub mod platform;
 pub mod remediation;
@@ -42,6 +43,7 @@ pub use models::{
     finding_location, Fact, Finding, FindingIgnore, FindingStatus, Ignores, OperatingSystem, Rule,
     ScanRun, Severity,
 };
+pub use pack::PackSource;
 pub use remediation::{
     etc_permission_targets, fix_capability, harden_login_defs, harden_sshd_config, harden_sysctl,
     rules_for_kind, safe_fix_capabilities, ssh_permission_targets, tighten_permissions,

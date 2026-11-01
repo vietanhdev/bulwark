@@ -89,8 +89,7 @@ installed, a per-user install needs no `sudo`:
 ```bash
 # on the Mac, from a checkout of the Bulwark source
 cargo build --release -p bulwarkctl
-install -m 0755 target/release/bulwarkctl ~/.local/bin/bulwarkctl
-mkdir -p ~/.local/lib/bulwark && cp -R rules ~/.local/lib/bulwark/rules
+install -m 0755 target/release/bulwarkctl ~/.local/bin/bulwarkctl   # every check is built in
 ```
 
 Root-only daemon plists (`/Library/LaunchDaemons/*.plist` with mode `0600`) are read only with root

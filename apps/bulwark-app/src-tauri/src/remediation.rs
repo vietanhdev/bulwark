@@ -29,7 +29,6 @@ use bulwark_core::{
 };
 use serde::Serialize;
 use std::path::PathBuf;
-use std::process::Command;
 
 fn ssh_dir() -> Result<PathBuf, String> {
     let home = bulwark_core::paths::home_var().map_err(|_| "HOME not set".to_string())?;
@@ -100,7 +99,7 @@ fn run_privileged_fix(args: &[&str]) -> Result<CombinedFixReport, String> {
     }
 
     let cli = crate::resolve_cli_binary()?;
-    let output = Command::new("pkexec")
+    let output = bulwark_core::sandbox::quiet_command("pkexec")
         .arg(&cli)
         .arg("fix")
         .args(args)

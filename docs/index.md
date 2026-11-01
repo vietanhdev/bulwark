@@ -3,11 +3,8 @@ layout: home
 
 hero:
   name: Bulwark
-  text: Security for your dev machines, the servers they reach, and your AI coding tools
-  tagline: >-
-    Finds the keys in plain text, the risky packages and the exposed dev services on your Linux,
-    macOS or Windows computer — and, over plain SSH, on the machines you manage — explains each
-    problem in plain language, and fixes most of them in one click.
+  text: Local-first security for developers and their AI coding agents
+  tagline: Finds the risky agent settings and leaked keys attackers look for, and fixes them. Nothing leaves your machine.
   actions:
     - theme: brand
       text: Download
@@ -29,7 +26,7 @@ hero:
   </div>
   <div class="bw-stat">
     <span class="bw-stat-num">25</span>
-    <span class="bw-stat-label">AI coding assistants covered</span>
+    <span class="bw-stat-label">AI coding agents covered</span>
   </div>
   <div class="bw-stat">
     <span class="bw-stat-num">1</span>
@@ -43,31 +40,27 @@ hero:
 
 <section class="bw-section">
 
-<p class="bw-eyebrow">What Bulwark checks</p>
+<p class="bw-eyebrow">What it checks</p>
 
-<h2 class="bw-h2">What attackers look for on a developer machine</h2>
-
-<p class="bw-sub">Stolen keys and poisoned packages are how most developer compromises start. Bulwark looks where those attacks look first, then checks the rest of the system. Everything runs on your computer.</p>
+<h2 class="bw-h2">What attackers look for first</h2>
 
 <div class="bw-bento">
   <article class="bw-card bw-card-hero">
-    <div class="bw-card-tag">New in 0.11</div>
+    <div class="bw-card-tag">The focus</div>
     <div class="bw-card-icon">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L20 3M16 7l3 3M14 9l2 2"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg>
     </div>
-    <h3>Secrets, supply chain and exposed services</h3>
-    <p>Long-lived AWS keys, Git and Docker passwords stored in plain text, SSH keys without a passphrase, and credential files other users can read.</p>
-    <p>Python startup hooks and known malicious-package traces, unpinned MCP servers, and dev databases listening on every network interface.</p>
-    <p>Tool settings that quietly switch security off: Git or npm skipping certificate checks, pip trusting any index, SSH accepting any server or forwarding your agent everywhere, and a Docker API open without TLS.</p>
-    <p class="bw-card-meta">Each finding comes with a safer alternative, such as a password manager, a credential helper or a hardware key.</p>
+    <h3>AI coding agents</h3>
+    <p>Project hooks, auto-approve modes, unpinned MCP servers, hidden instructions, and keys left in chats — across Claude Code, Cursor, Copilot, Codex, Gemini and 20 more.</p>
+    <p class="bw-card-meta"><code>bulwarkctl ai scan</code></p>
   </article>
 
   <article class="bw-card">
     <div class="bw-card-icon">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L20 3M16 7l3 3M14 9l2 2"/></svg>
     </div>
-    <h3>AI coding assistants</h3>
-    <p>Keys pasted into Claude Code, Cursor, Copilot, Codex or Gemini sessions and memory, and settings a prompt injection could abuse: auto-approve, project hooks, malicious MCP servers.</p>
+    <h3>Secrets, supply chain and exposed services</h3>
+    <p>Plaintext cloud keys, SSH keys without a passphrase, malicious packages, exposed dev databases.</p>
   </article>
 
   <article class="bw-card">
@@ -75,23 +68,16 @@ hero:
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 00-5.4 5.4l-6 6V21h3.3l6-6a4 4 0 005.4-5.4l-2.3 2.3-2.2-.4-.4-2.2 2.3-2.3z"/></svg>
     </div>
     <h3>One-click fixes</h3>
-    <p>Add a passphrase to every unprotected SSH key, remove a leaked key from a session file, tighten <code>~/.ssh</code> and <code>sshd_config</code>. You preview every change first, and a backup is kept.</p>
+    <p>Previewed first, backed up always.</p>
   </article>
 
-  <article class="bw-card">
-    <div class="bw-card-icon">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h7"/><path d="M17 15l2 2 3-4"/></svg>
-    </div>
-    <h3>Problems, not a wall of findings</h3>
-    <p>Six unprotected keys are one problem with one fix, not six alerts. Each problem shows its cause and what to do, and <a href="/checks/">every check has a page</a> with the full explanation.</p>
-  </article>
 
   <article class="bw-card">
     <div class="bw-card-icon">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg>
     </div>
     <h3>OS hardening and malware</h3>
-    <p>SSH, sudoers, kernel and firewall settings, persistence and rootkit indicators, file-integrity changes, and ClamAV virus scanning with live progress.</p>
+    <p>SSH, sudo, kernel, firewall, persistence, rootkits, and ClamAV.</p>
   </article>
 
   <article class="bw-card">
@@ -99,40 +85,53 @@ hero:
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>
     </div>
     <h3>Linux, macOS and Windows</h3>
-    <p>One Rust engine, a desktop app and a CLI on all three. Each system gets its own checks — FileVault and Gatekeeper on a Mac, Defender and BitLocker on Windows — and the score only counts checks that actually ran there.</p>
+    <p>A desktop app and a single-file CLI on each.</p>
   </article>
 
-  <article class="bw-card">
-    <div class="bw-card-icon">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 0114-5.3L20 8M20 4v4h-4"/><path d="M20 12a8 8 0 01-14 5.3L4 16M4 20v-4h4"/></svg>
-    </div>
-    <h3>Continuous and fully local</h3>
-    <p>A background loop re-checks on a schedule and speaks up only when something new appears. No account and no telemetry: nothing leaves your computer unless you turn on alerts.</p>
-  </article>
 </div>
 
 </section>
 
 <section class="bw-section">
 
-<p class="bw-eyebrow">New: remote machines</p>
+<div class="bw-split">
+<div class="bw-split-text">
+<p class="bw-eyebrow">From the terminal</p>
+<h2 class="bw-h2">Read it in ten seconds</h2>
+<p class="bw-sub">What to fix, why, and how. Worst first.</p>
+<p class="bw-sub"><a href="/guide/agent-security">AI agent checks →</a><br><a href="/download">Install the CLI →</a></p>
+</div>
+<div class="bw-term" role="img" aria-label="Terminal output of bulwarkctl ai scan: four problems, worst first, each with why it matters and the fix">
+<div class="bw-term-bar"><span></span><span></span><span></span><em>bulwarkctl ai scan</em></div>
+<pre><span class="t-dim">$</span> bulwarkctl ai scan
+<b>Bulwark 0.13.0</b> <span class="t-dim">· AI coding agents · 1 project · 4 agent files checked</span>
+<span></span>
+<b>4 problems to fix</b>  <span class="t-crit">1 critical</span><span class="t-dim"> · </span><span class="t-high">3 high</span>
+<span></span>
+  <span class="t-crit">● Critical</span> <b>Project-supplied agent hooks run shell commands automatically</b>
+             This project settings file defines hooks. Claude Code hooks run shell
+             commands automatically on tool/session events — a project-supplied …
+             <span class="t-ok">→</span> Remove the hooks from the repository's agent config.
+             <span class="t-dim">in: ~/Projects/api/.claude/settings.json:1</span>
+<span></span>
+  <span class="t-high">● High    </span> <b>An MCP server runs an unpinned package from a registry</b>
+             MCP server "fs" launches an unpinned package via npx.
+             <span class="t-ok">→</span> Pin the MCP server to an exact version.
+             <span class="t-dim">in: ~/Projects/api/.mcp.json:1</span>
+  <span class="t-dim">…</span>
+<span></span>
+<span class="t-ok">→</span> 1 agent file holds leaked secrets Bulwark can remove — <b>bulwarkctl ai redact</b></pre>
+</div>
+</div>
 
-<h2 class="bw-h2">Keep watch over your servers too</h2>
+</section>
 
-<p class="bw-sub">Add a Linux, macOS or Windows machine you can SSH into. Bulwark checks it on a schedule with the same explanations and fixes — no agent, no open port, no server to run, and on a Linux server nothing to install at all — and tells you on Telegram or by e-mail when something new turns up.</p>
+<section class="bw-section">
+
+<p class="bw-eyebrow">Remote machines</p>
 
 <p><img src="/diagrams/remote.svg" alt="Agentless remote monitoring: Bulwark signs in over your SSH, scans Linux servers, Macs, Windows PCs and WSL, and alerts on Telegram or e-mail" class="bw-diagram" /></p>
 
-<div class="bw-gallery">
-  <figure>
-    <img src="/screenshots/machines.png" alt="Remote: each machine with its system, connection state and last scan" />
-    <figcaption>Every machine at a glance: its system, whether it answers, and what its last scan found.</figcaption>
-  </figure>
-  <figure>
-    <img src="/screenshots/machine.png" alt="One remote machine: connection and last scan side by side, and its issues grouped by cause" />
-    <figcaption>One machine opened: connection and scan kept apart, issues grouped like Home's.</figcaption>
-  </figure>
-</div>
 
 <p class="bw-sub"><a href="/guide/remote-monitoring">How remote monitoring works →</a></p>
 
@@ -142,41 +141,11 @@ hero:
 
 <p class="bw-eyebrow">Under the hood</p>
 
-<h2 class="bw-h2">One engine, every platform, nothing hidden</h2>
-
-<p class="bw-sub">A desktop app and a CLI on Linux, macOS and Windows share one Rust engine. Every check is a small YAML rule you can read, change or add to — and a check that couldn't run is never counted as a pass.</p>
+<h2 class="bw-h2">Every check is a YAML rule you can read</h2>
 
 <p><img src="/diagrams/architecture.svg" alt="Bulwark architecture: the desktop app and the CLI share one Rust engine; collectors, the AI-assistant scanner, the log scanner and ClamAV feed a rule engine of 100 YAML rules plus your own; findings are explained, scored honestly and stored locally; remote machines are scanned over SSH; alerts go to Telegram or e-mail" class="bw-diagram" /></p>
 
-<p><img src="/diagrams/checks.svg" alt="123 checks in seven groups plus your own YAML checks" class="bw-diagram" /></p>
-
 <p class="bw-sub"><a href="/guide/architecture">Read the architecture →</a> · <a href="https://github.com/vietanhdev/bulwark">Contribute a check →</a></p>
-
-</section>
-
-<section class="bw-section bw-how">
-
-<p class="bw-eyebrow">How it works</p>
-
-<h2 class="bw-h2">Scan, understand, fix</h2>
-
-<div class="bw-steps">
-  <div class="bw-step">
-    <span class="bw-step-num">01</span>
-    <h3>Scan</h3>
-    <p>Click Scan now, or run <code>bulwark scan</code>. Configuration, secrets, AI assistants and viruses are all checked in one pass.</p>
-  </div>
-  <div class="bw-step">
-    <span class="bw-step-num">02</span>
-    <h3>Understand</h3>
-    <p>Problems are grouped by cause and ranked Critical to Low. Each one says why it matters in a sentence, with the full story on its check page.</p>
-  </div>
-  <div class="bw-step">
-    <span class="bw-step-num">03</span>
-    <h3>Fix</h3>
-    <p>Use the one-click fix when there is one, or follow the numbered steps with copyable commands. Every automatic change is previewed and backed up.</p>
-  </div>
-</div>
 
 </section>
 
@@ -185,8 +154,6 @@ hero:
 <p class="bw-eyebrow">Make it yours</p>
 
 <h2 class="bw-h2">Light, dark, and your colours</h2>
-
-<p class="bw-sub">Aqua on graphite by default, with eight accents and six sidebar colours, in light or dark.</p>
 
 <div class="bw-fan">
   <img src="/screenshots/hero-aubergine.png" alt="Bulwark with an orange accent on an aubergine sidebar" class="bw-fan-img bw-fan-4" />
@@ -197,36 +164,9 @@ hero:
 
 </section>
 
-<section class="bw-section">
-
-<p class="bw-eyebrow">A closer look</p>
-
-<h2 class="bw-h2">See it in action</h2>
-
-<div class="bw-gallery">
-  <figure>
-    <img src="/screenshots/overview.png" alt="Home: the problems to fix, grouped by cause and ranked by severity" />
-    <figcaption>Home: what to fix, grouped by cause and ranked by severity.</figcaption>
-  </figure>
-  <figure>
-    <img src="/screenshots/fix.png" alt="An opened problem: why it matters, a one-click fix, and details" />
-    <figcaption>Open a problem: why it matters, the one-click fix, then the details.</figcaption>
-  </figure>
-  <figure>
-    <img src="/screenshots/overview-dark.png" alt="Home in dark mode" />
-    <figcaption>Dark mode, following your desktop or set by hand.</figcaption>
-  </figure>
-  <figure>
-    <img src="/screenshots/antivirus.png" alt="Virus scan with ClamAV, showing a detected test file" />
-    <figcaption>Virus scan: ClamAV with live progress and folder watching.</figcaption>
-  </figure>
-</div>
-
-</section>
-
 <section class="bw-cta" aria-label="Get Bulwark">
-  <h2>Find the keys and holes attackers look for first.</h2>
-  <p>Free, open source, and everything stays on your computer.</p>
+  <h2>Find what attackers look for first.</h2>
+  <p>Free, open source, fully local.</p>
   <div class="bw-cta-actions">
     <a class="bw-btn bw-btn-brand" href="/download">Download Bulwark</a>
     <a class="bw-btn bw-btn-alt" href="/checks/">Browse every check</a>
@@ -253,7 +193,7 @@ hero:
 .bw-section {
   margin-top: 5rem;
 }
-.bw-eyebrow {
+.bw-home .bw-eyebrow {
   text-align: center;
   text-transform: uppercase;
   letter-spacing: 0.12em;
@@ -262,7 +202,7 @@ hero:
   color: var(--vp-c-brand-1);
   margin: 0 0 0.5rem;
 }
-.bw-h2 {
+.bw-home .bw-h2 {
   text-align: center;
   border: 0 !important;
   padding-top: 0;
@@ -272,7 +212,9 @@ hero:
   letter-spacing: -0.02em;
   font-weight: 700;
 }
-.bw-sub {
+/* `.bw-home` raises specificity over VitePress's `.vp-doc p { margin: 16px 0 }`, which otherwise
+   wins on load order and drops the auto margins — every intro paragraph sat left of centre. */
+.bw-home .bw-sub {
   text-align: center;
   max-width: 44rem;
   margin: 0.9rem auto 0;
@@ -342,13 +284,13 @@ hero:
 .dark .bw-card:hover {
   box-shadow: 0 16px 36px -14px rgba(0, 0, 0, 0.6);
 }
-.bw-card h3 {
+.bw-home .bw-card h3 {
   margin: 0 0 0.5rem;
   font-size: 1.15rem;
   font-weight: 650;
   line-height: 1.3;
 }
-.bw-card p {
+.bw-home .bw-card p {
   margin: 0;
   font-size: 0.92rem;
   line-height: 1.6;
@@ -424,48 +366,8 @@ hero:
 .dark .bw-card-tag {
   color: var(--vp-c-brand-1);
 }
-/* The two stacked cards after the hero fall into the right column beside the tall hero tile;
-   the remaining four flow as two balanced rows underneath. Auto-placement handles the rest. */
-
-/* How it works — a genuine three-step sequence, so the numbering carries real order. */
-.bw-steps {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 1.5rem;
-  margin-top: 2.75rem;
-  counter-reset: step;
-}
-.bw-step {
-  position: relative;
-  padding: 1.75rem 1.5rem;
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 16px;
-  background: var(--vp-c-bg-soft);
-}
-.bw-step-num {
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: var(--vp-c-brand-1);
-}
-.bw-step h3 {
-  margin: 0.6rem 0 0.5rem;
-  font-size: 1.2rem;
-  font-weight: 650;
-}
-.bw-step p {
-  margin: 0;
-  font-size: 0.92rem;
-  line-height: 1.6;
-  color: var(--vp-c-text-2);
-}
-.bw-how .bw-steps { position: relative; }
-.bw-step code {
-  font-size: 0.82em;
-  padding: 0.1em 0.4em;
-  border-radius: 5px;
-  background: var(--vp-c-default-soft);
-}
+/* Bento: the hero tile spans two rows on the left, the two cards after it stack on the right,
+   and the last two share a row underneath. Auto-placement does this; keep the card count even. */
 
 /* Colours fan (unchanged behaviour, restyled container). */
 .bw-fan {
@@ -491,22 +393,6 @@ hero:
 .bw-fan:hover .bw-fan-2 { transform: translateX(-78%) rotate(-9deg) translateY(10px); }
 .bw-fan:hover .bw-fan-3 { transform: translateX(-22%) rotate(9deg) translateY(10px); }
 
-.bw-gallery {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 1.75rem;
-  margin-top: 2.75rem;
-}
-.bw-gallery img {
-  width: 100%;
-  border-radius: 12px;
-  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.3);
-}
-.bw-gallery figcaption {
-  margin-top: 0.7rem;
-  font-size: 0.875rem;
-  color: var(--vp-c-text-2);
-}
 
 /* Closing CTA band. */
 .bw-cta {
@@ -520,7 +406,7 @@ hero:
     radial-gradient(70% 120% at 50% 0%, color-mix(in srgb, var(--vp-c-brand-1) 14%, transparent), transparent 70%),
     var(--vp-c-bg-soft);
 }
-.bw-cta h2 {
+.bw-home .bw-cta h2 {
   border: 0 !important;
   padding-top: 0;
   margin: 0 auto;
@@ -530,7 +416,7 @@ hero:
   letter-spacing: -0.02em;
   font-weight: 700;
 }
-.bw-cta p {
+.bw-home .bw-cta p {
   margin: 0.75rem auto 0;
   color: var(--vp-c-text-2);
 }
@@ -570,6 +456,66 @@ hero:
 }
 .bw-cta a.bw-btn-alt:hover { border-color: var(--vp-c-brand-1); }
 
+/* The CLI sample: a terminal window in the CLI's own colours, dark in both themes. */
+.bw-term {
+  max-width: 50rem;
+  margin: 2rem auto 0;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #0f1720;
+  border: 1px solid #253241;
+  box-shadow: 0 18px 48px -18px rgba(10, 20, 30, 0.45);
+}
+.bw-term-bar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 14px;
+  background: #18222e;
+  border-bottom: 1px solid #253241;
+}
+.bw-term-bar span { width: 11px; height: 11px; border-radius: 50%; background: #3a4757; }
+.bw-term-bar span:nth-child(1) { background: #ff5f57; }
+.bw-term-bar span:nth-child(2) { background: #febc2e; }
+.bw-term-bar span:nth-child(3) { background: #28c840; }
+.bw-term-bar em {
+  margin-left: 10px;
+  font-style: normal;
+  font-size: 0.78rem;
+  color: #8b98a8;
+  font-family: var(--vp-font-family-mono);
+}
+.bw-home .bw-term pre {
+  margin: 0;
+  padding: 1.1rem 1.3rem 1.3rem;
+  overflow-x: auto;
+  font-family: var(--vp-font-family-mono);
+  font-size: 0.8rem;
+  line-height: 1.6;
+  color: #d7dee7;
+  background: transparent;
+}
+.bw-term b { color: #f3f6fa; font-weight: 700; }
+.bw-term .t-dim { color: #7c8a9b; }
+.bw-term .t-crit { color: #ff6b6b; font-weight: 700; }
+.bw-term .t-high { color: #ff9a6b; }
+.bw-term .t-ok { color: #4fd18b; }
+
+/* Text beside the terminal on wide screens; stacked on narrow ones. */
+.bw-split {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.6fr);
+  gap: 2.5rem;
+  align-items: center;
+}
+.bw-home .bw-split-text .bw-eyebrow,
+.bw-home .bw-split-text .bw-h2,
+.bw-home .bw-split-text .bw-sub {
+  text-align: left;
+  margin-left: 0;
+}
+.bw-split .bw-term { margin: 0; max-width: none; }
+
 /* Tablet: collapse the bento and grids to two columns. */
 @media (max-width: 900px) {
   .bw-bento { grid-template-columns: repeat(2, 1fr); }
@@ -580,19 +526,22 @@ hero:
     grid-column: span 1;
   }
   .bw-card-hero { grid-row: auto; grid-column: 1 / -1; }
-  .bw-steps { grid-template-columns: 1fr; }
-  .bw-gallery { grid-template-columns: 1fr; }
+  .bw-split { grid-template-columns: 1fr; gap: 1.5rem; }
+  .bw-home .bw-split-text .bw-eyebrow,
+  .bw-home .bw-split-text .bw-h2,
+  .bw-home .bw-split-text .bw-sub { text-align: center; margin-left: auto; }
 }
 
 /* Phone: single column throughout. */
 @media (max-width: 640px) {
   .bw-section { margin-top: 4rem; }
-  .bw-h2 { font-size: 1.85rem; }
+  .bw-home .bw-h2 { font-size: 1.85rem; }
   .bw-stats { grid-template-columns: repeat(2, 1fr); gap: 1.25rem 1rem; }
   .bw-bento { grid-template-columns: 1fr; }
   .bw-fan { height: 300px; }
   .bw-fan-2, .bw-fan-3, .bw-fan-4 { display: none; }
   .bw-cta { padding: 3rem 1.5rem; }
-  .bw-cta h2 { font-size: 1.6rem; }
+  .bw-home .bw-cta h2 { font-size: 1.6rem; }
+  .bw-home .bw-term pre { font-size: 0.66rem; padding: 0.9rem 1rem 1rem; }
 }
 </style>

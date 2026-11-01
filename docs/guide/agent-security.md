@@ -178,9 +178,41 @@ bulwarkctl ai scan --target ~/work/service
 # Add or exclude discovery roots.
 bulwarkctl ai scan --root ~/oss --exclude ~/Projects/huge-monorepo
 
+# Also low-priority items, every file each problem was found in, and the masked evidence.
+bulwarkctl ai scan --all
+
 # Preview, then apply, redaction. A 0600 backup of each file is kept.
 bulwarkctl ai redact
 bulwarkctl ai redact --apply
+```
+
+The report leads with what to fix — one line per problem, worst first, why it matters and the first
+step — and ends with what Bulwark can do for you:
+
+```text
+Bulwark 0.13.0 · AI coding agents · 1 project · 4 agent files checked
+
+4 problems to fix  1 critical · 3 high
+
+  ● Critical Project-supplied agent hooks run shell commands automatically
+             This project settings file defines hooks. Claude Code hooks run shell commands
+             automatically on tool/session events — a project-supplied hook can execute …
+             → Remove the hooks from the repository's agent config (for example the hooks
+               block in .claude/settings.json, .cursor/hooks.json, .kiro/hooks/, or a …
+             in: ~/Projects/api/.claude/settings.json:1
+             more: https://bulwark.nrl.ai/checks/blwk-ai-002
+
+  ● High     GitHub PAT exposed in AI context
+             Anything written into an assistant's context, memory, or transcript should be
+             treated as leaked — rotate it.
+             → Remove the key from the file and replace it with a new one. Anything pasted
+               into an AI chat should be treated as leaked.
+             in: ~/.claude/projects/-home-u-api/memory/notes.md:1
+             more: https://bulwark.nrl.ai/checks/blwk-ai-001
+  …
+
+→ 1 agent file holds leaked secrets Bulwark can remove — preview with bulwarkctl ai redact, then add --apply
+→ Removing a secret from a file doesn't make it safe again: rotate it with its provider.
 ```
 
 `ai scan` exits non-zero on findings (`2` for a critical, `1` for medium/high), so it drops into

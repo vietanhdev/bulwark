@@ -318,7 +318,9 @@ There's no network API — the "client" and "server" are the same process, expos
 
 | Command | Purpose | Exit code |
 |---------|---------|-----------|
-| `bulwarkctl scan` | Run unprivileged checks only, print a table to stdout | `0` clean, `1` findings ≥ medium, `2` findings ≥ critical (CI-friendly) |
+| `bulwarkctl scan` | Run unprivileged checks only and print a short report (`crates/bulwarkctl/src/report.rs`): one line per problem, grouped by check, worst first, with why it matters and the first fix step; low/info items folded behind a count; a footer saying what the scan could *not* check (admin-only areas, checks that couldn't run, failures, ignores) — a clean result reads "nothing to fix from the checks that ran", never "all clear". Colour only on a terminal, never with `NO_COLOR` | `0` clean, `1` findings ≥ medium, `2` findings ≥ critical (CI-friendly; ignored findings don't count) |
+| `bulwarkctl scan --all` | Same, plus low-priority items and every place each problem was found | same as above |
+| `bulwarkctl --rules-dir <dir> …` | Use a rules folder instead of the pack built into the binary (also `BULWARK_RULES_DIR`; `--log-rules-dir`/`--decoders-dir` for `logs scan`). Without it, the binary uses the rule pack compiled into it — it is a single file that runs from anywhere | — |
 | `bulwarkctl scan --privileged` | Full scan; must be run under `sudo` (see §4) | same as above |
 | `bulwarkctl scan --json` | Same as `scan`, machine-readable output | same as above |
 | `bulwarkctl rules list` | List loaded rules, including load failures | `0` / `1` if any rule failed to load |
@@ -494,6 +496,28 @@ The first run of these tests failed, and each failure was a real defect:
 On a real home directory the result is ten fewer false positives — every one of them a placeholder or
 a test fixture quoted inside a transcript (`-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIB...`, a dummy
 `ghp_0123…uvwxyz`) — with no true positive lost.
+
+A later dogfooding pass found one more, of a different kind. The keyword index is a **file-level**
+prefilter: a rule runs if its keyword appears *anywhere* in the file. That is fine for a rule whose
+pattern carries its own marker (`ghp_…`, `AKIA…`), but `sourcegraph-access-token` also accepts a bare
+40-hex string — the exact shape of a git commit SHA. In an agent transcript, one mention of
+Sourcegraph plus a session's worth of commit hashes produced eight "leaked Sourcegraph tokens", none
+of them secrets. A provider match is now reported only when one of the rule's keywords is inside it or
+within 128 bytes before it on the same line (`keyword_near`); a real legacy token still matches next
+to its variable name. The generated-sample test proves the cost: the same 255 rules catch their own
+key before and after the change.
+
+```mermaid
+flowchart LR
+  F[File text] --> K{Keyword anywhere<br/>in the file?}
+  K -- no --> X[Rule skipped]
+  K -- yes --> R[Rule regex]
+  R --> E{Entropy, allowlists,<br/>doc examples}
+  E -- fail --> X
+  E -- pass --> N{Keyword in the match<br/>or just before it?}
+  N -- no --> X
+  N -- yes --> H[Reported, high confidence]
+```
 
 ---
 

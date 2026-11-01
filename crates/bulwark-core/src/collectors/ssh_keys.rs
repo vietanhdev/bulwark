@@ -392,7 +392,7 @@ fn run_ssh_keygen_add_passphrase(
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     use std::os::unix::process::CommandExt;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     // A tiny helper that prints the passphrase from the environment. The SCRIPT bytes carry no
@@ -423,7 +423,7 @@ fn run_ssh_keygen_add_passphrase(
     }
     let _guard = RemoveOnDrop(helper.clone());
 
-    let mut cmd = Command::new("ssh-keygen");
+    let mut cmd = crate::sandbox::quiet_command("ssh-keygen");
     cmd.arg("-p")
         .arg("-f")
         .arg(key)
