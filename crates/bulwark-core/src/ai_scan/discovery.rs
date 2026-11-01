@@ -21,15 +21,28 @@ use std::path::{Path, PathBuf};
 pub fn tool_label(tool: Tool) -> &'static str {
     match tool {
         Tool::ClaudeCode => "Claude Code",
+        Tool::ClaudeDesktop => "Claude Desktop",
         Tool::Cursor => "Cursor",
         Tool::Copilot => "GitHub Copilot",
         Tool::Codex => "OpenAI Codex",
         Tool::Gemini => "Gemini CLI",
+        Tool::Qwen => "Qwen Code",
         Tool::Aider => "Aider",
         Tool::Continue => "Continue",
-        Tool::Windsurf => "Windsurf",
+        Tool::Windsurf => "Windsurf / Devin Desktop",
         Tool::Cline => "Cline / Roo",
+        Tool::Kilo => "Kilo Code",
         Tool::AmazonQ => "Amazon Q",
+        Tool::Kiro => "Kiro",
+        Tool::Zed => "Zed",
+        Tool::Goose => "Goose",
+        Tool::OpenCode => "OpenCode",
+        Tool::Crush => "Crush",
+        Tool::Amp => "Amp",
+        Tool::Augment => "Augment",
+        Tool::JetBrains => "JetBrains Junie / AI Assistant",
+        Tool::Warp => "Warp",
+        Tool::OpenInterpreter => "Open Interpreter",
         Tool::VsCode => "VS Code / editor",
         Tool::Generic => "AI assistant",
     }
@@ -38,15 +51,28 @@ pub fn tool_label(tool: Tool) -> &'static str {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tool {
     ClaudeCode,
+    ClaudeDesktop,
     Cursor,
     Copilot,
     Codex,
     Gemini,
+    Qwen,
     Aider,
     Continue,
     Windsurf,
     Cline,
+    Kilo,
     AmazonQ,
+    Kiro,
+    Zed,
+    Goose,
+    OpenCode,
+    Crush,
+    Amp,
+    Augment,
+    JetBrains,
+    Warp,
+    OpenInterpreter,
     VsCode,
     Generic,
 }
@@ -58,12 +84,16 @@ pub enum Tool {
 pub enum ArtifactKind {
     /// Free-text model instructions (`CLAUDE.md`, `.cursorrules`, `copilot-instructions.md`).
     Instructions,
-    /// Agent settings JSON (`.claude/settings.json`, `.vscode/settings.json`).
+    /// Agent settings (`.claude/settings.json`, `.vscode/settings.json`, Goose's `config.yaml`).
     Settings,
-    /// An MCP server manifest (`.mcp.json`, `~/.cursor/mcp.json`, …).
+    /// An MCP server manifest (`.mcp.json`, `~/.cursor/mcp.json`, …) in JSON, YAML or TOML.
     McpConfig,
     /// VS Code tasks (`.vscode/tasks.json`) — auto-run-on-open surface.
     Tasks,
+    /// A file whose whole job is to run commands on agent events: `.cursor/hooks.json`,
+    /// `.kiro/hooks/*`, `.github/hooks/*.json`, `.clinerules/hooks/*`, a project `crushrc`. Only a
+    /// *project*-supplied one is a finding (the CVE-2025-59536 shape); your own are yours.
+    Hooks,
     /// A chat/session transcript (`~/.claude/projects/**/*.jsonl`, `.aider.chat.history.md`).
     Transcript,
     /// A credential/token store whose *permissions* are the finding (`~/.claude/.credentials.json`).
@@ -109,17 +139,58 @@ pub const COMMON_CODE_ROOTS: &[&str] = &[
 const WORKSPACE_MARKERS: &[&str] = &[
     ".claude",
     "CLAUDE.md",
+    "CLAUDE.local.md",
     "AGENTS.md",
+    "AGENT.md",
     "GEMINI.md",
+    "QWEN.md",
+    "CRUSH.md",
+    "WARP.md",
+    "AmazonQ.md",
+    ".agents",
     ".cursor",
     ".cursorrules",
     ".mcp.json",
+    ".windsurf",
     ".windsurfrules",
+    ".devin",
     ".continue",
     ".clinerules",
     ".roo",
+    ".roorules",
+    ".roomodes",
+    ".kilo",
+    ".kilocode",
+    "kilo.json",
+    "kilo.jsonc",
     ".aider.conf.yml",
     ".aider.chat.history.md",
+    ".gemini",
+    ".qwen",
+    ".kiro",
+    ".amazonq",
+    ".zed",
+    ".rules",
+    ".goosehints",
+    ".opencode",
+    "opencode.json",
+    "opencode.jsonc",
+    "crush.json",
+    ".crush.json",
+    "crushrc",
+    ".crushrc",
+    ".amp",
+    ".augment",
+    ".augment-guidelines",
+    ".junie",
+    ".aiassistant",
+    ".github/copilot-instructions.md",
+    ".github/instructions",
+    ".github/agents",
+    ".github/prompts",
+    ".github/hooks",
+    ".github/mcp.json",
+    ".vscode/mcp.json",
 ];
 
 /// Directory names never worth descending into during the workspace sweep — dependency and VCS
@@ -238,6 +309,379 @@ fn is_skip_dir(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// How one artifact location is matched on disk.
+#[derive(Debug, Clone, Copy)]
+enum Find {
+    /// Exactly this file.
+    File,
+    /// Every file under this directory (recursively, bounded) with one of these extensions; an
+    /// empty list means any file (hook *scripts* carry no extension).
+    Dir(&'static [&'static str]),
+    /// Every file with exactly this name anywhere under this directory (bounded) — for manifests
+    /// nested inside installed plugins/extensions (`<plugin>/.mcp.json`).
+    Named(&'static str),
+}
+
+/// One known artifact location, relative to a workspace root or to `$HOME`.
+struct Spec(&'static str, Tool, ArtifactKind, Find);
+
+use ArtifactKind::{
+    CodexConfig, Credential, DotEnv, Hooks, Instructions, McpConfig, Memory, Settings, Tasks,
+    Transcript,
+};
+use Find::{Dir, File, Named};
+use Tool::*;
+
+const MD: &[&str] = &["md"];
+const MD_MDC: &[&str] = &["md", "mdc"];
+const JSON: &[&str] = &["json"];
+const YAML_JSON: &[&str] = &["yaml", "yml", "json"];
+const ANY: &[&str] = &[];
+
+/// Project-scoped artifacts, relative to a workspace root. Sources for each agent's layout are its
+/// official docs or source tree; a location this table can't vouch for is left out rather than
+/// guessed, because a wrong path is silently useless and a wrong *format* produces false findings.
+const WORKSPACE_SPECS: &[Spec] = &[
+    // ---- Instruction / context files, read by the model every session.
+    Spec("CLAUDE.md", ClaudeCode, Instructions, File),
+    Spec("CLAUDE.local.md", ClaudeCode, Instructions, File),
+    Spec(".claude/CLAUDE.md", ClaudeCode, Instructions, File),
+    Spec("AGENTS.md", Generic, Instructions, File),
+    Spec("AGENTS.local.md", Generic, Instructions, File),
+    Spec("AGENT.md", Generic, Instructions, File),
+    Spec("GEMINI.md", Gemini, Instructions, File),
+    Spec("QWEN.md", Qwen, Instructions, File),
+    Spec("CRUSH.md", Crush, Instructions, File),
+    Spec("CRUSH.local.md", Crush, Instructions, File),
+    Spec("WARP.md", Warp, Instructions, File),
+    Spec("AmazonQ.md", AmazonQ, Instructions, File),
+    Spec(".rules", Zed, Instructions, File),
+    Spec(".goosehints", Goose, Instructions, File),
+    Spec(".cursorrules", Cursor, Instructions, File),
+    Spec(".windsurfrules", Windsurf, Instructions, File),
+    Spec(".clinerules", Cline, Instructions, File),
+    Spec(".roorules", Cline, Instructions, File),
+    Spec(".roomodes", Cline, Instructions, File),
+    Spec(".augment-guidelines", Augment, Instructions, File),
+    Spec(
+        ".github/copilot-instructions.md",
+        Copilot,
+        Instructions,
+        File,
+    ),
+    Spec(".devin/global_rules.md", Windsurf, Instructions, File),
+    Spec(".windsurf/global_rules.md", Windsurf, Instructions, File),
+    // Rule / command / subagent / skill directories — model-executed instruction surfaces, just as
+    // capable of hiding a bidi backdoor or an injected directive as a CLAUDE.md.
+    Spec(".cursor/rules", Cursor, Instructions, Dir(&["mdc"])),
+    Spec(".cursor/commands", Cursor, Instructions, Dir(MD)),
+    Spec(".continue/rules", Continue, Instructions, Dir(MD)),
+    Spec(".roo", Cline, Instructions, Dir(MD)),
+    Spec(".clinerules", Cline, Instructions, Dir(MD)),
+    Spec(".cline/skills", Cline, Instructions, Dir(MD)),
+    Spec(".claude/agents", ClaudeCode, Instructions, Dir(MD)),
+    Spec(".claude/commands", ClaudeCode, Instructions, Dir(MD)),
+    Spec(".claude/skills", ClaudeCode, Instructions, Dir(MD)),
+    Spec(".claude/rules", ClaudeCode, Instructions, Dir(MD)),
+    Spec(".agents/skills", Generic, Instructions, Dir(MD)),
+    Spec(".gemini/commands", Gemini, Instructions, Dir(&["toml"])),
+    Spec(".gemini/agents", Gemini, Instructions, Dir(MD)),
+    Spec(".gemini/skills", Gemini, Instructions, Dir(MD)),
+    Spec(".qwen/rules", Qwen, Instructions, Dir(MD)),
+    Spec(".qwen/commands", Qwen, Instructions, Dir(&["md", "toml"])),
+    Spec(".qwen/agents", Qwen, Instructions, Dir(MD)),
+    Spec(".qwen/skills", Qwen, Instructions, Dir(MD)),
+    Spec(".kiro/steering", Kiro, Instructions, Dir(MD)),
+    Spec(".kiro/agents", Kiro, Instructions, Dir(MD)),
+    Spec(".amazonq/rules", AmazonQ, Instructions, Dir(MD)),
+    Spec(".amazonq/prompts", AmazonQ, Instructions, Dir(MD)),
+    Spec(".windsurf/rules", Windsurf, Instructions, Dir(MD)),
+    Spec(".devin/rules", Windsurf, Instructions, Dir(MD)),
+    Spec(".kilo/rules", Kilo, Instructions, Dir(MD)),
+    Spec(".kilo/skills", Kilo, Instructions, Dir(MD)),
+    Spec(".kilocode/rules", Kilo, Instructions, Dir(MD)),
+    Spec(".opencode/agents", OpenCode, Instructions, Dir(MD)),
+    Spec(".opencode/agent", OpenCode, Instructions, Dir(MD)),
+    Spec(".opencode/commands", OpenCode, Instructions, Dir(MD)),
+    Spec(".opencode/command", OpenCode, Instructions, Dir(MD)),
+    Spec(".opencode/modes", OpenCode, Instructions, Dir(MD)),
+    Spec(".opencode/skills", OpenCode, Instructions, Dir(MD)),
+    Spec(".crush/skills", Crush, Instructions, Dir(MD)),
+    Spec(".github/instructions", Copilot, Instructions, Dir(MD)),
+    Spec(".github/prompts", Copilot, Instructions, Dir(MD)),
+    Spec(".github/agents", Copilot, Instructions, Dir(MD)),
+    Spec(".github/chatmodes", Copilot, Instructions, Dir(MD)),
+    Spec(".junie", JetBrains, Instructions, Dir(MD)),
+    Spec(".aiassistant/rules", JetBrains, Instructions, Dir(MD)),
+    Spec(".augment/rules", Augment, Instructions, Dir(MD_MDC)),
+    // ---- Agent settings.
+    Spec(".claude/settings.json", ClaudeCode, Settings, File),
+    Spec(".claude/settings.local.json", ClaudeCode, Settings, File),
+    Spec(".vscode/settings.json", VsCode, Settings, File),
+    Spec(".gemini/settings.json", Gemini, Settings, File),
+    Spec(".qwen/settings.json", Qwen, Settings, File),
+    Spec(".zed/settings.json", Zed, Settings, File),
+    Spec("opencode.json", OpenCode, Settings, File),
+    Spec("opencode.jsonc", OpenCode, Settings, File),
+    Spec(".opencode/opencode.json", OpenCode, Settings, File),
+    Spec(".opencode/opencode.jsonc", OpenCode, Settings, File),
+    Spec("kilo.json", Kilo, Settings, File),
+    Spec("kilo.jsonc", Kilo, Settings, File),
+    Spec(".kilo/kilo.json", Kilo, Settings, File),
+    Spec(".kilo/kilo.jsonc", Kilo, Settings, File),
+    Spec("crush.json", Crush, Settings, File),
+    Spec(".crush.json", Crush, Settings, File),
+    Spec(".amp/settings.json", Amp, Settings, File),
+    Spec(".amp/settings.jsonc", Amp, Settings, File),
+    Spec(".cursor/cli.json", Cursor, Settings, File),
+    Spec(".augment/settings.json", Augment, Settings, File),
+    Spec(".augment/settings.local.json", Augment, Settings, File),
+    Spec(".github/copilot/settings.json", Copilot, Settings, File),
+    Spec(
+        ".github/copilot/settings.local.json",
+        Copilot,
+        Settings,
+        File,
+    ),
+    Spec(".devin/config.json", Windsurf, Settings, File),
+    Spec(".devin/config.local.json", Windsurf, Settings, File),
+    Spec(".amazonq/cli-agents", AmazonQ, Settings, Dir(JSON)),
+    Spec(".aider.conf.yml", Aider, Settings, File),
+    Spec(".vscode/tasks.json", VsCode, Tasks, File),
+    // ---- Hook files: present in a repo, they run its commands on agent events.
+    Spec(".cursor/hooks.json", Cursor, Hooks, File),
+    Spec(".kiro/hooks", Kiro, Hooks, Dir(&["json", "hook"])),
+    Spec(".github/hooks", Copilot, Hooks, Dir(JSON)),
+    Spec(".devin/hooks.v1.json", Windsurf, Hooks, File),
+    Spec(".clinerules/hooks", Cline, Hooks, Dir(ANY)),
+    Spec("crushrc", Crush, Hooks, File),
+    Spec(".crushrc", Crush, Hooks, File),
+    // ---- MCP manifests.
+    Spec(".mcp.json", ClaudeCode, McpConfig, File),
+    Spec(".cursor/mcp.json", Cursor, McpConfig, File),
+    Spec(".vscode/mcp.json", VsCode, McpConfig, File),
+    Spec(".github/mcp.json", Copilot, McpConfig, File),
+    Spec(".roo/mcp.json", Cline, McpConfig, File),
+    Spec(".amazonq/mcp.json", AmazonQ, McpConfig, File),
+    Spec(".kiro/settings/mcp.json", Kiro, McpConfig, File),
+    Spec(".continue/mcpServers", Continue, McpConfig, Dir(YAML_JSON)),
+    // ---- Dotenv files.
+    Spec(".env", Generic, DotEnv, File),
+    Spec(".gemini/.env", Gemini, DotEnv, File),
+    Spec(".qwen/.env", Qwen, DotEnv, File),
+    // ---- Transcripts kept at the repo root.
+    Spec(".aider.chat.history.md", Aider, Transcript, File),
+    Spec(".aider.llm.history", Aider, Transcript, File),
+];
+
+/// Global `$HOME` tool state, relative to `$HOME`.
+const GLOBAL_SPECS: &[Spec] = &[
+    // ---- Claude Code.
+    Spec(".claude/settings.json", ClaudeCode, Settings, File),
+    Spec(".claude.json", ClaudeCode, McpConfig, File),
+    Spec(".claude/.credentials.json", ClaudeCode, Credential, File),
+    Spec(".claude/projects", ClaudeCode, Transcript, Dir(&["jsonl"])),
+    Spec(".claude/history.jsonl", ClaudeCode, Transcript, File),
+    // Agent memory: per-project memory notes and the global user memory file.
+    Spec(".claude/projects", ClaudeCode, Memory, Dir(MD)),
+    Spec(".claude/CLAUDE.md", ClaudeCode, Memory, File),
+    Spec(".claude/agents", ClaudeCode, Instructions, Dir(MD)),
+    Spec(".claude/commands", ClaudeCode, Instructions, Dir(MD)),
+    Spec(".claude/skills", ClaudeCode, Instructions, Dir(MD)),
+    Spec(".claude/rules", ClaudeCode, Instructions, Dir(MD)),
+    // Installed plugins (`cache/<marketplace>/<plugin>/<version>/`) carry their own commands,
+    // agents, skills and MCP servers. Only the installed cache — `marketplaces/` is a clone of the
+    // whole catalog, most of which the user never enabled.
+    Spec(".claude/plugins/cache", ClaudeCode, Instructions, Dir(MD)),
+    Spec(
+        ".claude/plugins/cache",
+        ClaudeCode,
+        McpConfig,
+        Named(".mcp.json"),
+    ),
+    // ---- Claude Desktop (official Linux beta).
+    Spec(
+        ".config/Claude/claude_desktop_config.json",
+        ClaudeDesktop,
+        McpConfig,
+        File,
+    ),
+    // ---- Codex.
+    Spec(".codex/config.toml", Codex, CodexConfig, File),
+    Spec(".codex/auth.json", Codex, Credential, File),
+    Spec(".codex/AGENTS.md", Codex, Instructions, File),
+    Spec(".codex/prompts", Codex, Instructions, Dir(MD)),
+    Spec(".codex/sessions", Codex, Transcript, Dir(&["jsonl"])),
+    Spec(".codex/history.jsonl", Codex, Transcript, File),
+    // ---- Cursor (editor + CLI).
+    Spec(".cursor/mcp.json", Cursor, McpConfig, File),
+    Spec(".cursor/cli-config.json", Cursor, Settings, File),
+    // ---- GitHub Copilot (CLI + VS Code user instructions).
+    Spec(".copilot/mcp-config.json", Copilot, McpConfig, File),
+    Spec(
+        ".copilot/copilot-instructions.md",
+        Copilot,
+        Instructions,
+        File,
+    ),
+    Spec(".copilot/instructions", Copilot, Instructions, Dir(MD)),
+    Spec(".copilot/agents", Copilot, Instructions, Dir(MD)),
+    Spec(".copilot/skills", Copilot, Instructions, Dir(MD)),
+    Spec(".copilot/providers.json", Copilot, Credential, File),
+    Spec(
+        ".config/github-copilot/hosts.json",
+        Copilot,
+        Credential,
+        File,
+    ),
+    // ---- Gemini CLI (settings, extensions, chats, credentials).
+    Spec(".gemini/settings.json", Gemini, Settings, File),
+    Spec(".gemini/GEMINI.md", Gemini, Instructions, File),
+    Spec(".gemini/commands", Gemini, Instructions, Dir(&["toml"])),
+    Spec(".gemini/agents", Gemini, Instructions, Dir(MD)),
+    Spec(".gemini/skills", Gemini, Instructions, Dir(MD)),
+    Spec(".gemini/extensions", Gemini, Instructions, Dir(MD)),
+    Spec(
+        ".gemini/extensions",
+        Gemini,
+        McpConfig,
+        Named("gemini-extension.json"),
+    ),
+    Spec(".gemini/tmp", Gemini, Transcript, Dir(&["jsonl"])),
+    Spec(".gemini/.env", Gemini, DotEnv, File),
+    Spec(".gemini/oauth_creds.json", Gemini, Credential, File),
+    Spec(".gemini/mcp-oauth-tokens.json", Gemini, Credential, File),
+    // ---- Qwen Code (a Gemini CLI fork with its own home).
+    Spec(".qwen/settings.json", Qwen, Settings, File),
+    Spec(".qwen/QWEN.md", Qwen, Instructions, File),
+    Spec(".qwen/rules", Qwen, Instructions, Dir(MD)),
+    Spec(".qwen/commands", Qwen, Instructions, Dir(&["md", "toml"])),
+    Spec(".qwen/agents", Qwen, Instructions, Dir(MD)),
+    Spec(".qwen/skills", Qwen, Instructions, Dir(MD)),
+    Spec(".qwen/projects", Qwen, Transcript, Dir(&["jsonl"])),
+    Spec(".qwen/.env", Qwen, DotEnv, File),
+    Spec(".qwen/oauth_creds.json", Qwen, Credential, File),
+    // ---- Aider / Continue.
+    Spec(".aider.conf.yml", Aider, Settings, File),
+    Spec(".continue/config.yaml", Continue, Settings, File),
+    Spec(".continue/mcpServers", Continue, McpConfig, Dir(YAML_JSON)),
+    Spec(".continue/.env", Continue, DotEnv, File),
+    // ---- Windsurf, now Devin Desktop (legacy and current homes).
+    Spec(
+        ".codeium/windsurf/global_rules.md",
+        Windsurf,
+        Instructions,
+        File,
+    ),
+    Spec(
+        ".codeium/windsurf/mcp_config.json",
+        Windsurf,
+        McpConfig,
+        File,
+    ),
+    Spec(".devin/global_rules.md", Windsurf, Instructions, File),
+    Spec(".devin/rules", Windsurf, Instructions, Dir(MD)),
+    Spec(".config/devin/config.json", Windsurf, Settings, File),
+    // ---- Amazon Q Developer CLI / Kiro.
+    Spec(".aws/amazonq/mcp.json", AmazonQ, McpConfig, File),
+    Spec(".aws/amazonq/cli-agents", AmazonQ, Settings, Dir(JSON)),
+    Spec(".aws/amazonq/prompts", AmazonQ, Instructions, Dir(MD)),
+    Spec(".kiro/settings/mcp.json", Kiro, McpConfig, File),
+    Spec(".kiro/steering", Kiro, Instructions, Dir(MD)),
+    Spec(".kiro/agents", Kiro, Instructions, Dir(MD)),
+    // ---- Cline (current `~/.cline/data` home, plus the legacy Documents copy) / Roo.
+    Spec(
+        ".cline/data/settings/cline_mcp_settings.json",
+        Cline,
+        McpConfig,
+        File,
+    ),
+    Spec(".cline/data/tasks", Cline, Transcript, Dir(JSON)),
+    Spec(".cline/data/secrets.json", Cline, Credential, File),
+    Spec(
+        "Documents/Cline/MCP/cline_mcp_settings.json",
+        Cline,
+        McpConfig,
+        File,
+    ),
+    Spec("Documents/Cline/Rules", Cline, Instructions, Dir(MD)),
+    Spec("Documents/Cline/Workflows", Cline, Instructions, Dir(MD)),
+    Spec(".roo", Cline, Instructions, Dir(MD)),
+    // ---- Zed.
+    Spec(".config/zed/settings.json", Zed, Settings, File),
+    Spec(".config/zed/AGENTS.md", Zed, Instructions, File),
+    // ---- Cross-agent skill folders (Zed, Amp, Crush, Goose all read these).
+    Spec(".agents/skills", Generic, Instructions, Dir(MD)),
+    Spec(".agents/AGENTS.md", Generic, Instructions, File),
+    Spec(".config/agents/skills", Generic, Instructions, Dir(MD)),
+    Spec(".config/AGENTS.md", Generic, Instructions, File),
+    // ---- Goose.
+    Spec(".config/goose/config.yaml", Goose, Settings, File),
+    Spec(".config/goose/.goosehints", Goose, Instructions, File),
+    Spec(".config/goose/AGENTS.md", Goose, Instructions, File),
+    Spec(".config/goose/skills", Goose, Instructions, Dir(MD)),
+    Spec(".config/goose/secrets.yaml", Goose, Credential, File),
+    // ---- OpenCode / Kilo Code (same config dialect).
+    Spec(".config/opencode/opencode.json", OpenCode, Settings, File),
+    Spec(".config/opencode/opencode.jsonc", OpenCode, Settings, File),
+    Spec(".config/opencode/AGENTS.md", OpenCode, Instructions, File),
+    Spec(".config/opencode/agents", OpenCode, Instructions, Dir(MD)),
+    Spec(".config/opencode/commands", OpenCode, Instructions, Dir(MD)),
+    Spec(".config/opencode/skills", OpenCode, Instructions, Dir(MD)),
+    Spec(".config/kilo/kilo.json", Kilo, Settings, File),
+    Spec(".config/kilo/kilo.jsonc", Kilo, Settings, File),
+    // ---- Crush.
+    Spec(".config/crush/crush.json", Crush, Settings, File),
+    Spec(".config/crush/CRUSH.md", Crush, Instructions, File),
+    Spec(".config/crush/skills", Crush, Instructions, Dir(MD)),
+    Spec(".local/share/crush/crush.json", Crush, Credential, File),
+    // ---- Amp.
+    Spec(".config/amp/settings.json", Amp, Settings, File),
+    Spec(".config/amp/settings.jsonc", Amp, Settings, File),
+    Spec(".config/amp/AGENTS.md", Amp, Instructions, File),
+    Spec(".config/amp/skills", Amp, Instructions, Dir(MD)),
+    // ---- Augment / JetBrains Junie.
+    Spec(".augment/settings.json", Augment, Settings, File),
+    Spec(".augment/rules", Augment, Instructions, Dir(MD_MDC)),
+    Spec(".junie/AGENTS.md", JetBrains, Instructions, File),
+    // ---- Open Interpreter (legacy Python release) profiles.
+    Spec(
+        ".config/open-interpreter/profiles",
+        OpenInterpreter,
+        Settings,
+        Dir(&["yaml", "yml"]),
+    ),
+];
+
+/// VS Code-family editors keep user settings, a user-level `mcp.json`, and extension storage under
+/// `~/.config/<product>/User/`. Every fork is a separate home with its own copy of the settings
+/// that matter (chat auto-approve, Workspace Trust) — a YOLO flag set in Cursor's user settings is
+/// invisible to a scan that only reads VS Code's.
+const VSCODE_FAMILY: &[&str] = &[
+    "Code",
+    "Code - Insiders",
+    "Code - OSS",
+    "VSCodium",
+    "Cursor",
+    "Windsurf",
+    "Kiro",
+];
+
+/// VS Code extensions that keep MCP manifests and task transcripts in `globalStorage`.
+const EXTENSION_STORAGE: &[(&str, Tool, &str)] = &[
+    (
+        "saoudrizwan.claude-dev",
+        Cline,
+        "settings/cline_mcp_settings.json",
+    ),
+    (
+        "rooveterinaryinc.roo-cline",
+        Cline,
+        "settings/mcp_settings.json",
+    ),
+    ("kilocode.kilo-code", Kilo, "settings/mcp_settings.json"),
+];
+
 fn push_if_exists(
     out: &mut Vec<Artifact>,
     path: PathBuf,
@@ -245,7 +689,7 @@ fn push_if_exists(
     kind: ArtifactKind,
     ws: Option<&Path>,
 ) {
-    if path.exists() {
+    if path.is_file() {
         out.push(Artifact {
             path,
             tool,
@@ -255,386 +699,85 @@ fn push_if_exists(
     }
 }
 
+fn apply_specs(out: &mut Vec<Artifact>, base: &Path, specs: &[Spec], ws: Option<&Path>) {
+    for Spec(rel, tool, kind, find) in specs {
+        let path = base.join(rel);
+        match find {
+            File => push_if_exists(out, path, *tool, *kind, ws),
+            Dir(exts) => collect_dir(out, &path, |p| has_ext(p, exts), *tool, *kind, ws),
+            Named(name) => collect_dir(
+                out,
+                &path,
+                |p| p.file_name().and_then(|n| n.to_str()) == Some(name),
+                *tool,
+                *kind,
+                ws,
+            ),
+        }
+    }
+}
+
+fn has_ext(path: &Path, exts: &[&str]) -> bool {
+    exts.is_empty()
+        || path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| exts.contains(&e))
+}
+
 /// The project-scoped artifacts to examine inside one workspace `ws`. Every entry is gated on
 /// existence, so a project using only Cursor contributes only Cursor artifacts.
 pub fn workspace_artifacts(ws: &Path) -> Vec<Artifact> {
-    use ArtifactKind::*;
-    use Tool::*;
     let mut out = Vec::new();
-
-    // Instruction / context files.
-    push_if_exists(
-        &mut out,
-        ws.join("CLAUDE.md"),
-        ClaudeCode,
-        Instructions,
-        Some(ws),
-    );
-    push_if_exists(
-        &mut out,
-        ws.join("AGENTS.md"),
-        Generic,
-        Instructions,
-        Some(ws),
-    );
-    push_if_exists(
-        &mut out,
-        ws.join("GEMINI.md"),
-        Gemini,
-        Instructions,
-        Some(ws),
-    );
-    push_if_exists(
-        &mut out,
-        ws.join(".cursorrules"),
-        Cursor,
-        Instructions,
-        Some(ws),
-    );
-    push_if_exists(
-        &mut out,
-        ws.join(".windsurfrules"),
-        Windsurf,
-        Instructions,
-        Some(ws),
-    );
-    push_if_exists(
-        &mut out,
-        ws.join(".clinerules"),
-        Cline,
-        Instructions,
-        Some(ws),
-    );
-    push_if_exists(
-        &mut out,
-        ws.join(".github/copilot-instructions.md"),
-        Copilot,
-        Instructions,
-        Some(ws),
-    );
-    collect_dir(
-        &mut out,
-        &ws.join(".cursor/rules"),
-        "mdc",
-        Cursor,
-        Instructions,
-        Some(ws),
-    );
-    collect_dir(
-        &mut out,
-        &ws.join(".continue/rules"),
-        "md",
-        Continue,
-        Instructions,
-        Some(ws),
-    );
-    collect_dir(
-        &mut out,
-        &ws.join(".roo/rules"),
-        "md",
-        Cline,
-        Instructions,
-        Some(ws),
-    );
-    // Subagent definitions, slash commands, and skills are all model-executed instruction surfaces
-    // — a bidi backdoor or injected directive in one of these is read by the agent just like a
-    // CLAUDE.md, but they were never scanned. `.claude/skills/<name>/SKILL.md` is nested, which the
-    // recursive collect_dir handles.
-    for sub in ["agents", "commands", "skills"] {
-        collect_dir(
-            &mut out,
-            &ws.join(".claude").join(sub),
-            "md",
-            ClaudeCode,
-            Instructions,
-            Some(ws),
-        );
-    }
-
-    // Agent settings.
-    push_if_exists(
-        &mut out,
-        ws.join(".claude/settings.json"),
-        ClaudeCode,
-        Settings,
-        Some(ws),
-    );
-    push_if_exists(
-        &mut out,
-        ws.join(".claude/settings.local.json"),
-        ClaudeCode,
-        Settings,
-        Some(ws),
-    );
-    push_if_exists(
-        &mut out,
-        ws.join(".vscode/settings.json"),
-        VsCode,
-        Settings,
-        Some(ws),
-    );
-    push_if_exists(
-        &mut out,
-        ws.join(".vscode/tasks.json"),
-        VsCode,
-        Tasks,
-        Some(ws),
-    );
-
-    // MCP manifests.
-    push_if_exists(
-        &mut out,
-        ws.join(".mcp.json"),
-        ClaudeCode,
-        McpConfig,
-        Some(ws),
-    );
-    push_if_exists(
-        &mut out,
-        ws.join(".cursor/mcp.json"),
-        Cursor,
-        McpConfig,
-        Some(ws),
-    );
-    push_if_exists(
-        &mut out,
-        ws.join(".vscode/mcp.json"),
-        VsCode,
-        McpConfig,
-        Some(ws),
-    );
-    push_if_exists(
-        &mut out,
-        ws.join(".roo/mcp.json"),
-        Cline,
-        McpConfig,
-        Some(ws),
-    );
-    push_if_exists(
-        &mut out,
-        ws.join(".amazonq/mcp.json"),
-        AmazonQ,
-        McpConfig,
-        Some(ws),
-    );
-
-    // Dotenv + tool config.
-    push_if_exists(&mut out, ws.join(".env"), Generic, DotEnv, Some(ws));
-    push_if_exists(&mut out, ws.join(".gemini/.env"), Gemini, DotEnv, Some(ws));
-    push_if_exists(
-        &mut out,
-        ws.join(".aider.conf.yml"),
-        Aider,
-        Settings,
-        Some(ws),
-    );
-
-    // Transcripts kept at the repo root.
-    push_if_exists(
-        &mut out,
-        ws.join(".aider.chat.history.md"),
-        Aider,
-        Transcript,
-        Some(ws),
-    );
-    push_if_exists(
-        &mut out,
-        ws.join(".aider.llm.history"),
-        Aider,
-        Transcript,
-        Some(ws),
-    );
-
+    apply_specs(&mut out, ws, WORKSPACE_SPECS, Some(ws));
     out
 }
 
 /// The global `$HOME` tool state to examine, independent of any workspace.
 pub fn global_artifacts(home: &Path) -> Vec<Artifact> {
-    use ArtifactKind::*;
-    use Tool::*;
     let mut out = Vec::new();
-
-    // Claude Code.
-    push_if_exists(
-        &mut out,
-        home.join(".claude/settings.json"),
-        ClaudeCode,
-        Settings,
-        None,
-    );
-    push_if_exists(
-        &mut out,
-        home.join(".claude.json"),
-        ClaudeCode,
-        McpConfig,
-        None,
-    );
-    push_if_exists(
-        &mut out,
-        home.join(".claude/.credentials.json"),
-        ClaudeCode,
-        Credential,
-        None,
-    );
-    collect_dir(
-        &mut out,
-        &home.join(".claude/projects"),
-        "jsonl",
-        ClaudeCode,
-        Transcript,
-        None,
-    );
-    // Agent memory: per-project memory notes and the global user memory file.
-    collect_dir(
-        &mut out,
-        &home.join(".claude/projects"),
-        "md",
-        ClaudeCode,
-        Memory,
-        None,
-    );
-    push_if_exists(
-        &mut out,
-        home.join(".claude/CLAUDE.md"),
-        ClaudeCode,
-        Memory,
-        None,
-    );
-    // User-level subagents / commands / skills — same model-executed instruction surfaces as the
-    // per-project ones, and just as capable of hiding an injected directive.
-    for sub in ["agents", "commands", "skills"] {
-        collect_dir(
-            &mut out,
-            &home.join(".claude").join(sub),
-            "md",
-            ClaudeCode,
-            Instructions,
-            None,
-        );
+    apply_specs(&mut out, home, GLOBAL_SPECS, None);
+    for product in VSCODE_FAMILY {
+        let user = home.join(".config").join(product).join("User");
+        push_if_exists(&mut out, user.join("settings.json"), VsCode, Settings, None);
+        push_if_exists(&mut out, user.join("mcp.json"), VsCode, McpConfig, None);
+        // Profiles carry their own settings.json — a YOLO flag can live in a non-default profile.
+        if let Ok(profiles) = std::fs::read_dir(user.join("profiles")) {
+            for p in profiles.flatten() {
+                push_if_exists(
+                    &mut out,
+                    p.path().join("settings.json"),
+                    VsCode,
+                    Settings,
+                    None,
+                );
+                push_if_exists(&mut out, p.path().join("mcp.json"), VsCode, McpConfig, None);
+            }
+        }
+        for (ext, tool, mcp) in EXTENSION_STORAGE {
+            let store = user.join("globalStorage").join(ext);
+            push_if_exists(&mut out, store.join(mcp), *tool, McpConfig, None);
+            collect_dir(
+                &mut out,
+                &store.join("tasks"),
+                |p| has_ext(p, JSON),
+                *tool,
+                Transcript,
+                None,
+            );
+        }
     }
-
-    // Codex.
-    push_if_exists(
-        &mut out,
-        home.join(".codex/config.toml"),
-        Codex,
-        CodexConfig,
-        None,
-    );
-    push_if_exists(
-        &mut out,
-        home.join(".codex/auth.json"),
-        Codex,
-        Credential,
-        None,
-    );
-    push_if_exists(
-        &mut out,
-        home.join(".codex/AGENTS.md"),
-        Codex,
-        Instructions,
-        None,
-    );
-    collect_dir(
-        &mut out,
-        &home.join(".codex/sessions"),
-        "jsonl",
-        Codex,
-        Transcript,
-        None,
-    );
-
-    // Cursor / Copilot / Gemini / Aider / Windsurf / Amazon Q globals.
-    push_if_exists(
-        &mut out,
-        home.join(".cursor/mcp.json"),
-        Cursor,
-        McpConfig,
-        None,
-    );
-    push_if_exists(
-        &mut out,
-        home.join(".copilot/mcp-config.json"),
-        Copilot,
-        McpConfig,
-        None,
-    );
-    push_if_exists(
-        &mut out,
-        home.join(".config/github-copilot/hosts.json"),
-        Copilot,
-        Credential,
-        None,
-    );
-    push_if_exists(
-        &mut out,
-        home.join(".gemini/settings.json"),
-        Gemini,
-        Settings,
-        None,
-    );
-    push_if_exists(
-        &mut out,
-        home.join(".gemini/GEMINI.md"),
-        Gemini,
-        Instructions,
-        None,
-    );
-    push_if_exists(&mut out, home.join(".gemini/.env"), Gemini, DotEnv, None);
-    push_if_exists(
-        &mut out,
-        home.join(".gemini/mcp-oauth-tokens.json"),
-        Gemini,
-        Credential,
-        None,
-    );
-    push_if_exists(
-        &mut out,
-        home.join(".aider.conf.yml"),
-        Aider,
-        Settings,
-        None,
-    );
-    push_if_exists(
-        &mut out,
-        home.join(".continue/config.yaml"),
-        Continue,
-        Settings,
-        None,
-    );
-    push_if_exists(
-        &mut out,
-        home.join(".continue/.env"),
-        Continue,
-        DotEnv,
-        None,
-    );
-    push_if_exists(
-        &mut out,
-        home.join(".codeium/windsurf/global_rules.md"),
-        Windsurf,
-        Instructions,
-        None,
-    );
-    push_if_exists(
-        &mut out,
-        home.join(".aws/amazonq/mcp.json"),
-        AmazonQ,
-        McpConfig,
-        None,
-    );
-
     out
 }
 
-/// Adds every file directly (or, for transcript trees, recursively) under `dir` with extension
-/// `ext` as an artifact. Recursion is bounded to a sane depth so a transcript directory tree
-/// (`~/.claude/projects/<proj>/*.jsonl`, `~/.codex/sessions/YYYY/MM/DD/*.jsonl`) is fully
-/// covered without an unbounded walk.
+/// Adds every file under `dir` accepted by `want` as an artifact. Recursion is bounded to a sane
+/// depth so a transcript directory tree (`~/.claude/projects/<proj>/*.jsonl`,
+/// `~/.codex/sessions/YYYY/MM/DD/*.jsonl`) is fully covered without an unbounded walk, and
+/// dependency/VCS trees are skipped — an installed plugin can bundle a whole `node_modules`.
 fn collect_dir(
     out: &mut Vec<Artifact>,
     dir: &Path,
-    ext: &str,
+    want: impl Fn(&Path) -> bool,
     tool: Tool,
     kind: ArtifactKind,
     ws: Option<&Path>,
@@ -642,7 +785,7 @@ fn collect_dir(
     fn walk(
         out: &mut Vec<Artifact>,
         dir: &Path,
-        ext: &str,
+        want: &dyn Fn(&Path) -> bool,
         tool: Tool,
         kind: ArtifactKind,
         ws: Option<&Path>,
@@ -668,8 +811,10 @@ fn collect_dir(
             }
             let path = entry.path();
             if file_type.is_dir() {
-                walk(out, &path, ext, tool, kind, ws, depth + 1);
-            } else if path.extension().and_then(|e| e.to_str()) == Some(ext) {
+                if !is_skip_dir(&path) {
+                    walk(out, &path, want, tool, kind, ws, depth + 1);
+                }
+            } else if want(&path) {
                 out.push(Artifact {
                     path,
                     tool,
@@ -679,7 +824,7 @@ fn collect_dir(
             }
         }
     }
-    walk(out, dir, ext, tool, kind, ws, 0);
+    walk(out, dir, &want, tool, kind, ws, 0);
 }
 
 #[cfg(test)]
@@ -845,5 +990,214 @@ mod tests {
             .any(|a| a.path.ends_with("session-1.jsonl") && a.kind == ArtifactKind::Transcript));
         assert!(arts.iter().any(|a| a.path.ends_with("rollout-x.jsonl")));
         assert!(arts.iter().any(|a| a.kind == ArtifactKind::Credential));
+    }
+
+    #[test]
+    fn every_supported_agent_contributes_its_project_artifacts() {
+        let ws = tempfile::tempdir().unwrap();
+        let cases: &[(&str, Tool, ArtifactKind)] = &[
+            (".zed/settings.json", Tool::Zed, ArtifactKind::Settings),
+            (".rules", Tool::Zed, ArtifactKind::Instructions),
+            (".goosehints", Tool::Goose, ArtifactKind::Instructions),
+            ("opencode.json", Tool::OpenCode, ArtifactKind::Settings),
+            (
+                ".opencode/agents/review.md",
+                Tool::OpenCode,
+                ArtifactKind::Instructions,
+            ),
+            ("kilo.jsonc", Tool::Kilo, ArtifactKind::Settings),
+            ("crush.json", Tool::Crush, ArtifactKind::Settings),
+            ("crushrc", Tool::Crush, ArtifactKind::Hooks),
+            ("CRUSH.md", Tool::Crush, ArtifactKind::Instructions),
+            (".amp/settings.json", Tool::Amp, ArtifactKind::Settings),
+            (".qwen/settings.json", Tool::Qwen, ArtifactKind::Settings),
+            ("QWEN.md", Tool::Qwen, ArtifactKind::Instructions),
+            (
+                ".gemini/settings.json",
+                Tool::Gemini,
+                ArtifactKind::Settings,
+            ),
+            (
+                ".gemini/commands/fix.toml",
+                Tool::Gemini,
+                ArtifactKind::Instructions,
+            ),
+            (
+                ".kiro/steering/product.md",
+                Tool::Kiro,
+                ArtifactKind::Instructions,
+            ),
+            (
+                ".kiro/hooks/lint.kiro.hook",
+                Tool::Kiro,
+                ArtifactKind::Hooks,
+            ),
+            (
+                ".kiro/settings/mcp.json",
+                Tool::Kiro,
+                ArtifactKind::McpConfig,
+            ),
+            (
+                ".amazonq/rules/style.md",
+                Tool::AmazonQ,
+                ArtifactKind::Instructions,
+            ),
+            (
+                ".amazonq/cli-agents/dev.json",
+                Tool::AmazonQ,
+                ArtifactKind::Settings,
+            ),
+            (".cursor/hooks.json", Tool::Cursor, ArtifactKind::Hooks),
+            (".cursor/cli.json", Tool::Cursor, ArtifactKind::Settings),
+            (
+                ".github/hooks/guard.json",
+                Tool::Copilot,
+                ArtifactKind::Hooks,
+            ),
+            (
+                ".github/instructions/ts.instructions.md",
+                Tool::Copilot,
+                ArtifactKind::Instructions,
+            ),
+            (".github/mcp.json", Tool::Copilot, ArtifactKind::McpConfig),
+            (
+                ".clinerules/hooks/TaskStart",
+                Tool::Cline,
+                ArtifactKind::Hooks,
+            ),
+            (".devin/hooks.v1.json", Tool::Windsurf, ArtifactKind::Hooks),
+            (
+                ".windsurf/rules/r.md",
+                Tool::Windsurf,
+                ArtifactKind::Instructions,
+            ),
+            (
+                ".continue/mcpServers/db.yaml",
+                Tool::Continue,
+                ArtifactKind::McpConfig,
+            ),
+            (
+                ".augment/settings.json",
+                Tool::Augment,
+                ArtifactKind::Settings,
+            ),
+            (
+                ".junie/guidelines.md",
+                Tool::JetBrains,
+                ArtifactKind::Instructions,
+            ),
+            (
+                ".aiassistant/rules/r.md",
+                Tool::JetBrains,
+                ArtifactKind::Instructions,
+            ),
+            (
+                ".agents/skills/s/SKILL.md",
+                Tool::Generic,
+                ArtifactKind::Instructions,
+            ),
+            ("WARP.md", Tool::Warp, ArtifactKind::Instructions),
+        ];
+        for (rel, _, _) in cases {
+            touch(&ws.path().join(rel));
+        }
+        let arts = workspace_artifacts(ws.path());
+        for (rel, tool, kind) in cases {
+            assert!(
+                arts.iter()
+                    .any(|a| a.path == ws.path().join(rel) && a.tool == *tool && a.kind == *kind),
+                "{rel} must be discovered as {tool:?}/{kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_new_agent_marker_makes_a_workspace() {
+        let home = tempfile::tempdir().unwrap();
+        for (proj, marker) in [
+            ("a", ".kiro"),
+            ("b", "opencode.json"),
+            ("c", ".goosehints"),
+            ("d", "QWEN.md"),
+        ] {
+            touch(
+                &home
+                    .path()
+                    .join("Projects")
+                    .join(proj)
+                    .join(marker)
+                    .join("x"),
+            );
+        }
+        let ws = discover_workspaces(home.path(), &[], &[], 100);
+        for proj in ["a", "b", "c", "d"] {
+            assert!(
+                ws.contains(&home.path().join("Projects").join(proj)),
+                "{proj}"
+            );
+        }
+    }
+
+    #[test]
+    fn global_state_of_other_agents_and_editor_forks_is_found() {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        let cases: &[(&str, ArtifactKind)] = &[
+            (".config/zed/settings.json", ArtifactKind::Settings),
+            (".config/goose/config.yaml", ArtifactKind::Settings),
+            (".config/opencode/opencode.jsonc", ArtifactKind::Settings),
+            (".config/crush/crush.json", ArtifactKind::Settings),
+            (".config/amp/settings.json", ArtifactKind::Settings),
+            (".qwen/projects/p/chats/s.jsonl", ArtifactKind::Transcript),
+            (".qwen/oauth_creds.json", ArtifactKind::Credential),
+            (".gemini/tmp/abc/chats/session-1.jsonl", ArtifactKind::Transcript),
+            (".gemini/extensions/ext/gemini-extension.json", ArtifactKind::McpConfig),
+            (".claude/plugins/cache/mk/plug/1.0.0/.mcp.json", ArtifactKind::McpConfig),
+            (".claude/plugins/cache/mk/plug/1.0.0/commands/go.md", ArtifactKind::Instructions),
+            (".claude/history.jsonl", ArtifactKind::Transcript),
+            (".config/Claude/claude_desktop_config.json", ArtifactKind::McpConfig),
+            (".cursor/cli-config.json", ArtifactKind::Settings),
+            (".kiro/settings/mcp.json", ArtifactKind::McpConfig),
+            (".cline/data/settings/cline_mcp_settings.json", ArtifactKind::McpConfig),
+            (".cline/data/tasks/1/api_conversation_history.json", ArtifactKind::Transcript),
+            (".codeium/windsurf/mcp_config.json", ArtifactKind::McpConfig),
+            (".copilot/providers.json", ArtifactKind::Credential),
+            (".config/Cursor/User/settings.json", ArtifactKind::Settings),
+            (".config/VSCodium/User/mcp.json", ArtifactKind::McpConfig),
+            (".config/Code/User/profiles/p1/settings.json", ArtifactKind::Settings),
+            (
+                ".config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json",
+                ArtifactKind::McpConfig,
+            ),
+            (
+                ".config/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks/t/ui_messages.json",
+                ArtifactKind::Transcript,
+            ),
+        ];
+        for (rel, _) in cases {
+            touch(&h.join(rel));
+        }
+        let arts = global_artifacts(h);
+        for (rel, kind) in cases {
+            assert!(
+                arts.iter()
+                    .any(|a| a.path == h.join(rel) && a.kind == *kind),
+                "{rel} must be discovered as {kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_dependency_trees_are_not_walked() {
+        let home = tempfile::tempdir().unwrap();
+        touch(
+            &home
+                .path()
+                .join(".claude/plugins/cache/mk/p/1/node_modules/dep/README.md"),
+        );
+        let arts = global_artifacts(home.path());
+        assert!(!arts
+            .iter()
+            .any(|a| a.path.to_string_lossy().contains("node_modules")));
     }
 }

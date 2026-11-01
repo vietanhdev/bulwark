@@ -1240,11 +1240,11 @@
   },
   {
    "id": "BLWK-AI-002",
-   "title": "Project-supplied Claude Code hooks run shell commands automatically",
+   "title": "Project-supplied agent hooks run shell commands automatically",
    "category": "ai-agents",
    "severity": "critical",
-   "explain": "Project-supplied Claude Code hooks that run shell on session/tool events.",
-   "fix": "Remove the hooks block from the repo's .claude/settings.json; keep hooks only in your own trusted user-level settings. Review any repo you didn't author before opening it in Claude Code.",
+   "explain": "Project-supplied agent hooks that run shell on session/tool events (Claude Code, Cursor, Kiro, Copilot, Gemini/Qwen, Crush, Augment, Cline, Devin Desktop).",
+   "fix": "Remove the hooks from the repository's agent config (for example the hooks block in .claude/settings.json, .cursor/hooks.json, .kiro/hooks/, or a project crushrc) and keep hooks only in your own user-level settings. Review any repository you didn't write before opening it with an AI agent.",
    "references": [
     "CVE-2025-59536",
     "ATTACK-T1546"
@@ -1304,8 +1304,8 @@
    "title": "An agent permission allowlist permits arbitrary command execution",
    "category": "ai-agents",
    "severity": "high",
-   "explain": "A permission allowlist that permits arbitrary execution (`Bash(*)`, `Bash(curl:*)`).",
-   "fix": "Scope the allowlist: replace Bash(*) / Bash(curl:*) / a bare \"*\" with the specific, read-only commands the agent actually needs. A wildcard exec permission is a prompt-injection's path straight to your shell.",
+   "explain": "A permission allowlist that permits arbitrary execution (`Bash(*)`, `Shell(*)`, `run_shell_command`, a blanket `bash: allow`).",
+   "fix": "Scope the allowlist: replace Bash(*) / Shell(*) / Bash(curl:*) / a bare \"*\" / a blanket \"bash\": \"allow\" with the specific, read-only commands the agent actually needs. A wildcard exec permission is a prompt-injection's path straight to your shell.",
    "references": [
     "ATTACK-T1059"
    ],
@@ -1319,8 +1319,8 @@
    "title": "An agent is configured to bypass all permission prompts",
    "category": "ai-agents",
    "severity": "high",
-   "explain": "`defaultMode: \"bypassPermissions\"` — no approval prompts at all.",
-   "fix": "Remove defaultMode: \"bypassPermissions\" (and never run with --dangerously-skip-permissions outside a throwaway container). It disables every guardrail between the model and your machine.",
+   "explain": "An agent told never to ask — `bypassPermissions`, Zed `default: allow`, Goose `GOOSE_MODE: auto`, OpenCode `permission: allow`, Qwen Code `yolo`, Cursor CLI `unrestricted`, Open Interpreter `auto_run`.",
+   "fix": "Turn off the setting named in this finding (for example Claude Code's defaultMode: \"bypassPermissions\", Zed's tool_permissions default \"allow\", Goose's GOOSE_MODE: auto, OpenCode's permission: \"allow\", Qwen Code's approvalMode \"yolo\", Cursor CLI approvalMode \"unrestricted\"), and only run an agent without approvals inside a throwaway container or VM. It removes every guardrail between the model and your machine.",
    "references": [
     "ATTACK-T1059"
    ],
@@ -1525,6 +1525,53 @@
    "condition": null,
    "group": "ai-agents",
    "slug": "blwk-ai-020"
+  },
+  {
+   "id": "BLWK-AI-021",
+   "title": "An AI agent's command sandbox is turned off",
+   "category": "ai-agents",
+   "severity": "high",
+   "explain": "An agent's command sandbox is turned off (Codex `danger-full-access`, Cursor CLI `sandbox.mode: disabled`, Claude Code's weaker nested sandbox).",
+   "fix": "Turn the agent's sandbox back on (for example remove sandbox_mode = \"danger-full-access\" from ~/.codex/config.toml, or sandbox.mode \"disabled\" from the Cursor CLI config). If one command genuinely needs to escape it, allow that command alone rather than switching the sandbox off for everything.",
+   "references": [
+    "ATTACK-T1059",
+    "ATTACK-T1611"
+   ],
+   "collector": "ai_scan",
+   "condition": null,
+   "group": "ai-agents",
+   "slug": "blwk-ai-021"
+  },
+  {
+   "id": "BLWK-AI-022",
+   "title": "The account that runs AI agents can become root without a password",
+   "category": "ai-agents",
+   "severity": "high",
+   "explain": "The account that runs your agents is in the `docker`, `lxd` or `incus-admin` group, so it can become root with no password.",
+   "fix": "Take your everyday account out of the docker (or lxd/incus) group and use rootless Docker or Podman instead, or run your agents under a separate account or in a container or VM. Any member of these groups can start a container that mounts / and gain root, so a prompt-injected agent can too.",
+   "references": [
+    "ATTACK-T1611",
+    "ATTACK-T1068"
+   ],
+   "collector": "ai_scan",
+   "condition": null,
+   "group": "ai-agents",
+   "slug": "blwk-ai-022"
+  },
+  {
+   "id": "BLWK-AI-023",
+   "title": "An MCP server's tools run without asking for approval",
+   "category": "ai-agents",
+   "severity": "medium",
+   "explain": "An MCP server whose tools all run without approval (`trust: true`, `autoApprove: [\"*\"]`, `alwaysAllow: [\"*\"]`).",
+   "fix": "Remove trust: true, or the \"*\" entry in alwaysAllow / autoApprove, from this MCP server's config so each tool call is shown to you first. Approve specific, read-only tools by name if the prompts are too frequent.",
+   "references": [
+    "ATTACK-T1059"
+   ],
+   "collector": "ai_scan",
+   "condition": null,
+   "group": "ai-agents",
+   "slug": "blwk-ai-023"
   }
  ]
 }

@@ -53,10 +53,12 @@ Fully local — no telemetry, nothing leaves the machine.
   egress, kernel hardening, filesystem permissions, privilege escalation, logging/auditing,
   accounts/services, defense evasion, rootkit/malware, file integrity), each carrying a severity,
   a plain-language explanation with live values interpolated in, step-by-step fix, and CIS/MITRE
-  ATT&CK references. Every check, including the 20 AI assistant checks, has its own page at
+  ATT&CK references. Every check, including the 23 AI assistant checks, has its own page at
   [bulwark.nrl.ai/checks](https://bulwark.nrl.ai/checks/).
-- **AI assistant security** — scans the AI coding assistants on the machine (Claude Code, Cursor,
-  Copilot, Codex, Gemini, Aider, Continue, Windsurf, Cline, Amazon Q) for secrets leaked into
+- **AI assistant security** — scans the AI coding assistants on the machine (Claude Code, Claude
+  Desktop, Cursor, Copilot, Codex, Gemini, Qwen Code, Zed, Goose, OpenCode, Kilo Code, Crush, Amp,
+  Kiro, Amazon Q, Cline, Roo, Windsurf / Devin Desktop, Continue, Augment, JetBrains Junie, Aider,
+  Warp, Open Interpreter, and VS Code with its forks) for secrets leaked into
   context/memory/transcripts and for dangerous agent configuration a prompt injection could turn
   into code execution: project-supplied Claude Code hooks (CVE-2025-59536), VS Code
   auto-approve/"YOLO mode" (CVE-2025-53773), MCP servers on unpinned `npx` or vulnerable
