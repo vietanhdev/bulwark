@@ -7,8 +7,6 @@ use super::correlate::CorrelateSpec;
 use crate::condition::Condition;
 use crate::models::{RuleLoadError, Severity};
 use serde::Deserialize;
-use std::path::Path;
-use walkdir::WalkDir;
 
 fn default_true() -> bool {
     true
@@ -58,23 +56,20 @@ pub struct LoadedLogRule {
 /// mirroring [`crate::engine::load_rules`] exactly (bad YAML / bad condition ⇒ a collected
 /// [`RuleLoadError`], never a silent drop). A rule with a `correlate` block whose `count` is 0
 /// is rejected here rather than silently never-firing.
-pub fn load_log_rules(dir: &Path) -> (Vec<LoadedLogRule>, Vec<RuleLoadError>) {
+pub fn load_log_rules<'a>(
+    pack: impl Into<crate::pack::PackSource<'a>>,
+) -> (Vec<LoadedLogRule>, Vec<RuleLoadError>) {
     let mut loaded = Vec::new();
     let mut errors = Vec::new();
 
-    for entry in WalkDir::new(dir).into_iter().filter_map(Result::ok) {
-        let path = entry.path();
-        let ext = path.extension().and_then(|e| e.to_str());
-        if !matches!(ext, Some("yaml") | Some("yml")) {
-            continue;
-        }
-        let path_str = path.display().to_string();
-        let text = match std::fs::read_to_string(path) {
+    for file in pack.into().files() {
+        let path_str = file.path;
+        let text = match file.text {
             Ok(t) => t,
-            Err(e) => {
+            Err(message) => {
                 errors.push(RuleLoadError {
                     path: path_str,
-                    message: e.to_string(),
+                    message,
                 });
                 continue;
             }

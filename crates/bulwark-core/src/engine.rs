@@ -7,7 +7,8 @@ use chrono::Utc;
 use std::collections::HashMap;
 use std::path::Path;
 use uuid::Uuid;
-use walkdir::WalkDir;
+
+use crate::pack::PackSource;
 
 pub struct LoadedRule {
     pub rule: Rule,
@@ -201,60 +202,23 @@ fn rule_matches_profile(rule: &Rule, profile: &Profile) -> bool {
         && (rule.profiles.is_empty() || rule.profiles.iter().any(|p| profile.needs.contains(p)))
 }
 
-/// Reads at most `max` bytes of `path` as UTF-8 (lossy), so an oversized rule file can't be used
-/// to exhaust memory during a scan. Opens without following a symlink at the final component.
-fn read_capped(path: &Path, max: u64) -> std::io::Result<String> {
-    use std::io::Read;
-    #[cfg(unix)]
-    let file = {
-        use std::os::unix::fs::OpenOptionsExt;
-        std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(path)?
-    };
-    #[cfg(not(unix))]
-    let file = std::fs::File::open(path)?;
-    let mut buf = Vec::new();
-    file.take(max).read_to_end(&mut buf)?;
-    Ok(String::from_utf8_lossy(&buf).into_owned())
-}
-
-/// Loads every `.yaml`/`.yml` file under `dir` as a [`Rule`], parsing its condition too.
+/// Loads every `.yaml`/`.yml` file in the pack as a [`Rule`], parsing its condition too.
 /// A rule that fails to parse (bad YAML, unknown fields, or a bad condition expression)
 /// is collected as a [`RuleLoadError`] and skipped — never a silent drop and never a panic
-/// that takes the rest of the pack down with it (architecture doc §8).
-pub fn load_rules(dir: &Path) -> (Vec<LoadedRule>, Vec<RuleLoadError>) {
+/// that takes the rest of the pack down with it (architecture doc §8). The pack is a folder or a
+/// built-in one ([`PackSource`]); both go through exactly this code.
+pub fn load_rules<'a>(pack: impl Into<PackSource<'a>>) -> (Vec<LoadedRule>, Vec<RuleLoadError>) {
     let mut loaded = Vec::new();
     let mut errors = Vec::new();
 
-    // WalkDir doesn't recurse *through* symlinks by default, but it still yields a symlink entry,
-    // and `read_to_string` on one follows it at the OS level. A rules dir can be attacker-supplied
-    // (`--rules-dir`, and it's passed into the root pkexec scan), so a planted `x.yaml -> /etc/shadow`
-    // would otherwise be read — as root — and its content reflected back in the parse-error message.
-    // Skip symlinks outright, and read each rule through a size cap so a multi-GB `*.yaml` can't OOM
-    // the (possibly root) process.
-    const MAX_RULE_BYTES: u64 = 1024 * 1024;
-    for entry in WalkDir::new(dir)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(Result::ok)
-    {
-        if entry.path_is_symlink() {
-            continue;
-        }
-        let path = entry.path();
-        let ext = path.extension().and_then(|e| e.to_str());
-        if !matches!(ext, Some("yaml") | Some("yml")) {
-            continue;
-        }
-        let path_str = path.display().to_string();
-        let text = match read_capped(path, MAX_RULE_BYTES) {
+    for file in pack.into().files() {
+        let path_str = file.path;
+        let text = match file.text {
             Ok(t) => t,
-            Err(e) => {
+            Err(message) => {
                 errors.push(RuleLoadError {
                     path: path_str,
-                    message: e.to_string(),
+                    message,
                 });
                 continue;
             }
@@ -317,8 +281,8 @@ pub fn load_rules(dir: &Path) -> (Vec<LoadedRule>, Vec<RuleLoadError>) {
 /// ones, with two extra refusals so a custom rule can never stand in for a built-in check: the
 /// `BLWK-` prefix is reserved, and an id the shipped pack already uses is rejected. Both surface as
 /// [`RuleLoadError`]s, never a silent drop.
-pub fn load_rule_packs(
-    builtin: &Path,
+pub fn load_rule_packs<'a>(
+    builtin: impl Into<PackSource<'a>>,
     custom: Option<&Path>,
 ) -> (Vec<LoadedRule>, Vec<RuleLoadError>) {
     let (mut loaded, mut errors) = load_rules(builtin);
@@ -387,8 +351,8 @@ pub fn is_running_as_root() -> bool {
 /// (by `Rule::os`/`Rule::profiles`) and collectors (by `Collector::supported_os`) — a
 /// macOS/Windows-only collector's `collect()` is structurally unreachable on Linux, not
 /// just conventionally skipped.
-pub fn run_scan(
-    rules_dir: &Path,
+pub fn run_scan<'a>(
+    rules_dir: impl Into<PackSource<'a>>,
     collectors: &[Box<dyn Collector>],
     privileged: bool,
     profile: &Profile,
@@ -402,8 +366,8 @@ pub fn run_scan(
 /// the collectors that actually got to run, so nothing downstream can mistake "we stopped before
 /// checking this" for "this passed" (see `Store::persist_and_reconcile`). Callers should decline
 /// to persist a cancelled run at all.
-pub fn run_scan_cancellable(
-    rules_dir: &Path,
+pub fn run_scan_cancellable<'a>(
+    rules_dir: impl Into<PackSource<'a>>,
     collectors: &[Box<dyn Collector>],
     privileged: bool,
     profile: &Profile,
@@ -422,8 +386,8 @@ pub fn run_scan_cancellable(
 /// [`run_scan_cancellable`] with the user's own rules folder added (see [`load_rule_packs`]). The
 /// front-doors pass [`crate::paths::custom_rules_dir`]; tests and remote engines pass `None`, so a
 /// developer's personal rules never leak into either.
-pub fn run_scan_with_custom(
-    rules_dir: &Path,
+pub fn run_scan_with_custom<'a>(
+    rules_dir: impl Into<PackSource<'a>>,
     custom_rules_dir: Option<&Path>,
     collectors: &[Box<dyn Collector>],
     privileged: bool,

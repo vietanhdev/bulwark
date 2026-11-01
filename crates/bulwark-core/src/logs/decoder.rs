@@ -12,8 +12,6 @@ use crate::models::{Fact, RuleLoadError};
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
-use std::path::Path;
-use walkdir::WalkDir;
 
 /// A decoder as authored in YAML.
 #[derive(Debug, Clone, Deserialize)]
@@ -71,23 +69,20 @@ pub struct DecodedEvent {
 /// The returned decoders are sorted program-specific-first (then by id) so decoding order is
 /// deterministic regardless of directory iteration order, and a generic catch-all decoder never
 /// shadows a specific one.
-pub fn load_decoders(dir: &Path) -> (Vec<CompiledDecoder>, Vec<RuleLoadError>) {
+pub fn load_decoders<'a>(
+    pack: impl Into<crate::pack::PackSource<'a>>,
+) -> (Vec<CompiledDecoder>, Vec<RuleLoadError>) {
     let mut loaded = Vec::new();
     let mut errors = Vec::new();
 
-    for entry in WalkDir::new(dir).into_iter().filter_map(Result::ok) {
-        let path = entry.path();
-        let ext = path.extension().and_then(|e| e.to_str());
-        if !matches!(ext, Some("yaml") | Some("yml")) {
-            continue;
-        }
-        let path_str = path.display().to_string();
-        let text = match std::fs::read_to_string(path) {
+    for file in pack.into().files() {
+        let path_str = file.path;
+        let text = match file.text {
             Ok(t) => t,
-            Err(e) => {
+            Err(message) => {
                 errors.push(RuleLoadError {
                     path: path_str,
-                    message: e.to_string(),
+                    message,
                 });
                 continue;
             }

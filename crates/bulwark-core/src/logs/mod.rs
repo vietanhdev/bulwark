@@ -21,7 +21,6 @@ use crate::models::{Fact, RuleLoadError, Severity};
 use chrono::{DateTime, Utc};
 use correlate::CorrelationState;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 use uuid::Uuid;
 
 pub use decoder::{load_decoders, DecodedEvent, Decoder};
@@ -142,9 +141,9 @@ fn eval_lenient(cond: &Condition, fact: &Fact) -> Result<bool, ConditionError> {
 /// `decoders_dir` and the rules in `rules_dir`. Events are processed in source order, and all
 /// time-based correlation uses each event's own timestamp, so the result is a pure function of
 /// the input stream (plus the run's wall-clock metadata) — fully reproducible and testable.
-pub fn run_log_scan(
-    decoders_dir: &Path,
-    rules_dir: &Path,
+pub fn run_log_scan<'d, 'r>(
+    decoders_dir: impl Into<crate::pack::PackSource<'d>>,
+    rules_dir: impl Into<crate::pack::PackSource<'r>>,
     source: &mut dyn LogSource,
 ) -> LogScanRun {
     let started_at = Utc::now();
@@ -282,7 +281,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     use crate::models::Severity;
     use std::io::Cursor;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     /// The real bundled pack dirs at the workspace root, resolved from this crate's manifest —
     /// so these tests protect the shipped decoders/rules, not a fixture copy (matching how

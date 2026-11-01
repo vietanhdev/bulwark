@@ -1308,7 +1308,7 @@ pub struct HostScanResult {
 pub fn scan_host(
     db: &Path,
     host: &RemoteHost,
-    rules_dir: &Path,
+    rules_dir: &crate::Pack,
     local_binary: &Path,
 ) -> Result<HostScanResult> {
     let kh = paths::known_hosts_path(db);
@@ -1458,9 +1458,10 @@ fn scan(db: &Path, rules_dir: Option<PathBuf>, sel: ScanSelection) -> Result<i32
             .collect::<Result<Vec<_>>>()?
     };
 
-    // Only needed if a machine lacks Bulwark and we copy ourselves there; a missing local pack
-    // must not stop machines that have their own.
-    let rules_dir = crate::resolve_rules_dir(rules_dir).unwrap_or_default();
+    // Only used if a machine lacks Bulwark and we copy ourselves there. Without --rules-dir this
+    // is the pack built into this binary, so it always resolves; a --rules-dir that isn't a folder
+    // is a mistake and stops the run, as it does for every other command.
+    let rules_dir = crate::resolve_rules_dir(rules_dir)?;
     let local_binary = std::env::current_exe().context("cannot locate this bulwarkctl binary")?;
 
     let mut results: Vec<HostScanResult> = Vec::new();
