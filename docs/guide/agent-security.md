@@ -190,7 +190,7 @@ The report leads with what to fix — one line per problem, worst first, why it 
 step — and ends with what Bulwark can do for you:
 
 ```text
-Bulwark 0.13.0 · AI coding agents · 1 project · 4 agent files checked
+Bulwark 0.13.1 · AI coding agents · 1 project · 4 agent files checked
 
 4 problems to fix  1 critical · 3 high
 
