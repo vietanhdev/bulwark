@@ -257,6 +257,8 @@ struct Rule {
     /// The file this rule applies to, if it is scoped to one. See [`Rule::applies_to`].
     path_src: Option<String>,
     path_re: OnceLock<Option<Regex>>,
+    /// The rule's keywords, lowercased. See [`keyword_near`].
+    keywords: Vec<String>,
 }
 
 impl Rule {
@@ -394,6 +396,21 @@ const ACRONYMS: &[(&str, &str)] = &[
     ("npm", "npm"),
     ("pypi", "PyPI"),
     ("oauth", "OAuth"),
+    // Brand names whose capitalisation a first-letter rule gets wrong ("Github PAT").
+    ("github", "GitHub"),
+    ("gitlab", "GitLab"),
+    ("openai", "OpenAI"),
+    ("huggingface", "Hugging Face"),
+    ("digitalocean", "DigitalOcean"),
+    ("sendgrid", "SendGrid"),
+    ("mailchimp", "Mailchimp"),
+    ("hashicorp", "HashiCorp"),
+    ("planetscale", "PlanetScale"),
+    ("jfrog", "JFrog"),
+    ("linkedin", "LinkedIn"),
+    ("dockerhub", "Docker Hub"),
+    ("pagerduty", "PagerDuty"),
+    ("cloudflare", "Cloudflare"),
 ];
 
 fn humanize(id: &str) -> String {
@@ -463,6 +480,7 @@ static PACK: LazyLock<Pack> = LazyLock::new(|| {
             allowlists: r.allowlists.into_iter().map(Allowlist::from_spec).collect(),
             path_src: r.path,
             path_re: OnceLock::new(),
+            keywords: r.keywords.iter().map(|k| k.to_lowercase()).collect(),
         });
     }
 
@@ -803,6 +821,9 @@ fn matches_for<'t>(pack: &Pack, rule: &Rule, text: &'t str) -> Vec<RawMatch<'t>>
         if !rule.high_conf && is_placeholder_value(secret.as_str()) {
             continue;
         }
+        if rule.high_conf && !keyword_near(rule, text, whole.start(), whole.end()) {
+            continue;
+        }
         // The rule's own suppressions, then the file-wide ones. This is the half of each gitleaks
         // rule that turns a deliberately broad pattern into a usable one — see `Allowlist`.
         let allowed = |a: &&Allowlist| {
@@ -826,6 +847,32 @@ fn matches_for<'t>(pack: &Pack, rule: &Rule, text: &'t str) -> Vec<RawMatch<'t>>
         });
     }
     out
+}
+
+/// How far before a match, on the same line, a rule's keyword may sit and still vouch for it.
+const KEYWORD_WINDOW: usize = 128;
+
+/// Whether one of the rule's keywords is in the match or just before it on the same line.
+///
+/// The keyword index is a *prefilter*: it picks rules by whether their keyword appears anywhere in
+/// the file. For a rule whose pattern carries its own marker (`ghp_…`, `AKIA…`) that is enough. But
+/// a few provider rules have a branch with no marker at all — `sourcegraph-access-token` also
+/// accepts any bare 40-hex string, which is exactly a git commit SHA. In a source file gitleaks
+/// can live with that; in an agent transcript, where a mention of "sourcegraph" and dozens of
+/// commit hashes share one file, every hash became a reported "leaked token" (eight on one real
+/// home directory, none of them secrets). A finding we report at high severity, and offer to
+/// redact, has to carry its own evidence, so the keyword must be local to the match.
+fn keyword_near(rule: &Rule, text: &str, start: usize, end: usize) -> bool {
+    if rule.keywords.is_empty() {
+        return true;
+    }
+    let line_start = text[..start].rfind('\n').map_or(0, |i| i + 1);
+    let mut from = start.saturating_sub(KEYWORD_WINDOW).max(line_start);
+    while !text.is_char_boundary(from) {
+        from += 1;
+    }
+    let window = text[from..end].to_ascii_lowercase();
+    rule.keywords.iter().any(|k| window.contains(k.as_str()))
 }
 
 /// A set of accepted, non-overlapping byte spans, keyed by start offset, with O(log n) overlap
@@ -1738,6 +1785,29 @@ mod tests {
             ids.contains(&"openai-api-key".to_string()),
             "expected the OpenAI rule to fire, got {ids:?}"
         );
+    }
+
+    #[test]
+    fn a_commit_hash_is_not_a_token_because_a_keyword_is_somewhere_in_the_file() {
+        // A transcript mentions Sourcegraph once, and later quotes a commit hash. The rule's bare
+        // 40-hex branch used to report the hash as a leaked Sourcegraph token.
+        let sha = synthetic_token(7, 40, "0123456789abcdef");
+        let far = format!(
+            "We looked at sourcegraph for code search.\n{}\nThe fix landed in commit {sha} yesterday.\n",
+            "filler ".repeat(40)
+        );
+        assert!(
+            scan_text(&far)
+                .iter()
+                .all(|m| m.rule_id != "sourcegraph-access-token"),
+            "{:?}",
+            scan_text(&far)
+        );
+        // Right next to its keyword it is still reported — that is how a real legacy token looks.
+        let near = format!("SOURCEGRAPH_TOKEN={sha}\n");
+        assert!(scan_text(&near)
+            .iter()
+            .any(|m| m.rule_id == "sourcegraph-access-token"));
     }
 
     #[test]

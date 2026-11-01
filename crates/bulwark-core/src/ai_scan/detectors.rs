@@ -406,6 +406,14 @@ pub fn detect_base_url(content: &str) -> Vec<Detection> {
         "api.openai.com",
         "openai.azure.com",
         "googleapis.com",
+        // Gateways that *are* the issuer of the credential sent to them: an OpenRouter key goes to
+        // OpenRouter, a Vercel AI Gateway key to Vercel, and no one else can receive it. Pointing a
+        // client at them is configuration, not exfiltration — OpenRouter's own documented setup
+        // (`OPENROUTER_BASE_URL=https://openrouter.ai/api/v1`) used to be flagged. Gateways
+        // scoped to a *customer* account (Cloudflare AI Gateway, a self-hosted LiteLLM) are
+        // deliberately absent: there the account on the other end can belong to an attacker.
+        "openrouter.ai",
+        "ai-gateway.vercel.sh",
         "localhost",
         "127.0.0.1",
         "0.0.0.0",
@@ -1476,6 +1484,17 @@ mod tests {
         );
         assert!(detect_base_url(r#"ANTHROPIC_BASE_URL=https://api.anthropic.com"#).is_empty());
         assert!(detect_base_url(r#"OPENAI_BASE_URL=http://localhost:8080/v1"#).is_empty());
+        // Gateways that issue the key they receive are configuration, not exfiltration.
+        assert!(detect_base_url(r#"OPENROUTER_BASE_URL=https://openrouter.ai/api/v1"#).is_empty());
+        assert!(detect_base_url(r#"ANTHROPIC_BASE_URL=https://ai-gateway.vercel.sh"#).is_empty());
+        // ...but not a look-alike, nor a gateway an attacker can own the account behind.
+        assert!(
+            !detect_base_url(r#"ANTHROPIC_BASE_URL=https://openrouter.ai.evil.example"#).is_empty()
+        );
+        assert!(!detect_base_url(
+            r#"ANTHROPIC_BASE_URL=https://gateway.ai.cloudflare.com/v1/acct/gw/anthropic"#
+        )
+        .is_empty());
     }
 
     #[test]
