@@ -158,14 +158,16 @@ jobs:
             fi
             echo "::group::dput $s"
             # `ppa:` shortcut is understood by modern dput; upload is irreversible. Retried:
-            # the FTP connection to Launchpad sometimes fails outright ("Network is
-            # unreachable"), and dput only records a completed upload, so a retry is safe.
+            # Launchpad's FTP endpoint is intermittently unreachable from GitHub's runners. A
+            # failing attempt hangs ~7 minutes before "Network is unreachable", while a good
+            # one takes seconds, so each attempt is capped. dput only records a completed
+            # upload, so a retry after a timeout is safe.
             changes=$(ls target/ppa/bulwark_*"-0ppa${PPA_REV}~${s}1_source.changes")
-            for attempt in 1 2 3 4; do
-              dput ppa:vietanhng/bulwark "$changes" && break
-              [ "$attempt" = 4 ] && { echo "::error::dput failed 4 times for $s"; exit 1; }
-              echo "dput failed (attempt $attempt), retrying in $((attempt * 30))s"
-              sleep $((attempt * 30))
+            for attempt in 1 2 3 4 5 6 7 8; do
+              timeout 120 dput ppa:vietanhng/bulwark "$changes" && break
+              [ "$attempt" = 8 ] && { echo "::error::dput failed 8 times for $s"; exit 1; }
+              echo "dput failed (attempt $attempt), retrying in 20s"
+              sleep 20
             done
             echo "::endgroup::"
           done
