@@ -938,7 +938,7 @@ pub(super) fn detect_mcp_value(content: &str, v: &serde_json::Value) -> Vec<Dete
                 out.push(Detection {
                     rule_id: "BLWK-AI-018",
                     explanation: format!(
-                        "MCP server \"{name}\" connects to the remote endpoint {url} with a credential written inline in its config."
+                        "MCP server \"{name}\" connects to the remote endpoint {url} with a credential written inline in its config. Anyone who can read this file, or clone the repository it is in, has that credential."
                     ),
                     line: Some(line),
                     evidence: evidence.clone(),

@@ -315,7 +315,10 @@ pub fn scan_cancellable(
     let mut host_findings = Vec::new();
     // A check that could not run is reported in `errors`, never dropped silently (architecture §8);
     // a scan of a home that simply isn't this account's is out of scope, not a failure.
-    if opts.explicit_targets.is_empty() && !cancelled {
+    // Unix only: a root-equivalent *group* (docker, lxd, incus-admin) is a Unix concept. On Windows
+    // there is no account database to read here, and the check used to report itself as an error
+    // on every scan of a Windows machine.
+    if cfg!(unix) && opts.explicit_targets.is_empty() && !cancelled {
         match current_account() {
             Some(account) if same_dir(&account.home, &opts.home) => {
                 match std::fs::read_to_string("/etc/group") {

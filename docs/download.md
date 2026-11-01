@@ -207,7 +207,7 @@ Bulwark 0.12.0 · this computer · 55 of 73 checks ran
 
 Not covered by this scan:
   · 4 check areas need admin rights — run sudo bulwarkctl scan --privileged
-  · 18 checks couldn't run here (not installed, unreadable, or not this kind of machine) — not counted as passing
+  · 18 checks couldn't run here — not counted as passing
 ```
 
 `--json` gives the full result for scripts; the exit code is `0` when nothing medium or worse is

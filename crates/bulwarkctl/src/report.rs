@@ -92,6 +92,8 @@ struct Item<'a> {
     /// The exact path an explanation may spell out. A sentence naming it is the "what" ("key
     /// found in /home/…/notes.md"), already shown on the `in:` line, so the "why" skips it.
     raw_path: Option<&'a str>,
+    /// The agent an AI finding belongs to ("Claude Code"). See [`Problem::why`].
+    tool: Option<&'a str>,
 }
 
 impl<'a> From<&'a Finding> for Item<'a> {
@@ -105,6 +107,7 @@ impl<'a> From<&'a Finding> for Item<'a> {
             place: finding_location(f),
             evidence: None,
             raw_path: None,
+            tool: None,
         }
     }
 }
@@ -121,6 +124,7 @@ impl Problem<'_> {
     /// that first sentence usually names one of them ("listens … (port 9000)") and would read as if
     /// it were about all of them, so the first sentence every place shares is used instead.
     fn why(&self) -> String {
+        // Each place's sentences, minus any that spell out its own path (that is the "what").
         let all: Vec<Vec<String>> = self
             .items
             .iter()
@@ -138,29 +142,46 @@ impl Problem<'_> {
                 }
             })
             .collect();
-        let shared = all[0]
+        // The same sentences with each place's own agent name blanked, so "Claude Code hooks run…"
+        // and "Cursor hooks run…" count as one shared sentence, while "Port 9000 is open." and
+        // "Port 5432 is open." still don't.
+        let norm: Vec<Vec<String>> = self
+            .items
             .iter()
-            .find(|s| all[1..].iter().all(|other| other.contains(s)));
+            .zip(&all)
+            .map(|(item, ss)| {
+                ss.iter()
+                    .map(|s| match item.tool.filter(|t| !t.is_empty()) {
+                        Some(t) => s.replace(t, "\u{0}"),
+                        None => s.clone(),
+                    })
+                    .collect()
+            })
+            .collect();
+        let shared = |i: usize| norm[1..].iter().all(|o| o.contains(&norm[0][i]));
         let start = if self.items.len() == 1 {
             0
         } else {
-            shared
-                .and_then(|s| all[0].iter().position(|x| x == s))
-                .unwrap_or(0)
+            // No sentence every place shares: say nothing rather than describe one place under a
+            // count of several. The title and the place list still say what and where.
+            match (0..all[0].len()).find(|&i| shared(i)) {
+                Some(i) => i,
+                None => return String::new(),
+            }
         };
         // A short opening sentence is usually the bare fact ("This project settings file defines
         // hooks.", "X11Forwarding is set to \"yes\"."); the sentence after it says why that matters.
+        // It is added only if every place shares it, so the why never names one place.
         const SHORT: usize = 60;
         let mut why = String::new();
-        for s in all[0].iter().skip(start) {
+        for (i, sentence) in all[0].iter().enumerate().skip(start) {
             if !why.is_empty() {
-                // Only keep extending with sentences every place shares.
-                if why.chars().count() >= SHORT || !all[1..].iter().all(|o| o.contains(s)) {
+                if why.chars().count() >= SHORT || !shared(i) {
                     break;
                 }
                 why.push(' ');
             }
-            why.push_str(s);
+            why.push_str(sentence);
         }
         why
     }
@@ -272,6 +293,13 @@ fn wrap(text: &str, width: usize, max_lines: usize) -> Vec<String> {
         *last = clip(&format!("{last} …"), width);
     }
     lines.into_iter().map(|l| clip(&l, width)).collect()
+}
+
+/// Whether a single place is worth its own line: a file says where to go; anything else (a port,
+/// a module, a title) is already in the title or the explanation, and "in: port 2222" under an
+/// sshd_config setting points at the wrong thing.
+fn looks_like_a_file(place: &str) -> bool {
+    place.contains('/') || place.contains('\\')
 }
 
 /// The places a problem was found, on one line that fits the text column: as many as fit (each
@@ -464,7 +492,7 @@ fn render_body(body: Body<'_>, opts: &ReportOptions) -> String {
                     }
                     let _ = writeln!(out, "{pad}{}", st.dim(&line));
                 }
-            } else if p.items.len() > 1 || !p.title().contains(p.items[0].place.as_str()) {
+            } else if p.items.len() > 1 || looks_like_a_file(&p.items[0].place) {
                 let places =
                     place_line(&p.items.iter().map(|i| safe(&i.place)).collect::<Vec<_>>());
                 let _ = writeln!(out, "{pad}{}", st.dim(&format!("in: {places}")));
@@ -540,7 +568,9 @@ pub fn render(scan: &ScanRun, ignores: &Ignores, opts: &ReportOptions) -> String
         .saturating_sub(scan.rules_evaluated.len() + scan.rules_not_applicable.len());
     if undecided > 0 {
         gaps.push(format!(
-            "{undecided} {} couldn't run here (a tool that isn't installed, or a file it couldn't read) — not counted as passing",
+            // No reason is guessed: a missing tool, an unreadable setting and a check this build
+            // can't do on this system all land here, and a wrong reason misleads more than none.
+            "{undecided} {} couldn't run here — not counted as passing",
             plural(undecided, "check", "checks")
         ));
     }
@@ -615,6 +645,7 @@ pub fn render_ai(report: &AiScanReport, home: Option<&str>, opts: &ReportOptions
                 },
                 evidence: Some(&f.evidence),
                 raw_path: Some(&f.file),
+                tool: Some(&f.tool),
             }
         })
         .collect();
@@ -645,9 +676,10 @@ pub fn render_ai(report: &AiScanReport, home: Option<&str>, opts: &ReportOptions
     }
     if !report.errors.is_empty() {
         let n = report.errors.len();
+        // Mostly unreadable files, but also a check that couldn't run — so not "files".
         gaps.push(st.yellow(&format!(
-            "{n} {} couldn't be read{}",
-            plural(n, "file", "files"),
+            "{n} {} couldn't be checked{}",
+            plural(n, "item", "items"),
             if opts.all {
                 ":"
             } else {
@@ -865,6 +897,53 @@ mod tests {
     }
 
     #[test]
+    fn a_grouped_why_borrows_a_sentence_that_differs_only_by_agent() {
+        let mut a = finding("R", Severity::High, "t", "/p/one/.claude/settings.json");
+        let mut b = finding("R", Severity::High, "t", "/p/two/.cursor/hooks.json");
+        a.explanation = "This file defines hooks. Claude Code runs them on every event.".into();
+        b.explanation = "This file defines hooks. Cursor runs them on every event.".into();
+        let item = |f, tool| Item {
+            tool: Some(tool),
+            ..Item::from(f)
+        };
+        let p = Problem {
+            rule_id: "R",
+            severity: Severity::High,
+            items: vec![item(&a, "Claude Code"), item(&b, "Cursor")],
+        };
+        assert_eq!(
+            p.why(),
+            "This file defines hooks. Claude Code runs them on every event."
+        );
+        // Nothing shared at all: no why line, rather than one about a single place.
+        let mut c = finding("R", Severity::High, "t", "/x");
+        let mut d = finding("R", Severity::High, "t", "/y");
+        c.explanation = "Server \"a\" is open.".into();
+        d.explanation = "Server \"b\" is open.".into();
+        let p = Problem {
+            rule_id: "R",
+            severity: Severity::High,
+            items: vec![Item::from(&c), Item::from(&d)],
+        };
+        assert_eq!(p.why(), "");
+        // Without knowing the agents, a differing sentence is not borrowed.
+        let p = Problem {
+            rule_id: "R",
+            severity: Severity::High,
+            items: vec![Item::from(&a), Item::from(&b)],
+        };
+        assert_eq!(p.why(), "This file defines hooks.");
+    }
+
+    #[test]
+    fn a_single_place_is_shown_only_when_it_is_a_file() {
+        assert!(looks_like_a_file("~/.ssh/id_ed25519"));
+        assert!(looks_like_a_file("C:\\Users\\u\\.npmrc"));
+        assert!(!looks_like_a_file("port 2222"));
+        assert!(!looks_like_a_file("usb-storage"));
+    }
+
+    #[test]
     fn long_text_wraps_and_is_cut_with_an_ellipsis() {
         let text = "one two three four five six seven eight nine ten";
         assert_eq!(
@@ -934,7 +1013,7 @@ mod tests {
         );
         assert!(r.contains("rotate it with its provider"));
         assert!(r.contains("too many projects to check them all"));
-        assert!(r.contains("1 file couldn't be read — --all lists them"));
+        assert!(r.contains("1 item couldn't be checked — --all lists them"));
         assert!(!r.contains("ghp_"), "evidence only under --all");
 
         let all = render_ai(
