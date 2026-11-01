@@ -46,8 +46,8 @@ enum Commands {
         privileged: bool,
         /// Comma-separated opt-in need tags (e.g. "server", "developer"). A rule with no
         /// `profiles` tag always runs regardless of this; a rule tagged `profiles: [server]`
-        /// only runs when "server" is listed here. Empty by default — see the Profiles
-        /// section of the architecture doc.
+        /// only runs when "server" is listed here. When omitted, the host's detected roles are
+        /// used — see the Profiles section of the architecture doc.
         #[arg(long, value_delimiter = ',')]
         needs: Vec<String>,
         /// Scan a REMOTE host over SSH instead of this machine. Takes a `[user@]host` spec (or a
@@ -509,6 +509,19 @@ fn exit_code_for(worst: Option<Severity>) -> i32 {
     }
 }
 
+/// The profile a local scan runs under: the host's detected roles, or exactly the tags given with
+/// `--needs`. An empty `--needs` used to replace the detected roles with nothing, so a plain
+/// `bulwarkctl scan` silently skipped every `profiles:`-tagged rule (all the server checks on
+/// Linux, the launchd check on macOS) while the app, which uses the detected roles, ran them.
+fn scan_profile(needs: Vec<String>) -> Profile {
+    let host = Profile::current_host();
+    if needs.is_empty() {
+        host
+    } else {
+        Profile { needs, ..host }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
@@ -550,10 +563,7 @@ fn main() -> anyhow::Result<()> {
             }
             let rules_dir = resolve_rules_dir(cli.rules_dir)?;
             let collectors = all_collectors();
-            let profile = Profile {
-                needs,
-                ..Profile::current_host()
-            };
+            let profile = scan_profile(needs);
             let scan = engine::run_scan(&rules_dir, &collectors, privileged, &profile);
 
             // A scan that loaded no rules examined nothing, and "0 findings" from it is not a clean
@@ -568,6 +578,19 @@ fn main() -> anyhow::Result<()> {
             // confident, silent all-clear. Same invariant, same treatment: a failure must be
             // visible, never a silent drop (architecture doc §8).
             if scan.rules_loaded == 0 {
+                // Tell "nothing on disk" apart from "nothing for this OS": the fix for one is the
+                // path, for the other there is none, and pointing at the path sends people the
+                // wrong way.
+                let on_disk = engine::load_rules(&rules_dir).0.len();
+                if on_disk > 0 {
+                    anyhow::bail!(
+                        "none of the {on_disk} rules in {} apply to this host ({}) — refusing to \
+                         report a clean result from a scan that examined nothing. The config \
+                         checks cover Linux; `bulwarkctl ai scan` works here",
+                        rules_dir.display(),
+                        std::env::consts::OS
+                    );
+                }
                 anyhow::bail!(
                     "scan loaded 0 rules from {} — refusing to report a clean result from a scan \
                      that examined nothing (check the path, or pass --rules-dir)",
@@ -1927,4 +1950,23 @@ fn print_scan_table(scan: &bulwark_core::ScanRun) {
         println!("           fix: {}", f.fix_hint);
     }
     println!("\n{} finding(s) total.", scan.findings.len());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_needs_flag_keeps_the_detected_roles() {
+        assert_eq!(scan_profile(vec![]).needs, Profile::current_host().needs);
+        // Every host is at least a desktop or a server, so the default is never empty.
+        assert!(!scan_profile(vec![]).needs.is_empty());
+    }
+
+    #[test]
+    fn explicit_needs_replace_the_detected_roles() {
+        let profile = scan_profile(vec!["developer".to_string()]);
+        assert_eq!(profile.needs, vec!["developer".to_string()]);
+        assert_eq!(profile.os, Profile::current_host().os);
+    }
 }

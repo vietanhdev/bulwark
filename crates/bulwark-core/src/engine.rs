@@ -86,7 +86,15 @@ impl RoleEvidence {
             .any(|p| std::path::Path::new(p).exists())
             || std::fs::read_link("/etc/systemd/system/default.target")
                 .map(|t| t.to_string_lossy().contains("graphical"))
-                .unwrap_or(false);
+                .unwrap_or(false)
+            // macOS has no display-manager unit. WindowServer is its compositor and ships with
+            // every GUI install, so without this a Mac reads as a headless server and every
+            // `profiles: [desktop]` macOS rule is skipped.
+            || (cfg!(target_os = "macos")
+                && std::path::Path::new(
+                    "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+                )
+                .exists());
 
         // `.socket` as well as `.service` is load-bearing, not belt-and-braces: Ubuntu now ships
         // SSH socket-activated, so on an idle box that fully accepts SSH there is no running

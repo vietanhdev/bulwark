@@ -42,9 +42,13 @@ mod tests {
 
     #[test]
     fn reports_installed_state_from_this_real_machine() {
-        // This project's own dev machine has neither accton nor lastcomm installed —
-        // exercising the real filesystem check rather than a fixture keeps this honest.
+        // Exercises the real filesystem check rather than a fixture. Whether the tools are
+        // present depends on the machine (macOS ships accton and lastcomm; most Linux dev
+        // boxes don't), so the expectation is read from the same paths, not hardcoded.
+        let expected = ACCT_BINARIES
+            .iter()
+            .any(|p| std::path::Path::new(p).exists());
         let rows = ProcessAccountingCollector.collect().unwrap();
-        assert_eq!(rows[0].get("installed").unwrap(), &Value::Bool(false));
+        assert_eq!(rows[0].get("installed").unwrap(), &Value::Bool(expected));
     }
 }
