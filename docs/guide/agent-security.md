@@ -7,11 +7,13 @@ Code, Zed, Goose, OpenCode, Kilo Code, Crush, Amp, Kiro, Amazon Q, Cline, Roo, W
 Desktop, Continue, Augment, JetBrains Junie and AI Assistant, Aider, Warp and Open Interpreter, plus
 VS Code and its forks (VS Code Insiders, VSCodium, Cursor, Windsurf, Kiro).
 
-1. **Secrets leaked into AI context.** API keys, tokens and connection strings pasted into an
-   assistant's **session transcripts** or **memory** (for Claude Code, `~/.claude/projects/*/*.jsonl`
-   and `~/.claude/projects/*/memory/*.md`). Transcripts keep a copy on disk long after the
-   conversation. Project `.env` files and configs are deliberately *not* secret-scanned here:
-   they are meant to hold secrets, and flagging them buried real leaks under false positives.
+1. **Secrets leaked into AI context.** Provider API keys and tokens (exact formats such as
+   `sk-ant-…`, `AKIA…`, `ghp_…`) in an assistant's **session transcripts**, **memory** and
+   **instruction files** (`CLAUDE.md`, slash commands, skills, rules) — anywhere a key ends up in
+   the model's context — and in a project's settings, MCP and hook files, which travel with the
+   repository. Transcripts keep a copy on disk long after the conversation. A `.env`, and the
+   same config files in your home folder, hold keys on purpose and are not searched for them;
+   Bulwark checks who can read them and that git ignores them instead.
 2. **Dangerous agent configuration.** Settings that a prompt injection can turn into code
    execution on your host, grounded in real, published attacks.
 3. **Sandbox posture.** Whether the agent's own command sandbox is switched off, and whether the

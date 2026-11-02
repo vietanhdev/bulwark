@@ -39,9 +39,8 @@ fn fixture_home() -> tempfile::TempDir {
             fake_anthropic_key()
         ),
     );
-    // The same key in the agent's memory — secret detection runs only on agent sessions and memory,
-    // and this is where redaction is allowed to rewrite. The project-root CLAUDE.md above is not
-    // secret-scanned at all and must be left untouched.
+    // The same key in the agent's memory, which is where redaction is allowed to rewrite. The
+    // project-root CLAUDE.md above is reported too, but must be left untouched.
     write(
         &home.path().join(MEMORY_NOTES),
         &format!(
@@ -100,15 +99,17 @@ fn ai_scan_finds_a_leaked_secret_and_dangerous_config() {
         rule_ids.contains(&"BLWK-AI-001"),
         "the API key in agent memory must be found: {rule_ids:?}"
     );
-    assert!(
-        !report["findings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|f| f["rule_id"] == "BLWK-AI-001"
-                && f["file"].as_str().unwrap_or("").ends_with("CLAUDE.md")),
-        "a project-root CLAUDE.md is not secret-scanned"
-    );
+    // A key pasted into a project's CLAUDE.md is in the model's context: reported, so it gets
+    // rotated — but never offered for rewriting, since that file sits among the user's own.
+    let root = report["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| {
+            f["rule_id"] == "BLWK-AI-001" && f["file"].as_str().unwrap_or("").ends_with("CLAUDE.md")
+        })
+        .expect("a key in a project-root CLAUDE.md must be reported");
+    assert_eq!(root["redactable"], false);
     assert!(
         rule_ids.contains(&"BLWK-AI-002"),
         "the SessionStart hook must be found: {rule_ids:?}"
