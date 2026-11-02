@@ -7,6 +7,7 @@ import CliDemo from "./CliDemo.vue";
 
 const views = [
   { id: "cli", label: "Command line" },
+  { id: "agent", label: "AI agents" },
   { id: "app", label: "Desktop app" },
 ] as const;
 type View = (typeof views)[number]["id"];
@@ -80,6 +81,54 @@ function onKey(e: KeyboardEvent) {
         <li>Scans servers over your SSH</li>
       </ul>
       <p class="more"><a href="/download#cli">Get the CLI →</a></p>
+    </div>
+
+    <div
+      v-show="active === 'agent'"
+      id="hero-panel-agent"
+      role="tabpanel"
+      aria-labelledby="hero-tab-agent"
+    >
+      <div class="chat">
+        <p class="chat-user">Is this repository safe to work in?</p>
+        <p class="chat-tool">
+          <span>Bulwark skill</span> $ bulwarkctl ai scan --target .
+        </p>
+        <div class="chat-reply">
+          <p>
+            <strong>Not yet.</strong> Bulwark found 4 problems in this repo's
+            agent files: 1 critical, 3 high.
+          </p>
+          <ol>
+            <li>
+              <strong>Critical:</strong> the repo's own settings run shell
+              commands automatically — <code>.claude/settings.json</code>
+            </li>
+            <li>
+              <strong>High:</strong> an Anthropic API key is exposed —
+              <code>.claude/commands/deploy.md:3</code>. Revoke it and create a
+              new one.
+            </li>
+            <li>
+              <strong>High:</strong> an MCP server runs an unpinned package —
+              <code>.mcp.json</code>
+            </li>
+            <li>
+              <strong>High:</strong> the file with the key isn't in
+              <code>.gitignore</code>
+            </li>
+          </ol>
+          <p>
+            I haven't changed anything. I can preview removing the key with
+            <code>bulwarkctl ai redact</code> and apply it if you say yes.
+          </p>
+        </div>
+      </div>
+      <p class="install"><code>bulwarkctl agent install</code></p>
+      <p class="more">
+        Claude Code, Codex, Copilot, Gemini CLI, OpenCode, Cursor ·
+        <a href="/agents">How it works →</a>
+      </p>
     </div>
 
     <div
@@ -177,6 +226,77 @@ function onKey(e: KeyboardEvent) {
 }
 .more a:hover {
   text-decoration: underline;
+}
+
+/* A real agent conversation (Claude Code, with the skill installed), trimmed. */
+.chat {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 22px 24px;
+  border-radius: 14px;
+  background: var(--vp-c-bg-soft);
+  border: 1px solid var(--vp-c-divider);
+  box-shadow: 0 30px 70px -30px rgba(15, 20, 25, 0.35);
+  text-align: left;
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+.chat p {
+  margin: 0 0 0.7rem;
+}
+.chat-user {
+  margin-left: auto !important;
+  width: fit-content;
+  max-width: 85%;
+  padding: 0.5rem 0.95rem;
+  border-radius: 14px 14px 4px 14px;
+  background: var(--vp-c-brand-soft);
+  font-weight: 500;
+}
+.chat-tool {
+  font-family: var(--vp-font-family-mono);
+  font-size: 0.8rem;
+  color: var(--vp-c-text-2);
+}
+.chat-tool span {
+  margin-right: 0.5rem;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--vp-c-divider);
+  font-family: var(--vp-font-family-base);
+  font-size: 0.72rem;
+}
+.chat-reply ol {
+  margin: 0 0 0.7rem;
+  padding-left: 1.4rem;
+  list-style: decimal;
+}
+.chat-reply li {
+  margin: 0.2rem 0;
+}
+.chat-reply > p:last-child {
+  margin-bottom: 0;
+}
+.chat code,
+.install code {
+  font-family: var(--vp-font-family-mono);
+  font-size: 0.84em;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--vp-c-default-soft);
+}
+.install {
+  margin: 1.25rem 0 0;
+  text-align: center;
+}
+.install code {
+  font-size: 0.95rem;
+  padding: 6px 14px;
+  border-radius: 8px;
+}
+.more {
+  color: var(--vp-c-text-2);
+  font-size: 0.9rem;
 }
 
 .hero-demo {

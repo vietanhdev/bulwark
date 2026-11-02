@@ -457,7 +457,7 @@ fn scan_artifact(artifact: &Artifact) -> anyhow::Result<Vec<AiFinding>> {
     // more often than it did before this feature.
     let mut gitignored = false;
 
-    if kind_is_secret_scanned(artifact.kind) {
+    if is_secret_scanned(artifact.kind, artifact.workspace.is_some()) {
         // Only high-confidence, structurally-identifiable provider keys (sk-ant-…, AKIA…, ghp_…,
         // a PEM block) are reported — and `scan_text_high_confidence` runs *only* those rules, so
         // the broad generic `KEY=value` heuristic (the slowest patterns in the pack) never runs.
@@ -550,19 +550,27 @@ fn scan_artifact(artifact: &Artifact) -> anyhow::Result<Vec<AiFinding>> {
     Ok(out)
 }
 
-/// Whether secret detection runs on this kind of artifact. Only agent **sessions** (transcripts)
-/// and agent **memory** are scanned for leaked keys: those are where a secret ends up by accident
-/// and lives on, re-fed to the model every session. Project files (`.env`, settings, MCP manifests,
-/// Codex config, instruction files) hold credentials *on purpose* or carry example values, and
-/// scanning them produced findings users could neither confirm nor act on. Their real risks are
-/// still checked separately: permissions (AI-015), gitignore exposure, and config-safety detectors.
-fn kind_is_secret_scanned(kind: ArtifactKind) -> bool {
+/// Whether secret detection runs on this artifact. Only exact provider key formats are looked
+/// for (`sk-ant-api03-…`, `AKIA…`, `ghp_…`), never the loose `KEY=value` guess, so what decides
+/// this is whether a real key *there* is a leak:
+///
+/// * **Sessions, memory and instruction files — everywhere.** A key in a transcript, a `CLAUDE.md`,
+///   a slash command or a skill is in the model's context, and from there in the chat history.
+/// * **A project's settings, MCP manifest, hooks, tasks or Codex config.** These travel with the
+///   repository: a token in a committed `.mcp.json` is readable by everyone who clones it.
+/// * **Not** the same files in your home folder, which hold a working key on purpose and are
+///   checked for who can read them instead (AI-015), **nor** a `.env` (its job is to hold keys;
+///   AI-015/016 check its permissions and that git ignores it) or the agent's own credential store.
+///
+/// Instruction files were once excluded too, along with `.env`, to stop false alarms — which came
+/// from the loose heuristic that no longer runs here. That silently dropped a key pasted into a
+/// project's `CLAUDE.md` or `.claude/commands/`, the commonest way one reaches a repository.
+fn is_secret_scanned(kind: ArtifactKind, in_project: bool) -> bool {
     use ArtifactKind::*;
     match kind {
-        Transcript | Memory => true,
-        Instructions | Settings | McpConfig | Tasks | Hooks | DotEnv | CodexConfig | Credential => {
-            false
-        }
+        Transcript | Memory | Instructions => true,
+        Settings | McpConfig | Tasks | Hooks | CodexConfig => in_project,
+        DotEnv | Credential => false,
     }
 }
 
@@ -1148,20 +1156,19 @@ mod tests {
         format!("sk-ant-api03-{}AA", "a".repeat(93))
     }
 
-    /// **The redaction-scope regression.** Every secret is *reported* (so the user can rotate it),
+    /// **The redaction-scope regression.** A leaked key is *reported* (so the user can rotate it),
     /// but redaction rewrites a file only when it is BOTH a leak surface AND inside an agent folder.
     /// Three cases, one scan:
-    ///   * `.env` — functional config: reported, never redactable (rewriting destroys the working
-    ///     key). This is the original data-loss bug.
+    ///   * `.env` — functional config: not secret-scanned at all (its job is to hold keys), and
+    ///     never redactable (rewriting destroys the working key — the original data-loss bug).
     ///   * project-root `CLAUDE.md` — a leak surface, but it sits among the developer's own tracked
     ///     files, so it is reported and NOT redactable (the "agent folders only" rule).
     ///   * `.claude/commands/notes.md` — a leak surface *inside* an agent folder: redactable.
     #[test]
-    fn secrets_are_only_scanned_in_agent_sessions_and_memory() {
+    fn a_leaked_key_is_reported_and_only_redacted_inside_an_agent_folder() {
         let home = tempfile::tempdir().unwrap();
         let proj = home.path().join("Projects/app");
-        // Project files: a root CLAUDE.md, a .env and an agent-folder command. None of these are
-        // secret-scanned any more — they hold credentials on purpose or carry example values.
+        // Project files: a root CLAUDE.md, a .env and an agent-folder command.
         write(
             &proj.join("CLAUDE.md"),
             &format!("pasted key {}\n", anthropic_key()),
@@ -1193,13 +1200,22 @@ mod tests {
             .map(|f| f.file.replace('\\', "/"))
             .collect();
 
-        for skipped in ["/.env", "/CLAUDE.md", "commands/notes.md"] {
-            assert!(
-                !secret_files.iter().any(|f| f.ends_with(skipped)),
-                "{skipped} must not be secret-scanned"
-            );
-        }
-        for scanned in ["s1.jsonl", "memory/notes.md"] {
+        assert!(
+            !secret_files.iter().any(|f| f.ends_with("/.env")),
+            ".env must not be secret-scanned"
+        );
+        let root = report
+            .findings
+            .iter()
+            .find(|f| {
+                f.rule_id == "BLWK-AI-001" && f.file.replace('\\', "/").ends_with("/CLAUDE.md")
+            })
+            .expect("a key pasted into a project's CLAUDE.md must be reported");
+        assert!(
+            !root.redactable,
+            "a project-root CLAUDE.md is never rewritten"
+        );
+        for scanned in ["commands/notes.md", "s1.jsonl", "memory/notes.md"] {
             let f = report
                 .findings
                 .iter()
@@ -1209,7 +1225,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("the key in {scanned} must be reported"));
             assert!(
                 f.redactable,
-                "{scanned} lives in ~/.claude and is redactable"
+                "{scanned} is in an agent folder and is redactable"
             );
         }
         let redactable = report.redactable_files();
@@ -1521,6 +1537,24 @@ mod tests {
             "/home/u/.config/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/1/ui_messages.json"
         )));
         assert!(!kind_allows_redaction(ArtifactKind::Hooks));
-        assert!(!kind_is_secret_scanned(ArtifactKind::Hooks));
+        assert!(!is_secret_scanned(ArtifactKind::Hooks, false));
+    }
+
+    #[test]
+    fn a_key_is_looked_for_wherever_finding_one_means_a_leak() {
+        use ArtifactKind::*;
+        for kind in [Transcript, Memory, Instructions] {
+            assert!(is_secret_scanned(kind, false) && is_secret_scanned(kind, true));
+        }
+        for kind in [Settings, McpConfig, Tasks, Hooks, CodexConfig] {
+            assert!(is_secret_scanned(kind, true), "{kind:?} in a project");
+            assert!(
+                !is_secret_scanned(kind, false),
+                "{kind:?} in the home folder"
+            );
+        }
+        for kind in [DotEnv, Credential] {
+            assert!(!is_secret_scanned(kind, true) && !is_secret_scanned(kind, false));
+        }
     }
 }

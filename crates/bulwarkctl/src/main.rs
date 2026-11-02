@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
+mod agent;
 mod hosts;
 mod notify;
 mod proc;
@@ -108,6 +109,12 @@ enum Commands {
     Ai {
         #[command(subcommand)]
         action: AiAction,
+    },
+    /// Give AI coding agents (Claude Code, Codex, Copilot, Gemini CLI, OpenCode, Cursor) the
+    /// Bulwark skill, so they can run these checks when asked and ask before fixing anything
+    Agent {
+        #[command(subcommand)]
+        action: agent::AgentAction,
     },
     /// Monitor other machines over SSH: register them, check the connection, scan on a
     /// schedule. Agentless — nothing is installed on or listens on a monitored machine.
@@ -938,6 +945,12 @@ fn main() -> anyhow::Result<()> {
         Commands::Notify { action } => {
             let db = resolve_db_path(cli.db_path)?;
             let code = notify::run(action, &db)?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }
+        Commands::Agent { action } => {
+            let code = agent::run(action, &resolve_home()?)?;
             if code != 0 {
                 std::process::exit(code);
             }

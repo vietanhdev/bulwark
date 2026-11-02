@@ -226,6 +226,14 @@ export default withMermaid({
   themeConfig: {
     logo: "/shield.svg",
     nav: [
+      {
+        text: "Product",
+        items: [
+          { text: "Desktop app", link: "/desktop" },
+          { text: "Command line", link: "/cli" },
+          { text: "AI agents", link: "/agents" },
+        ],
+      },
       { text: "Download", link: "/download" },
       { text: "Checks", link: "/checks/" },
       { text: "Guide", link: "/guide/agent-security" },
@@ -235,6 +243,14 @@ export default withMermaid({
     ],
     sidebar: [
       {
+        text: "Product",
+        items: [
+          { text: "Desktop app", link: "/desktop" },
+          { text: "Command line", link: "/cli" },
+          { text: "AI agents", link: "/agents" },
+        ],
+      },
+      {
         text: "Checks",
         items: [{ text: "Every check Bulwark runs", link: "/checks/" }],
       },
@@ -242,9 +258,15 @@ export default withMermaid({
         text: "Guide",
         items: [
           { text: "AI agent security", link: "/guide/agent-security" },
-          { text: "Choosing what Bulwark checks", link: "/guide/custom-checks" },
+          {
+            text: "Choosing what Bulwark checks",
+            link: "/guide/custom-checks",
+          },
           { text: "Fixing findings", link: "/guide/remediation" },
-          { text: "Monitoring other machines", link: "/guide/remote-monitoring" },
+          {
+            text: "Monitoring other machines",
+            link: "/guide/remote-monitoring",
+          },
           { text: "Architecture & design", link: "/guide/architecture" },
           { text: "Contributing", link: "/guide/contributing" },
           { text: "Collaborate", link: "/collaborate" },
