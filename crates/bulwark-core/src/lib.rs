@@ -1,3 +1,4 @@
+pub mod agent_skill;
 pub mod ai_scan;
 pub mod av_scan;
 pub mod collectors;

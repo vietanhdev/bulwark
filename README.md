@@ -34,7 +34,11 @@ Each problem says why it matters and how to fix it, often in one click. No accou
 bulwarkctl ai scan      # your AI coding agents: settings, MCP servers, leaked keys
 bulwarkctl scan         # this computer
 bulwarkctl ai redact    # preview removing leaked keys from agent files (--apply to do it)
+bulwarkctl agent install  # let Claude Code, Codex, Copilot, Gemini CLI, OpenCode, Cursor run Bulwark
 ```
+
+With the [agent skill](https://bulwark.nrl.ai/agents) installed, ask your agent "Is this repository
+safe?": it runs the scan, explains what it found and asks before fixing anything.
 
 ```text
 Bulwark 0.13.1 · AI coding agents · 1 project · 4 agent files checked
