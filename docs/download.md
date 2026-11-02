@@ -252,10 +252,11 @@ available yet.
 Command line: <a :href="url(is.macCli)">macOS tarball</a> · <a :href="url(is.winCli)">Windows zip</a>.
 Each is a single file with every check built in.
 
-::: warning Not code-signed yet
-The macOS and Windows builds aren't signed yet, so macOS Gatekeeper and Windows SmartScreen warn on
-first launch. On macOS, right-click the app and choose **Open**; on Windows, choose **More info →
-Run anyway**.
+::: warning If your system warns on first launch
+**macOS:** if it says it can't verify the developer, open **System Settings → Privacy & Security**,
+scroll down and choose **Open Anyway** next to Bulwark. (Right-click → Open no longer works on
+macOS 15 and later.)
+**Windows:** the build isn't signed yet, so SmartScreen warns; choose **More info → Run anyway**.
 :::
 
 ## Verify your download
