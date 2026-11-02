@@ -92,39 +92,6 @@ hero:
 
 </section>
 
-<section class="bw-section">
-
-<div class="bw-split">
-<div class="bw-split-text">
-<p class="bw-eyebrow">From the terminal</p>
-<h2 class="bw-h2">Read it in ten seconds</h2>
-<p class="bw-sub">What to fix, why, and how. Worst first.</p>
-<p class="bw-sub"><a href="/guide/agent-security">AI agent checks →</a><br><a href="/download">Install the CLI →</a></p>
-</div>
-<div class="bw-term" role="img" aria-label="Terminal output of bulwarkctl ai scan: four problems, worst first, each with why it matters and the fix">
-<div class="bw-term-bar"><span></span><span></span><span></span><em>bulwarkctl ai scan</em></div>
-<pre><span class="t-dim">$</span> bulwarkctl ai scan
-<b>Bulwark 0.13.1</b> <span class="t-dim">· AI coding agents · 1 project · 4 agent files checked</span>
-<span></span>
-<b>4 problems to fix</b>  <span class="t-crit">1 critical</span><span class="t-dim"> · </span><span class="t-high">3 high</span>
-<span></span>
-  <span class="t-crit">● Critical</span> <b>Project-supplied agent hooks run shell commands automatically</b>
-             This project settings file defines hooks. Claude Code hooks run shell
-             commands automatically on tool/session events — a project-supplied …
-             <span class="t-ok">→</span> Remove the hooks from the repository's agent config.
-             <span class="t-dim">in: ~/Projects/api/.claude/settings.json:1</span>
-<span></span>
-  <span class="t-high">● High    </span> <b>An MCP server runs an unpinned package from a registry</b>
-             MCP server "fs" launches an unpinned package via npx.
-             <span class="t-ok">→</span> Pin the MCP server to an exact version.
-             <span class="t-dim">in: ~/Projects/api/.mcp.json:1</span>
-  <span class="t-dim">…</span>
-<span></span>
-<span class="t-ok">→</span> 1 agent file holds leaked secrets Bulwark can remove — <b>bulwarkctl ai redact</b></pre>
-</div>
-</div>
-
-</section>
 
 <section class="bw-section">
 
@@ -456,66 +423,6 @@ hero:
 }
 .bw-cta a.bw-btn-alt:hover { border-color: var(--vp-c-brand-1); }
 
-/* The CLI sample: a terminal window in the CLI's own colours, dark in both themes. */
-.bw-term {
-  max-width: 50rem;
-  margin: 2rem auto 0;
-  border-radius: 14px;
-  overflow: hidden;
-  background: #0f1720;
-  border: 1px solid #253241;
-  box-shadow: 0 18px 48px -18px rgba(10, 20, 30, 0.45);
-}
-.bw-term-bar {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 10px 14px;
-  background: #18222e;
-  border-bottom: 1px solid #253241;
-}
-.bw-term-bar span { width: 11px; height: 11px; border-radius: 50%; background: #3a4757; }
-.bw-term-bar span:nth-child(1) { background: #ff5f57; }
-.bw-term-bar span:nth-child(2) { background: #febc2e; }
-.bw-term-bar span:nth-child(3) { background: #28c840; }
-.bw-term-bar em {
-  margin-left: 10px;
-  font-style: normal;
-  font-size: 0.78rem;
-  color: #8b98a8;
-  font-family: var(--vp-font-family-mono);
-}
-.bw-home .bw-term pre {
-  margin: 0;
-  padding: 1.1rem 1.3rem 1.3rem;
-  overflow-x: auto;
-  font-family: var(--vp-font-family-mono);
-  font-size: 0.8rem;
-  line-height: 1.6;
-  color: #d7dee7;
-  background: transparent;
-}
-.bw-term b { color: #f3f6fa; font-weight: 700; }
-.bw-term .t-dim { color: #7c8a9b; }
-.bw-term .t-crit { color: #ff6b6b; font-weight: 700; }
-.bw-term .t-high { color: #ff9a6b; }
-.bw-term .t-ok { color: #4fd18b; }
-
-/* Text beside the terminal on wide screens; stacked on narrow ones. */
-.bw-split {
-  display: grid;
-  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.6fr);
-  gap: 2.5rem;
-  align-items: center;
-}
-.bw-home .bw-split-text .bw-eyebrow,
-.bw-home .bw-split-text .bw-h2,
-.bw-home .bw-split-text .bw-sub {
-  text-align: left;
-  margin-left: 0;
-}
-.bw-split .bw-term { margin: 0; max-width: none; }
-
 /* Tablet: collapse the bento and grids to two columns. */
 @media (max-width: 900px) {
   .bw-bento { grid-template-columns: repeat(2, 1fr); }
@@ -526,10 +433,6 @@ hero:
     grid-column: span 1;
   }
   .bw-card-hero { grid-row: auto; grid-column: 1 / -1; }
-  .bw-split { grid-template-columns: 1fr; gap: 1.5rem; }
-  .bw-home .bw-split-text .bw-eyebrow,
-  .bw-home .bw-split-text .bw-h2,
-  .bw-home .bw-split-text .bw-sub { text-align: center; margin-left: auto; }
 }
 
 /* Phone: single column throughout. */
@@ -542,6 +445,5 @@ hero:
   .bw-fan-2, .bw-fan-3, .bw-fan-4 { display: none; }
   .bw-cta { padding: 3rem 1.5rem; }
   .bw-home .bw-cta h2 { font-size: 1.6rem; }
-  .bw-home .bw-term pre { font-size: 0.66rem; padding: 0.9rem 1rem 1rem; }
 }
 </style>

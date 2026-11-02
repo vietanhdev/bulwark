@@ -192,6 +192,14 @@ impl Problem<'_> {
     fn title(&self) -> String {
         let first = self.items[0].title;
         if self.items.iter().all(|f| f.title == first) {
+            // One place, named in the title and again on the `in:` line below it: say it once.
+            if let [only] = self.items.as_slice() {
+                if shows_place(only) {
+                    if let Some(t) = first.strip_suffix(&format!(" ({})", only.place)) {
+                        return t.to_string();
+                    }
+                }
+            }
             return first.to_string();
         }
         let mut common = first.to_string();
@@ -290,6 +298,13 @@ fn wrap(text: &str, width: usize, max_lines: usize) -> Vec<String> {
     if lines.len() > max_lines {
         lines.truncate(max_lines);
         let last = lines.last_mut().expect("max_lines > 0");
+        // Drop whole words until the ellipsis fits, so a cut never lands mid-word ("the exac…").
+        while last.chars().count() + 2 > width {
+            match last.rfind(' ') {
+                Some(i) => last.truncate(i),
+                None => break,
+            }
+        }
         *last = clip(&format!("{last} …"), width);
     }
     lines.into_iter().map(|l| clip(&l, width)).collect()
@@ -300,6 +315,13 @@ fn wrap(text: &str, width: usize, max_lines: usize) -> Vec<String> {
 /// sshd_config setting points at the wrong thing.
 fn looks_like_a_file(place: &str) -> bool {
     place.contains('/') || place.contains('\\')
+}
+
+/// Whether a problem found in one place gets an `in:` line. A whole-machine finding's place is
+/// its own title ("SSH TCP forwarding/tunneling is enabled"), which a slash must not pass off as
+/// a file.
+fn shows_place(item: &Item) -> bool {
+    looks_like_a_file(&item.place) && item.place != item.title
 }
 
 /// The places a problem was found, on one line that fits the text column: as many as fit (each
@@ -497,7 +519,7 @@ fn render_body(body: Body<'_>, opts: &ReportOptions) -> String {
                     }
                     let _ = writeln!(out, "{pad}{}", st.dim(&line));
                 }
-            } else if p.items.len() > 1 || looks_like_a_file(&p.items[0].place) {
+            } else if p.items.len() > 1 || shows_place(&p.items[0]) {
                 let places =
                     place_line(&p.items.iter().map(|i| safe(&i.place)).collect::<Vec<_>>());
                 let _ = writeln!(out, "{pad}{}", st.dim(&format!("in: {places}")));
@@ -1074,6 +1096,40 @@ mod tests {
         assert!(looks_like_a_file("C:\\Users\\u\\.npmrc"));
         assert!(!looks_like_a_file("port 2222"));
         assert!(!looks_like_a_file("usb-storage"));
+    }
+
+    #[test]
+    fn a_cut_line_ends_on_a_whole_word() {
+        let lines = wrap("aaaa bbbb cccc dddd eeee ffff", 14, 1);
+        assert_eq!(lines, vec!["aaaa bbbb …"]);
+    }
+
+    #[test]
+    fn a_place_is_said_once() {
+        // The title names the file the `in:` line also shows.
+        let s = scan(vec![finding(
+            "BLWK-DEV-005",
+            Severity::Medium,
+            "SSH forwards your agent to every server (/home/u/.ssh/config)",
+            "/home/u/.ssh/config",
+        )]);
+        let r = render(&s, &Ignores::default(), &opts(false));
+        assert!(
+            r.contains("SSH forwards your agent to every server\n"),
+            "{r}"
+        );
+        assert!(r.contains("in: /home/u/.ssh/config"), "{r}");
+
+        // A whole-machine finding's place is its title; a slash in it doesn't make it a file.
+        let mut f = finding(
+            "BLWK-SSH-005",
+            Severity::Medium,
+            "SSH TCP forwarding/tunneling is enabled",
+            "",
+        );
+        f.context = Default::default();
+        let r = render(&scan(vec![f]), &Ignores::default(), &opts(false));
+        assert!(!r.contains("in: "), "{r}");
     }
 
     #[test]

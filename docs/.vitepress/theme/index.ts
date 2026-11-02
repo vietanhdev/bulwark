@@ -35,8 +35,8 @@ export default {
           h("span", { class: "hero-trust-chip" }, "100% local — no telemetry"),
           h("span", { class: "hero-trust-chip" }, "Linux · macOS · Windows"),
         ]),
-      // A full-width demo video directly under the hero headline — the product in motion, above the
-      // fold, before the feature grid.
+      // The product directly under the hero headline, above the fold: the CLI's real output first,
+      // the desktop app's video a tab away.
       "home-hero-after": () => h(HeroDemo),
       "layout-bottom": () => h(MermaidLightbox),
     });
