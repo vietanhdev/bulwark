@@ -108,6 +108,14 @@
   </branding>
 
   <releases>
+    <release version="0.13.2" date="2026-11-02">
+      <description>
+        <p>Clearer wording when you ignore a finding.</p>
+        <ul>
+          <li>The ignore prompt reads as a full sentence for every kind of finding</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.13.1" date="2026-11-02">
       <description>
         <p>Ubuntu 24.04 packages, and a clearer colour picker in dark mode.</p>
