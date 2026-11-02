@@ -159,6 +159,7 @@ Concretely, when you touch something structural, walk this list:
 | A rule, collector, or detector | The rule table in the relevant `docs/guide/*.md` |
 | A CLI command or flag | The CLI section of the relevant guide page + `README.md` if it's user-facing |
 | Anything a user sees in the GUI | The screenshots (`apps/bulwark-app/scripts/capture-screenshots.mjs`) |
+| The CLI's report output | The website's terminal samples: run `scripts/capture-cli-samples.sh` (Docker) |
 | A new docs page | Its sidebar entry in `docs/.vitepress/config.mts` **and** the OG card list in `docs/scripts/generate-og.mjs` — a page missing from the latter silently previews as the generic homepage card |
 
 **Explain with diagrams, not just prose.** The docs site renders [mermaid](https://mermaid.js.org/)

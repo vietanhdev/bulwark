@@ -3,7 +3,6 @@ import DefaultTheme from "vitepress/theme";
 import MermaidLightbox from "./MermaidLightbox.vue";
 import HeroDemo from "./HeroDemo.vue";
 import ChecksIndex from "./ChecksIndex.vue";
-import CliDemo from "./CliDemo.vue";
 
 // Same pairing as the desktop app (apps/bulwark-app/src/styles.css): Archivo for prose, IBM
 // Plex Mono for anything that is data — rule IDs, paths, commands, config directives. These
@@ -20,7 +19,6 @@ export default {
   extends: DefaultTheme,
   enhanceApp({ app }) {
     app.component("ChecksIndex", ChecksIndex);
-    app.component("CliDemo", CliDemo);
   },
   Layout() {
     return h(DefaultTheme.Layout, null, {
@@ -37,8 +35,8 @@ export default {
           h("span", { class: "hero-trust-chip" }, "100% local — no telemetry"),
           h("span", { class: "hero-trust-chip" }, "Linux · macOS · Windows"),
         ]),
-      // A full-width demo video directly under the hero headline — the product in motion, above the
-      // fold, before the feature grid.
+      // The product directly under the hero headline, above the fold: the CLI's real output first,
+      // the desktop app's video a tab away.
       "home-hero-after": () => h(HeroDemo),
       "layout-bottom": () => h(MermaidLightbox),
     });

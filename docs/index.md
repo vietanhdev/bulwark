@@ -92,24 +92,6 @@ hero:
 
 </section>
 
-<section class="bw-section">
-
-<p class="bw-eyebrow">The CLI</p>
-<h2 class="bw-h2">One file. Every check.</h2>
-<p class="bw-sub">The app's engine, for terminals and servers. Worst first, with the fix.</p>
-
-<CliDemo />
-
-<ul class="bw-cli-facts">
-  <li>Linux · macOS · Windows</li>
-  <li>Static binary, nothing to install</li>
-  <li><code>--json</code> and exit codes for CI</li>
-  <li>Scans servers over your SSH</li>
-</ul>
-
-<p class="bw-sub"><a href="/download#cli">Get the CLI →</a></p>
-
-</section>
 
 <section class="bw-section">
 
@@ -441,89 +423,6 @@ hero:
 }
 .bw-cta a.bw-btn-alt:hover { border-color: var(--vp-c-brand-1); }
 
-/* The CLI sample: a terminal window in the CLI's own colours, dark in both themes. */
-.bw-term {
-  max-width: 50rem;
-  margin: 2rem auto 0;
-  border-radius: 14px;
-  overflow: hidden;
-  background: #0f1720;
-  border: 1px solid #253241;
-  box-shadow: 0 18px 48px -18px rgba(10, 20, 30, 0.45);
-}
-.bw-term-bar {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 10px 14px;
-  background: #18222e;
-  border-bottom: 1px solid #253241;
-}
-.bw-term-bar span { width: 11px; height: 11px; border-radius: 50%; background: #3a4757; }
-.bw-term-bar span:nth-child(1) { background: #ff5f57; }
-.bw-term-bar span:nth-child(2) { background: #febc2e; }
-.bw-term-bar span:nth-child(3) { background: #28c840; }
-.bw-term-bar em {
-  margin-left: 10px;
-  font-style: normal;
-  font-size: 0.78rem;
-  color: #8b98a8;
-  font-family: var(--vp-font-family-mono);
-}
-.bw-home .bw-term pre {
-  margin: 0;
-  padding: 1.1rem 1.3rem 1.3rem;
-  overflow-x: auto;
-  font-family: var(--vp-font-family-mono);
-  font-size: 0.8rem;
-  line-height: 1.6;
-  color: #d7dee7;
-  background: transparent;
-}
-.bw-term b { color: #f3f6fa; font-weight: 700; }
-.bw-term .t-dim { color: #7c8a9b; }
-.bw-term .t-crit { color: #ff6b6b; font-weight: 700; }
-.bw-term .t-high { color: #ff9a6b; }
-.bw-term .t-ok { color: #4fd18b; }
-
-/* Text beside the terminal on wide screens; stacked on narrow ones. */
-.bw-split {
-  display: grid;
-  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.6fr);
-  gap: 2.5rem;
-  align-items: center;
-}
-.bw-home .bw-split-text .bw-eyebrow,
-.bw-home .bw-split-text .bw-h2,
-.bw-home .bw-split-text .bw-sub {
-  text-align: left;
-  margin-left: 0;
-}
-.bw-split .bw-term { margin: 0; max-width: none; }
-
-
-/* Under the CLI demo: what the CLI is, as four short facts. */
-.bw-home ul.bw-cli-facts {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 0.5rem 0.6rem;
-  list-style: none;
-  margin: 1.5rem auto 0.5rem;
-  padding: 0;
-}
-.bw-home .cli-demo { max-width: 58rem; }
-.bw-home .bw-cli-facts li {
-  list-style: none;
-  margin: 0;
-  padding: 0.3rem 0.8rem;
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 999px;
-  font-size: 0.85rem;
-  color: var(--vp-c-text-2);
-}
-.bw-cli-facts code { font-size: 0.8rem; }
-
 /* Tablet: collapse the bento and grids to two columns. */
 @media (max-width: 900px) {
   .bw-bento { grid-template-columns: repeat(2, 1fr); }
@@ -534,10 +433,6 @@ hero:
     grid-column: span 1;
   }
   .bw-card-hero { grid-row: auto; grid-column: 1 / -1; }
-  .bw-split { grid-template-columns: 1fr; gap: 1.5rem; }
-  .bw-home .bw-split-text .bw-eyebrow,
-  .bw-home .bw-split-text .bw-h2,
-  .bw-home .bw-split-text .bw-sub { text-align: center; margin-left: auto; }
 }
 
 /* Phone: single column throughout. */
@@ -550,6 +445,5 @@ hero:
   .bw-fan-2, .bw-fan-3, .bw-fan-4 { display: none; }
   .bw-cta { padding: 3rem 1.5rem; }
   .bw-home .bw-cta h2 { font-size: 1.6rem; }
-  .bw-home .bw-term pre { font-size: 0.66rem; padding: 0.9rem 1rem 1rem; }
 }
 </style>
