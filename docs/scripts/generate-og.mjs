@@ -29,6 +29,9 @@ const SITE = "bulwark.nrl.ai";
 const CARD_TITLES = {
   "index.md": "Bulwark",
   "guide/architecture.md": "Architecture",
+  "desktop.md": "The Desktop App",
+  "cli.md": "The Command Line",
+  "agents.md": "Bulwark for AI Agents",
   "guide/agent-security.md": "AI Agent Security",
   "guide/remote-monitoring.md": "Monitoring Other Machines",
   "guide/custom-checks.md": "Choosing What Bulwark Checks",
@@ -63,6 +66,9 @@ const CARD_TITLES = {
 function pagesNeedingCards() {
   const pages = [
     "index.md",
+    "desktop.md",
+    "cli.md",
+    "agents.md",
     "guide/architecture.md",
     "guide/agent-security.md",
     "guide/remote-monitoring.md",
