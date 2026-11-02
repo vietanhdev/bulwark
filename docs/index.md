@@ -94,35 +94,20 @@ hero:
 
 <section class="bw-section">
 
-<div class="bw-split">
-<div class="bw-split-text">
-<p class="bw-eyebrow">From the terminal</p>
-<h2 class="bw-h2">Read it in ten seconds</h2>
-<p class="bw-sub">What to fix, why, and how. Worst first.</p>
-<p class="bw-sub"><a href="/guide/agent-security">AI agent checks →</a><br><a href="/download">Install the CLI →</a></p>
-</div>
-<div class="bw-term" role="img" aria-label="Terminal output of bulwarkctl ai scan: four problems, worst first, each with why it matters and the fix">
-<div class="bw-term-bar"><span></span><span></span><span></span><em>bulwarkctl ai scan</em></div>
-<pre><span class="t-dim">$</span> bulwarkctl ai scan
-<b>Bulwark 0.13.1</b> <span class="t-dim">· AI coding agents · 1 project · 4 agent files checked</span>
-<span></span>
-<b>4 problems to fix</b>  <span class="t-crit">1 critical</span><span class="t-dim"> · </span><span class="t-high">3 high</span>
-<span></span>
-  <span class="t-crit">● Critical</span> <b>Project-supplied agent hooks run shell commands automatically</b>
-             This project settings file defines hooks. Claude Code hooks run shell
-             commands automatically on tool/session events — a project-supplied …
-             <span class="t-ok">→</span> Remove the hooks from the repository's agent config.
-             <span class="t-dim">in: ~/Projects/api/.claude/settings.json:1</span>
-<span></span>
-  <span class="t-high">● High    </span> <b>An MCP server runs an unpinned package from a registry</b>
-             MCP server "fs" launches an unpinned package via npx.
-             <span class="t-ok">→</span> Pin the MCP server to an exact version.
-             <span class="t-dim">in: ~/Projects/api/.mcp.json:1</span>
-  <span class="t-dim">…</span>
-<span></span>
-<span class="t-ok">→</span> 1 agent file holds leaked secrets Bulwark can remove — <b>bulwarkctl ai redact</b></pre>
-</div>
-</div>
+<p class="bw-eyebrow">The CLI</p>
+<h2 class="bw-h2">One file. Every check.</h2>
+<p class="bw-sub">The app's engine, for terminals and servers. Worst first, with the fix.</p>
+
+<CliDemo />
+
+<ul class="bw-cli-facts">
+  <li>Linux · macOS · Windows</li>
+  <li>Static binary, nothing to install</li>
+  <li><code>--json</code> and exit codes for CI</li>
+  <li>Scans servers over your SSH</li>
+</ul>
+
+<p class="bw-sub"><a href="/download#cli">Get the CLI →</a></p>
 
 </section>
 
@@ -515,6 +500,29 @@ hero:
   margin-left: 0;
 }
 .bw-split .bw-term { margin: 0; max-width: none; }
+
+
+/* Under the CLI demo: what the CLI is, as four short facts. */
+.bw-home ul.bw-cli-facts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem 0.6rem;
+  list-style: none;
+  margin: 1.5rem auto 0.5rem;
+  padding: 0;
+}
+.bw-home .cli-demo { max-width: 58rem; }
+.bw-home .bw-cli-facts li {
+  list-style: none;
+  margin: 0;
+  padding: 0.3rem 0.8rem;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 999px;
+  font-size: 0.85rem;
+  color: var(--vp-c-text-2);
+}
+.bw-cli-facts code { font-size: 0.8rem; }
 
 /* Tablet: collapse the bento and grids to two columns. */
 @media (max-width: 900px) {
