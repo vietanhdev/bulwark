@@ -108,6 +108,17 @@
   </branding>
 
   <releases>
+    <release version="0.14.0" date="2026-11-02">
+      <description>
+        <p>Let your AI coding agent run Bulwark, and catch keys pasted into agent instructions.</p>
+        <ul>
+          <li>New: bulwark agent install gives Claude Code, Codex, GitHub Copilot, Gemini CLI, OpenCode and Cursor a Bulwark skill. Ask "is this repository safe?" and the agent runs the scan and asks before fixing anything</li>
+          <li>A key pasted into a project's CLAUDE.md, a slash command or a skill is now reported</li>
+          <li>Command-line reports name each place once and cut long lines at a word</li>
+          <li>The ignore prompt reads as a full sentence for every kind of finding</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.13.1" date="2026-11-02">
       <description>
         <p>Ubuntu 24.04 packages, and a clearer colour picker in dark mode.</p>
