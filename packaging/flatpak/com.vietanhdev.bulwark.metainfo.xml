@@ -108,6 +108,20 @@
   </branding>
 
   <releases>
+    <release version="0.15.0" date="2026-11-10">
+      <description>
+        <p>A simpler app in three tabs, a Secrets page that shows where your credentials live, and new checks for developer machines.</p>
+        <ul>
+          <li>New layout: Scan, Secrets and Tools. Scan runs the checks, shows the results and previews every fix. A first-run guide walks you through the steps</li>
+          <li>New Secrets page: one list of the credentials your tools hold (AWS CLI, Docker, Git, GitHub CLI, npm, PyPI, Kubernetes and more) and whether each is in a keychain or in plain text. Names only, never values</li>
+          <li>New checks: keys saved in your shell history, secrets in shell startup files, plain-text npm and PyPI tokens, credentials embedded in a kubeconfig, token files from Cargo, Terraform and others, and weak SSH keys</li>
+          <li>New checks for package managers: npm running install scripts from any package, and npm, bun or uv installing versions published minutes ago</li>
+          <li>Hidden text in AI agent instruction files is caught in more forms, and shown decoded</li>
+          <li>The credential checks now run on Windows too</li>
+          <li>Fix commands never include a file name that could act as a command when pasted</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.14.0" date="2026-11-02">
       <description>
         <p>Let your AI coding agent run Bulwark, and catch keys pasted into agent instructions.</p>
