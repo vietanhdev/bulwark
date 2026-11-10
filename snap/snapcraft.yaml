@@ -18,6 +18,12 @@ description: |
   it can be published; see packaging/README.md.
 
 license: Apache-2.0
+# Shown on the store page, and what a reviewer of the classic-confinement request looks at
+# first. `contact` is the issue tracker rather than an address, so nothing personal is published.
+website: https://bulwark.nrl.ai
+source-code: https://github.com/vietanhdev/bulwark
+issues: https://github.com/vietanhdev/bulwark/issues
+contact: https://github.com/vietanhdev/bulwark/issues
 grade: stable
 confinement: classic     # NOT strict: pkexec + host /etc access are load-bearing (see README)
 
