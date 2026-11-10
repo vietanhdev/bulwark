@@ -171,6 +171,14 @@ jobs:
       # cannot be resolved until Tauri moves off them. They are unmaintained/unsound advisories with
       # no code path reachable from Bulwark's own usage. Every other advisory (including any future
       # one in a crate we control) still fails this job.
+      #
+      # RUSTSEC-2026-0459 is different and temporary: it is the bundled SQLite (before 3.54), a
+      # dependency we do choose. The fix is libsqlite3-sys 0.39, which no released diesel accepts
+      # yet (2.3.14 requires <0.39; upstream raised the bound on its main branch on 2026-10-30).
+      # The bug needs a process to open a database, with its -wal file, that a less trusted party
+      # wrote. The one place that could happen here was a sudo/pkexec scan whose database sits in
+      # a folder another account can write to, and the CLI now refuses that (src/db_guard.rs).
+      # REMOVE this line and raise libsqlite3-sys to 0.39 as soon as a diesel release allows it.
       - name: cargo audit
         run: |
           cargo audit \
@@ -185,7 +193,8 @@ jobs:
             --ignore RUSTSEC-2024-0418 \
             --ignore RUSTSEC-2024-0419 \
             --ignore RUSTSEC-2024-0420 \
-            --ignore RUSTSEC-2025-0098
+            --ignore RUSTSEC-2025-0098 \
+            --ignore RUSTSEC-2026-0459
 
   changes:
     if: github.triggering_actor == 'vietanhdev'
