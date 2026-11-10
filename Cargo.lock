@@ -368,7 +368,7 @@ dependencies = [
 
 [[package]]
 name = "bulwark-access"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "bulwark-core",
  "chrono",
@@ -380,11 +380,11 @@ dependencies = [
 
 [[package]]
 name = "bulwark-agent"
-version = "0.14.0"
+version = "0.15.0"
 
 [[package]]
 name = "bulwark-app"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "bulwark-access",
@@ -406,7 +406,7 @@ dependencies = [
 
 [[package]]
 name = "bulwark-core"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -432,11 +432,11 @@ dependencies = [
 
 [[package]]
 name = "bulwark-proto"
-version = "0.14.0"
+version = "0.15.0"
 
 [[package]]
 name = "bulwarkctl"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "bulwark-core",
