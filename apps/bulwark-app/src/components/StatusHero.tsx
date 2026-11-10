@@ -1,7 +1,6 @@
 import { AlertTriangle, Check, Clock, HelpCircle, X, type LucideIcon } from "lucide-react";
 import { ShieldMark } from "@/components/ShieldMark";
 import { SeverityDot, severityLabel, type Severity } from "@/components/Severity";
-import { cn } from "@/lib/utils";
 
 export type ProtectionStatus = "idle" | "clean" | "warning" | "critical" | "scanning";
 
@@ -66,7 +65,7 @@ export function StatusHero({ status, counts, host, showBreakdown = true }: Statu
           </>
         )}
         <ShieldMark
-          className={cn("relative h-14 w-14 transition-colors duration-500", scanning && "animate-pulse")}
+          className={"relative h-14 w-14 transition-colors duration-500"}
           style={{ color: scanning ? "var(--primary)" : shieldColor }}
         />
         {!scanning && (

@@ -24,13 +24,13 @@ it's fixture data shaped exactly like what the real Tauri commands return.
 
 ## Regenerating `fixtures/rules.json`
 
-If the rule pack changes and the fixture goes stale:
+If the rule pack changes and the fixture goes stale, run this from `src/mocks/tauri/` (needs PyYAML):
 
 ```bash
 python3 -c "
 import yaml, json, glob
 rules = []
-for path in sorted(glob.glob('../../../../rules/**/*.yaml', recursive=True)):
+for path in sorted(glob.glob('../../../../../rules/**/*.yaml', recursive=True)):
     with open(path) as f:
         r = yaml.safe_load(f)
     rules.append({

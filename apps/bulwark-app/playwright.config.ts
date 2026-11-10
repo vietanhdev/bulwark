@@ -18,7 +18,8 @@ export default defineConfig({
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
     command: "npm run dev",
-    env: { VITE_MOCK_TAURI: "true" },
+    // The AWS Vault preview tab has its own tests, so the test server turns it on.
+    env: { VITE_MOCK_TAURI: "true", VITE_MOCK_AWS_VAULT: "true" },
     url: "http://localhost:4173",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

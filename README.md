@@ -13,7 +13,7 @@
   <a href="https://github.com/vietanhdev/bulwark/actions/workflows/ci.yml"><img src="https://github.com/vietanhdev/bulwark/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License: Apache 2.0"></a>
   <a href="https://bulwark.nrl.ai"><img src="https://img.shields.io/badge/docs-bulwark.nrl.ai-1f8a8c" alt="Docs"></a>
-  <a href="https://bulwark.nrl.ai/checks/"><img src="https://img.shields.io/badge/checks-123-1f8a8c" alt="123 checks"></a>
+  <a href="https://bulwark.nrl.ai/checks/"><img src="https://img.shields.io/badge/checks-132-1f8a8c" alt="132 checks"></a>
 </p>
 
 Bulwark checks what an attacker would use on a developer machine:
@@ -61,7 +61,7 @@ Bulwark 0.13.1 · AI coding agents · 1 project · 4 agent files checked
 
 ## Demo
 
-![Bulwark in action: run a scan, open a problem and its one-click fix, check a remote machine, and switch between light and dark](docs/public/demo.gif)
+![Bulwark in action: run a scan, open a problem and its fix, preview Fix now, look through Secrets and Tools, and switch between light and dark](docs/public/demo.gif)
 
 ## How it works
 
@@ -74,7 +74,19 @@ place to fix. A check that couldn't run (no privilege, wrong OS, a file it could
 as such and never counted as a pass, so a green result means something.
 
 <p align="center">
-  <img src="docs/public/diagrams/checks.svg" alt="123 checks in seven groups: secrets and credentials (10), supply chain and developer tools (14), exposed services (6), AI coding agents (15), SSH (11), compromise indicators (17), OS hardening (50), plus your own YAML checks; runs on Linux, macOS, Windows and WSL." width="100%">
+  <img src="docs/public/diagrams/checks.svg" alt="132 checks in seven groups: secrets and credentials (16), supply chain and developer tools (16), exposed services (6), AI coding agents (15), SSH (12), compromise indicators (17), OS hardening (50), plus your own YAML checks; runs on Linux, macOS, Windows and WSL." width="100%">
+</p>
+
+### AI coding agents
+
+<p align="center">
+  <img src="docs/public/diagrams/agent-surface.svg" alt="Six places a coding agent reaches that Bulwark checks: instruction files, settings and approvals, hooks from cloned repos, MCP servers, secrets in AI context, and your account and files, around an AI coding agent in the middle; 23 agent checks across Claude Code, Codex, Cursor, Copilot, Gemini CLI and more." width="100%">
+</p>
+
+### From scan to fix
+
+<p align="center">
+  <img src="docs/public/diagrams/scan-to-fix.svg" alt="From scan to fix in five steps: scan, understand, preview every change, apply only after you confirm, then check again. Results stay on this computer, secrets are shown masked, a skipped check never counts as passed, and risky SSH changes are reviewed one at a time." width="100%">
 </p>
 
 ### Watch your other machines
@@ -109,7 +121,7 @@ as such and never counted as a pass, so a green result means something.
   base-URL exfil overrides, and world-readable credential stores. Workspaces are auto-discovered;
   leaked secrets are opt-in redactable (dry-run first, `0600` backup, permissions preserved). A
   highlighted tab in the GUI and `bulwarkctl ai scan` / `bulwarkctl ai redact` in the CLI.
-- **100 rules** across 15 categories (credential exposure, SSH/remote access, persistence, network
+- **109 rules** across 15 categories (credential exposure, SSH/remote access, persistence, network
   egress, kernel hardening, filesystem permissions, privilege escalation, logging/auditing,
   accounts/services, defense evasion, rootkit/malware, file integrity, developer-tool settings, macOS and
   Windows settings), each carrying a severity,
@@ -150,6 +162,10 @@ as such and never counted as a pass, so a green result means something.
   No plugin API to learn.
 
 ## How it compares with host auditors
+
+<p align="center">
+  <img src="docs/public/diagrams/where-it-fits.svg" alt="Where Bulwark fits: developer tools and AI agents are its main focus; it covers the operating system; it partly covers malware and live attacks (pair with antivirus or EDR) and your code's dependencies (pair with npm audit, Snyk, Socket or Dependabot)." width="100%">
+</p>
 
 This table covers the host-hardening side; the AI-agent checks and what each one is grounded in are in
 the [AI agent security guide](https://bulwark.nrl.ai/guide/agent-security). On the host side Bulwark fills a specific gap: a *desktop-native, continuously-monitoring* host scanner with a

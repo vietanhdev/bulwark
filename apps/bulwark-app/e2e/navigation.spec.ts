@@ -15,11 +15,11 @@ test.describe("navigation", () => {
 
   test("can move back and forth between views without losing state", async ({ page }) => {
     await page.goto("/");
-    await goToView(page, "All checks");
-    await expect(page.getByRole("heading", { name: "All checks", exact: true })).toBeVisible();
-    await goToView(page, "Activity");
-    await expect(page.getByRole("heading", { name: "Activity", exact: true })).toBeVisible();
-    await goToView(page, "Home");
-    await expect(page.getByRole("heading", { name: "Home", exact: true })).toBeVisible();
+    await goToView(page, "Rule catalog");
+    await expect(page.getByRole("heading", { name: "Rule catalog", exact: true })).toBeVisible();
+    await goToView(page, "History");
+    await expect(page.getByRole("heading", { name: "History", exact: true })).toBeVisible();
+    await goToView(page, "Scan");
+    await expect(page.getByRole("heading", { name: "Scan", exact: true })).toBeVisible();
   });
 });

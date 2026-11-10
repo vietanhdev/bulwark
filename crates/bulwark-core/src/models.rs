@@ -245,6 +245,12 @@ pub struct Finding {
 pub struct CollectorError {
     pub collector: String,
     pub message: String,
+    /// True when this is one file the collector could not check (a link leaving the home folder,
+    /// a pipe, an unreadable file), not a collector that failed. The rules that read that file
+    /// are not counted as evaluated either way; front-doors show it as a skipped check, not as a
+    /// failed scan. Absent in results from older versions.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub skipped: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -325,6 +331,7 @@ mod tests {
             collector_errors: vec![CollectorError {
                 collector: "sudoers".into(),
                 message: "denied".into(),
+                skipped: false,
             }],
             privileged_collectors_skipped: vec!["sudoers".into()],
             rules_evaluated: vec!["BLWK-NET-001".into()],

@@ -2137,7 +2137,14 @@ mod tests {
     #[test]
     fn explicit_needs_replace_the_detected_roles() {
         let profile = scan_profile(vec!["developer".to_string()]);
-        assert_eq!(profile.needs, vec!["developer".to_string()]);
-        assert_eq!(profile.os, Profile::current_host().os);
+        let host = Profile::current_host();
+        let mut expected = vec!["developer".to_string()];
+        // Explicit needs replace roles, not environment facts. WSL must remain
+        // tagged so manual scans and background scans apply the same skip rules.
+        if host.needs.iter().any(|need| need == "wsl") {
+            expected.push("wsl".to_string());
+        }
+        assert_eq!(profile.needs, expected);
+        assert_eq!(profile.os, host.os);
     }
 }

@@ -40,8 +40,8 @@ being edited.
 ## Ignore a type of issue, or turn a check off
 
 - **⋮ → Ignore this type of issue** on any issue hides every finding of that check on that machine.
-- **All checks** lists every check; open one and choose **Turn off** (with a reason) or **Turn on**.
-  Checks you turned off show an *off* badge, and **All checks → Ignored** lists every decision,
+- **Tools → Rule catalog** lists every check; open one and choose **Turn off** (with a reason) or **Turn on**.
+  Checks you turned off show an *off* badge, and **Rule catalog → Ignored** lists every decision,
   per-place ignores included, with the full history.
 - Terminal: `bulwarkctl rules suppress <ID> --reason …` / `unsuppress`, and `bulwarkctl rules
   suppressions [--audit]`.
@@ -50,7 +50,7 @@ Each monitored machine keeps its own decisions: ignoring something on `web-1` ne
 laptop.
 
 **Choose the kind of machine.** Server-only checks (login banners, log forwarding, password ageing)
-run only when you ask for them: **Checks → Change** on Home, or `bulwarkctl scan --needs server`.
+run only when you ask for them: **Checks → Change** on the Scan page, or `bulwarkctl scan --needs server`.
 
 ## Add your own checks
 
@@ -61,7 +61,7 @@ Write a check in the same YAML format as Bulwark's own and drop it in your rules
 | Linux, macOS | `~/.config/bulwark/rules` (or `$XDG_CONFIG_HOME/bulwark/rules`) |
 | Windows | `%APPDATA%\bulwark\rules` |
 
-**All checks → Your own checks → Open folder** creates it with a commented example. A check reads the
+**Tools → Rule catalog → Your own checks → Open folder** creates it with a commented example. A check reads the
 facts one collector gathers and fires when its condition holds:
 
 ```yaml

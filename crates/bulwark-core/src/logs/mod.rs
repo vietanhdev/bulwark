@@ -282,7 +282,7 @@ fn build_finding(
         category: loaded.rule.category.clone(),
         title: crate::engine::render_template(&loaded.rule.title, &context),
         explanation: crate::engine::render_template(&loaded.rule.explain, &context),
-        fix_hint: crate::engine::render_template(&loaded.rule.fix, &context),
+        fix_hint: crate::engine::render_fix_template(&loaded.rule.fix, &context),
         group_key,
         match_count,
         context,

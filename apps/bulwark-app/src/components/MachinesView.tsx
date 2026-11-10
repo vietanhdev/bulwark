@@ -138,8 +138,8 @@ export function MachinesView({
 
   return (
     <PageShell
-      title="Remote machines"
-      description="Keep watch over your servers and other computers over SSH. No agent runs on them, and nothing listens on them between scans."
+      title="Remote hosts"
+      description="Inspect other machines over SSH. Connections and schedules stay under your control."
       action={
         machines.length > 0 && (
           <>
@@ -309,11 +309,11 @@ const DOT_COLOR: Record<Dot, string> = {
   idle: "var(--muted-foreground)",
 };
 
-function StatusDot({ dot, pulse }: { dot: Dot; pulse?: boolean }) {
+function StatusDot({ dot }: { dot: Dot; pulse?: boolean }) {
   return (
     <span
       aria-hidden
-      className={cn("inline-block h-2 w-2 shrink-0 rounded-full", pulse && "animate-pulse")}
+      className={"inline-block h-2 w-2 shrink-0 rounded-full"}
       style={{ background: DOT_COLOR[dot] }}
     />
   );

@@ -67,8 +67,11 @@ const is = {
 
 // Always yields a working link: the direct asset once a release exists, the releases page
 // otherwise (no release cut yet, or the API call failed).
+// The link comes from an API response, so only a download from this repository's own releases is
+// ever bound to a button; anything else falls back to the releases page.
 function url(pred) {
-  return find(pred)?.browser_download_url ?? RELEASES_URL;
+  const link = find(pred)?.browser_download_url;
+  return typeof link === "string" && link.startsWith(`${RELEASES_URL}/download/`) ? link : RELEASES_URL;
 }
 function size(pred) {
   const a = find(pred);
@@ -96,7 +99,7 @@ Run `uname -m`. `x86_64` (also called amd64) is a typical desktop, laptop or clo
 
 ## Desktop app
 
-The desktop app: one scan for secrets, packages, exposed services, AI assistants, OS settings and viruses, with one-click fixes. It also installs the command-line tool as `bulwark`.
+The desktop app: one scan for secrets, packages, exposed services, AI assistants, OS settings and viruses, with fixes you preview before applying. It also installs the command-line tool as `bulwark`.
 
 <div class="dl-grid">
   <a class="dl-card" :href="url(is.guiDeb)">

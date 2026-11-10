@@ -1,0 +1,16 @@
+id: BLWK-CRED-008
+title: "A kubeconfig embeds static cluster credentials ({{ credential_stores.path }})"
+category: credential-exposure
+severity: medium
+collector: credential_stores
+os: [linux, macos, windows]
+condition: kind == "kube_config" and static_credentials > 0
+explain: >
+  {{ credential_stores.path }} contains {{ credential_stores.static_credentials }} embedded credential(s):
+  bearer tokens, client keys or passwords. Unlike a cloud login, these usually do not expire, so a copied
+  kubeconfig keeps working against the cluster.
+fix: |
+  1. Switch each cluster entry to an exec plugin that fetches short-lived tokens ('aws eks update-kubeconfig', 'gcloud container clusters get-credentials', 'az aks get-credentials' or 'kubelogin').
+  2. Revoke the embedded token or certificate on the cluster.
+  3. Keep any kubeconfig that must hold static credentials readable by you alone ('chmod 600').
+references: [ATTACK-T1552.001, ATTACK-T1078.004]

@@ -1,0 +1,17 @@
+id: BLWK-CRED-006
+title: "An npm token is stored in plain text ({{ credential_stores.path }})"
+category: credential-exposure
+severity: medium
+collector: credential_stores
+os: [linux, macos, windows]
+# A ${VAR} reference is the recommended form and is not counted.
+condition: kind == "npmrc" and plaintext_tokens > 0
+explain: >
+  {{ credential_stores.path }} contains {{ credential_stores.plaintext_tokens }} registry login(s) written
+  out in full. A publish token in this file lets anyone who copies it push packages under your name, which
+  is how several 2025-2026 npm worms spread from one developer machine to thousands of projects.
+fix: |
+  1. Revoke the token on the registry and create a granular token with an expiry and only the packages it needs.
+  2. Reference it from the environment instead of writing it down: '//registry.npmjs.org/:_authToken=${NPM_TOKEN}'.
+  3. For publishing from CI, prefer trusted publishing (OIDC), which needs no long-lived token at all.
+references: [ATTACK-T1552.001, ATTACK-T1195.002]

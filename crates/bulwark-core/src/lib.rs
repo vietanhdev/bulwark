@@ -6,6 +6,7 @@ pub mod compliance;
 pub mod condition;
 pub mod engine;
 pub mod fleet;
+pub mod homefs;
 pub mod logs;
 pub mod models;
 pub mod notify_config;

@@ -9,8 +9,8 @@
  *
  * Usage:
  *   VITE_MOCK_TAURI=true npx vite --port 4173 --strictPort &
- *   FRAME_DIR=/tmp/bw-frames NODE_PATH=/tmp/pw/node_modules node scripts/record-demo.mjs [baseUrl]
- *   # then ffmpeg -framerate 12 -i "$FRAME_DIR/f%05d.png" ... (see the shell step)
+ *   FRAME_DIR=/tmp/bw-frames node scripts/record-demo.mjs [baseUrl]
+ *   FRAME_DIR=/tmp/bw-frames scripts/encode-demo.sh   # -> docs/public/demo.mp4 + demo.gif
  *
  * Output: numbered PNG frames in $FRAME_DIR (2560x1600 each).
  */
@@ -37,6 +37,7 @@ const browser = await chromium.launch({
 const context = await browser.newContext({
   viewport: { width: W, height: H },
   deviceScaleFactor: SCALE,
+  colorScheme: "light",
 });
 const page = await context.newPage();
 page.setDefaultTimeout(3500);
@@ -93,61 +94,64 @@ const clickBtn = (name, exact = false) =>
     .first()
     .click()
     .catch(() => {});
+// Scenes follow the workbench: Scan -> open a finding -> Fix now review -> Secrets (inventory, one
+// tool, the list of tools) -> Tools ->
+// Settings (theme), then back to Scan. Fixture data only (VITE_MOCK_TAURI), nothing real.
 
-// 1. Home, at rest.
+// 1. Scan, at rest, then run a scan.
 await hold(1200);
-
-// 2. Run a scan — problems stream in, grouped by cause.
 await clickBtn("Scan now");
-await hold(3200);
+await hold(2600);
 
-// 3. Open a problem: why it matters, the one-click fix, then Details.
+// 2. Open a finding: why it matters and its fix.
 await clickBtn(/ssh private key is not passphrase-protected/i);
-await hold(1400);
-await clickBtn(/^add a passphrase$/i);
-await hold(1200);
+await hold(1800);
 await clickBtn(/anthropic api key exposed/i);
-await hold(1300);
-await scrollBy(260);
-await hold(900);
-await scrollBy(-260);
-await hold(300);
+await hold(1600);
 
-// 4. Remote machines: each one's system at a glance, then one opened — its connection and last
-//    scan side by side, and its issues grouped like Home's.
-await clickNav("Remote");
+// 3. Fix now: a preview of every change; nothing is written until Apply.
+await clickBtn(/^fix now$/i, false);
+await hold(3000);
+await clickBtn(/^cancel$/i);
+await hold(500);
+
+// 4. Secrets: one inventory of what each tool holds and how it is stored (names only, never
+//    values). On a fresh profile every detected tool is added and read automatically, so the
+//    Inventory is already filled. Then one tool's own tab, then the list of tools you can add.
+const clickTab = (name) =>
+  page
+    .getByRole("tab", { name, exact: true })
+    .click()
+    .catch(() => {});
+await clickNav(/^secrets$/i);
+await hold(2600);
+await clickTab("AWS CLI");
 await hold(1500);
-await page
-  .getByRole("button", { name: /web-1/ })
-  .first()
-  .click()
-  .catch(() => {});
-await hold(1400);
-await scrollBy(420);
-await hold(1100);
-await scrollBy(-420);
-await hold(300);
+await clickTab("Add");
+await hold(1700);
 
-// 5. Live theme + colour switching.
-await clickNav("Settings");
-await hold(1000);
-await clickBtn("Dark", true);
+// 5. Tools: deeper tools when needed.
+await clickNav(/^tools$/i);
+await hold(1800);
+
+// 6. Live theme + colour switching.
+await clickNav(/^settings$/i);
+await hold(900);
+await clickBtn("Light", true);
 await hold(1100);
 await clickBtn("Blue accent");
-await hold(750);
-await clickBtn("Indigo sidebar");
-await hold(950);
+await hold(700);
+await clickBtn("Indigo chrome");
+await hold(900);
 await clickBtn("Aqua accent");
-await hold(600);
-await clickBtn("Graphite sidebar");
+await clickBtn("Graphite chrome");
+await hold(700);
+await clickBtn("Dark", true);
 await hold(800);
 
-// 6. Back to a light Home.
-await clickBtn("Light", true);
-await hold(450);
-await clickNav("Home");
-await hold(1500);
+// 7. Back to Scan.
+await clickNav(/^scan$/i);
+await hold(1400);
 
-await context.close();
 await browser.close();
-console.log(`captured ${idx} frames at ${W * SCALE}x${H * SCALE} into ${FRAME_DIR}`);
+console.log(`${idx} frames -> ${FRAME_DIR}`);

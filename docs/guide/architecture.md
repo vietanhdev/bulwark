@@ -17,7 +17,7 @@ Bulwark is a Tauri + Rust desktop app that scans a Linux host for security misco
 
 This document was written before implementation and has been revised to describe what actually shipped, not just what was planned. As of v0.1:
 
-- **100 rules across 15 categories** (developer-tool settings — Git, SSH client, npm/yarn, pip and Docker options that switch a security check off — SSH/remote access, persistence, privilege escalation, defense evasion, credential exposure (plaintext credential stores, added in 0.11), filesystem permissions, network egress, kernel/sysctl hardening, logging/auditing, accounts & services, rootkit/malware indicators, file integrity, macOS hardening, Windows hardening), plus a dedicated 23-rule AI agent-security pass covering two dozen coding agents.
+- **109 rules across 15 categories** (developer-tool settings — Git, SSH client, npm/yarn, pip and Docker options that switch a security check off — SSH/remote access, persistence, privilege escalation, defense evasion, credential exposure (plaintext credential stores, added in 0.11), filesystem permissions, network egress, kernel/sysctl hardening, logging/auditing, accounts & services, rootkit/malware indicators, file integrity, macOS hardening, Windows hardening), plus a dedicated 23-rule AI agent-security pass covering two dozen coding agents.
 - **Both front-doors work end-to-end**: `bulwarkctl` (scan, rules list/validate, history) and `bulwark-app` (Tauri v2 + React GUI), sharing one `bulwark-core` engine and one local SQLite store, exactly as designed in §4.
 - **Real ClamAV integration** — not a placeholder: live streamed per-file scan progress, real engine/database version and staleness reporting, and a distro-aware install command shown when ClamAV isn't installed at all.
 - **File-integrity monitoring** for a curated set of security-relevant files, plus a background monitoring loop that re-scans on an interval and reconciles findings across runs.
@@ -102,6 +102,9 @@ flowchart TB
 flowchart LR
   ui["React UI (Tauri webview)"] -->|"IPC commands"| shell["Tauri Rust shell<br/>(bulwark-app)"]
   term["Terminal / SSH session"] -->|"args, stdout, exit code"| cli["bulwarkctl"]
+  shell -->|"Secrets page: names and storage only"| access["bulwark-access<br/>passive readers"]
+  access -->|"reads each tool's own files"| stores["AWS CLI, Docker, Git,<br/>npm, PyPI, kubeconfig…"]
+  vault -->|"metadata only, no persistence"| access
   shell -->|"invoke scan"| core["bulwark-core"]
   cli -->|"invoke scan"| core
   core -->|"loads"| rules["rules/<br/>(YAML rule pack)"]
@@ -113,6 +116,12 @@ flowchart LR
   db -->|"shared history / diffing"| shell
   db -->|"shared history / diffing"| cli
 ```
+
+**The Secrets page:** `bulwark-access` is a separate crate used only by the GUI. Its readers parse
+each developer tool's own credential files into names, storage kind and expiry, never a value, and
+keep the result in UI memory. It does not join the scanner, the SQLite store, background
+monitoring, or any authentication path. See [Secrets](/guide/secrets) and the
+[workbench section](#_18-the-desktop-workbench) below.
 
 `bulwark-core` is not one engine but four, sharing a finding model and a store. Each answers a
 question the others structurally cannot:
@@ -299,6 +308,9 @@ There's no network API — the "client" and "server" are the same process, expos
 
 | Command | Purpose | Auth |
 |---------|---------|------|
+| `secrets_detect` | Which secrets managers this build offers and whether each has files here (existence checks only) | none |
+| `secrets_inventory` | One manager's inventory: names, storage kind, expiry; `provider` is matched against a fixed list | local user; no value is read |
+| `access_aws_snapshot` | Preview, off unless `BULWARK_AWS_VAULT_PREVIEW=1`: AWS Vault profile metadata through a fixed, bounded subprocess | local user; authenticate separately in a terminal |
 | `scan_start` | Kick off a scan; streams findings via Channel as they're produced | none (local single-user) |
 | `scan_get_history` | List past `ScanRun`s | none |
 | `finding_get_by_run` | Fetch findings for a given run | none |
@@ -416,7 +428,7 @@ now refuse.
 
 Reframed as rule-set and scan-performance growth, since there's no multi-tenant traffic.
 
-- **Current load:** single host, 100 rules.
+- **Current load:** single host, 109 rules.
 - **Expected load:** community-contributed rules could grow into the hundreds over time — Lynis's own documentation describes "hundreds" of individual tests, a directionally useful reference ceiling.
 - **Breaking point:** naively re-running a collector for every rule that references it duplicates work once dozens of rules share one collector (e.g. many SSH rules all reading `sshd_config`).
 - **Scale-out plan:** not distributed — collectors are memoized per scan run (collect once, evaluate N rules against the cached fact), and independent collectors run concurrently.
@@ -527,6 +539,8 @@ flowchart LR
 - **Authz:** privilege boundary via `pkexec`/polkit (GUI) or `sudo` (CLI), scoped per-collector — root is only required for specific operations, never for the whole app.
 - **Data classification:** a finding's context can itself contain sensitive material (a finding may quote the exact secret pattern it detected). Never logged externally, never transmitted — local SQLite only, no network calls from `bulwark-core` by design (a hard invariant, not just a default).
 - **Threat model:** Bulwark is itself an attractive target if compromised — broad read access across the system, and elevated write access for any future "apply fix" action. Rule files (and any future "apply fix") are a supply-chain-sensitive surface; signed/provenance-checked rule packs are required before any "install rules from the internet" feature ships (see §14).
+- **Reading a home folder as root.** A privileged scan reads dotfiles in the invoking user's home, and that user controls every name in it. `bulwark-core::homefs` is the one way collectors and the Secrets readers open such a file: it resolves every link (in the file name and in the folders above it), requires the result to stay inside the home folder, opens once without blocking, and then decides from the open descriptor — a regular file, really located in that home, owned by the home's owner. A link that leaves the home folder, a named pipe, or a file swapped mid-read is refused, and the row is reported as "could not check `<path>`", never as clean. Links that stay inside the home folder (how dotfile managers work) are followed.
+- **Nothing from the scanned machine is trusted as text.** Values substituted into a finding are made display-safe (control, bidirectional and invisible characters replaced, long values cut). A value placed in a rule's `fix` text must be one plain word, or it is replaced by a stand-in, so a file named `id; curl … | sh` can never become part of a command a user copies. A URL from a config file is reduced to scheme, host and port, because registry URLs carry credentials.
 - **Known limitation — root-level compromise:** Bulwark cannot defend against an attacker who already has root on the machine it's running on. Such an attacker can disable rules, tamper with the local SQLite findings store, or replace the Bulwark binary itself, exactly as easily as they'd disable any other local defense — a local-only tool cannot be tamper-evident against the privilege level it's trying to detect. This is a structural limit of the v1 design (no phone-home, see Non-goals), not an oversight; it's stated here explicitly rather than left implicit. A future opt-in mode that ships scan results to a destination the same attacker doesn't control (e.g. remote syslog) would close this gap but is out of v1 scope.
 - **Network use is opt-in and lives in the front-doors.** Two features cross the network, both only when the user sets them up and both outside `bulwark-core`: monitoring other machines over SSH (to machines the user registers, with host keys verified) and alerts to Telegram / an SMTP server (machine names, severities and issue titles only — never evidence or secrets). Nothing is sent to the Bulwark project. See §4 and [Monitoring other machines](/guide/remote-monitoring).
 - **Audit logging:** every privileged action is logged locally with timestamp and exact command, viewable in-app — useful for review, though subject to the same limitation above if the attacker already has root.
@@ -671,3 +685,38 @@ Both axes are enforced in `engine::run_scan`, via a `Profile { os, needs }` pass
 - Only one rule (`BLWK-LOG-003`) carries a `profiles` tag today; a full pass deciding which of the other 55 Linux rules are genuinely server-only, desktop-only, etc. is future work, not attempted here — mistagging a broadly-relevant rule as opt-in-only would be a real regression (it would silently stop running for most users by default), so this was deliberately left conservative rather than guessed at in bulk.
 - The GUI's active-needs selection isn't persisted across restarts, and the background monitoring loop doesn't know about it yet (see §14).
 - CI does not yet build/test on macOS or Windows runners — see the research on cheap options for that (GitHub Actions `macos-latest`/`windows-latest` runners, free once this repository is public) — so the two skeleton collectors are only ever compiled on Linux CI today, never actually exercised on their target OS.
+
+## 18. The desktop workbench
+
+```mermaid
+flowchart LR
+  subgraph app["Desktop app"]
+    scan["Scan<br/>run, read, Fix now"]
+    secrets["Secrets<br/>inventory per tool"]
+    tools["Tools<br/>Configuration, File changes, Malware scan,<br/>Remote hosts, Rule catalog, History"]
+  end
+  scan -->|scan_start / ai_scan_start| core["bulwark-core<br/>collectors + rules + AI detectors"]
+  secrets -->|secrets_inventory| access["bulwark-access<br/>passive readers"]
+  secrets -.->|"Review in Scan"| scan
+  access -->|token files| core
+```
+
+- **Scan** is the default tab and owns the run, its results and **Fix now**. Before the first
+  scan it shows a four-step guide instead of an empty state. The top-level pages carry no visible
+  title: the selected tab already names them.
+- **Secrets** is an inventory, not a checker. Each supported tool is one passive reader in
+  `bulwark-access::inventory` (AWS CLI, Docker, Git, GitHub CLI, npm, PyPI, Kubernetes) plus a
+  "Tool tokens" view built from `bulwark_core::collectors::token_files`,
+  so the inventory and the scan rule share one parser. On first run every detected tool is added;
+  file-based tools are re-read each time the page opens. Readers keep names, storage kind and
+  expiry, never a value, and follow a symlink only when its target stays inside the home folder.
+- **Whether storage is safe is a Scan rule**: `BLWK-CRED-001..010` (credential files, shell startup
+  files, package-registry tokens, kubeconfig, tool token files, and keys saved in shell history),
+  `BLWK-SSH-014` (weak keys), and `BLWK-DEV-010/011` (npm install scripts; no release waiting
+  period for npm, bun or uv — each read from the user-level config only, so they are low-severity
+  suggestions). `BLWK-AI-012` covers three kinds of hidden text in instruction files: bidi
+  controls, Unicode Tag characters (decoded in the finding) and long runs of invisible characters.
+- **Motion budget**: motion only where it carries information — a spinner or the single task
+  mark while work runs, and the disclosure chevron. No idle loops, tab-switch fades, slide-ins or
+  hover scaling; one stable activity phrase. A browser test fails if anything loops while idle.
+

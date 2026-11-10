@@ -20,11 +20,11 @@ VS Code and its forks (VS Code Insiders, VSCodium, Cursor, Windsurf, Kiro).
    account the agents run as can become root without a password anyway.
 
 In the desktop app these checks run as part of every **Scan now** and their problems appear on
-Home with everything else (configure extra folders in **Settings → AI assistant checks**). From a
+the **Scan** page with everything else (configure extra folders in **Settings → AI assistant checks**). From a
 terminal, `bulwark ai scan` runs only these checks (`bulwarkctl ai scan` with the CLI-only
 package). Each check below links to its own page with the full explanation and fix.
 
-![An opened problem in Bulwark: why it matters, the one-click fix, and Details](/screenshots/fix.png)
+![An opened problem in Bulwark: its evidence, proposed remediation action, and Details](/screenshots/fix.png)
 
 ::: warning A scan reads real secrets. Treat its output accordingly.
 Findings are stored and displayed with the secret **masked** (`sk-a…3f`), never in full, and the
@@ -32,6 +32,8 @@ raw value is never written to the database or the logs. But the *file paths* a f
 are real, so a screenshot of a live scan can still disclose where you keep things. The screenshots
 in this documentation are deliberately generated from fixtures, not from a real machine.
 :::
+
+![Six places a coding agent reaches that Bulwark checks: instruction files, settings and approvals, hooks from cloned repos, MCP servers, secrets in AI context, and your account and files, around an AI coding agent in the middle; 23 agent checks across Claude Code, Codex, Cursor, Copilot, Gemini CLI and more.](/diagrams/agent-surface.svg)
 
 ## What it checks
 
@@ -48,7 +50,7 @@ in this documentation are deliberately generated from fixtures, not from a real 
 | [`BLWK-AI-009`](/checks/blwk-ai-009) | Critical | VS Code `chat.tools.autoApprove` ("YOLO mode") | [CVE-2025-53773](https://www.wiz.io/vulnerability-database/cve/cve-2025-53773) |
 | [`BLWK-AI-010`](/checks/blwk-ai-010) | High | VS Code Workspace Trust disabled | T1204.002 |
 | [`BLWK-AI-011`](/checks/blwk-ai-011) | High | A VS Code task set to run on `folderOpen` | T1204.002 |
-| [`BLWK-AI-012`](/checks/blwk-ai-012) | High | Hidden Unicode / bidi controls in an instruction file (the **Rules File Backdoor**) | [Pillar Security](https://www.pillar.security/blog/new-vulnerability-in-github-copilot-and-cursor-how-hackers-can-weaponize-code-agents) |
+| [`BLWK-AI-012`](/checks/blwk-ai-012) | High | Hidden Unicode in an instruction file: bidi controls that reorder what you see, invisible Tag characters that spell text only the model reads (shown decoded), or a long run of zero-width characters (the **Rules File Backdoor**, ASCII smuggling, GlassWorm) | [Pillar Security](https://www.pillar.security/blog/new-vulnerability-in-github-copilot-and-cursor-how-hackers-can-weaponize-code-agents) |
 | [`BLWK-AI-013`](/checks/blwk-ai-013) | Medium | Prompt-injection-style phrases in an instruction file (heuristic) | T1566 |
 | [`BLWK-AI-014`](/checks/blwk-ai-014) | High | An `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` override to a non-official host | CVE-2025-59536 |
 | [`BLWK-AI-015`](/checks/blwk-ai-015) | Medium | A plaintext credential file readable by group/other | T1552.001 |

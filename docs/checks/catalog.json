@@ -129,7 +129,7 @@
     "ATTACK-T1078.004"
    ],
    "collector": "credential_stores",
-   "condition": "kind == \"aws_credentials\" and long_lived_keys > 0",
+   "condition": "(kind == \"aws_credentials\" or kind == \"aws_config\") and long_lived_keys > 0",
    "source": "rules/credential-exposure/BLWK-CRED-001.yaml",
    "group": "secrets",
    "slug": "blwk-cred-001"
@@ -178,10 +178,109 @@
     "ATTACK-T1552.001"
    ],
    "collector": "credential_stores",
-   "condition": "kind != \"git_config\" and readable_by_others == true",
+   "condition": "kind != \"git_config\" and kind != \"shell_startup\" and kind != \"shell_history\" and kind != \"aws_config\" and readable_by_others == true",
    "source": "rules/credential-exposure/BLWK-CRED-004.yaml",
    "group": "secrets",
    "slug": "blwk-cred-004"
+  },
+  {
+   "id": "BLWK-CRED-005",
+   "title": "Secrets are written into a shell startup file ({{ credential_stores.path }})",
+   "category": "credential-exposure",
+   "severity": "high",
+   "explain": "{{ credential_stores.path }} sets {{ credential_stores.exported_secrets }} secret-looking variable(s) to a literal value ({{ credential_stores.secret_names }}). Every program you start inherits them, dotfile backups and sync tools copy them, and anything that can read your home folder, including a malicious package's install script, can read them.",
+   "fix": "Keep the value in a secrets store and fetch it when it is needed, not in the file.\n1. Rotate each key listed above: it has been sitting in a plain file.\n2. Store the new value in your system keychain or password manager (for example 'secret-tool store', 'security add-generic-password', 1Password CLI 'op read' or 'pass').\n3. Replace the line with a lookup that runs only when needed, or use a per-project tool such as direnv with a keychain-backed value.\n4. For AWS, prefer short-lived sessions ('aws configure sso' or AWS Vault) to exporting keys at all.",
+   "references": [
+    "ATTACK-T1552.001"
+   ],
+   "collector": "credential_stores",
+   "condition": "kind == \"shell_startup\" and exported_secrets > 0",
+   "source": "rules/credential-exposure/BLWK-CRED-005.yaml",
+   "group": "secrets",
+   "slug": "blwk-cred-005"
+  },
+  {
+   "id": "BLWK-CRED-006",
+   "title": "An npm token is stored in plain text ({{ credential_stores.path }})",
+   "category": "credential-exposure",
+   "severity": "medium",
+   "explain": "{{ credential_stores.path }} contains {{ credential_stores.plaintext_tokens }} registry login(s) written out in full. A publish token in this file lets anyone who copies it push packages under your name, which is how several 2025-2026 npm worms spread from one developer machine to thousands of projects.",
+   "fix": "1. Revoke the token on the registry and create a granular token with an expiry and only the packages it needs.\n2. Reference it from the environment instead of writing it down: '//registry.npmjs.org/:_authToken=${NPM_TOKEN}'.\n3. For publishing from CI, prefer trusted publishing (OIDC), which needs no long-lived token at all.",
+   "references": [
+    "ATTACK-T1552.001",
+    "ATTACK-T1195.002"
+   ],
+   "collector": "credential_stores",
+   "condition": "kind == \"npmrc\" and plaintext_tokens > 0",
+   "source": "rules/credential-exposure/BLWK-CRED-006.yaml",
+   "group": "secrets",
+   "slug": "blwk-cred-006"
+  },
+  {
+   "id": "BLWK-CRED-007",
+   "title": "A PyPI password or token is stored in plain text ({{ credential_stores.path }})",
+   "category": "credential-exposure",
+   "severity": "medium",
+   "explain": "{{ credential_stores.path }} holds {{ credential_stores.plaintext_tokens }} upload credential(s) in plain text. Whoever copies the file can publish a release of your package.",
+   "fix": "1. Revoke the token on PyPI and create a new one scoped to a single project.\n2. Let twine read it from your keychain instead: 'keyring set https://upload.pypi.org/legacy/ __token__', then remove the password line.\n3. For releases from CI, use PyPI trusted publishing, which needs no stored token.",
+   "references": [
+    "ATTACK-T1552.001",
+    "ATTACK-T1195.002"
+   ],
+   "collector": "credential_stores",
+   "condition": "kind == \"pypirc\" and plaintext_tokens > 0",
+   "source": "rules/credential-exposure/BLWK-CRED-007.yaml",
+   "group": "secrets",
+   "slug": "blwk-cred-007"
+  },
+  {
+   "id": "BLWK-CRED-008",
+   "title": "A kubeconfig embeds static cluster credentials ({{ credential_stores.path }})",
+   "category": "credential-exposure",
+   "severity": "medium",
+   "explain": "{{ credential_stores.path }} contains {{ credential_stores.static_credentials }} embedded credential(s): bearer tokens, client keys or passwords. Unlike a cloud login, these usually do not expire, so a copied kubeconfig keeps working against the cluster.",
+   "fix": "1. Switch each cluster entry to an exec plugin that fetches short-lived tokens ('aws eks update-kubeconfig', 'gcloud container clusters get-credentials', 'az aks get-credentials' or 'kubelogin').\n2. Revoke the embedded token or certificate on the cluster.\n3. Keep any kubeconfig that must hold static credentials readable by you alone ('chmod 600').",
+   "references": [
+    "ATTACK-T1552.001",
+    "ATTACK-T1078.004"
+   ],
+   "collector": "credential_stores",
+   "condition": "kind == \"kube_config\" and static_credentials > 0",
+   "source": "rules/credential-exposure/BLWK-CRED-008.yaml",
+   "group": "secrets",
+   "slug": "blwk-cred-008"
+  },
+  {
+   "id": "BLWK-CRED-009",
+   "title": "{{ credential_stores.tool }} stores a login token in plain text ({{ credential_stores.path }})",
+   "category": "credential-exposure",
+   "severity": "medium",
+   "explain": "{{ credential_stores.path }} holds {{ credential_stores.plaintext_tokens }} login token(s) for {{ credential_stores.tool }}, written out in full. Anything that can read your home folder, a backup, or a package install script that goes looking can copy them and act as you on that service.",
+   "fix": "Move the token into your system keychain, then delete it from the file and revoke the old one.\n- GitHub CLI: run 'gh auth logout' and 'gh auth login' on a machine with a keyring (secret-service, macOS Keychain or Windows Credential Manager) so the token is not written to hosts.yml.\n- Cargo: set 'global-credential-providers = [\"cargo:libsecret\"]' (or \"cargo:macos-keychain\", \"cargo:wincred\") in ~/.cargo/config.toml, then 'cargo login' again.\n- Terraform: use a credentials helper, or set TF_TOKEN_<host> from your password manager instead of credentials.tfrc.json.\n- RubyGems: pass the key through GEM_HOST_API_KEY from your password manager when publishing.\n- Composer: provide auth through the COMPOSER_AUTH environment variable from your password manager.\n- netrc: use your tool's credential helper (for Git, a keychain-backed helper) instead of passwords in .netrc.",
+   "references": [
+    "ATTACK-T1552.001"
+   ],
+   "collector": "credential_stores",
+   "condition": "kind in [\"gh_hosts\", \"cargo_credentials\", \"terraform_credentials\", \"gem_credentials\", \"composer_auth\", \"netrc\"] and plaintext_tokens > 0",
+   "source": "rules/credential-exposure/BLWK-CRED-009.yaml",
+   "group": "secrets",
+   "slug": "blwk-cred-009"
+  },
+  {
+   "id": "BLWK-CRED-010",
+   "title": "Keys are saved in your shell history ({{ credential_stores.path }})",
+   "category": "credential-exposure",
+   "severity": "high",
+   "explain": "{{ credential_stores.path }} contains {{ credential_stores.secrets_found }} key(s) typed as part of a command ({{ credential_stores.secret_kinds }}; {{ credential_stores.secret_lines }}). Your shell saved the whole line, so the key now sits in a plain file that backups, sync tools and any program running as you can read. History files are one of the first places credential-stealing malware looks.",
+   "fix": "Treat each key as leaked: replace it first, then clean up.\n1. Revoke the key where it was issued and create a new one.\n2. Remove the lines from {{ credential_stores.path }} with a text editor (close other terminals first, or they will write the old history back).\n3. To stop it happening again, do not put keys on the command line. Read them from your keychain or password manager when needed, for example 'export GITHUB_TOKEN=$(gh auth token)' or 'op run -- <command>'.\n4. As a safety net, make the shell skip lines that start with a space: 'HISTCONTROL=ignorespace' for bash, 'setopt HIST_IGNORE_SPACE' for zsh.",
+   "references": [
+    "ATTACK-T1552.003"
+   ],
+   "collector": "credential_stores",
+   "condition": "kind == \"shell_history\" and secrets_found > 0",
+   "source": "rules/credential-exposure/BLWK-CRED-010.yaml",
+   "group": "secrets",
+   "slug": "blwk-cred-010"
   },
   {
    "id": "BLWK-EVASION-001",
@@ -349,6 +448,39 @@
    "source": "rules/developer-tools/BLWK-DEV-009.yaml",
    "group": "network",
    "slug": "blwk-dev-009"
+  },
+  {
+   "id": "BLWK-DEV-010",
+   "title": "npm runs install scripts from packages automatically ({{ dev_tool_config.path }})",
+   "category": "developer-tools",
+   "severity": "low",
+   "explain": "By default, 'npm install' runs scripts that packages ship (preinstall, install, postinstall) with your account's full access. That is how the 2025-2026 npm worms spread: one poisoned release of a popular package ran a script on every machine that installed it and copied tokens, SSH keys and cloud credentials. Your user settings ({{ dev_tool_config.path }}) do not turn this off.",
+   "fix": "Turn install scripts off for your account, then allow them only where a project needs them.\n1. Run 'npm config set ignore-scripts true'.\n2. If a package needs its build step (for example a native module), run it on purpose: 'npm rebuild <package>' inside that project.\n3. Commands you start yourself, such as 'npm test' and 'npm run build', keep working.",
+   "references": [
+    "ATTACK-T1195.002",
+    "ATTACK-T1059"
+   ],
+   "collector": "dev_tool_config",
+   "condition": "kind == \"npm_user\" and install_scripts_auto == true",
+   "source": "rules/developer-tools/BLWK-DEV-010.yaml",
+   "group": "supply-chain",
+   "slug": "blwk-dev-010"
+  },
+  {
+   "id": "BLWK-DEV-011",
+   "title": "{{ dev_tool_config.tool }} installs brand-new package versions with no waiting period ({{ dev_tool_config.path }})",
+   "category": "developer-tools",
+   "severity": "low",
+   "explain": "Malicious package releases are usually caught and removed within hours or days. With no waiting period set in {{ dev_tool_config.path }}, {{ dev_tool_config.tool }} installs a version published minutes ago, which is the window attackers rely on. A short delay lets the registry and scanners catch a bad release before it reaches this machine.",
+   "fix": "{{ dev_tool_config.how_to_fix }}",
+   "references": [
+    "ATTACK-T1195.002"
+   ],
+   "collector": "dev_tool_config",
+   "condition": "kind in [\"npm_user\", \"bun_user\", \"uv_user\"] and no_release_cooldown == true",
+   "source": "rules/developer-tools/BLWK-DEV-011.yaml",
+   "group": "supply-chain",
+   "slug": "blwk-dev-011"
   },
   {
    "id": "BLWK-FIM-001",
@@ -1501,6 +1633,22 @@
    "slug": "blwk-ssh-013"
   },
   {
+   "id": "BLWK-SSH-014",
+   "title": "SSH key uses a weak algorithm: {{ ssh_private_keys.path }}",
+   "category": "ssh-remote-access",
+   "severity": "medium",
+   "explain": "{{ ssh_private_keys.path }} is a {{ ssh_private_keys.key_algorithm }} key ({{ ssh_private_keys.key_bits }} bits for RSA). DSA keys are disabled by default in current OpenSSH, and RSA keys shorter than 2048 bits can be broken with affordable computing. Servers increasingly refuse both, and those that still accept them offer little protection.",
+   "fix": "Create a modern key, switch to it, then retire the old one.\n1. Run 'ssh-keygen -t ed25519' (with a passphrase) to create a new key.\n2. Add the new public key wherever the old one is accepted: servers' ~/.ssh/authorized_keys, GitHub, GitLab, and so on.\n3. Remove the old public key from those places, then delete the old key pair.\nIf something you connect to only supports RSA, use 'ssh-keygen -t rsa -b 4096' instead.",
+   "references": [
+    "ATTACK-T1552.004"
+   ],
+   "collector": "ssh_private_keys",
+   "condition": "key_strength_known == true and (key_algorithm == \"dsa\" or (key_algorithm == \"rsa\" and key_bits < 2048))",
+   "source": "rules/ssh-remote-access/BLWK-SSH-014.yaml",
+   "group": "remote-access",
+   "slug": "blwk-ssh-014"
+  },
+  {
    "id": "BLWK-WIN-001",
    "title": "Microsoft Defender real-time protection is off",
    "category": "windows-hardening",
@@ -1830,11 +1978,11 @@
   },
   {
    "id": "BLWK-AI-012",
-   "title": "An instruction file contains hidden bidirectional Unicode controls",
+   "title": "An instruction file contains hidden Unicode characters",
    "category": "ai-agents",
    "severity": "high",
-   "explain": "Hidden Unicode / bidi controls in an instruction file (the Rules File Backdoor).",
-   "fix": "Inspect and strip the bidirectional text-reordering controls (U+202A–202E, U+2066–2069) from this file. They reorder how text renders to a human while the model reads the raw bytes — the Trojan Source / Rules File Backdoor technique for smuggling instructions into an agent.",
+   "explain": "Hidden Unicode in an instruction file: bidi controls that reorder what you see, invisible Tag characters that spell text only the model reads (shown decoded), or a long run of zero-width characters (the Rules File Backdoor, ASCII smuggling, GlassWorm).",
+   "fix": "Open the file in an editor that shows invisible characters (in VS Code, turn on 'Render Control Characters' and 'Unicode Highlight'), delete the hidden characters, and check where the file came from. Three kinds are flagged: bidirectional controls (U+202A–202E, U+2066–2069) that reorder what you see, invisible Unicode Tag characters (U+E0000–E007F) that spell out text only the model reads, and long runs of zero-width characters or variation selectors that encode hidden data. All are known ways to smuggle instructions into an agent (Trojan Source, the Rules File Backdoor, GlassWorm).",
    "references": [
     "ATTACK-T1027"
    ],

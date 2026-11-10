@@ -81,7 +81,7 @@ export function AppearanceSettings() {
               aria-label={`${label} accent`}
               aria-pressed={accent === id}
               className={cn(
-                "flex h-8 w-8 items-center justify-center rounded-full transition-transform hover:scale-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+                "flex h-8 w-8 items-center justify-center rounded-full transition-shadow hover:ring-2 hover:ring-border hover:ring-offset-2 hover:ring-offset-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
                 accent === id && "ring-2 ring-ring ring-offset-2 ring-offset-card",
               )}
               style={{ background: swatch }}
@@ -93,10 +93,8 @@ export function AppearanceSettings() {
       </div>
 
       <div>
-        <div className="text-sm font-medium">Sidebar colour</div>
-        <div className="mt-0.5 text-xs text-muted-foreground">
-          The dark rail down the left and the title bar.
-        </div>
+        <div className="text-sm font-medium">Window chrome</div>
+        <div className="mt-0.5 text-xs text-muted-foreground">The title bar stays dark in either theme.</div>
         <div className="mt-2 flex flex-wrap gap-2.5">
           {CHROMES.map(({ id, label, swatch }) => (
             <button
@@ -104,11 +102,11 @@ export function AppearanceSettings() {
               type="button"
               onClick={() => pickChrome(id)}
               title={label}
-              aria-label={`${label} sidebar`}
+              aria-label={`${label} chrome`}
               aria-pressed={chrome === id}
               className={cn(
-                "flex h-8 w-8 items-center justify-center rounded-full transition-transform hover:scale-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
-                // The sidebar colours are all dark, so on a dark card they need an edge to be seen.
+                "flex h-8 w-8 items-center justify-center rounded-full transition-shadow hover:ring-2 hover:ring-border hover:ring-offset-2 hover:ring-offset-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+                // The window chromes are all dark, so on a dark card they need an edge to be seen.
                 chrome === id
                   ? "ring-2 ring-ring ring-offset-2 ring-offset-card"
                   : "ring-1 ring-inset ring-foreground/20",

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { Radar, RotateCw, ShieldCheck, Square } from "lucide-react";
+import { ChevronRight, Radar, RotateCw, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
+import { TaskActivity } from "@/components/TaskActivity";
 import { PageShell, SectionLabel } from "@/components/PageShell";
 import { CategoryFindings, groupFindingsByCategory } from "@/components/CategoryFindings";
 import { FixAllButton } from "@/components/FixActions";
@@ -39,7 +40,7 @@ interface ScanRunResult {
 
 type ScanEvent =
   | { event: "finding"; data: Finding }
-  | { event: "collectorError"; data: { collector: string; message: string } }
+  | { event: "collectorError"; data: { collector: string; message: string; skipped?: boolean } }
   | { event: "privilegedSkipped"; data: { collectors: string[] } }
   | { event: "complete"; data: { total_findings: number; host_fingerprint: string; cancelled: boolean } }
   | { event: "error"; data: { message: string } };
@@ -57,7 +58,8 @@ const isComplianceFinding = (f: Finding) => !f.rule_id.startsWith("BLWK-FIM-");
  * the config engine's detail page (the Overview aggregates it with the other scanners; the Rules
  * tab is the reference catalog and framework mapping). You come here to read and fix.
  */
-export function ComplianceView() {
+export function ComplianceView({ active }: { active: boolean }) {
+  const [scope, setScope] = useState<"developer" | "all">("developer");
   const { revision, bump, running } = useRevision();
   // True when a compliance scan is running here OR was launched from the Overview — either way this
   // tab shows it live.
@@ -67,6 +69,7 @@ export function ComplianceView() {
   const [findings, setFindings] = useState<Finding[]>([]);
   const [skippedPrivileged, setSkippedPrivileged] = useState<string[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
+  const [unreadFiles, setUnreadFiles] = useState<string[]>([]);
   const [hasScanned, setHasScanned] = useState(false);
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
@@ -106,9 +109,16 @@ export function ComplianceView() {
     return m;
   }, [rules]);
 
+  const visibleFindings = useMemo(
+    () =>
+      scope === "all"
+        ? findings
+        : findings.filter((f) => /^(BLWK-DEV-|BLWK-SSH-|BLWK-CRED-|BLWK-AI-)/.test(f.rule_id)),
+    [findings, scope],
+  );
   const grouped = useMemo(
-    () => groupFindingsByCategory(findings, (id) => ruleCategoryById.get(id) ?? "other"),
-    [findings, ruleCategoryById],
+    () => groupFindingsByCategory(visibleFindings, (id) => ruleCategoryById.get(id) ?? "other"),
+    [visibleFindings, ruleCategoryById],
   );
 
   const toggle = (category: string) =>
@@ -125,6 +135,7 @@ export function ComplianceView() {
     setFindings([]);
     setSkippedPrivileged([]);
     setErrors([]);
+    setUnreadFiles([]);
     setPrivilegedRunDone(false);
 
     const onEvent = new Channel<ScanEvent>();
@@ -141,7 +152,8 @@ export function ComplianceView() {
           setSkippedPrivileged(msg.data.collectors);
           break;
         case "collectorError":
-          setErrors((prev) => [...prev, `${msg.data.collector}: ${msg.data.message}`]);
+          if (msg.data.skipped) setUnreadFiles((prev) => [...prev, msg.data.message]);
+          else setErrors((prev) => [...prev, `${msg.data.collector}: ${msg.data.message}`]);
           break;
         case "error":
           setErrors((prev) => [...prev, msg.data.message]);
@@ -191,6 +203,7 @@ export function ComplianceView() {
   async function runPrivilegedScan() {
     setElevating(true);
     setErrors([]);
+    setUnreadFiles([]);
     try {
       const result = await invoke<ScanRunResult>("scan_privileged");
       setStreamed(false);
@@ -214,8 +227,8 @@ export function ComplianceView() {
 
   return (
     <PageShell
-      title="Checkups"
-      description="Everything the configuration rule pack found on this host — SSH, sudo, kernel, cron, accounts, logging and more — grouped by subsystem, each with the reason it matters and the exact command to fix it."
+      title="Configuration"
+      description="Developer settings, SSH and credential hygiene. Expand a finding for context and fixes."
       action={
         scanning ? (
           <Button onClick={stopScan} variant="outline" size="sm">
@@ -230,36 +243,79 @@ export function ComplianceView() {
         ) : (
           <Button onClick={runScan} size="sm">
             <Radar className="h-4 w-4" />
-            Run compliance scan
+            Check configuration
           </Button>
         )
       }
     >
       <div className="flex flex-col gap-6">
-        {(scanning || complianceRunning) && (
-          <div className="flex items-center gap-2.5 rounded-md border border-border bg-muted/40 px-3 py-2.5">
-            <RotateCw className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
-            <div className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">
-              {scanning ? "Scanning configuration…" : "Scanning configuration (started from Overview)…"}
-            </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
+          <div className="flex gap-1" aria-label="Finding scope">
+            {(["developer", "all"] as const).map((value) => (
+              <Button
+                key={value}
+                size="sm"
+                variant={scope === value ? "secondary" : "ghost"}
+                aria-pressed={scope === value}
+                onClick={() => setScope(value)}
+              >
+                {value === "developer" ? "Developer focus" : "All configuration"}
+              </Button>
+            ))}
           </div>
+          <span className="text-xs text-muted-foreground">
+            {visibleFindings.length} shown · {findings.length} total findings
+          </span>
+        </div>
+        <details className="credential-disclosure text-xs text-muted-foreground">
+          <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded focus-visible:outline-2 focus-visible:outline-primary">
+            <ChevronRight className="disclosure-chevron size-3.5" aria-hidden="true" />
+            What gets checked?
+          </summary>
+          <p className="mt-2 max-w-2xl leading-relaxed">
+            Check configuration runs the host rule pack, including Git, package managers, Docker, SSH and
+            broader system settings. Developer focus filters the results; it does not narrow the scan. Stored
+            AI-assistant findings appear here too; run those checks from Scan.
+          </p>
+        </details>
+        {(scanning || complianceRunning) && <TaskActivity task="scan" active={active} />}
+
+        {unreadFiles.length > 0 && (
+          <details className="credential-disclosure rounded-md bg-muted/50 px-3 py-2 text-xs">
+            <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded focus-visible:outline-2 focus-visible:outline-primary">
+              <ChevronRight className="disclosure-chevron size-3.5" aria-hidden="true" />
+              {unreadFiles.length} {unreadFiles.length === 1 ? "file" : "files"} could not be checked. The
+              checks that read {unreadFiles.length === 1 ? "it" : "them"} are not counted as passed.
+            </summary>
+            <ul className="mt-2 space-y-1 pl-5 text-muted-foreground">
+              {unreadFiles.map((m) => (
+                <li key={m} className="[overflow-wrap:anywhere]">
+                  {m.charAt(0).toUpperCase() + m.slice(1)}
+                </li>
+              ))}
+            </ul>
+          </details>
         )}
 
         {skippedPrivileged.length > 0 && !privilegedRunDone && (
-          <Callout
-            tone="warning"
-            action={
-              <Button variant="outline" size="sm" onClick={runPrivilegedScan} disabled={elevating}>
-                {elevating ? "Waiting for authentication…" : "Run privileged checks"}
-              </Button>
-            }
-          >
-            <span className="font-medium">
-              {skippedPrivileged.length} check{skippedPrivileged.length === 1 ? "" : "s"} need root and were
-              skipped.
-            </span>{" "}
-            <span className="font-mono text-xs opacity-80">{skippedPrivileged.join(", ")}</span>
-          </Callout>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-y border-border py-3 text-xs text-muted-foreground">
+            <div>
+              <p>
+                {skippedPrivileged.length} check{skippedPrivileged.length === 1 ? " needs" : "s need"}{" "}
+                administrator access.
+              </p>
+              <details className="credential-disclosure mt-1">
+                <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded focus-visible:outline-2 focus-visible:outline-primary">
+                  <ChevronRight className="disclosure-chevron size-3.5" aria-hidden="true" />
+                  Skipped checks
+                </summary>
+                <p className="mt-1 font-mono">{skippedPrivileged.join(", ")}</p>
+              </details>
+            </div>
+            <Button variant="outline" size="sm" onClick={runPrivilegedScan} disabled={elevating}>
+              {elevating ? "Waiting for authentication…" : "Run privileged checks"}
+            </Button>
+          </div>
         )}
 
         {errors.map((e, i) => (
@@ -269,29 +325,32 @@ export function ComplianceView() {
         ))}
 
         <section>
-          {findings.length > 0 && (
+          {visibleFindings.length > 0 && (
             <SectionLabel>
-              {findings.length} issue{findings.length === 1 ? "" : "s"} to fix
+              {visibleFindings.length} issue{visibleFindings.length === 1 ? "" : "s"} to fix
             </SectionLabel>
           )}
 
-          {findings.length === 0 && !scanning && !loading && (
-            <div className="rounded-lg border border-dashed border-border py-14 text-center">
-              <ShieldCheck className="mx-auto h-7 w-7 text-muted-foreground/40" strokeWidth={1.5} />
-              <p className="mt-3 text-sm font-medium">
-                {hasScanned
-                  ? "This host passes every configuration check."
-                  : "No compliance scan has run yet."}
+          {visibleFindings.length === 0 && !scanning && !loading && (
+            <div className="border-y border-border py-6 text-sm">
+              <p className="font-medium">
+                {!hasScanned
+                  ? "No configuration results yet."
+                  : skippedPrivileged.length > 0
+                    ? "Some checks still need administrator access."
+                    : errors.length > 0
+                      ? "Some checks could not finish."
+                      : "No findings in this view."}
               </p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {hasScanned
-                  ? "Every rule that ran came back clean."
-                  : "Run a compliance scan to check this host's configuration against the rule pack."}
+              <p className="mt-1 text-xs text-muted-foreground">
+                {!hasScanned
+                  ? "Run a check to inspect this computer’s configuration."
+                  : "This view shows recorded findings; skipped or failed checks are not passes."}
               </p>
             </div>
           )}
 
-          {findings.some((f) => fixCapabilities.has(f.rule_id)) && (
+          {scope === "all" && findings.some((f) => fixCapabilities.has(f.rule_id)) && (
             <div className="mb-4">
               <FixAllButton onFixed={runScan} />
             </div>

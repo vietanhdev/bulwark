@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/bulwark-core",
+    "crates/bulwark-access",
     "crates/bulwarkctl",
     "crates/bulwark-agent",
     "crates/bulwark-proto",

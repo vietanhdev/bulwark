@@ -104,6 +104,41 @@ fn openssh_cipher(content: &str) -> Option<String> {
 /// characters outside the alphabet (newlines, stray whitespace). Padding is irrelevant because we
 /// only ever want a prefix. Deliberately tiny and dependency-free — it decodes a key *header*, not
 /// arbitrary data.
+/// Algorithm and, for RSA, modulus size of an OpenSSH public key line (`ssh-rsa AAAA… comment`).
+/// Public material only: the private key is never parsed for this. None for an unrecognised line.
+pub fn public_key_strength(line: &str) -> Option<(&'static str, u32)> {
+    let mut parts = line.split_whitespace();
+    let kind = parts.next()?;
+    let algorithm = match kind {
+        "ssh-dss" => "dsa",
+        "ssh-ed25519" | "sk-ssh-ed25519@openssh.com" => "ed25519",
+        k if k.starts_with("ecdsa-sha2-") || k.starts_with("sk-ecdsa-sha2-") => "ecdsa",
+        "ssh-rsa" => "rsa",
+        _ => return None,
+    };
+    if algorithm != "rsa" {
+        return Some((algorithm, 0));
+    }
+    // Blob: string "ssh-rsa", mpint e, mpint n — each a big-endian u32 length then bytes.
+    let bytes = base64_decode_prefix(parts.next()?, 2048)?;
+    let mut at = 0usize;
+    let mut field = || -> Option<&[u8]> {
+        let len = u32::from_be_bytes(bytes.get(at..at + 4)?.try_into().ok()?) as usize;
+        let start = at + 4;
+        let end = start.checked_add(len)?;
+        at = end;
+        bytes.get(start..end)
+    };
+    if field()? != b"ssh-rsa" {
+        return None;
+    }
+    field()?; // public exponent
+    let n = field()?;
+    let n = &n[n.iter().position(|b| *b != 0)?..];
+    let bits = (n.len() as u32 - 1) * 8 + (8 - n[0].leading_zeros());
+    Some(("rsa", bits))
+}
+
 fn base64_decode_prefix(input: &str, max_bytes: usize) -> Option<Vec<u8>> {
     fn val(c: u8) -> Option<u8> {
         match c {
@@ -139,6 +174,12 @@ impl SshPrivateKeysCollector {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return facts;
         };
+        // `dir` is `<home>/.ssh`. Files are opened through `homefs`, so a `.ssh` that links out
+        // of the home folder, a pipe, or a file swapped after the directory listing is never read.
+        let home = dir.parent().unwrap_or(dir);
+        let read = |path: &Path| {
+            crate::homefs::read_in_home(home, path, super::MAX_COLLECTOR_READ_BYTES).found()
+        };
         for entry in entries.flatten() {
             // Skip symlinks (don't follow one out of ~/.ssh) and non-files by dirent type.
             let Ok(ft) = entry.file_type() else { continue };
@@ -150,7 +191,7 @@ impl SshPrivateKeysCollector {
             if is_never_a_private_key(&name) {
                 continue;
             }
-            let Ok(content) = super::read_capped(&entry.path()) else {
+            let Some(content) = read(&entry.path()) else {
                 continue;
             };
             let Some((format, encrypted)) = classify_private_key(&content) else {
@@ -175,6 +216,21 @@ impl SshPrivateKeysCollector {
             fact.insert(
                 "encryption_known".to_string(),
                 Value::Bool(encrypted.is_some()),
+            );
+            // Strength comes from the matching public key (`<key>.pub`), never from the private
+            // key. Without one, strength stays undetermined rather than assumed fine.
+            let public = entry.path().with_file_name(format!("{name}.pub"));
+            let strength = std::fs::symlink_metadata(&public)
+                .ok()
+                .filter(|m| m.file_type().is_file())
+                .and_then(|_| read(&public))
+                .and_then(|text| public_key_strength(text.lines().next().unwrap_or("")));
+            let (algorithm, bits) = strength.unwrap_or(("unknown", 0));
+            fact.insert("key_algorithm".to_string(), Value::String(algorithm.into()));
+            fact.insert("key_bits".to_string(), Value::from(bits));
+            fact.insert(
+                "key_strength_known".to_string(),
+                Value::Bool(strength.is_some()),
             );
             facts.push(fact);
         }
@@ -499,6 +555,64 @@ fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 #[cfg(not(unix))]
 fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::write(path, bytes)
+}
+
+#[cfg(test)]
+mod strength_tests {
+    use super::public_key_strength;
+
+    /// An `ssh-rsa` public key line whose modulus has `bits` bits (synthetic: all-0xff modulus).
+    fn rsa_line(bits: u32) -> String {
+        let mut blob = Vec::new();
+        for field in [b"ssh-rsa".to_vec(), vec![1, 0, 1], {
+            let mut n = vec![0u8];
+            n.extend(std::iter::repeat_n(0xffu8, (bits / 8) as usize));
+            n
+        }] {
+            blob.extend((field.len() as u32).to_be_bytes());
+            blob.extend(field);
+        }
+        const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut b64 = String::new();
+        for chunk in blob.chunks(3) {
+            let v = chunk
+                .iter()
+                .enumerate()
+                .fold(0u32, |acc, (i, b)| acc | (*b as u32) << (16 - 8 * i));
+            for i in 0..4 {
+                b64.push(if i <= chunk.len() {
+                    T[((v >> (18 - 6 * i)) & 63) as usize] as char
+                } else {
+                    '='
+                });
+            }
+        }
+        format!("ssh-rsa {b64} me@host")
+    }
+
+    #[test]
+    fn rsa_modulus_size_is_read_from_the_public_key() {
+        assert_eq!(public_key_strength(&rsa_line(1024)), Some(("rsa", 1024)));
+        assert_eq!(public_key_strength(&rsa_line(4096)), Some(("rsa", 4096)));
+    }
+
+    #[test]
+    fn other_algorithms_and_garbage() {
+        assert_eq!(
+            public_key_strength("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5 me"),
+            Some(("ed25519", 0))
+        );
+        assert_eq!(
+            public_key_strength("ssh-dss AAAAB3NzaC1kc3M me"),
+            Some(("dsa", 0))
+        );
+        assert_eq!(
+            public_key_strength("ecdsa-sha2-nistp256 AAAA me"),
+            Some(("ecdsa", 0))
+        );
+        assert_eq!(public_key_strength("ssh-rsa !!!notbase64"), None);
+        assert_eq!(public_key_strength(""), None);
+    }
 }
 
 #[cfg(test)]

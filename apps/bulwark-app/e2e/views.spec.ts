@@ -5,12 +5,18 @@ import { goToView, visibleText } from "./fixtures";
 // labels, not fixture data). Assertions are visibility-aware because inactive
 // views stay mounted and hidden.
 const VIEW_SECTIONS: { label: string; sections: RegExp[] }[] = [
-  { label: "Home", sections: [/^checks:/i, /problems? to fix|all clear/i, /secrets & credentials/i] },
-  { label: "Checkups", sections: [/issues to fix|all clear|no issues/i] },
-  { label: "Virus scan", sections: [/real-time protection/i, /manual scan/i] },
+  {
+    label: "Scan",
+    sections: [/^checks:/i, /findings? to review|all clear/i, /secrets & credentials/i],
+  },
+  { label: "Configuration", sections: [/issues to fix|all clear|no issues/i] },
+  { label: "Malware scan", sections: [/real-time protection/i, /manual scan/i] },
   { label: "File changes", sections: [/what.?s watched/i, /integrity findings/i] },
-  { label: "All checks", sections: [/accounts.*services/i, /kernel hardening/i, /filesystem permissions/i] },
-  { label: "Activity", sections: [/findings over time/i, /open by severity/i, /scan history/i] },
+  {
+    label: "Rule catalog",
+    sections: [/accounts.*services/i, /kernel hardening/i, /filesystem permissions/i],
+  },
+  { label: "History", sections: [/findings over time/i, /open by severity/i, /scan history/i] },
   {
     label: "Settings",
     sections: [/appearance/i, /continuous monitoring/i, /ai assistant checks/i, /ssh hardening/i],
@@ -30,7 +36,7 @@ test.describe("view content", () => {
 
   test("All checks groups checks into rule categories with counts", async ({ page }) => {
     await page.goto("/");
-    await goToView(page, "All checks");
+    await goToView(page, "Rule catalog");
     // Category headings carry a numeric count (e.g. "KERNEL HARDENING 21").
     await expect(visibleText(page, /kernel hardening/i)).toBeVisible();
     await expect(visibleText(page, /\b\d+\b/)).toBeVisible();

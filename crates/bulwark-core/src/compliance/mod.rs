@@ -697,10 +697,22 @@ mod tests {
                     "BLWK-DEV-007",
                     "BLWK-DEV-008",
                     "BLWK-DEV-009",
+                    // npm supply-chain practices: recommendations, not yet reviewed for a mapping.
+                    "BLWK-DEV-010",
+                    "BLWK-DEV-011",
                     "BLWK-CRED-001",
                     "BLWK-CRED-002",
                     "BLWK-CRED-003",
                     "BLWK-CRED-004",
+                    // Credential-storage checks added with the Secrets manager: same review
+                    // status as CRED-001..004, so no control mapping is claimed yet.
+                    "BLWK-CRED-005",
+                    "BLWK-CRED-006",
+                    "BLWK-CRED-007",
+                    "BLWK-CRED-008",
+                    "BLWK-CRED-009",
+                    "BLWK-CRED-010",
+                    "BLWK-SSH-014",
                     "BLWK-NET-003",
                     "BLWK-NET-004",
                     // The firewalled twin of NET-003 (added with remote monitoring): same

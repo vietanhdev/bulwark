@@ -62,7 +62,7 @@ type RealtimeAvEvent =
 export function AntivirusView({ active }: { active: boolean }) {
   const platform = usePlatform();
   const { revision, running } = useRevision();
-  // True when an antivirus sweep is running here or was launched from the Overview.
+  // True when an antivirus sweep is running here or was launched from Scan.
   const antivirusRunning = running.has("antivirus");
 
   const [scanning, setScanning] = useState(false);
@@ -213,8 +213,8 @@ export function AntivirusView({ active }: { active: boolean }) {
 
   return (
     <PageShell
-      title="Virus scan"
-      description="Signature-based malware scanning through ClamAV. Bulwark shells out to it rather than reimplementing detection."
+      title="Malware scan"
+      description="On-demand file scanning with local ClamAV. Optional background scanning is configured below."
       action={
         scanning ? (
           <Button onClick={stopScan} variant="outline">
@@ -231,7 +231,7 @@ export function AntivirusView({ active }: { active: boolean }) {
             <Bug className="h-4 w-4" />
             {customPaths.length > 0
               ? `Scan ${customPaths.length} item${customPaths.length === 1 ? "" : "s"}`
-              : "Run a virus scan"}
+              : "Run malware scan"}
           </Button>
         )
       }
@@ -243,8 +243,8 @@ export function AntivirusView({ active }: { active: boolean }) {
           <Callout tone="info">
             <div className="font-medium">Microsoft Defender is this computer's virus scanner.</div>
             <div className="mt-1.5 text-sm">
-              It scans files as they arrive, and Checkups tells you if its real-time protection is ever off.
-              ClamAV is optional here — a second opinion for files you want to double-check.
+              It scans files as they arrive, and Configuration tells you if its real-time protection is ever
+              off. ClamAV is optional here — a second opinion for files you want to double-check.
             </div>
             {clamav.install_command && (
               <div className="mt-1.5 text-xs opacity-90">{clamav.install_command}</div>
@@ -297,7 +297,7 @@ export function AntivirusView({ active }: { active: boolean }) {
                     realtime?.enabled ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground",
                   )}
                 >
-                  <Eye className={cn("h-4 w-4", realtime?.enabled && "animate-pulse")} strokeWidth={1.75} />
+                  <Eye className={"h-4 w-4"} strokeWidth={1.75} />
                 </div>
                 <div>
                   <div className="text-sm font-medium">

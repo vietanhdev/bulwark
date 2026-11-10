@@ -1,0 +1,21 @@
+id: BLWK-SSH-014
+title: "SSH key uses a weak algorithm: {{ ssh_private_keys.path }}"
+category: ssh-remote-access
+severity: medium
+collector: ssh_private_keys
+os: [linux, macos]
+# Strength is read from the key's .pub file. Without one, key_strength_known is false and the rule
+# is not evaluated for that key, never reported as strong.
+condition: key_strength_known == true and (key_algorithm == "dsa" or (key_algorithm == "rsa" and key_bits < 2048))
+explain: >
+  {{ ssh_private_keys.path }} is a {{ ssh_private_keys.key_algorithm }} key ({{ ssh_private_keys.key_bits }}
+  bits for RSA). DSA keys are disabled by default in current OpenSSH, and RSA keys shorter than 2048 bits
+  can be broken with affordable computing. Servers increasingly refuse both, and those that still accept
+  them offer little protection.
+fix: |
+  Create a modern key, switch to it, then retire the old one.
+  1. Run 'ssh-keygen -t ed25519' (with a passphrase) to create a new key.
+  2. Add the new public key wherever the old one is accepted: servers' ~/.ssh/authorized_keys, GitHub, GitLab, and so on.
+  3. Remove the old public key from those places, then delete the old key pair.
+  If something you connect to only supports RSA, use 'ssh-keygen -t rsa -b 4096' instead.
+references: [ATTACK-T1552.004]

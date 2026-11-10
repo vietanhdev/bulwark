@@ -1,0 +1,21 @@
+id: BLWK-CRED-005
+title: "Secrets are written into a shell startup file ({{ credential_stores.path }})"
+category: credential-exposure
+severity: high
+collector: credential_stores
+os: [linux, macos, windows]
+# exported_secrets is emitted only when the file was read. Only variable *names* are reported:
+# the collector never keeps a value.
+condition: kind == "shell_startup" and exported_secrets > 0
+explain: >
+  {{ credential_stores.path }} sets {{ credential_stores.exported_secrets }} secret-looking variable(s) to a
+  literal value ({{ credential_stores.secret_names }}). Every program you start inherits them, dotfile
+  backups and sync tools copy them, and anything that can read your home folder, including a malicious
+  package's install script, can read them.
+fix: |
+  Keep the value in a secrets store and fetch it when it is needed, not in the file.
+  1. Rotate each key listed above: it has been sitting in a plain file.
+  2. Store the new value in your system keychain or password manager (for example 'secret-tool store', 'security add-generic-password', 1Password CLI 'op read' or 'pass').
+  3. Replace the line with a lookup that runs only when needed, or use a per-project tool such as direnv with a keychain-backed value.
+  4. For AWS, prefer short-lived sessions ('aws configure sso' or AWS Vault) to exporting keys at all.
+references: [ATTACK-T1552.001]

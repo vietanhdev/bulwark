@@ -1,32 +1,38 @@
 import { type Page, expect } from "@playwright/test";
 
-// The seven primary views, keyed by their sidebar label. `title` is the heading
+// The primary views, keyed by their sidebar label. `title` is the heading
 // the view renders when active; `signature` is a section unique to that view, so
 // a test proves the *right* view is showing (all views stay mounted and are
 // CSS-hidden when inactive, so assertions must be visibility-aware).
 export const VIEWS = [
-  { label: "Home", title: "Home", signature: /problems? to fix|all clear|let.s check this computer/i },
-  { label: "Checkups", title: "Checkups", signature: /issues to fix|all clear|no issues/i },
-  { label: "Virus scan", title: "Virus scan", signature: /real-time protection/i },
+  { label: "Secrets", title: "Secrets", signature: /stored credentials? across|reading your tools/i },
+  {
+    label: "Scan",
+    title: "Scan",
+    signature: /findings? to review|no findings in completed checks|ready to check your setup/i,
+  },
+  { label: "Configuration", title: "Configuration", signature: /issues? to fix|no findings/i },
+  { label: "Malware scan", title: "Malware scan", signature: /real-time protection/i },
   { label: "File changes", title: "File changes", signature: /what.?s watched/i },
-  { label: "All checks", title: "All checks", signature: /kernel hardening/i },
-  { label: "Activity", title: "Activity", signature: /findings over time/i },
+  { label: "Rule catalog", title: "Rule catalog", signature: /kernel hardening/i },
+  { label: "History", title: "History", signature: /findings over time/i },
   { label: "Settings", title: "Settings", signature: /appearance/i },
+  { label: "Tools", title: "Tools", signature: /a few deeper tools/i },
+  { label: "Remote hosts", title: "Remote hosts", signature: /inspect other machines/i },
 ] as const;
 
 /** Click a sidebar nav item (scoped to the <nav> so labels that also appear in
  *  page content don't create ambiguity). */
 export async function goToView(page: Page, label: string) {
-  await page
-    .locator("nav")
-    .getByRole("button", { name: new RegExp(label) })
-    .first()
-    .click();
+  if (!["Scan", "Secrets", "Tools", "Settings"].includes(label)) {
+    await page.locator("nav").getByRole("button", { name: "Tools", exact: true }).click();
+    await page.getByRole("button", { name: label, exact: true }).filter({ visible: true }).click();
+  } else await page.locator("nav").getByRole("button", { name: label, exact: true }).click();
 }
 
 /** Assert the app shell has rendered (used as a ready-check after goto). */
 export async function expectShellReady(page: Page) {
-  await expect(page.locator("nav").getByRole("button", { name: "Home" })).toBeVisible();
+  await expect(page.locator("nav").getByRole("button", { name: "Secrets" })).toBeVisible();
 }
 
 /** First VISIBLE element with the given text. Inactive views stay mounted and

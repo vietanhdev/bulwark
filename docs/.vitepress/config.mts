@@ -37,7 +37,7 @@ function ogSlugFor(relativePath: string): string {
 export default withMermaid({
   title: "Bulwark",
   description:
-    "Local-first security for developers and their AI coding agents — risky agent hooks and MCP servers, keys leaked into AI sessions, plaintext credentials and exposed dev services, found and fixed on your own machine.",
+    "Scan your dev machine for risky AI-agent settings, MCP servers, leaked keys, plain-text credentials and unsafe package-manager configs — in seconds. Nothing leaves your computer.",
   lang: "en-US",
   cleanUrls: true,
   // Default to light on first visit (no stored preference / no system-preference match yet)
@@ -63,7 +63,7 @@ export default withMermaid({
       "meta",
       {
         property: "og:title",
-        content: "Bulwark — Security Scanner for Developer Machines",
+        content: "Bulwark — security checks for your dev machine",
       },
     ],
     [
@@ -71,9 +71,7 @@ export default withMermaid({
       {
         property: "og:description",
         content:
-          "A security scanner for Linux developer machines. Finds plaintext keys, risky " +
-          "packages, exposed dev services and AI-assistant leaks, explains every problem " +
-          "in plain language, and fixes most in one click.",
+          "Scan your dev machine for risky AI-agent settings, MCP servers, leaked keys, plain-text credentials and unsafe package-manager configs — in seconds. Nothing leaves your computer.",
       },
     ],
     ["meta", { name: "twitter:card", content: "summary_large_image" }],
@@ -81,7 +79,7 @@ export default withMermaid({
       "meta",
       {
         name: "twitter:title",
-        content: "Bulwark — Security Scanner for Developer Machines",
+        content: "Bulwark — security checks for your dev machine",
       },
     ],
     [
@@ -89,7 +87,7 @@ export default withMermaid({
       {
         name: "twitter:description",
         content:
-          "A security scanner for Linux developer machines, with a native CLI and desktop app.",
+          "Scan your dev machine for risky AI-agent settings, leaked keys and unsafe package-manager configs, in seconds.",
       },
     ],
     // JSON-LD structured data. Google reads it for rich results, and generative engines
@@ -103,8 +101,8 @@ export default withMermaid({
         "@type": "SoftwareApplication",
         name: "Bulwark",
         applicationCategory: "SecurityApplication",
-        applicationSubCategory: "Host security scanner",
-        operatingSystem: "Linux",
+        applicationSubCategory: "Developer configuration workbench",
+        operatingSystem: "Linux, macOS, Windows",
         url: SITE_URL,
         downloadUrl: `${SITE_URL}/download`,
         softwareHelp: `${SITE_URL}/guide/architecture`,
@@ -112,12 +110,12 @@ export default withMermaid({
           "A free, open-source security scanner for Linux developer machines and servers, with " +
           "a native CLI and a Tauri desktop GUI. Checks plaintext credentials, supply-chain " +
           "startup hooks, exposed dev services, SSH, sudoers, kernel/sysctl hardening, " +
-          "persistence, file permissions, logging and rootkit indicators against 88 declarative rules; " +
+          "persistence, file permissions, logging and rootkit indicators against declarative rules; " +
           "scans AI coding assistants (Claude Code, Cursor, Copilot, Codex) for leaked secrets " +
           "and prompt-injection-exploitable config; integrates ClamAV; monitors continuously; and " +
           "watches other machines over SSH, agentless, with Telegram and e-mail alerts.",
         featureList: [
-          "111 checks, each with a plain-language explanation page and fix",
+          "Configuration and agent checks with findings and supported remediation previews",
           "AI coding-assistant security scan (secrets in context, malicious MCP, YOLO mode)",
           "ClamAV antivirus integration",
           "Systemd-journal log correlation (SSH brute-force, sudo abuse)",
@@ -190,6 +188,16 @@ export default withMermaid({
     );
   },
 
+  // Dev server only: mermaid imports the CommonJS `fastdom` (and its promise extension), and the mermaid plugin's own
+  // pre-bundle list names `debug`, which no longer resolves — so Vite skipped pre-bundling and
+  // served `fastdom` raw, and `vitepress dev` rendered a blank page ("does not provide an
+  // export named 'default'"). Production builds bundle it normally and were never affected.
+  vite: {
+    optimizeDeps: {
+      include: ["mermaid > fastdom", "mermaid > fastdom/extensions/fastdom-promised.js"],
+    },
+  },
+
   // Aqua palette matching the app's default theme (converted to hex since mermaid doesn't
   // understand oklch()). Only governs light mode — the plugin forces mermaid's own dark theme
   // when `.dark` is on <html>; the dark diagrams are recoloured in theme/custom.css instead.
@@ -236,38 +244,38 @@ export default withMermaid({
       },
       { text: "Download", link: "/download" },
       { text: "Checks", link: "/checks/" },
-      { text: "Guide", link: "/guide/agent-security" },
+      { text: "Get started", link: "/guide/get-started" },
       { text: "Articles", link: "/articles/ssh-hardening-checklist" },
       { text: "Collaborate", link: "/collaborate" },
       { text: "GitHub", link: "https://github.com/vietanhdev/bulwark" },
     ],
     sidebar: [
       {
-        text: "Product",
+        text: "Start here",
         items: [
-          { text: "Desktop app", link: "/desktop" },
-          { text: "Command line", link: "/cli" },
-          { text: "AI agents", link: "/agents" },
+          { text: "Get started in five steps", link: "/guide/get-started" },
+          { text: "The desktop app", link: "/desktop" },
+          { text: "The command line", link: "/cli" },
+          { text: "For AI coding agents", link: "/agents" },
+          { text: "Download", link: "/download" },
         ],
       },
       {
-        text: "Checks",
-        items: [{ text: "Every check Bulwark runs", link: "/checks/" }],
+        text: "How to",
+        items: [
+          { text: "Fix what a scan finds", link: "/guide/remediation" },
+          { text: "See where your secrets live", link: "/guide/secrets" },
+          { text: "Secure your AI coding agents", link: "/guide/agent-security" },
+          { text: "Choose what gets checked", link: "/guide/custom-checks" },
+          { text: "Check other machines", link: "/guide/remote-monitoring" },
+        ],
       },
       {
-        text: "Guide",
+        text: "Reference",
         items: [
-          { text: "AI agent security", link: "/guide/agent-security" },
-          {
-            text: "Choosing what Bulwark checks",
-            link: "/guide/custom-checks",
-          },
-          { text: "Fixing findings", link: "/guide/remediation" },
-          {
-            text: "Monitoring other machines",
-            link: "/guide/remote-monitoring",
-          },
+          { text: "Every check Bulwark runs", link: "/checks/" },
           { text: "Architecture & design", link: "/guide/architecture" },
+          { text: "Similar tools and what comes next", link: "/guide/next-steps" },
           { text: "Contributing", link: "/guide/contributing" },
           { text: "Collaborate", link: "/collaborate" },
         ],

@@ -1,188 +1,79 @@
-import {
-  BadgeCheck,
-  FileCheck2,
-  LayoutDashboard,
-  LineChart,
-  ListChecks,
-  Server,
-  Settings,
-  ShieldCheck,
-  type LucideIcon,
-} from "lucide-react";
-import { cn } from "@/lib/utils";
+import { ArrowLeft, Settings } from "lucide-react";
+import { WorkbenchIcon } from "./WorkbenchIcon";
 
 export type View =
-  "overview" | "machines" | "antivirus" | "integrity" | "rules" | "compliance" | "analytics" | "settings";
+  | "access"
+  | "overview"
+  | "machines"
+  | "antivirus"
+  | "integrity"
+  | "rules"
+  | "compliance"
+  | "analytics"
+  | "settings"
+  | "tools";
+const PRIMARY = [
+  { id: "overview", label: "Scan", icon: "scan" },
+  { id: "access", label: "Secrets", icon: "sessions" },
+  { id: "tools", label: "Tools", icon: "tools" },
+] as const;
+const SECONDARY: View[] = ["compliance", "machines", "antivirus", "integrity", "rules", "analytics"];
 
-interface SidebarProps {
+/** Compact task navigation. Secondary tools stay reachable without dominating the workspace. */
+export function WorkbenchNav({
+  view,
+  onChange,
+  monitoringEnabled,
+}: {
   view: View;
   onChange: (view: View) => void;
   monitoringEnabled: boolean | null;
-}
-
-interface NavItem {
-  id: View;
-  label: string;
-  icon: LucideIcon;
-  /** Marks the item as new, with a small "New" badge.
-   *
-   *  Deliberately NOT a colour treatment. The first cut of this gave the promoted item a
-   *  standing primary rail and a primary background wash — which is precisely the vocabulary
-   *  this sidebar uses for *the page you are currently on*. The result was that sitting on
-   *  Overview, Agent Security still looked selected, and the Overview's own findings read as
-   *  though they belonged to Agent Security. Selection state owns the rail and the wash; nothing
-   *  else may borrow them, or the nav stops being able to answer "where am I". */
-  badge?: string;
-}
-
-/* The nav mirrors the product's actual shape: one scanner per tab, and one page that adds them
-   up.
-
-   `Overview` is ungrouped and alone at the top because it is *the answer* — it aggregates every
-   scanner's findings into a single "what is wrong with this machine" list, and its scan button
-   drives all of them.
-
-   "Scans" is the four engines, ordered oldest-and-most-load-bearing first: Compliance (the
-   configuration rule pack's scan results — the issues found and how to fix them), Antivirus
-   (ClamAV), Agent Security (AI assistant artifacts), File integrity. Each page is where you go to
-   run that engine on its own and read its results in detail.
-
-   "Reference" is what explains the results rather than producing them: the rule pack itself —
-   every rule plus how it maps to CIS/MITRE and this host's hardening index (folded in from what
-   used to be a separate Compliance tab) — and the scan timeline.
-
-   What moved, and why:
-     - File integrity was a right-hand column inside a page called "Antivirus", despite being
-       an independent pillar with its own threat model. It gets its own page.
-     - "Monitoring" was a cadence setting dressed as a destination, and "About" was a footer.
-       Both are Settings.
-     - Compliance sat under "Reference" as though it were documentation, but it reports the
-       results of a scan — it belongs with the scanners.
-     - The group was called "Protection", which described a *property* rather than what the
-       items are. They are scanners; the label now says so. */
-const GROUPS: { label: string | null; items: NavItem[] }[] = [
-  {
-    label: null,
-    items: [
-      { id: "overview", label: "Home", icon: LayoutDashboard },
-      // The other machines this one keeps watch over (agentless, over SSH). Right under Home
-      // because it is the same question — "what is wrong?" — asked of more than one computer.
-      { id: "machines", label: "Remote", icon: Server },
-    ],
-  },
-  {
-    label: "Scans",
-    items: [
-      { id: "compliance", label: "Checkups", icon: BadgeCheck },
-      { id: "antivirus", label: "Virus scan", icon: ShieldCheck },
-      // The newest pillar, and the one most users won't know to look for — so it carries a "new"
-      // badge. A badge, not a colour: see NavItem.badge for why it must not borrow the rail.
-      { id: "integrity", label: "File changes", icon: FileCheck2 },
-    ],
-  },
-  {
-    label: "Reference",
-    items: [
-      { id: "rules", label: "All checks", icon: ListChecks },
-      { id: "analytics", label: "Activity", icon: LineChart },
-    ],
-  },
-];
-
-function NavButton({
-  item,
-  active,
-  onChange,
-}: {
-  item: NavItem;
-  active: boolean;
-  onChange: (view: View) => void;
 }) {
-  const { id, label, icon: Icon, badge } = item;
   return (
-    <button
-      onClick={() => onChange(id)}
-      aria-current={active ? "page" : undefined}
-      className={cn(
-        // The severity rail again, doing navigational work: the active page is the one with a
-        // bar in its gutter, exactly like the finding you're reading. One structural idea,
-        // used consistently, rather than a second highlight vocabulary just for the chrome.
-        "rail relative flex items-center gap-2.5 rounded-md py-2 pr-2.5 pl-3 text-left text-sm transition-colors",
-        "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
-        active
-          ? "bg-ink-raised font-medium text-ink-fg"
-          : "font-normal text-ink-muted hover:bg-ink-raised/50 hover:text-ink-fg",
-      )}
-      // The rail is painted only for the active page — see NavItem.badge for why a "new" item
-      // must not borrow it.
-      style={{ "--rail-color": active ? "var(--primary)" : "transparent" } as React.CSSProperties}
-    >
-      <Icon className="h-4 w-4 shrink-0" strokeWidth={active ? 2.25 : 1.75} />
-      <span className="min-w-0 flex-1 truncate">{label}</span>
-      {badge && (
-        <span className="shrink-0 rounded-full border border-ink-border px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-wider text-ink-muted">
-          {badge}
-        </span>
-      )}
-    </button>
-  );
-}
-
-export function Sidebar({ view, onChange, monitoringEnabled }: SidebarProps) {
-  return (
-    <nav className="flex w-52 shrink-0 flex-col justify-between border-r border-ink-border bg-ink p-2.5">
-      <div className="flex flex-col gap-5">
-        {GROUPS.map((group, i) => (
-          <div key={group.label ?? i} className="flex flex-col gap-1">
-            {group.label && (
-              <div className="mb-1 px-3 font-mono text-[10px] font-semibold uppercase tracking-widest text-ink-muted/70">
-                {group.label}
-              </div>
-            )}
-            {group.items.map((item) => (
-              <NavButton key={item.id} item={item} active={view === item.id} onChange={onChange} />
-            ))}
-          </div>
-        ))}
-      </div>
-
-      <div className="flex flex-col gap-1">
-        {/* The live status chip doubles as the way into the setting that governs it — clicking
-            "Monitoring paused" should take you to the thing that un-pauses it. It used to carry a
-            second line, "N scans recorded" — a lifetime counter that read as though it measured
-            the watch above it, and that nobody could act on. The state is the whole message. */}
+    <>
+      <nav
+        aria-label="Workbench"
+        className="workbench-tabs flex shrink-0 items-center gap-1 border-b border-border px-3"
+      >
+        {PRIMARY.map(({ id, label, icon }) => {
+          const selected = view === id || (id === "tools" && SECONDARY.includes(view));
+          return (
+            <button
+              key={id}
+              onClick={() => onChange(id)}
+              aria-current={selected ? "page" : undefined}
+              className="workbench-tab"
+            >
+              <WorkbenchIcon kind={icon} className="tab-icon" />
+              {label}
+            </button>
+          );
+        })}
         <button
           onClick={() => onChange("settings")}
-          className="flex flex-col rounded-md px-3 py-2 text-left transition-colors hover:bg-ink-raised/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+          aria-current={view === "settings" ? "page" : undefined}
+          title={
+            monitoringEnabled === null
+              ? "Settings — schedule unavailable"
+              : `Settings — scheduled checks ${monitoringEnabled ? "on" : "off"}`
+          }
+          className="workbench-tab ml-auto"
         >
-          <span className="flex items-center gap-1.5">
-            <span className="relative flex h-1.5 w-1.5 shrink-0">
-              {monitoringEnabled && (
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
-              )}
-              <span
-                className={cn(
-                  "relative inline-flex h-1.5 w-1.5 rounded-full",
-                  monitoringEnabled ? "bg-primary" : "bg-ink-muted/50",
-                )}
-              />
-            </span>
-            <span className="text-xs font-medium text-ink-fg">
-              {monitoringEnabled === null
-                ? "Checking…"
-                : monitoringEnabled
-                  ? "Keeping watch"
-                  : "Watch paused"}
-            </span>
-          </span>
+          <Settings className="tab-icon" strokeWidth={1.6} aria-hidden="true" />
+          Settings
         </button>
-
-        <NavButton
-          item={{ id: "settings", label: "Settings", icon: Settings }}
-          active={view === "settings"}
-          onChange={onChange}
-        />
-      </div>
-    </nav>
+      </nav>
+      {SECONDARY.includes(view) && (
+        <div className="shrink-0 px-6 pt-3">
+          <button
+            onClick={() => onChange("tools")}
+            className="flex items-center gap-1.5 rounded text-xs text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary"
+          >
+            <ArrowLeft className="size-3" aria-hidden="true" />
+            Back to tools
+          </button>
+        </div>
+      )}
+    </>
   );
 }

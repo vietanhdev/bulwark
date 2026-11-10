@@ -14,7 +14,7 @@
 //! `http.sslVerify` scoped to one URL, `ForwardAgent yes` for one named host, or a plain-HTTP
 //! registry on `localhost` are deliberate and narrow, and are left alone.
 
-use super::{read_capped, user_homes, Collector};
+use super::{user_homes, Collector};
 use crate::models::{Fact, OperatingSystem};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -38,6 +38,8 @@ const FLAGS: &[&str] = &[
     "http_registry",
     "trusted_host",
     "docker_api_unprotected",
+    "install_scripts_auto",
+    "no_release_cooldown",
 ];
 
 #[derive(Default, Debug, PartialEq)]
@@ -51,6 +53,10 @@ pub(crate) struct Flags {
     pub http_registry: bool,
     pub trusted_host: bool,
     pub docker_api_unprotected: bool,
+    /// npm's user settings leave package install scripts on (the npm default).
+    pub install_scripts_auto: bool,
+    /// npm's user settings set no waiting period for newly published versions.
+    pub no_release_cooldown: bool,
     /// The offending value, for the explanation (e.g. the http:// URL).
     pub detail: String,
 }
@@ -82,6 +88,48 @@ fn authority_host(rest: &str) -> &str {
     match hostport.strip_prefix('[') {
         Some(v6) => v6.split(']').next().unwrap_or(""),
         None => hostport.split(':').next().unwrap_or(""),
+    }
+}
+
+/// What a finding may say about a URL from a config file: scheme, host and port only. A registry
+/// URL often carries credentials (`http://user:token@host/`) or a token in its path or query, and
+/// a finding is stored, shown and forwarded, so none of that is kept. Anything that is not a plain
+/// host name or address is described rather than quoted.
+pub(crate) fn url_origin(url: &str) -> String {
+    let u = url.trim().trim_matches(['"', '\'']);
+    let (scheme, rest) = match u.split_once("://") {
+        Some((s, r))
+            if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '+') =>
+        {
+            (format!("{}://", s.to_ascii_lowercase()), r)
+        }
+        Some(_) => return "an address in this file".into(),
+        None => (String::new(), u),
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let hostport = authority.rsplit('@').next().unwrap_or("");
+    let (host, port) = match hostport.strip_prefix('[') {
+        Some(v6) => match v6.split_once(']') {
+            Some((h, p)) => (format!("[{h}]"), p.strip_prefix(':').unwrap_or("")),
+            None => return "an address in this file".into(),
+        },
+        None => match hostport.rsplit_once(':') {
+            Some((h, p)) => (h.to_string(), p),
+            None => (hostport.to_string(), ""),
+        },
+    };
+    let host_ok = !host.is_empty()
+        && host.len() <= 253
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']'));
+    if !host_ok || !port.chars().all(|c| c.is_ascii_digit()) || port.len() > 5 {
+        return "an address in this file".into();
+    }
+    if port.is_empty() {
+        format!("{scheme}{host}")
+    } else {
+        format!("{scheme}{host}:{port}")
     }
 }
 
@@ -222,10 +270,132 @@ pub(crate) fn parse_npmrc(text: &str) -> Flags {
         }
         if (key == "registry" || key.ends_with(":registry")) && remote_http(value) {
             f.http_registry = true;
-            f.detail = value.trim_matches('"').to_string();
+            f.detail = url_origin(value);
         }
     }
     f
+}
+
+/// npm's user-level supply-chain settings, from `~/.npmrc` (empty text when the file is absent).
+/// Both keys are in npm's config reference: `ignore-scripts` (default false) and
+/// `min-release-age` (days; npm 11.10+, off by default). `before` pins installs to a date, which
+/// is a cooldown too. Only the user file is read: a project or system npmrc can still override it.
+pub(crate) fn parse_npm_user_practices(text: &str) -> Flags {
+    let mut scripts_off = false;
+    let mut cooldown = false;
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let value = value.trim().trim_matches('"');
+        match key.trim().trim_matches('"').to_ascii_lowercase().as_str() {
+            "ignore-scripts" => scripts_off = value.eq_ignore_ascii_case("true"),
+            "min-release-age" => cooldown = value.parse::<f64>().is_ok_and(|days| days > 0.0),
+            "before" if !value.is_empty() && value != "null" => cooldown = true,
+            _ => {}
+        }
+    }
+    Flags {
+        install_scripts_auto: !scripts_off,
+        no_release_cooldown: !cooldown,
+        ..Flags::default()
+    }
+}
+
+/// bun's user-level waiting period: `[install] minimumReleaseAge`, in seconds, default off (bun's
+/// bunfig reference). `None` when the file is not valid TOML.
+pub(crate) fn parse_bun_user_practices(text: &str) -> Option<Flags> {
+    let table: toml::Table = text.parse().ok()?;
+    let set = table
+        .get("install")
+        .and_then(|i| i.get("minimumReleaseAge"))
+        .is_some_and(|v| {
+            v.as_integer().is_some_and(|n| n > 0) || v.as_float().is_some_and(|n| n > 0.0)
+        });
+    Some(Flags {
+        no_release_cooldown: !set,
+        ..Flags::default()
+    })
+}
+
+/// uv's user-level waiting period: top-level `exclude-newer`, a timestamp or a duration such as
+/// "1 week"; `false` or absent means off (uv's settings reference). `None` for invalid TOML.
+pub(crate) fn parse_uv_user_practices(text: &str) -> Option<Flags> {
+    let table: toml::Table = text.parse().ok()?;
+    let set = table
+        .get("exclude-newer")
+        .and_then(|v| v.as_str())
+        .is_some_and(|v| !v.trim().is_empty());
+    Some(Flags {
+        no_release_cooldown: !set,
+        ..Flags::default()
+    })
+}
+
+/// One package manager whose user-level settings are checked for what they leave *unset*.
+struct UserPractices {
+    kind: &'static str,
+    tool: &'static str,
+    /// The config file to read (and to name in the finding), whether or not it exists yet.
+    config: PathBuf,
+    parse: fn(&str) -> Option<Flags>,
+    how_to_fix: &'static str,
+}
+
+/// The package managers this home shows in use (a config file or the tool's own data folder).
+fn user_practices(home: &Path) -> Vec<UserPractices> {
+    let any = |paths: &[&str]| paths.iter().any(|p| home.join(p).exists());
+    let mut out = Vec::new();
+    if uses_npm(home) {
+        out.push(UserPractices {
+            kind: "npm_user",
+            tool: "npm",
+            config: home.join(".npmrc"),
+            parse: |t| Some(parse_npm_user_practices(t)),
+            how_to_fix: "Run 'npm config set min-release-age 7' for a 7-day waiting period (needs npm 11.10 or newer; check with 'npm --version'). For an urgent security patch, override once: 'npm install <package> --min-release-age=0'.",
+        });
+    }
+    if any(&[".bunfig.toml", ".bun"]) {
+        out.push(UserPractices {
+            kind: "bun_user",
+            tool: "bun",
+            config: home.join(".bunfig.toml"),
+            parse: parse_bun_user_practices,
+            how_to_fix: "Add these two lines to ~/.bunfig.toml for a 7-day waiting period (the value is in seconds): '[install]' and 'minimumReleaseAge = 604800'. Exempt a package you trust with 'minimumReleaseAgeExcludes'.",
+        });
+    }
+    let uv_config = if cfg!(windows) {
+        home.join("AppData/Roaming/uv/uv.toml")
+    } else {
+        home.join(".config/uv/uv.toml")
+    };
+    if any(&[
+        ".config/uv",
+        ".cache/uv",
+        ".local/share/uv",
+        "AppData/Roaming/uv",
+        "AppData/Local/uv",
+    ]) {
+        out.push(UserPractices {
+            kind: "uv_user",
+            tool: "uv",
+            config: uv_config,
+            parse: parse_uv_user_practices,
+            how_to_fix: "Add the line 'exclude-newer = \"1 week\"' to ~/.config/uv/uv.toml (on Windows: %APPDATA%\\uv\\uv.toml). For one urgent install, pass '--exclude-newer' with today's date.",
+        });
+    }
+    out
+}
+
+/// Whether this home shows npm in use: its user config or its cache folder exists.
+fn uses_npm(home: &Path) -> bool {
+    home.join(".npmrc").is_file()
+        || home.join(".npm").is_dir()
+        || home.join("AppData/Local/npm-cache").is_dir()
 }
 
 /// Yarn Berry `.yarnrc.yml`: `enableStrictSsl: false`, `npmRegistryServer: "http://…"`.
@@ -240,7 +410,7 @@ pub(crate) fn parse_yarnrc_yml(text: &str) -> Flags {
             "enableStrictSsl" if is_false(v) => f.strict_ssl_off = true,
             "npmRegistryServer" if remote_http(v) => {
                 f.http_registry = true;
-                f.detail = v.trim().trim_matches('"').to_string();
+                f.detail = url_origin(v);
             }
             _ => {}
         }
@@ -282,12 +452,12 @@ pub(crate) fn parse_pip_conf(text: &str) -> Flags {
             match key.as_str() {
                 "index-url" | "extra-index-url" | "find-links" if remote_http(item) => {
                     f.http_registry = true;
-                    f.detail = item.to_string();
+                    f.detail = url_origin(item);
                 }
                 "trusted-host" if !local_host(item) => {
                     f.trusted_host = true;
                     if f.detail.is_empty() {
-                        f.detail = item.to_string();
+                        f.detail = url_origin(item);
                     }
                 }
                 _ => {}
@@ -320,7 +490,7 @@ pub(crate) fn parse_docker_daemon_json(text: &str) -> Option<Flags> {
                     let host = rest.rsplit_once(':').map_or(*rest, |(h, _)| h);
                     matches!(host, "127.0.0.1" | "localhost" | "[::1]" | "::1")
                 })
-                .map(|(h, _)| h.to_string())
+                .map(|(h, _)| url_origin(h))
                 .collect()
         })
         .unwrap_or_default();
@@ -352,17 +522,37 @@ pub(crate) fn parse_docker_desktop_settings(text: &str) -> Option<Flags> {
 /// (kind, path, parser) for every file that exists. Parsers returning `None` mean "unparseable".
 type Parser = fn(&str) -> Option<Flags>;
 
-fn candidate_files() -> Vec<(&'static str, PathBuf, Parser)> {
+fn candidate_files() -> Vec<(&'static str, PathBuf, Parser, Option<PathBuf>)> {
+    let mut found: Vec<(&'static str, PathBuf, Parser, Option<PathBuf>)> = Vec::new();
+    for home in user_homes() {
+        found.extend(
+            home_candidates(&home)
+                .into_iter()
+                .map(|(kind, path, parser)| (kind, path, parser, Some(home.clone()))),
+        );
+    }
+    found.extend(
+        system_candidates()
+            .into_iter()
+            .map(|(kind, path, parser)| (kind, path, parser, None)),
+    );
+    // The same file can be reached twice (e.g. root's home under a privileged scan).
+    let mut seen = std::collections::HashSet::new();
+    found.retain(|(_, p, _, _)| seen.insert(p.clone()));
+    found
+}
+
+/// The config files under one home folder.
+fn home_candidates(home: &Path) -> Vec<(&'static str, PathBuf, Parser)> {
     let mut out: Vec<(&'static str, PathBuf, Parser)> = Vec::new();
     let git: Parser = |t| Some(parse_git_config(t));
     let ssh: Parser = |t| Some(parse_ssh_client_config(t));
     let npm: Parser = |t| Some(parse_npmrc(t));
     let yarn: Parser = |t| Some(parse_yarnrc_yml(t));
     let pip: Parser = |t| Some(parse_pip_conf(t));
-    let daemon: Parser = parse_docker_daemon_json;
     let desktop: Parser = parse_docker_desktop_settings;
 
-    for home in user_homes() {
+    {
         out.push(("git", home.join(".gitconfig"), git));
         out.push(("git", home.join(".config").join("git").join("config"), git));
         out.push(("ssh", home.join(".ssh").join("config"), ssh));
@@ -394,6 +584,18 @@ fn candidate_files() -> Vec<(&'static str, PathBuf, Parser)> {
             ));
         }
     }
+    out
+}
+
+/// Config files outside any home: system-wide ones, and on Windows the per-user folders that are
+/// found through the environment and not through a home path.
+fn system_candidates() -> Vec<(&'static str, PathBuf, Parser)> {
+    let mut out: Vec<(&'static str, PathBuf, Parser)> = Vec::new();
+    let git: Parser = |t| Some(parse_git_config(t));
+    let ssh: Parser = |t| Some(parse_ssh_client_config(t));
+    let pip: Parser = |t| Some(parse_pip_conf(t));
+    let daemon: Parser = parse_docker_daemon_json;
+    let desktop: Parser = parse_docker_desktop_settings;
     if cfg!(windows) {
         if let Some(appdata) = std::env::var_os("APPDATA").map(PathBuf::from) {
             out.push(("pip", appdata.join("pip").join("pip.ini"), pip));
@@ -414,9 +616,6 @@ fn candidate_files() -> Vec<(&'static str, PathBuf, Parser)> {
         out.push(("pip", PathBuf::from("/etc/pip.conf"), pip));
         out.push(("docker", PathBuf::from("/etc/docker/daemon.json"), daemon));
     }
-    // The same file can be reached twice (e.g. root's home under a privileged scan).
-    let mut seen = std::collections::HashSet::new();
-    out.retain(|(_, p, _)| seen.insert(p.clone()));
     out
 }
 
@@ -424,8 +623,14 @@ fn fact_for(kind: &str, path: &Path, parsed: Option<Flags>) -> Fact {
     let mut fact = Fact::new();
     fact.insert("kind".into(), Value::String(kind.into()));
     fact.insert("path".into(), Value::String(path.display().to_string()));
-    // Unreadable or unparseable: no flags, so every rule on this row reports a collector error.
+    // Unreadable or unparseable: no flags, so every rule on this row reports "could not check".
     let Some(f) = parsed else {
+        fact.insert(
+            crate::homefs::COULD_NOT_READ.into(),
+            Value::String(
+                "it could not be read or its contents could not be parsed (also true of a link that leaves the home folder, or a pipe)".into(),
+            ),
+        );
         return fact;
     };
     let values = [
@@ -438,6 +643,8 @@ fn fact_for(kind: &str, path: &Path, parsed: Option<Flags>) -> Fact {
         f.http_registry,
         f.trusted_host,
         f.docker_api_unprotected,
+        f.install_scripts_auto,
+        f.no_release_cooldown,
     ];
     for (k, v) in FLAGS.iter().zip(values) {
         fact.insert((*k).into(), Value::Bool(v));
@@ -457,12 +664,45 @@ impl Collector for DevToolConfigCollector {
 
     fn collect(&self) -> anyhow::Result<Vec<Fact>> {
         let mut facts = Vec::new();
-        for (kind, path, parse) in candidate_files() {
-            // A symlink is followed only to a regular file; a missing file is simply absent.
-            if !path.is_file() {
-                continue;
+        // One row per package manager in use, for the settings whose *absence* matters
+        // (DEV-010, DEV-011). A missing config file means the tool's defaults; an unreadable or
+        // unparseable one leaves the flags undetermined, so the rule reports "could not check".
+        use crate::homefs::{open_system_file, read_in_home, read_start, HomeFile};
+        const CAP: u64 = super::MAX_COLLECTOR_READ_BYTES;
+        for home in user_homes() {
+            for p in user_practices(&home) {
+                // Missing means the tool's defaults. A pipe, a link leaving the home folder or an
+                // unreadable file is "could not check": the row carries no flags.
+                let parsed = match read_in_home(&home, &p.config, CAP) {
+                    HomeFile::Missing => (p.parse)(""),
+                    HomeFile::Refused => None,
+                    HomeFile::Found(text) => (p.parse)(&text),
+                };
+                let mut fact = fact_for(p.kind, &p.config, parsed);
+                fact.insert("tool".into(), Value::String(p.tool.into()));
+                fact.insert("how_to_fix".into(), Value::String(p.how_to_fix.into()));
+                facts.push(fact);
             }
-            let parsed = read_capped(&path).ok().and_then(|t| parse(&t));
+        }
+        for (kind, path, parse, home) in candidate_files() {
+            // A missing file is simply absent. One that exists but may not be read (a pipe, a
+            // link out of the home folder) gets a row without flags, so its rules report it.
+            let text = match &home {
+                Some(home) => read_in_home(home, &path, CAP),
+                None => match open_system_file(&path) {
+                    HomeFile::Found(file) => match read_start(file, CAP) {
+                        Some(text) => HomeFile::Found(text),
+                        None => HomeFile::Refused,
+                    },
+                    HomeFile::Missing => HomeFile::Missing,
+                    HomeFile::Refused => HomeFile::Refused,
+                },
+            };
+            let parsed = match text {
+                HomeFile::Missing => continue,
+                HomeFile::Refused => None,
+                HomeFile::Found(text) => parse(&text),
+            };
             facts.push(fact_for(kind, &path, parsed));
         }
         Ok(facts)
@@ -472,6 +712,139 @@ impl Collector for DevToolConfigCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn npm_user_practices_read_only_the_documented_keys() {
+        // npm's defaults: scripts run, no waiting period.
+        let d = parse_npm_user_practices("");
+        assert!(d.install_scripts_auto && d.no_release_cooldown);
+        let hardened = parse_npm_user_practices("ignore-scripts=true\nmin-release-age=7\n");
+        assert_eq!(hardened, Flags::default());
+        // `before` is a cooldown too; a zero or commented-out age is not.
+        assert!(!parse_npm_user_practices("before=2026-01-01\n").no_release_cooldown);
+        assert!(parse_npm_user_practices("min-release-age=0\n").no_release_cooldown);
+        assert!(
+            parse_npm_user_practices("; min-release-age=7\n# ignore-scripts=true\n")
+                .install_scripts_auto
+        );
+        assert!(parse_npm_user_practices("ignore-scripts=false\n").install_scripts_auto);
+        // Unrelated settings change nothing, and never set another rule's flag.
+        let other =
+            parse_npm_user_practices("registry=https://registry.npmjs.org/\nsave-exact=true\n");
+        assert!(other.install_scripts_auto && !other.http_registry && !other.strict_ssl_off);
+    }
+
+    #[test]
+    fn bun_and_uv_waiting_periods_use_the_documented_keys() {
+        // Defaults (no file, or a file about something else): no waiting period.
+        assert!(parse_bun_user_practices("").unwrap().no_release_cooldown);
+        assert!(parse_uv_user_practices("").unwrap().no_release_cooldown);
+        assert!(
+            parse_bun_user_practices("[install]\nexact = true\n")
+                .unwrap()
+                .no_release_cooldown
+        );
+        assert!(
+            parse_uv_user_practices("[pip]\nindex-url = \"https://pypi.org/simple\"\n")
+                .unwrap()
+                .no_release_cooldown
+        );
+        // Set as each tool documents it.
+        assert_eq!(
+            parse_bun_user_practices("[install]\nminimumReleaseAge = 259200\n"),
+            Some(Flags::default())
+        );
+        assert_eq!(
+            parse_uv_user_practices("exclude-newer = \"1 week\"\n"),
+            Some(Flags::default())
+        );
+        assert_eq!(
+            parse_uv_user_practices("exclude-newer = \"2026-01-01T00:00:00Z\"\n"),
+            Some(Flags::default())
+        );
+        // Explicitly off, or zero.
+        assert!(
+            parse_bun_user_practices("[install]\nminimumReleaseAge = 0\n")
+                .unwrap()
+                .no_release_cooldown
+        );
+        assert!(
+            parse_uv_user_practices("exclude-newer = false\n")
+                .unwrap()
+                .no_release_cooldown
+        );
+        // Invalid TOML is undetermined, never "fine".
+        assert_eq!(parse_bun_user_practices("[install\nx"), None);
+        assert_eq!(parse_uv_user_practices("exclude-newer = "), None);
+    }
+
+    #[test]
+    fn package_manager_rows_need_evidence_of_use() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(user_practices(home.path()).is_empty());
+        std::fs::create_dir_all(home.path().join(".bun")).unwrap();
+        std::fs::create_dir_all(home.path().join(".cache/uv")).unwrap();
+        let kinds: Vec<_> = user_practices(home.path()).iter().map(|p| p.kind).collect();
+        assert_eq!(kinds, ["bun_user", "uv_user"]);
+    }
+
+    #[test]
+    fn a_url_in_a_finding_keeps_only_scheme_host_and_port() {
+        // Built at runtime so no credential-shaped literal is committed.
+        let secret = format!("tok{}", "Z9y8".repeat(6));
+        for (url, want) in [
+            (
+                format!("http://user:{secret}@registry.example/simple"),
+                "http://registry.example",
+            ),
+            (
+                format!("http://registry.example:8081/repo?token={secret}"),
+                "http://registry.example:8081",
+            ),
+            (
+                format!("http://{secret}@[2001:db8::1]:8080/"),
+                "http://[2001:db8::1]:8080",
+            ),
+            (
+                "\"http://registry.example/\"".to_string(),
+                "http://registry.example",
+            ),
+            (format!("user:{secret}@pypi.example"), "pypi.example"),
+            (
+                "tcp://127.0.0.1:2375/x\u{1b}[2J".to_string(),
+                "tcp://127.0.0.1:2375",
+            ),
+            ("http://bad host/".to_string(), "an address in this file"),
+        ] {
+            let got = url_origin(&url);
+            assert_eq!(got, want, "{url}");
+            assert!(!got.contains(&secret));
+        }
+        // End to end through each parser that records a URL.
+        let npm = parse_npmrc(&format!("registry=http://u:{secret}@npm.example/\n"));
+        let yarn = parse_yarnrc_yml(&format!(
+            "npmRegistryServer: \"http://u:{secret}@yarn.example/\"\n"
+        ));
+        let pip = parse_pip_conf(&format!(
+            "[global]\nindex-url = http://u:{secret}@pip.example/simple\n"
+        ));
+        for (f, host) in [
+            (npm, "http://npm.example"),
+            (yarn, "http://yarn.example"),
+            (pip, "http://pip.example"),
+        ] {
+            assert!(f.http_registry);
+            assert_eq!(f.detail, host);
+        }
+    }
+
+    #[test]
+    fn npm_user_row_needs_evidence_that_npm_is_used() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(!uses_npm(home.path()));
+        std::fs::create_dir(home.path().join(".npm")).unwrap();
+        assert!(uses_npm(home.path()));
+    }
 
     #[test]
     fn git_flags_only_global_weakening() {
