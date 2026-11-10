@@ -221,7 +221,19 @@ fn run_provider_with_environment(
             cmd.env(name, value);
         }
     }
-    let mut child = cmd.spawn().map_err(|_| "Could not start AWS Vault.")?;
+    // Linux refuses to run a file some process still has open for writing ("text file busy"),
+    // which a just-written binary briefly is. Bounded to a second, so one that stays busy is
+    // still reported.
+    let mut busy = 0;
+    let mut child = loop {
+        match cmd.spawn() {
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && busy < 50 => {
+                busy += 1;
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            started => break started.map_err(|_| "Could not start AWS Vault.")?,
+        }
+    };
     let group = child.id() as i32;
     let stdout = child
         .stdout
