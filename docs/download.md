@@ -230,6 +230,29 @@ sudo apt install bulwarkctl
 bulwarkctl scan
 ```
 
+### Fedora COPR
+
+For current Fedora releases, on x86_64 and aarch64, with updates through `dnf`:
+
+```bash
+sudo dnf copr enable vietanhdev/bulwarkctl
+sudo dnf install bulwarkctl
+bulwarkctl scan
+```
+
+### Arch Linux (AUR)
+
+[`bulwarkctl`](https://aur.archlinux.org/packages/bulwarkctl) builds from the tagged source:
+
+```bash
+git clone https://aur.archlinux.org/bulwarkctl.git
+cd bulwarkctl
+makepkg -si
+bulwarkctl scan
+```
+
+An AUR helper does the same in one step, for example `yay -S bulwarkctl`.
+
 ## macOS and Windows
 
 New: the desktop app and the CLI also run on **macOS (Apple silicon)** and **Windows (x86_64)**.
