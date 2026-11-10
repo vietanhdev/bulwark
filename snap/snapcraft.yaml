@@ -1,6 +1,9 @@
 name: bulwark
 title: Bulwark
-base: core24
+# core22, not the newest base, for the same reason release.yml builds in ubuntu:22.04: the build
+# image's glibc is the oldest glibc the app runs on. A classic snap runs against the HOST's libc
+# (see "what the snap carries" below), so a core24 build would not start on Ubuntu 22.04.
+base: core22
 version: '0.15.0'   # set by scripts/bump-version.sh (checked by scripts/check-packaging-consistency.sh)
 summary: Linux security misconfiguration & intrusion scanner (GUI)
 description: |
@@ -22,16 +25,18 @@ confinement: classic     # NOT strict: pkexec + host /etc access are load-bearin
 # snap was amd64-only purely because publish-snap.yml happens to say `runs-on: ubuntu-24.04` —
 # an architecture decision recorded nowhere, enforced by nothing, and silently reversible by an
 # unrelated edit to a workflow. Stating it makes the restriction reviewable, and gives
-# scripts/check-packaging-consistency.sh something to assert against.
+# scripts/check-packaging-consistency.sh something to assert against. (core22 spells this
+# `architectures`; core24 calls it `platforms`. The check reads either.)
 #
 # amd64 only, deliberately: this snap needs `confinement: classic`, which requires manual Snap
 # Store approval that has not been granted (and, per packaging/README.md, is unlikely to be —
 # the criteria name /etc, sudo and pkexec in the not-supported list). Adding arm64 would
-# multiply the build matrix for a channel that publishes nothing today. The build itself is now
-# arch-clean — the Node tarball below follows CRAFT_ARCH_BUILD_FOR — so adding `arm64:` here is
-# a one-line change if the channel ever opens.
-platforms:
-  amd64:
+# multiply the build matrix for a channel that publishes nothing today. The build itself is
+# arch-clean — the Node tarball below follows the target arch — so adding an arm64 entry here
+# is a small change if the channel ever opens.
+architectures:
+  - build-on: [amd64]
+    build-for: [amd64]
 
 # tauri-plugin-single-instance claims a session-bus name at startup, and a sandbox
 # blocks any name the manifest does not declare. In the Flatpak this produced a bare
@@ -55,58 +60,92 @@ plugs:
     bus: session
     name: org.com_vietanhdev_bulwark.SingleInstance
 
+# What the snap carries: the same self-contained application folder the AppImage is made of,
+# under app/, started through its own launcher (app/AppRun).
+#
+# An earlier recipe installed the two binaries by hand and listed WebKitGTK under
+# stage-packages. That snap built, installed, passed every CLI check and could not start its
+# GUI: "libwebkit2gtk-4.1.so.0: cannot open shared object file". A classic snap gets no library
+# path from snapd, and nothing pointed the binary at $SNAP/usr/lib. Fixing only that is not
+# enough either: WebKit starts its helper processes from a path compiled into the library
+# (/usr/lib/<triplet>/webkit2gtk-4.1), and a classic snap runs in the host's mount namespace, so
+# there is no `layout:` to redirect it (layouts are a strict-confinement feature). GTK's pixbuf
+# loaders, GIO modules, input methods and GSettings schemas have the same problem.
+#
+# Tauri's AppImage bundler already solves all of that: it rewrites WebKit's helper path to a
+# relative one, and its launcher sets the library path and the GTK variables and changes into
+# the bundle before starting the app. release.yml launch-tests that folder on every release.
+# So this recipe builds that bundle and unpacks it, and adds nothing of its own to the runtime.
+#
+# Two consequences, the same as for the AppImage:
+#   - It expects the host's graphics stack (libEGL, Mesa) and two text-shaping libraries every
+#     desktop has (libfribidi, libharfbuzz). WebKit and GTK come from the snap.
+#   - The launcher's variables point into the bundle. bulwark_core::sandbox::host_env strips
+#     them from every system program the app starts, keyed on APPDIR, which the launcher sets.
+#
+# The two linters below are switched off because their warnings describe this design, a few
+# hundred lines of them per build. `classic` wants every ELF file pointed at the base snap's
+# loader and libc; this bundle runs against the host's libc on purpose, because it uses the
+# host's graphics libraries and those are built against the host's libc, not core22's.
+# `library` lists exactly those host libraries as missing.
+lint:
+  ignore:
+    - classic
+    - library
+
 apps:
   bulwark:
-    command: bin/bulwark-app
-    # classic snaps get no auto-connected desktop interfaces; the wrapper below
-    # sets the library + resource paths the app needs.
+    command: app/AppRun
     desktop: usr/share/applications/bulwark.desktop
     plugs:
       - single-instance-plug
     slots:
       - single-instance
-  # The bundled CLI, exposed as `bulwark.cli` — usable directly, and what the CI
-  # install-verify step smoke-tests (the GUI needs a display; the CLI doesn't).
+  # The bundled CLI, exposed as `bulwark.cli`: usable directly, and what the GUI's privileged
+  # scan runs (resolve_cli_binary pins the `bulwark` binary beside the GUI binary). It carries
+  # its rule pack built in and links only libc, so it needs no launcher.
   cli:
-    command: bin/bulwark
+    command: app/usr/bin/bulwark
 
 parts:
   # ---------------------------------------------------------------------------
-  # Frontend + Tauri app binary. Unlike the Launchpad PPA, snapcraft build
-  # environments HAVE network access, so npm and cargo can fetch normally — no
-  # vendoring needed here.
+  # Unlike the Launchpad PPA, snapcraft build environments HAVE network access, so
+  # npm and cargo fetch normally — no vendoring needed here.
   # ---------------------------------------------------------------------------
   bulwark-app:
     plugin: nil
     source: .
+    # The same list release.yml installs into its ubuntu:22.04 build image.
     build-packages:
+      - ca-certificates
       - curl
+      - file
+      - git
       - build-essential
       - pkg-config
-      - libwebkit2gtk-4.1-dev
+      - xz-utils
       - libssl-dev
+      - libwebkit2gtk-4.1-dev
       - libgtk-3-dev
       - libayatana-appindicator3-dev
       - librsvg2-dev
-      # NOTE: no nodejs/npm here — core24 ships Node 18, too old for the vite
-      # frontend build (needs >=20.12). override-build fetches Node 22 instead.
-    stage-packages:
-      # Runtime libs the app links against. Classic confinement means the app
-      # runs unconfined, but its own binary still needs these present.
-      - libwebkit2gtk-4.1-0
-      - libgtk-3-0
-      - libayatana-appindicator3-1
+      # The AppImage bundler needs both: patchelf to set library paths, and xdg-open, which it
+      # copies into the bundle (the app opens links and folders through it).
+      - patchelf
+      - xdg-utils
+      # NOTE: no nodejs/npm here — the base's Node is too old for the vite frontend
+      # build (needs >=20.12). override-build fetches Node 22 instead.
     override-build: |
       set -eux
-      # Ubuntu 24.04's archive rustc may be too old for the workspace; pin a
-      # current toolchain via rustup for the build.
+      # The archive's rustc is too old for the workspace; pin a current toolchain via
+      # rustup for the build.
       export RUSTUP_HOME="$CRAFT_PART_BUILD/.rustup"
       export CARGO_HOME="$CRAFT_PART_BUILD/.cargo"
       curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
       export PATH="$CARGO_HOME/bin:$PATH"
 
-      # core24's Node is 18; the frontend build (vite/rolldown) needs >=20.12
-      # (it imports styleText from node:util). Fetch an official Node 22 build.
+      # The frontend build (vite/rolldown) needs Node >=20.12 (it imports styleText
+      # from node:util). Fetch an official Node 22 build.
       #
       # The Node tarball is the ONE prebuilt binary this build downloads, so it is the one
       # place that can silently hardcode an architecture — rustup's installer detects the host
@@ -125,32 +164,38 @@ parts:
       export PATH="$CRAFT_PART_BUILD/node-v${NODE_VER}-linux-${NODE_ARCH}/bin:$PATH"
       node --version
 
-      cd "$CRAFT_PART_SRC/apps/bulwark-app"
-      npm ci
-      npm run build            # vite -> apps/bulwark-app/dist (embedded by Tauri)
-
-      # Build the GUI binary and the bundled CLI sidecar.
-      # --features custom-protocol is REQUIRED: Tauri's build script does
-      # `let dev = !custom_protocol`, so without it the app loads devUrl
-      # (http://localhost:1420) rather than the embedded frontend and never renders.
-      cargo build --release -p bulwark-app --features custom-protocol
+      # The CLI first: src-tauri/build.rs stages it as the GUI's `bulwark` sidecar, and a GUI
+      # built before it exists ships a zero-byte placeholder.
+      cd "$CRAFT_PART_SRC"
       cargo build --release -p bulwarkctl
 
-      # --- install layout --------------------------------------------------
-      install -D -m0755 "$CRAFT_PART_SRC/target/release/bulwark-app" \
-        "$CRAFT_PART_INSTALL/bin/bulwark-app"
-      # The GUI shells out to a sidecar named `bulwark` (NOT bulwarkctl) sitting
-      # beside the GUI binary — resolve_cli_binary pins exactly that.
-      install -D -m0755 "$CRAFT_PART_SRC/target/release/bulwarkctl" \
-        "$CRAFT_PART_INSTALL/bin/bulwark"
+      # `tauri build`, not a bare cargo build of the app crate: it builds the frontend, enables
+      # the custom-protocol feature (without it the app loads devUrl and draws an empty
+      # window), and bundles the rule pack and the sidecar where the app looks for them.
+      #
+      # The bundler's own tooling (linuxdeploy) is itself an AppImage, and an AppImage mounts
+      # itself with FUSE, which a build container does not have. This tells it to unpack and
+      # run instead. It affects only the build tooling.
+      cd "$CRAFT_PART_SRC/apps/bulwark-app"
+      npm ci
+      APPIMAGE_EXTRACT_AND_RUN=1 npx tauri build --bundles appimage
 
-      # Rule pack / decoders / log-rules, beside the binaries. Verified in CI: the
-      # bundled CLI (bulwark.cli) resolves /snap/bulwark/current/bin/rules
-      # next-to-exe. The GUI's in-process scans use the same resolver; only the
-      # GUI window rendering itself still wants an eyeball on a real desktop.
-      for d in rules decoders log-rules; do
-        cp -r "$CRAFT_PART_SRC/$d" "$CRAFT_PART_INSTALL/bin/$d"
-      done
+      # --- install layout --------------------------------------------------
+      # Unpack the bundle (no FUSE needed) into app/.
+      APPIMAGE="$(ls "$CRAFT_PART_SRC"/target/release/bundle/appimage/*.AppImage)"
+      chmod +x "$APPIMAGE"
+      cd "$CRAFT_PART_BUILD"
+      rm -rf squashfs-root
+      "$APPIMAGE" --appimage-extract >/dev/null
+      test -x squashfs-root/AppRun
+      test -x squashfs-root/usr/bin/bulwark-app
+      test -s squashfs-root/usr/bin/bulwark
+      mkdir -p "$CRAFT_PART_INSTALL/app"
+      cp -a squashfs-root/. "$CRAFT_PART_INSTALL/app/"
+      # The extracted folders are mode 0700. Inside a mounted AppImage that is fine, the user
+      # owns the mount; inside a snap the files belong to root, and nobody else could even
+      # list them.
+      chmod -R u+rwX,go+rX,go-w "$CRAFT_PART_INSTALL/app"
 
       # Desktop entry + icon. Every hicolor size is shipped rather than only 128:
       # GNOME asks for 48px constantly (dash, alt-tab, window list) and a 48
@@ -163,13 +208,16 @@ parts:
       # leading spaces are stripped before writing: a .desktop line that starts
       # with whitespace is an error to desktop-file-validate (GLib tolerates it,
       # so it was invisible until something validated the file).
+      #
+      # Icon is a path under ${SNAP}, not a theme name: a snap's own icon folders are not on
+      # the host's icon search path, so `Icon=bulwark` resolves to nothing there.
       sed 's/^ *//' <<'DESKTOP' | install -D -m0644 /dev/stdin \
         "$CRAFT_PART_INSTALL/usr/share/applications/bulwark.desktop"
       [Desktop Entry]
       Name=Bulwark
       Comment=Security for your dev machines, the servers they reach, and your AI coding tools
       Exec=bulwark
-      Icon=bulwark
+      Icon=${SNAP}/usr/share/icons/hicolor/256x256/apps/bulwark.png
       Terminal=false
       Type=Application
       Categories=System;Security;

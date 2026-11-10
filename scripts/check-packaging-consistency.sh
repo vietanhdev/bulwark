@@ -129,6 +129,9 @@ done
 # fine. The Flatpak and Snap invoke plain `cargo build --release`, and both shipped a GUI
 # that could not possibly render. Any packaging that builds the app with bare cargo must
 # pass this feature.
+#
+# A manifest that builds through `tauri build` is fine by construction (the snap does, since it
+# ships the AppImage bundle). One that does neither is a manifest this check cannot vouch for.
 for m in "${FLATPAK_MANIFEST}" "${SNAP_MANIFEST}"; do
   if grep -qE "cargo build .*-p bulwark-app" "${m}"; then
     if grep -qE "cargo build .*-p bulwark-app.*--features custom-protocol" "${m}"; then
@@ -137,6 +140,11 @@ for m in "${FLATPAK_MANIFEST}" "${SNAP_MANIFEST}"; do
       bad "$(basename "${m}") builds bulwark-app WITHOUT --features custom-protocol"
       note "That produces a dev build which loads devUrl and renders an empty window."
     fi
+  elif grep -qE "^[[:space:]]*([A-Z_]+=[^[:space:]]+ )*(npx|npm run|cargo) tauri build" "${m}"; then
+    ok "$(basename "${m}") builds the app through 'tauri build' (custom-protocol is implied)"
+  else
+    bad "$(basename "${m}") builds the app neither with 'tauri build' nor with --features custom-protocol"
+    note "A bare cargo build of bulwark-app is a dev build: it loads devUrl and renders an empty window."
   fi
 done
 
@@ -254,19 +262,27 @@ fi
 # The snap declares its arches explicitly so the restriction is reviewable. Checked for
 # *presence and subset*, not equality: the snap is deliberately amd64-only (classic confinement
 # is unapproved, so the channel publishes nothing), but it must never claim an arch the release
-# does not build a GUI for. Without a platforms: key snapcraft silently builds host-arch-only,
+# does not build a GUI for. Without that key snapcraft silently builds host-arch-only,
 # which is how this was an undeclared decision for as long as it was.
 SNAP_ARCHES="$(python3 - "${SNAP_MANIFEST}" <<'PY'
 import sys, yaml
 m = yaml.safe_load(open(sys.argv[1]))
-p = m.get("platforms") or {}
+# core24 declares `platforms:` (a map keyed by arch); core22 declares `architectures:` (a list
+# of build-on/build-for entries). Read whichever the manifest's base uses.
+arches = set(m.get("platforms") or {})
+for entry in m.get("architectures") or []:
+    if isinstance(entry, str):
+        arches.add(entry)
+        continue
+    target = entry.get("build-for") or entry.get("build-on") or []
+    arches.update([target] if isinstance(target, str) else target)
 # snapcraft spells Debian arch names here; map to the uname spelling the matrix uses.
 xlate = {"amd64": "x86_64", "arm64": "aarch64", "armhf": "arm"}
-print(",".join(sorted(xlate.get(k, k) for k in p)))
+print(",".join(sorted(xlate.get(k, k) for k in arches)))
 PY
 )"
 if [[ -z "${SNAP_ARCHES}" ]]; then
-  bad "snapcraft.yaml declares no platforms: key — its architecture is an accident of the runner"
+  bad "snapcraft.yaml declares no architectures: or platforms: key — its architecture is an accident of the runner"
 else
   snap_extra=""
   for a in ${SNAP_ARCHES//,/ }; do

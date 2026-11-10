@@ -298,22 +298,53 @@ snapcraft                       # build
 sudo snap install --classic --dangerous bulwark_0.7.0_amd64.snap
 ```
 
-### Two things to verify on a real machine
+### What the snap contains, and why
 
-`snapcraft.yaml` has two spots that **cannot be validated without an actual
-snapcraft build** (flagged with `TODO(verify)` in the file):
+The snap carries the **same self-contained application folder the AppImage is made of**,
+unpacked under `app/` and started through its own launcher (`app/AppRun`). The recipe runs
+`tauri build --bundles appimage` and extracts the result; it adds nothing of its own to the
+runtime.
 
-1. **Rule-pack path.** The GUI resolves `rules/`, `decoders/`, `log-rules/` via
-   Tauri's resource dir at runtime. Confirm the path Tauri computes inside the
-   snap matches where the recipe installs them; adjust if the app can't find its
-   rules. Symptom of a mismatch: "couldn't find a 'rules' directory."
-2. **polkit policy.** A classic snap can't install
-   `polkit/com.bulwark.policy` into the host's `/usr/share/polkit-1/actions`, so
-   `pkexec` falls back to the distro-default polkit action (usually
-   `auth_admin_keep`) instead of Bulwark's `auth_admin`. Same opt-in caveat that
-   the plain `.deb`/`.rpm` already have (see the root `AGENTS.md`/`CLAUDE.md`
-   "Open question — the polkit policy is not packaged"). Document it for snap
-   users or ship `install-polkit.sh` alongside.
+It was not always built that way. The earlier recipe installed the two binaries by hand and
+listed WebKitGTK under `stage-packages`. That snap built, installed, passed every check in
+CI, and its GUI could not start:
+
+    bulwark-app: error while loading shared libraries: libwebkit2gtk-4.1.so.0
+
+A classic snap gets no library path from snapd, and nothing pointed the binary at the
+libraries inside the snap. Adding a library path alone would not have been enough: WebKit
+starts its helper processes from a path compiled into the library, and a classic snap runs
+in the host's mount namespace, so there is no `layout:` to redirect it. GTK's pixbuf
+loaders, GIO modules and GSettings schemas have the same problem. Tauri's AppImage bundler
+already solves all of it, and `release.yml` launch-tests that folder on every release, so
+the snap reuses it.
+
+Three things follow from that choice:
+
+- **`base: core22`.** A classic snap runs against the host's libc, so the build image's
+  glibc is the oldest the snap runs on, the same reasoning as `release.yml`'s
+  `ubuntu:22.04` container.
+- **It expects the host's graphics stack** (libEGL, Mesa) and two text-shaping libraries
+  every desktop has (libfribidi, libharfbuzz). WebKit and GTK come from the snap. That is
+  why the recipe switches off snapcraft's `classic` and `library` linters: their warnings
+  describe this design.
+- **The launcher's variables point into the bundle.** `bulwark_core::sandbox::host_env`
+  strips them from every system program the app starts. It keys on `APPDIR`, which the
+  launcher sets, so it already covers the snap.
+
+**The GUI is launch-tested, not inferred from the CLI.** `scripts/test-snap-gui.sh` starts
+the installed snap on a virtual display on a runner with no WebKit of its own, and fails
+unless the app resolves its rules, loads the embedded frontend, runs the snap's own
+`WebKitWebProcess`, paints a real interface and stops when asked. `ci.yml`'s `snap-build`
+job runs it on every pull request and `publish-snap.yml` runs it before the upload step.
+The old checks drove only `bulwark.cli`, which shares a folder with the GUI and none of
+its code; that is how the broken snap stayed green.
+
+Still open: **the polkit policy.** A classic snap can't install
+`polkit/com.bulwark.policy` into the host's `/usr/share/polkit-1/actions`, so `pkexec`
+falls back to the distro-default polkit action (usually `auth_admin_keep`) instead of
+Bulwark's `auth_admin`. Same opt-in caveat that the plain `.deb`/`.rpm` already have (see
+the root `AGENTS.md` "Open question — the polkit policy is not packaged").
 
 ---
 
@@ -634,6 +665,14 @@ editing by hand, since a mismatch is a common first-import rejection.
 creates the project if absent, and submits the build. It needs an API **token** (never a
 password) from <https://copr.fedorainfracloud.org/api/> saved to `~/.config/copr`.
 
+**An existing project keeps the chroots it was created with.** The script selects the
+newest three Fedora releases for each architecture, but it used to apply that list only when
+it created the project. So every later run printed six chroots, built the two the project
+had on day one, and exited 0: a new Fedora release and all of aarch64 were never published,
+while this page said they were. The script now sets the list on every run (`copr-cli modify
+--chroot …`, which replaces the old list and so also retires ended releases), and fails if
+it cannot. After a build, check the chroots on the build page, not the exit code.
+
 **COPR builders have no network**, exactly like Launchpad's — mock disables it by
 default. The spec fetches crates from crates.io during `%build`, so the project must be
 created with (or modified to) `--enable-net on`, which the script now does and asserts.
@@ -667,9 +706,8 @@ you will conclude the fix is wrong and go looking for a different one.
 
 **The snap has the same trap in a different costume.** A stale snap mount namespace
 keeps serving the old layout, so a corrected `snapcraft.yaml` reads as ineffective
-even though it built and installed fine — structurally identical to trap 1 above, and
-it bites hardest on the WebKitGTK child-process error the `layout:` bind exists to
-fix. Clear it before concluding a fix did not work:
+even though it built and installed fine — structurally identical to trap 1 above.
+Clear it before concluding a fix did not work:
 
 ```bash
 sudo /usr/lib/snapd/snap-discard-ns bulwark
