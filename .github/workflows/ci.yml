@@ -114,7 +114,12 @@ jobs:
           # every link fails. Fedora/Arch pull their libc-dev as a hard dep, hence gcc alone works.
           - { image: "debian:12", arch: x86_64, runner: ubuntu-24.04, install: "apt-get update && apt-get install -y --no-install-recommends curl gcc libc6-dev git ca-certificates" }
           - { image: "fedora:41", arch: x86_64, runner: ubuntu-24.04, install: "dnf install -y -q gcc git which" }
-          - { image: "archlinux:latest", arch: x86_64, runner: ubuntu-24.04, install: "pacman -Sy --noconfirm gcc git curl" }
+          # -Syu, not -Sy: Arch is rolling and supports only full upgrades. `-Sy` refreshes the
+          # package lists and then installs new packages against an image that still holds old
+          # ones. That works until a library the image already has changes its soname: when
+          # openssl 4 landed, installing curl pulled it in and pacman refused the transaction
+          # ("installing openssl breaks dependency 'libcrypto.so=3-64' required by pacman").
+          - { image: "archlinux:latest", arch: x86_64, runner: ubuntu-24.04, install: "pacman -Syu --noconfirm gcc git curl" }
           - { image: "debian:12", arch: aarch64, runner: ubuntu-24.04-arm, install: "apt-get update && apt-get install -y --no-install-recommends curl gcc libc6-dev git ca-certificates" }
           - { image: "fedora:41", arch: aarch64, runner: ubuntu-24.04-arm, install: "dnf install -y -q gcc git which" }
     name: test (${{ matrix.image }}, ${{ matrix.arch }})

@@ -46,6 +46,6 @@ echo ">> updated ${OLD:0:16}… -> ${SHA:0:16}…"
 echo
 echo ">> verify with a real makepkg before pushing to the AUR:"
 echo "     docker run --rm -v \"\$PWD/packaging/aur:/pkg\" archlinux:latest bash -c '"
-echo "       pacman -Sy --noconfirm --needed base-devel >/dev/null &&"
+echo "       pacman -Syu --noconfirm --needed base-devel >/dev/null &&"
 echo "       useradd -m b && cp /pkg/PKGBUILD /home/b/ && chown -R b /home/b &&"
 echo "       su b -c \"cd /home/b && makepkg --verifysource\"'"
