@@ -25,6 +25,10 @@ jobs:
   # which is why it silently inherited the same "built without --features custom-protocol"
   # defect as the Flatpak and would have shipped a GUI that could not render. Building it on
   # any change to the snap or the app closes that gap; publishing stays manual.
+  #
+  # Building and driving the bundled CLI was still not enough: that passed for months on a snap
+  # whose GUI could not load WebKit and died on start. The last step launches the real GUI on a
+  # virtual display, on a runner with no WebKit of its own, and looks at what it drew.
   snap-build:
     runs-on: ubuntu-24.04
     if: github.triggering_actor == 'vietanhdev'
@@ -41,6 +45,8 @@ jobs:
           n=$(bulwark.cli rules list | grep -c '^BLWK-' || true)
           echo "rules visible from the snap: $n"
           test "$n" -gt 0
+      - name: Launch the snap's GUI
+        run: scripts/test-snap-gui.sh
 
   test:
     if: github.triggering_actor == 'vietanhdev'

@@ -80,16 +80,17 @@ for a in "${COPR_ARCHES[@]}"; do
 done
 echo ">> chroots: ${CHROOTS[*]}"
 
+# Build the flag list as separate argv entries. "${CHROOTS[@]/#/--chroot }"
+# looks equivalent but embeds the space *inside* one argument, so copr-cli
+# sees a single unrecognized "--chroot fedora-43-x86_64" token and bails.
+CHROOT_ARGS=()
+for c in "${CHROOTS[@]}"; do CHROOT_ARGS+=(--chroot "${c}"); done
+
 # `copr-cli list` prints "Name: <project>" plus an indented block, not a bare name, so a
 # `grep -x` against the project name never matches and the script tried to create a project
 # that already existed ("You already have a project named 'bulwarkctl'"). Match the field.
 if ! copr-cli list 2>/dev/null | grep -qE "^Name:[[:space:]]+${PROJECT}$"; then
   echo ">> creating COPR project ${PROJECT}"
-  # Build the flag list as separate argv entries. "${CHROOTS[@]/#/--chroot }"
-  # looks equivalent but embeds the space *inside* one argument, so copr-cli
-  # sees a single unrecognized "--chroot fedora-43-x86_64" token and bails.
-  CHROOT_ARGS=()
-  for c in "${CHROOTS[@]}"; do CHROOT_ARGS+=(--chroot "${c}"); done
   # --enable-net on is REQUIRED, not optional: mock disables builder networking by
   # default, and the spec fetches crates from crates.io during %build. Without it every
   # build fails with "Could not resolve host: index.crates.io".
@@ -99,8 +100,15 @@ if ! copr-cli list 2>/dev/null | grep -qE "^Name:[[:space:]]+${PROJECT}$"; then
     --enable-net on \
     "${CHROOT_ARGS[@]}"
 else
-  # Idempotent: an existing project may predate the flag (this cost one failed build).
-  copr-cli modify "${PROJECT}" --enable-net on >/dev/null 2>&1 || true
+  # An existing project keeps the chroots it was created with, and a build only ever runs in
+  # those. The list above used to be applied on creation alone, so the project stayed on the
+  # two x86_64 Fedora releases of the day it was made: every later build printed all six
+  # chroots, built two, and exited 0, while a new Fedora release and the whole aarch64 half
+  # this script selects were never published. Set the list every time; it replaces the old
+  # one, which also retires chroots Fedora has ended. Not silenced: a project that could not
+  # be updated must not go on to "publish" to the wrong set.
+  echo ">> updating ${PROJECT}: networking on, chroots as above"
+  copr-cli modify "${PROJECT}" --enable-net on "${CHROOT_ARGS[@]}"
 fi
 
 echo ">> submitting build"
