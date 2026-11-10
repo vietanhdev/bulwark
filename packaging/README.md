@@ -279,7 +279,7 @@ response is cheap, and a definitive `#reject` beats inferring from precedent):
 
 1. Register the name once: `snapcraft register bulwark`.
 2. Request classic confinement in the `classic-confinement` **subcategory** of
-   <https://forum.snapcraft.io/c/store-requests>, **using its template** — a
+   <https://forum.snapcraft.io/c/store-requests/classic-confinement/26>, **using its template** — a
    malformed post is auto-bounced by `store-requests-bot` with no human review.
    Argue against the supported-category list, not from technical need: the category
    list is the axis reviewers actually decide on.
@@ -600,13 +600,24 @@ gh secret set SNAPCRAFT_STORE_CREDENTIALS < snapcraft-creds.txt
 rm snapcraft-creds.txt
 ```
 
+**What the store says today (0.15.0, uploaded to `edge` on 2026-11-10).** The snap builds,
+passes its launch test and uploads; the store's automatic review then holds it with a single
+finding:
+
+    (NEEDS REVIEW) confinement 'classic' not allowed. If your snap needs classic confinement
+    to function, please make a request … in the 'classic-confinement' category
+
+Nothing else is flagged, so the one remaining step is the forum request below, which a
+person has to write and post. An earlier upload was also refused for a dbus slot and plug
+("confinement 'classic' not allowed with plugs/slots"); the recipe no longer declares any.
+
 **Classic confinement is gated on approval for _every_ channel** (edge included),
 not just `stable` — a classic snap is rejected on upload until the registered name
 is granted classic. Two one-time steps, in order:
 
 1. **Register the name:** `snapcraft register bulwark` (or [snapcraft.io/register-snap](https://snapcraft.io/register-snap)).
 2. **Request classic:** open a topic in the *Store requests* category —
-   [forum.snapcraft.io/c/store-requests/19](https://forum.snapcraft.io/c/store-requests/19) —
+   [forum.snapcraft.io/c/store-requests/classic-confinement/26](https://forum.snapcraft.io/c/store-requests/classic-confinement/26) —
    with the snap name, the source URL, and the justification (host security
    auditor: needs `pkexec` + host `/etc`, which a strict sandbox blocks). A
    reviewer grants classic manually (days to weeks). Only then can any publish

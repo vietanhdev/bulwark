@@ -26,7 +26,7 @@
 Post this in the **`classic-confinement` subcategory** of Store requests, using
 that subcategory's template — a malformed post is auto-bounced by
 `store-requests-bot` with no human review:
-<https://forum.snapcraft.io/c/store-requests/19>
+<https://forum.snapcraft.io/c/store-requests/classic-confinement/26>
 
 Title suggestion: **Classic confinement request for bulwark**
 
