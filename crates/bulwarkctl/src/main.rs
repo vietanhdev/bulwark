@@ -10,6 +10,8 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 mod agent;
+#[cfg(unix)]
+mod db_guard;
 mod hosts;
 mod notify;
 mod proc;
@@ -526,14 +528,42 @@ fn exe_relative_dir(subdir: &str) -> Option<PathBuf> {
         .and_then(|c| c.canonicalize().ok())
 }
 
-fn resolve_db_path(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
-    if let Some(p) = explicit {
-        return Ok(p);
+/// Where the findings database is, before asking whether this process may use it.
+fn db_path_as_named(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
+    match explicit {
+        Some(p) => Ok(p),
+        // `BULWARK_DB_PATH`, then `XDG_DATA_HOME`, then `~/.local/share` — one resolver shared with
+        // the GUI (see `bulwark_core::paths`). XDG_DATA_HOME matters inside a Flatpak, where $HOME
+        // is the real, read-only home and only XDG_DATA_HOME is writable.
+        None => bulwark_core::paths::default_db_path(),
     }
-    // `BULWARK_DB_PATH`, then `XDG_DATA_HOME`, then `~/.local/share` — one resolver shared with the
-    // GUI (see `bulwark_core::paths`). XDG_DATA_HOME matters inside a Flatpak, where $HOME is the
-    // real, read-only home and only XDG_DATA_HOME is writable.
-    bulwark_core::paths::default_db_path()
+}
+
+/// Why this process must not open the database at `path`, if it must not.
+///
+/// Root on someone else's behalf never opens a database that account can write to: with a
+/// preserved HOME (`sudo -E`, or macOS) the default one sits in their home folder, and a database
+/// is input SQLite parses. A real root login chose its own files and is left alone, as is a
+/// container that simply runs everything as root.
+fn db_refusal(path: &Path) -> Option<String> {
+    #[cfg(unix)]
+    if engine::is_running_as_root() && elevated_from_another_user() {
+        return db_guard::exposure(path, 0)
+            .map(|why| format!("refusing to use {} as root: {why}", path.display()));
+    }
+    let _ = path;
+    None
+}
+
+fn resolve_db_path(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
+    let path = db_path_as_named(explicit)?;
+    if let Some(refusal) = db_refusal(&path) {
+        anyhow::bail!(
+            "{refusal}, so it could feed a root process whatever it likes. Use --no-persist to \
+             scan without saving, or --db-path with a location only root can write to"
+        );
+    }
+    Ok(path)
 }
 
 /// Who to attribute a suppression to in the audit trail. `SUDO_USER` wins over `USER` so a
@@ -632,6 +662,11 @@ fn main() -> anyhow::Result<()> {
                     "--privileged requires root — re-run as: sudo bulwarkctl scan --privileged"
                 );
             }
+            // Decided before the scan, not after it: a database this run may not use is an error
+            // the user should meet in a second, not once the results are ready to save.
+            if !no_persist {
+                resolve_db_path(cli.db_path.clone())?;
+            }
             let rules_dir = resolve_rules_dir(cli.rules_dir)?;
             // A root scan never picks up the user-writable custom folder on its own: a rule planted
             // there could template root-only facts (sudoers lines, privileged file hashes) into its
@@ -693,9 +728,17 @@ fn main() -> anyhow::Result<()> {
             // What you've chosen not to see (whole checks and single findings). The JSON stays raw —
             // remote scanning reads it and must see everything — but the table and the exit code a
             // cron job gates on follow your decisions.
-            let ignores = resolve_db_path(cli.db_path.clone())
+            let ignores = db_path_as_named(cli.db_path.clone())
                 .ok()
                 .filter(|p| p.exists())
+                // Only reachable with --no-persist. Said out loud, or the table quietly grows.
+                .filter(|p| match db_refusal(p) {
+                    Some(refusal) => {
+                        eprintln!("[bulwark] your ignore list was not applied: {refusal}");
+                        false
+                    }
+                    None => true,
+                })
                 .and_then(|p| Store::open(&p).ok())
                 .and_then(|mut st| st.ignores().ok())
                 .unwrap_or_default();

@@ -119,6 +119,7 @@
           <li>Hidden text in AI agent instruction files is caught in more forms, and shown decoded</li>
           <li>The credential checks now run on Windows too</li>
           <li>Fix commands never include a file name that could act as a command when pasted</li>
+          <li>A scan run through sudo no longer opens a results database that another account can write to</li>
         </ul>
       </description>
     </release>
