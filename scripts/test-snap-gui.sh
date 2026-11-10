@@ -22,7 +22,7 @@ SHOT="$(mktemp --suffix=.png)"
 
 sudo apt-get update -qq >/dev/null
 sudo apt-get install -y -qq --no-install-recommends \
-  xvfb imagemagick x11-apps procps \
+  xvfb imagemagick x11-apps procps dbus \
   libegl1 libgl1 libgl1-mesa-dri libgles2 libfribidi0 libharfbuzz0b >/dev/null
 
 if dpkg-query -W -f='${Status}\n' 'libwebkit2gtk-4.1-0' 2>/dev/null | grep -q "install ok installed"; then
@@ -55,6 +55,15 @@ sleep 3
 # (scripts/test-gui-packages-docker.sh).
 export WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_DISABLE_DMABUF_RENDERER=1
 export LIBGL_ALWAYS_SOFTWARE=1 GDK_BACKEND=x11
+
+# A session bus, as every desktop has. Without one the app starts anyway and simply skips
+# single-instance, so a test with no bus can never notice a snap that is not allowed to claim
+# its bus name. That is how a recipe the Snap Store rejects stayed green here.
+BUS="$(dbus-daemon --session --fork --print-address=1 --print-pid=1)"
+DBUS_SESSION_BUS_ADDRESS="$(printf '%s\n' "$BUS" | sed -n 1p)"
+BUS_PID="$(printf '%s\n' "$BUS" | sed -n 2p)"
+export DBUS_SESSION_BUS_ADDRESS
+[ -n "$DBUS_SESSION_BUS_ADDRESS" ] || { echo "FAIL: could not start a session bus"; exit 1; }
 
 # From a folder that is not the snap's: the bundle's WebKit finds its helper processes through
 # a relative path, so a launcher that forgot to change directory fails only when started from
@@ -104,6 +113,21 @@ else
   echo "FAIL: no screenshot could be captured"; fail=1
 fi
 
+# Starting it again must hand over to the running app and exit, not open a second one. This
+# is the only check that proves the app could claim its name on the session bus.
+if kill -0 "$APP_PID" 2>/dev/null; then
+  timeout 20 bulwark >"$LOG.second" 2>&1
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "second launch handed over to the first and exited"
+  else
+    echo "FAIL: a second launch did not hand over to the running app (exit $rc)"
+    sed 's/^/  second: /' "$LOG.second" | head -20
+    fail=1
+  fi
+  kill -0 "$APP_PID" 2>/dev/null || { echo "FAIL: the first app died when a second was started"; fail=1; }
+fi
+
 # Closing the app is something every user does. It must stop when asked.
 kill "$APP_PID" 2>/dev/null || true
 for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -115,6 +139,7 @@ if kill -0 "$APP_PID" 2>/dev/null; then
   kill -9 "$APP_PID" 2>/dev/null || true
 fi
 kill "$XVFB_PID" 2>/dev/null || true
+[ -n "${BUS_PID:-}" ] && kill "$BUS_PID" 2>/dev/null || true
 
 [ "$fail" -eq 0 ] && echo "snap GUI launch OK"
 exit "$fail"

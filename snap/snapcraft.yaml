@@ -38,27 +38,13 @@ architectures:
   - build-on: [amd64]
     build-for: [amd64]
 
-# tauri-plugin-single-instance claims a session-bus name at startup, and a sandbox
-# blocks any name the manifest does not declare. In the Flatpak this produced a bare
-# GDBus NotAllowed error painted on an empty window, before the UI existed. Classic
-# confinement should not enforce this, but the declaration is cheap, is what the Tauri
-# docs prescribe, and keeps the snap working if it ever moves to strict confinement.
-#
-# The name derives from tauri.conf.json's *identifier* with dots and dashes replaced by
-# underscores. It must match what the binary asks for; rename it only together with the
-# identifier, and let check-packaging-consistency.sh verify the two agree.
-# https://v2.tauri.app/plugin/single-instance/#usage-in-snap-and-flatpak
-slots:
-  single-instance:
-    interface: dbus
-    bus: session
-    name: org.com_vietanhdev_bulwark.SingleInstance
-
-plugs:
-  single-instance-plug:
-    interface: dbus
-    bus: session
-    name: org.com_vietanhdev_bulwark.SingleInstance
+# No `plugs:` or `slots:`, on purpose. The Snap Store refuses them on a classic snap
+# ("confinement 'classic' not allowed with plugs/slots"), and a classic snap does not need
+# them: it is unconfined, so the app claims its single-instance bus name
+# (<identifier>.SingleInstance) like any other program on the session bus. An earlier recipe
+# declared a dbus slot and plug "in case it ever moves to strict"; that alone got every upload
+# rejected. scripts/test-snap-gui.sh starts the app twice on a session bus to prove a second
+# launch hands over to the first, and check-packaging-consistency.sh fails if they come back.
 
 # What the snap carries: the same self-contained application folder the AppImage is made of,
 # under app/, started through its own launcher (app/AppRun).
@@ -97,10 +83,6 @@ apps:
   bulwark:
     command: app/AppRun
     desktop: usr/share/applications/bulwark.desktop
-    plugs:
-      - single-instance-plug
-    slots:
-      - single-instance
   # The bundled CLI, exposed as `bulwark.cli`: usable directly, and what the GUI's privileged
   # scan runs (resolve_cli_binary pins the `bulwark` binary beside the GUI binary). It carries
   # its rule pack built in and links only libc, so it needs no launcher.

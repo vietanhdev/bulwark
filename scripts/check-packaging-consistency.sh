@@ -32,64 +32,78 @@ bad()  { printf '\033[0;31mFAIL\033[0m %s\n' "$1"; fail=1; }
 ok()   { printf '\033[0;32mok\033[0m   %s\n' "$1"; }
 
 # --- 1. single-instance D-Bus name -------------------------------------------------
-# Mirrors the plugin's own derivation: identifier, dots and dashes -> underscores.
-# https://v2.tauri.app/plugin/single-instance/#usage-in-snap-and-flatpak
+# tauri-plugin-single-instance claims <identifier>.SingleInstance on the session bus (since
+# plugin 2.4; before that it was "org." + the identifier with underscores). This check used to
+# mirror the OLD derivation and assert that both manifests declared it, long after the plugin
+# had stopped asking for that name: a stale permission, verified on every run. Found only
+# when the Snap Store rejected the upload for carrying it.
+#
+# So this section now asserts what is actually true of each channel:
+#   - Flatpak: an app may own its own app-id and anything under it without a finish-arg, so
+#     the name needs no declaration PROVIDED identifier == app-id. An --own-name for it is
+#     then either stale or redundant, and Flathub's linter rejects one outside the app-id.
+#   - Snap (classic): the store refuses any plugs/slots on a classic snap, and an unconfined
+#     app needs none.
+# What proves the name is really claimed is not this grep but the launch tests, which start
+# the app twice on a session bus (scripts/test-snap-gui.sh, publish-flatpak.yml).
 IDENTIFIER="$(python3 -c "import json;print(json.load(open('${TAURI_CONF}'))['identifier'])")"
 [[ -n "${IDENTIFIER}" ]] || { echo "ERROR: could not read identifier from ${TAURI_CONF}" >&2; exit 1; }
-DBUS_NAME="org.$(printf '%s' "${IDENTIFIER}" | tr '.-' '__').SingleInstance"
+DBUS_NAME="${IDENTIFIER}.SingleInstance"
 
-echo "single-instance D-Bus name derived from identifier '${IDENTIFIER}':"
+echo "single-instance D-Bus name (identifier '${IDENTIFIER}'):"
 note "${DBUS_NAME}"
 echo
 
-# Flathub's linter rejects owning a bus name outside the app-id prefix
-# (finish-args-own-name-...), and the name above comes from the identifier, so the
-# identifier and the Flatpak app-id have to agree. They did not until 0.8.6 — the app-id
-# said vietanhdev and the identifier said vietanhnv — and the submission failed lint.
+# The derivation above holds only while the app does not name the bus itself.
+if grep -rqE '\.dbus_id\(' apps/bulwark-app/src-tauri/src; then
+  bad "the app sets a custom dbus_id, so the single-instance name is no longer ${DBUS_NAME}"
+  note "Update this check and the manifests to the name the app now asks for."
+else
+  ok "the app uses the plugin's default bus name"
+fi
+
 APP_ID="$(sed -n 's/^app-id: *//p' "${FLATPAK_MANIFEST}" | head -1)"
 if [[ "${APP_ID}" == "${IDENTIFIER}" ]]; then
-  ok "tauri identifier matches the Flatpak app-id (${APP_ID})"
+  ok "tauri identifier matches the Flatpak app-id (${APP_ID}), so ${DBUS_NAME} is the app's own"
 else
   bad "tauri identifier '${IDENTIFIER}' != Flatpak app-id '${APP_ID}'"
-  note "Flathub rejects owning a D-Bus name outside the app-id, and that name is derived"
-  note "from the identifier — so these must be equal for the submission to pass lint."
+  note "Flatpak lets an app own only names under its app-id without a finish-arg, and"
+  note "Flathub rejects an --own-name outside it. With these different, a second launch"
+  note "cannot reach the first, and the fix is to make them equal, not to add a permission."
 fi
 
-
-if grep -qF -- "--own-name=${DBUS_NAME}" "${FLATPAK_MANIFEST}"; then
-  ok "flatpak manifest owns ${DBUS_NAME}"
+if grep -qE -- '^[[:space:]]*-[[:space:]]+--(own|talk)-name=.*SingleInstance' "${FLATPAK_MANIFEST}"; then
+  bad "flatpak manifest declares a SingleInstance bus name"
+  note "The app's name (${DBUS_NAME}) is under its own app-id and needs no finish-arg."
+  note "Any other spelling is one the app does not ask for (the pre-2.4 plugin name was"
+  note "org.<identifier_with_underscores>.SingleInstance) and fails Flathub's lint."
 else
-  bad "flatpak manifest is missing --own-name=${DBUS_NAME}"
-  note "Without it the app starts, draws an empty window, and reports a bare GDBus"
-  note "NotAllowed error. See ${FLATPAK_MANIFEST}."
+  ok "flatpak manifest declares no SingleInstance name (none is needed under the app-id)"
 fi
 
-if grep -qF -- "--talk-name=${DBUS_NAME}" "${FLATPAK_MANIFEST}"; then
-  ok "flatpak manifest talks to ${DBUS_NAME}"
+SNAP_BUS="$(python3 - "${SNAP_MANIFEST}" <<'PYEOF'
+import sys, yaml
+m = yaml.safe_load(open(sys.argv[1]))
+found = []
+for key in ("plugs", "slots"):
+    if m.get(key):
+        found.append(key)
+    for name, app in (m.get("apps") or {}).items():
+        if (app or {}).get(key):
+            found.append(f"apps.{name}.{key}")
+print(m.get("confinement", "unset"), ",".join(found))
+PYEOF
+)"
+SNAP_CONFINEMENT="${SNAP_BUS%% *}"
+SNAP_DECLARED="${SNAP_BUS#* }"
+if [[ "${SNAP_CONFINEMENT}" != "classic" ]]; then
+  bad "snapcraft.yaml is no longer classic (${SNAP_CONFINEMENT}): this check knows nothing about its bus access"
+  note "A confined snap must declare a dbus slot and plug named ${DBUS_NAME}; teach this check."
+elif [[ -n "${SNAP_DECLARED}" ]]; then
+  bad "snapcraft.yaml is classic and declares ${SNAP_DECLARED}"
+  note "The Snap Store rejects the upload: \"confinement 'classic' not allowed with plugs/slots\"."
 else
-  bad "flatpak manifest is missing --talk-name=${DBUS_NAME}"
-fi
-
-# Order is load-bearing and invisible: both flags write the same metadata key, so the last
-# one wins, and `own` outranks `talk`. own-name listed first is silently downgraded to
-# talk — the manifest reads correctly, the build succeeds, and the app stays broken. This
-# actually happened; it cost a whole build cycle after the fix was already "in".
-OWN_LINE="$(grep -nF -- "--own-name=${DBUS_NAME}" "${FLATPAK_MANIFEST}" | head -1 | cut -d: -f1)"
-TALK_LINE="$(grep -nF -- "--talk-name=${DBUS_NAME}" "${FLATPAK_MANIFEST}" | head -1 | cut -d: -f1)"
-if [[ -n "${OWN_LINE}" && -n "${TALK_LINE}" ]]; then
-  if (( OWN_LINE > TALK_LINE )); then
-    ok "--own-name comes after --talk-name (so the grant resolves to 'own')"
-  else
-    bad "--own-name (line ${OWN_LINE}) must come AFTER --talk-name (line ${TALK_LINE})"
-    note "Both write the same key; the last wins. own-name first silently degrades to"
-    note "'=talk' and the single-instance plugin cannot claim the name."
-  fi
-fi
-
-if grep -qF "name: ${DBUS_NAME}" "${SNAP_MANIFEST}"; then
-  ok "snap manifest declares ${DBUS_NAME}"
-else
-  bad "snap manifest is missing a dbus slot/plug named ${DBUS_NAME}"
+  ok "snapcraft.yaml is classic and declares no plugs or slots"
 fi
 
 # --- 2. the webview must be able to load at all --------------------------------------
