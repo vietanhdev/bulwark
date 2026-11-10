@@ -336,10 +336,10 @@ export function RulesView() {
 
   return (
     <PageShell
-      title="All checks"
+      title="Rule catalog"
       description={
         rules
-          ? `Everything Bulwark checks — ${rules.length} rules across ${new Set(rules.map((r) => r.category)).size} categories, each one a YAML file in the rule pack.`
+          ? `Available checks — ${rules.length} rules across ${new Set(rules.map((r) => r.category)).size} categories, each one a YAML file in the rule pack.`
           : "Loading the rule pack…"
       }
     >
@@ -397,9 +397,9 @@ export function RulesView() {
                   </div>
                 ) : (
                   <Callout tone="info">
-                    Run a scan from the Overview or the Compliance tab to see which controls this host passes.
-                    Until then, the map below is just that — every rule Bulwark has and the framework control
-                    it answers to.
+                    Run a scan from Scan or Configuration to see which controls this host passes. Until then,
+                    the map below is just that — every rule Bulwark has and the framework control it answers
+                    to.
                   </Callout>
                 )}
               </div>
@@ -1009,8 +1009,8 @@ function SuppressedTab({
             <button className="underline underline-offset-2" onClick={onGoToRules}>
               Rules
             </button>{" "}
-            tab and choose Turn off, with a reason. To hide just one finding, use Ignore next to it on Home.
-            Every decision is logged below, and nothing is deleted.
+            tab and choose Turn off, with a reason. To hide just one finding, use Ignore next to it in System
+            review. Every decision is logged below, and nothing is deleted.
           </Callout>
         ) : (
           <div className="overflow-hidden rounded-lg border border-border bg-card">

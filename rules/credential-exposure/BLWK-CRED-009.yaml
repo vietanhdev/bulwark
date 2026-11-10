@@ -1,0 +1,22 @@
+id: BLWK-CRED-009
+title: "{{ credential_stores.tool }} stores a login token in plain text ({{ credential_stores.path }})"
+category: credential-exposure
+severity: medium
+collector: credential_stores
+os: [linux, macos, windows]
+# plaintext_tokens is emitted only when the file was read and parsed: an unparseable JSON file is
+# a collector error, never a confident "no tokens".
+condition: kind in ["gh_hosts", "cargo_credentials", "terraform_credentials", "gem_credentials", "composer_auth", "netrc"] and plaintext_tokens > 0
+explain: >
+  {{ credential_stores.path }} holds {{ credential_stores.plaintext_tokens }} login token(s) for
+  {{ credential_stores.tool }}, written out in full. Anything that can read your home folder, a backup,
+  or a package install script that goes looking can copy them and act as you on that service.
+fix: |
+  Move the token into your system keychain, then delete it from the file and revoke the old one.
+  - GitHub CLI: run 'gh auth logout' and 'gh auth login' on a machine with a keyring (secret-service, macOS Keychain or Windows Credential Manager) so the token is not written to hosts.yml.
+  - Cargo: set 'global-credential-providers = ["cargo:libsecret"]' (or "cargo:macos-keychain", "cargo:wincred") in ~/.cargo/config.toml, then 'cargo login' again.
+  - Terraform: use a credentials helper, or set TF_TOKEN_<host> from your password manager instead of credentials.tfrc.json.
+  - RubyGems: pass the key through GEM_HOST_API_KEY from your password manager when publishing.
+  - Composer: provide auth through the COMPOSER_AUTH environment variable from your password manager.
+  - netrc: use your tool's credential helper (for Git, a keychain-backed helper) instead of passwords in .netrc.
+references: [ATTACK-T1552.001]

@@ -736,3 +736,20 @@
 @media (max-width: 640px) {
   .vp-doc .bw-checks li a { grid-template-columns: 1fr; gap: 0.3rem; }
 }
+
+/* From the 768px breakpoint up to ~1280px the top-level nav entries are wider
+   than the bar: below 960px they push the "…" flyout past the viewport (a page-wide
+   horizontal scroll), and from 960px — where the sidebar takes the left 272px and
+   the bar is fixed — they are clipped instead, hiding GitHub and the menu. Tighten
+   link padding in that band and drop the top-level Collaborate link, which stays
+   reachable from the Guide sidebar. Selectors carry an extra class to out-rank
+   VitePress's scoped component styles. */
+@media (min-width: 768px) and (max-width: 1279px) {
+  .VPNavBar .VPNavBarMenuLink,
+  .VPNavBar .VPNavBarMenuGroup .button {
+    padding: 0 7px;
+  }
+  .VPNavBar .VPNavBarMenuLink[href="/collaborate"] {
+    display: none;
+  }
+}

@@ -367,6 +367,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bulwark-access"
+version = "0.14.0"
+dependencies = [
+ "bulwark-core",
+ "chrono",
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "bulwark-agent"
 version = "0.14.0"
 
@@ -375,6 +387,7 @@ name = "bulwark-app"
 version = "0.14.0"
 dependencies = [
  "anyhow",
+ "bulwark-access",
  "bulwark-core",
  "chrono",
  "notify",

@@ -2,6 +2,7 @@ mod authorized_keys;
 pub(crate) mod banners;
 mod clamav;
 mod credential_stores;
+pub use credential_stores::{token_files, TokenFile};
 mod cron;
 mod dev_tools;
 pub mod file_integrity;

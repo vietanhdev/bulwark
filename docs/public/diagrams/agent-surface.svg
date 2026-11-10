@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 700" width="1200" height="700" font-family="-apple-system, 'Segoe UI', Ubuntu, Roboto, 'Helvetica Neue', Arial, sans-serif" role="img" aria-labelledby="t d">
+  <title id="t">What a coding agent can reach, and what Bulwark checks</title>
+  <desc id="d">An AI coding agent in the middle reads files, calls tools and runs commands. Around it, six places Bulwark checks: instruction files (hidden Unicode, injected orders; BLWK-AI-012, 013); settings and approvals (never-ask modes, Bash(*) allowlists, sandbox off, VS Code YOLO mode; AI-006, 007, 009, 017, 021); hooks from cloned repos (repo hooks, auto-enabled repo MCP servers, folder-open tasks, Workspace Trust off; AI-002, 008, 010, 011); MCP servers (unpinned npx/uvx, mcp-remote, shell wrappers, privileged containers, whole-disk file access, no-approval tools; AI-003, 004, 005, 019, 020, 023); secrets in AI context (keys in transcripts, memory and configs, inline MCP tokens, a redirected API URL; AI-001, 014, 018); and your account and files (readable credential files, secrets git does not ignore, docker group membership; AI-015, 016, 022).</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f7fafc"/><stop offset="1" stop-color="#eef3f8"/></linearGradient>
+    <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f2468f"/><stop offset="1" stop-color="#c2185b"/></linearGradient><linearGradient id="g2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffab3d"/><stop offset="1" stop-color="#ef6c1a"/></linearGradient><linearGradient id="g3" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3f8ef0"/><stop offset="1" stop-color="#1d5fc2"/></linearGradient><linearGradient id="g4" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8f6bff"/><stop offset="1" stop-color="#5b3fd6"/></linearGradient><linearGradient id="g5" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#19b3a3"/><stop offset="1" stop-color="#0b7f86"/></linearGradient><linearGradient id="g6" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ef5350"/><stop offset="1" stop-color="#b71c1c"/></linearGradient><linearGradient id="g7" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5cc15a"/><stop offset="1" stop-color="#2e8b3a"/></linearGradient><linearGradient id="g8" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4b5565"/><stop offset="1" stop-color="#262c36"/></linearGradient>
+    <filter id="sh" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#1b2a3a" flood-opacity="0.12"/></filter>
+    <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" fill="none" stroke="#dfe7ef" stroke-width="1"/></pattern>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#9aabbd"/></marker>
+  </defs>
+  <rect width="1200" height="700" rx="18" fill="url(#bg)"/>
+  <rect width="1200" height="700" rx="18" fill="url(#grid)" opacity="0.6"/>
+  <text x="32" y="48" font-size="24" font-weight="700" fill="#16202c">What a coding agent can reach, and what Bulwark checks</text>
+  <text x="32" y="72" font-size="14" fill="#5b6b7d">A prompt injection only needs one of these to turn into commands on your machine. Bulwark looks at all six.</text>
+  <g fill="none" stroke="#a9b8c8" stroke-width="2.2" stroke-dasharray="3 6" stroke-linecap="round">
+    <path d="M382 178C442 178 482 308 527 308"/>
+    <path d="M382 354C442 354 482 364 504 364"/>
+    <path d="M382 530C442 530 482 428 523 428"/>
+    <path d="M818 178C758 178 718 308 673 308"/>
+    <path d="M818 354C758 354 718 364 696 364"/>
+    <path d="M818 530C758 530 718 428 677 428"/>
+  </g>
+  <g transform="translate(32 104)" filter="url(#sh)">
+    <rect width="350" height="148" rx="14" fill="#fff" stroke="#e1e8f0"/>
+    <rect x="0" y="16" width="4" height="40" rx="2" fill="#c2185b"/>
+    <g transform="translate(18 18)"><rect width="36" height="36" rx="10.0" fill="url(#g1)"/><g transform="scale(1.000)"><path d="M11 8h10l5 5v15H11z" fill="none" stroke="#fff" stroke-width="2.2" stroke-linejoin="round"/><path d="M15 18h7M15 22h7" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></g></g>
+    <text x="66" y="42" font-size="17" font-weight="700" fill="#16202c">Instruction files</text>
+    <text x="18" y="82" font-size="13.5" fill="#46566a">Files the model obeys: CLAUDE.md, AGENTS.md,</text>
+    <text x="18" y="102" font-size="13.5" fill="#46566a">rules, skills. Hidden text can hijack them.</text>
+    <text x="18" y="130" font-size="12" font-family="ui-monospace, 'SFMono-Regular', 'DejaVu Sans Mono', Menlo, Consolas, monospace" fill="#c2185b">BLWK-AI-012 · 013</text>
+  </g>
+  <g transform="translate(32 280)" filter="url(#sh)">
+    <rect width="350" height="148" rx="14" fill="#fff" stroke="#e1e8f0"/>
+    <rect x="0" y="16" width="4" height="40" rx="2" fill="#d35400"/>
+    <g transform="translate(18 18)"><rect width="36" height="36" rx="10.0" fill="url(#g2)"/><g transform="scale(1.000)"><path d="M9 12h18M9 18h18M9 24h18" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/><circle cx="14" cy="12" r="2.8" fill="#fff"/><circle cx="23" cy="18" r="2.8" fill="#fff"/><circle cx="16" cy="24" r="2.8" fill="#fff"/></g></g>
+    <text x="66" y="42" font-size="17" font-weight="700" fill="#16202c">Settings and approvals</text>
+    <text x="18" y="82" font-size="13.5" fill="#46566a">Modes that never ask, Bash(*) allowlists,</text>
+    <text x="18" y="102" font-size="13.5" fill="#46566a">a sandbox switched off, VS Code YOLO mode.</text>
+    <text x="18" y="130" font-size="12" font-family="ui-monospace, 'SFMono-Regular', 'DejaVu Sans Mono', Menlo, Consolas, monospace" fill="#d35400">BLWK-AI-006 · 007 · 009 · 017 · 021</text>
+  </g>
+  <g transform="translate(32 456)" filter="url(#sh)">
+    <rect width="350" height="148" rx="14" fill="#fff" stroke="#e1e8f0"/>
+    <rect x="0" y="16" width="4" height="40" rx="2" fill="#5b3fd6"/>
+    <g transform="translate(18 18)"><rect width="36" height="36" rx="10.0" fill="url(#g4)"/><g transform="scale(1.000)"><circle cx="12" cy="10" r="2.8" fill="none" stroke="#fff" stroke-width="2.2"/><circle cx="12" cy="26" r="2.8" fill="none" stroke="#fff" stroke-width="2.2"/><circle cx="24" cy="14" r="2.8" fill="none" stroke="#fff" stroke-width="2.2"/><path d="M12 13v10M24 17c0 5-12 3-12 6" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></g></g>
+    <text x="66" y="42" font-size="17" font-weight="700" fill="#16202c">Hooks from cloned repos</text>
+    <text x="18" y="82" font-size="13.5" fill="#46566a">Repo hooks that run shell on agent events,</text>
+    <text x="18" y="102" font-size="13.5" fill="#46566a">auto-enabled repo MCP, folder-open tasks.</text>
+    <text x="18" y="130" font-size="12" font-family="ui-monospace, 'SFMono-Regular', 'DejaVu Sans Mono', Menlo, Consolas, monospace" fill="#5b3fd6">BLWK-AI-002 · 008 · 010 · 011</text>
+  </g>
+  <g transform="translate(818 104)" filter="url(#sh)">
+    <rect width="350" height="148" rx="14" fill="#fff" stroke="#e1e8f0"/>
+    <rect x="0" y="16" width="4" height="40" rx="2" fill="#1d5fc2"/>
+    <g transform="translate(18 18)"><rect width="36" height="36" rx="10.0" fill="url(#g3)"/><g transform="scale(1.000)"><path d="M14 8v6M22 8v6M10 14h16v4a8 8 0 0 1-16 0zM18 26v4" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g></g>
+    <text x="66" y="42" font-size="17" font-weight="700" fill="#16202c">MCP servers</text>
+    <text x="18" y="82" font-size="13.5" fill="#46566a">Unpinned npx/uvx, mcp-remote, shell wrappers,</text>
+    <text x="18" y="102" font-size="13.5" fill="#46566a">privileged containers, whole-disk access.</text>
+    <text x="18" y="130" font-size="12" font-family="ui-monospace, 'SFMono-Regular', 'DejaVu Sans Mono', Menlo, Consolas, monospace" fill="#1d5fc2">BLWK-AI-003 · 004 · 005 · 019 · 020 · 023</text>
+  </g>
+  <g transform="translate(818 280)" filter="url(#sh)">
+    <rect width="350" height="148" rx="14" fill="#fff" stroke="#e1e8f0"/>
+    <rect x="0" y="16" width="4" height="40" rx="2" fill="#b71c1c"/>
+    <g transform="translate(18 18)"><rect width="36" height="36" rx="10.0" fill="url(#g6)"/><g transform="scale(1.000)"><circle cx="13" cy="18" r="5" fill="none" stroke="#fff" stroke-width="2.2"/><path d="M18 18h11M25 18v4M29 18v3" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></g></g>
+    <text x="66" y="42" font-size="17" font-weight="700" fill="#16202c">Secrets in AI context</text>
+    <text x="18" y="82" font-size="13.5" fill="#46566a">API keys in transcripts, memory and configs,</text>
+    <text x="18" y="102" font-size="13.5" fill="#46566a">inline MCP tokens, a redirected API URL.</text>
+    <text x="18" y="130" font-size="12" font-family="ui-monospace, 'SFMono-Regular', 'DejaVu Sans Mono', Menlo, Consolas, monospace" fill="#b71c1c">BLWK-AI-001 · 014 · 018</text>
+  </g>
+  <g transform="translate(818 456)" filter="url(#sh)">
+    <rect width="350" height="148" rx="14" fill="#fff" stroke="#e1e8f0"/>
+    <rect x="0" y="16" width="4" height="40" rx="2" fill="#2e8b3a"/>
+    <g transform="translate(18 18)"><rect width="36" height="36" rx="10.0" fill="url(#g7)"/><g transform="scale(1.000)"><circle cx="18" cy="13" r="5" fill="none" stroke="#fff" stroke-width="2.2"/><path d="M9 29c1-6 5-8 9-8s8 2 9 8" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></g></g>
+    <text x="66" y="42" font-size="17" font-weight="700" fill="#16202c">Your account and files</text>
+    <text x="18" y="82" font-size="13.5" fill="#46566a">Credential files others can read, secrets</text>
+    <text x="18" y="102" font-size="13.5" fill="#46566a">git doesn&#x27;t ignore, docker group = root.</text>
+    <text x="18" y="130" font-size="12" font-family="ui-monospace, 'SFMono-Regular', 'DejaVu Sans Mono', Menlo, Consolas, monospace" fill="#2e8b3a">BLWK-AI-015 · 016 · 022</text>
+  </g>
+  <circle cx="382" cy="178" r="5" fill="#fff" stroke="#c2185b" stroke-width="2.5"/>
+  <circle cx="382" cy="354" r="5" fill="#fff" stroke="#d35400" stroke-width="2.5"/>
+  <circle cx="382" cy="530" r="5" fill="#fff" stroke="#5b3fd6" stroke-width="2.5"/>
+  <circle cx="818" cy="178" r="5" fill="#fff" stroke="#1d5fc2" stroke-width="2.5"/>
+  <circle cx="818" cy="354" r="5" fill="#fff" stroke="#b71c1c" stroke-width="2.5"/>
+  <circle cx="818" cy="530" r="5" fill="#fff" stroke="#2e8b3a" stroke-width="2.5"/>
+  <circle cx="600" cy="370" r="110" fill="#0b7f86" opacity="0.08"/>
+  <circle cx="600" cy="370" r="96" fill="url(#g5)" filter="url(#sh)"/>
+  <g transform="translate(582 300)"><rect x="11" y="11" width="14" height="14" rx="2" fill="none" stroke="#fff" stroke-width="2.2"/><path d="M15 8v3M21 8v3M15 25v3M21 25v3M8 15h3M8 21h3M25 15h3M25 21h3" stroke="#fff" stroke-width="2" stroke-linecap="round"/></g>
+  <text x="600" y="370" text-anchor="middle" font-size="21" font-weight="800" fill="#fff">AI coding</text>
+  <text x="600" y="395" text-anchor="middle" font-size="21" font-weight="800" fill="#fff">agent</text>
+  <text x="600" y="420" text-anchor="middle" font-size="12" fill="#d8f3f0">reads · calls tools · runs</text>
+  <g transform="translate(32 630)">
+    <rect width="1136" height="44" rx="12" fill="#ffffff" stroke="#e1e8f0"/>
+    <text x="20" y="27" font-size="13.5" fill="#46566a"><tspan font-weight="700" fill="#0b7f86">23 agent checks</tspan>  ·  Claude Code, Codex, Cursor, Copilot, Gemini CLI, Windsurf, Kiro, Zed, Goose and more  ·  each one explains the risk and the fix</text>
+  </g>
+</svg>

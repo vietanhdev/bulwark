@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 430" width="1200" height="430" font-family="-apple-system, 'Segoe UI', Ubuntu, Roboto, 'Helvetica Neue', Arial, sans-serif" role="img" aria-labelledby="t d">
+  <title id="t">From scan to fix, on your terms</title>
+  <desc id="d">Five steps: Scan your configs, keys and agents on this computer; Understand each problem in plain words; Preview every change Fix now would make, with nothing written yet; Apply only after you confirm, with backups and an administrator prompt when needed; then scan again to confirm it is gone. Guarantees: results stay on this computer, secrets are shown masked, a skipped check never counts as passed, and SSH changes that could lock you out are reviewed one at a time.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f7fafc"/><stop offset="1" stop-color="#eef3f8"/></linearGradient>
+    <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f2468f"/><stop offset="1" stop-color="#c2185b"/></linearGradient><linearGradient id="g2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffab3d"/><stop offset="1" stop-color="#ef6c1a"/></linearGradient><linearGradient id="g3" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3f8ef0"/><stop offset="1" stop-color="#1d5fc2"/></linearGradient><linearGradient id="g4" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8f6bff"/><stop offset="1" stop-color="#5b3fd6"/></linearGradient><linearGradient id="g5" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#19b3a3"/><stop offset="1" stop-color="#0b7f86"/></linearGradient><linearGradient id="g6" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ef5350"/><stop offset="1" stop-color="#b71c1c"/></linearGradient><linearGradient id="g7" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5cc15a"/><stop offset="1" stop-color="#2e8b3a"/></linearGradient><linearGradient id="g8" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4b5565"/><stop offset="1" stop-color="#262c36"/></linearGradient>
+    <filter id="sh" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#1b2a3a" flood-opacity="0.12"/></filter>
+    <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" fill="none" stroke="#dfe7ef" stroke-width="1"/></pattern>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#9aabbd"/></marker>
+  </defs>
+  <rect width="1200" height="430" rx="18" fill="url(#bg)"/>
+  <rect width="1200" height="430" rx="18" fill="url(#grid)" opacity="0.6"/>
+  <text x="32" y="48" font-size="24" font-weight="700" fill="#16202c">From scan to fix, on your terms</text>
+  <text x="32" y="72" font-size="14" fill="#5b6b7d">Bulwark never changes anything you have not seen first.</text>
+  <g transform="translate(32 104)" filter="url(#sh)">
+    <rect width="204" height="170" rx="14" fill="#fff" stroke="#e1e8f0"/>
+    <g transform="translate(18 20)"><rect width="44" height="44" rx="12.2" fill="url(#g5)"/><g transform="scale(1.222)"><path d="M9 13V9h4M23 9h4v4M27 23v4h-4M13 27H9v-4" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 18h12" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></g></g>
+    <text x="18" y="96" font-size="17" font-weight="700" fill="#16202c">1  Scan</text>
+    <text x="18" y="124" font-size="13.5" fill="#46566a">Configs, keys and AI</text>
+    <text x="18" y="144" font-size="13.5" fill="#46566a">agents on this computer.</text>
+  </g>
+  <path d="M240 189H261" stroke="#9aabbd" stroke-width="2.4" marker-end="url(#arr)"/>
+  <g transform="translate(265 104)" filter="url(#sh)">
+    <rect width="204" height="170" rx="14" fill="#fff" stroke="#e1e8f0"/>
+    <g transform="translate(18 20)"><rect width="44" height="44" rx="12.2" fill="url(#g3)"/><g transform="scale(1.222)"><path d="M13 21a7 7 0 1 1 10 0c-1 1-2 2-2 4h-6c0-2-1-3-2-4zM15 29h6" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g></g>
+    <text x="18" y="96" font-size="17" font-weight="700" fill="#16202c">2  Understand</text>
+    <text x="18" y="124" font-size="13.5" fill="#46566a">Each problem in plain</text>
+    <text x="18" y="144" font-size="13.5" fill="#46566a">words: why it matters.</text>
+  </g>
+  <path d="M473 189H494" stroke="#9aabbd" stroke-width="2.4" marker-end="url(#arr)"/>
+  <g transform="translate(498 104)" filter="url(#sh)">
+    <rect width="204" height="170" rx="14" fill="#fff" stroke="#e1e8f0"/>
+    <g transform="translate(18 20)"><rect width="44" height="44" rx="12.2" fill="url(#g4)"/><g transform="scale(1.222)"><path d="M7 18c3-5 7-7 11-7s8 2 11 7c-3 5-7 7-11 7s-8-2-11-7z" fill="none" stroke="#fff" stroke-width="2.2" stroke-linejoin="round"/><circle cx="18" cy="18" r="3.2" fill="#fff"/></g></g>
+    <text x="18" y="96" font-size="17" font-weight="700" fill="#16202c">3  Preview</text>
+    <text x="18" y="124" font-size="13.5" fill="#46566a">Fix now lists every change.</text>
+    <text x="18" y="144" font-size="13.5" fill="#46566a">Nothing is written yet.</text>
+  </g>
+  <path d="M706 189H727" stroke="#9aabbd" stroke-width="2.4" marker-end="url(#arr)"/>
+  <g transform="translate(731 104)" filter="url(#sh)">
+    <rect width="204" height="170" rx="14" fill="#fff" stroke="#e1e8f0"/>
+    <g transform="translate(18 20)"><rect width="44" height="44" rx="12.2" fill="url(#g2)"/><g transform="scale(1.222)"><path d="M10 19l5 5 11-12" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></g></g>
+    <text x="18" y="96" font-size="17" font-weight="700" fill="#16202c">4  Apply</text>
+    <text x="18" y="124" font-size="13.5" fill="#46566a">Only after you confirm.</text>
+    <text x="18" y="144" font-size="13.5" fill="#46566a">Backups first.</text>
+  </g>
+  <path d="M939 189H960" stroke="#9aabbd" stroke-width="2.4" marker-end="url(#arr)"/>
+  <g transform="translate(964 104)" filter="url(#sh)">
+    <rect width="204" height="170" rx="14" fill="#fff" stroke="#e1e8f0"/>
+    <g transform="translate(18 20)"><rect width="44" height="44" rx="12.2" fill="url(#g7)"/><g transform="scale(1.222)"><path d="M26 14a9 9 0 0 0-16 0M10 22a9 9 0 0 0 16 0" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/><path d="M26 9v5h-5M10 27v-5h5" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g></g>
+    <text x="18" y="96" font-size="17" font-weight="700" fill="#16202c">5  Check again</text>
+    <text x="18" y="124" font-size="13.5" fill="#46566a">Scan again to see</text>
+    <text x="18" y="144" font-size="13.5" fill="#46566a">the problem is gone.</text>
+  </g>
+  <path d="M508 290v8H925v-8" fill="none" stroke="#ef6c1a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="716" y="318" text-anchor="middle" font-size="13" font-weight="700" fill="#d35400">You decide here: Apply or Cancel</text>
+  <g transform="translate(39 352)">
+    <rect width="225" height="44" rx="22" fill="#fff" stroke="#e1e8f0"/>
+    <g transform="translate(8 8)"><rect width="28" height="28" rx="7.8" fill="url(#g5)"/><g transform="scale(0.778)"><path d="M18 8l9 3v6c0 6-4 10-9 12-5-2-9-6-9-12v-6z" fill="none" stroke="#fff" stroke-width="2.2" stroke-linejoin="round"/></g></g>
+    <text x="46" y="27" font-size="13.5" font-weight="600" fill="#2b3a4a">Stays on this computer</text>
+  </g>
+  <g transform="translate(276 352)">
+    <rect width="277" height="44" rx="22" fill="#fff" stroke="#e1e8f0"/>
+    <g transform="translate(8 8)"><rect width="28" height="28" rx="7.8" fill="url(#g6)"/><g transform="scale(0.778)"><circle cx="13" cy="18" r="5" fill="none" stroke="#fff" stroke-width="2.2"/><path d="M18 18h11M25 18v4M29 18v3" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></g></g>
+    <text x="46" y="27" font-size="13.5" font-weight="600" fill="#2b3a4a">Secrets shown masked: sk-a…3f</text>
+  </g>
+  <g transform="translate(565 352)">
+    <rect width="284" height="44" rx="22" fill="#fff" stroke="#e1e8f0"/>
+    <g transform="translate(8 8)"><rect width="28" height="28" rx="7.8" fill="url(#g8)"/><g transform="scale(0.778)"><path d="M7 18c3-5 7-7 11-7s8 2 11 7c-3 5-7 7-11 7s-8-2-11-7z" fill="none" stroke="#fff" stroke-width="2.2" stroke-linejoin="round"/><circle cx="18" cy="18" r="3.2" fill="#fff"/></g></g>
+    <text x="46" y="27" font-size="13.5" font-weight="600" fill="#2b3a4a">Skipped never counts as passed</text>
+  </g>
+  <g transform="translate(861 352)">
+    <rect width="299" height="44" rx="22" fill="#fff" stroke="#e1e8f0"/>
+    <g transform="translate(8 8)"><rect width="28" height="28" rx="7.8" fill="url(#g2)"/><g transform="scale(0.778)"><path d="M9 12h18M9 18h18M9 24h18" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/><circle cx="14" cy="12" r="2.8" fill="#fff"/><circle cx="23" cy="18" r="2.8" fill="#fff"/><circle cx="16" cy="24" r="2.8" fill="#fff"/></g></g>
+    <text x="46" y="27" font-size="13.5" font-weight="600" fill="#2b3a4a">Risky SSH changes: one at a time</text>
+  </g>
+</svg>

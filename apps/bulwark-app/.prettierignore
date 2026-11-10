@@ -1,3 +1,5 @@
 dist
 src-tauri
 node_modules
+test-results
+playwright-report

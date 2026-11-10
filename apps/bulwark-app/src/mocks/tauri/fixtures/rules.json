@@ -68,7 +68,7 @@
     "references": ["ATTACK-T1552.001", "ATTACK-T1078.004"],
     "explain": "Your AWS access key is saved in a plain file ({{ credential_stores.path }}, {{ credential_stores.long_lived_keys }} key(s)). These keys never expire, so whoever copies the file can use your AWS account, and run up your bill, until you notice. That is exactly what a poisoned Python package did in October 2026: LiteLLM 1.107.0 read these files on every developer machine that installed it.",
     "fix": "Sign in to AWS with sessions that expire on their own, instead of a key that works forever.\n1. Run 'aws configure sso' once to connect the AWS CLI to IAM Identity Center.\n2. Start each work session with 'aws sso login'. The session expires after a few hours.\n3. In the AWS console, deactivate and delete the old access key.\n4. Remove the key from {{ credential_stores.path }}.\nCan't use Identity Center? Keep the key in a password manager (1Password, Bitwarden or KeePassXC) and let the AWS CLI fetch it when needed with 'credential_process'.\n",
-    "os": ["linux", "macos"],
+    "os": ["linux", "macos", "windows"],
     "profiles": []
   },
   {
@@ -80,7 +80,7 @@
     "references": ["ATTACK-T1552.001"],
     "explain": "Git is saving your passwords and access tokens in a plain text file ({{ credential_stores.path }}). Any program running as you can read it, and a GitHub token usually lets someone push code to your repositories or publish packages in your name.",
     "fix": "Let Git keep your tokens in your computer's keychain instead of a plain file.\n1. For GitHub, run 'gh auth setup-git'. Git then uses the GitHub CLI's login, which is stored in your keychain.\n2. For other Git hosts, install Git Credential Manager. It works on Linux, macOS and Windows and uses the system keychain.\n3. Stop using the plain-file store: 'git config --global --unset credential.helper'.\n4. Delete ~/.git-credentials and revoke the tokens it contained, in case they were already copied.\nEven better: use SSH keys for Git, protected by a passphrase or a hardware key.\n",
-    "os": ["linux", "macos"],
+    "os": ["linux", "macos", "windows"],
     "profiles": []
   },
   {
@@ -92,7 +92,7 @@
     "references": ["ATTACK-T1552.001"],
     "explain": "Docker saved {{ credential_stores.inline_auths }} registry login(s) inside {{ credential_stores.path }}. They look scrambled, but it is only base64 encoding, not encryption: anyone who can read the file can decode your username and password or token in seconds.",
     "fix": "Let Docker keep registry logins in your computer's keychain.\n1. Install Docker's credential helper ('golang-docker-credential-helpers' on Ubuntu; built in on macOS and Windows, and Docker Desktop sets it up for you).\n2. In {{ credential_stores.path }}, set \"credsStore\" to \"secretservice\" (Linux), \"osxkeychain\" (macOS) or \"wincred\" (Windows).\n3. Delete the entries under \"auths\", then run 'docker login' again for each registry.\n4. Rotate any registry token that was stored in the file.\n",
-    "os": ["linux", "macos"],
+    "os": ["linux", "macos", "windows"],
     "profiles": []
   },
   {
@@ -105,6 +105,78 @@
     "explain": "{{ credential_stores.path }} holds a login token for a tool ({{ credential_stores.kind }}), and other users or programs on this computer can read it (permissions {{ credential_stores.mode }}). Token files should be readable by you alone.",
     "fix": "Make the file private, then keep the token somewhere safer if the tool allows it.\n1. Run 'chmod 600 {{ credential_stores.path }}' so only you can read it.\n2. Move the token into a password manager and pass it to the tool when it runs: for example 'op run' (1Password) or 'bws run' (Bitwarden).\n3. For npm, write '//registry.npmjs.org/:_authToken=${NPM_TOKEN}' in .npmrc so the file holds no secret.\n4. For PyPI, let twine read the token from your keychain: 'pip install keyring'.\nIf other people use this computer, rotate the token too.\n",
     "os": ["linux", "macos"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-CRED-005",
+    "title": "Secrets are written into a shell startup file ({{ credential_stores.path }})",
+    "category": "credential-exposure",
+    "severity": "high",
+    "collector": "credential_stores",
+    "references": ["ATTACK-T1552.001"],
+    "explain": "{{ credential_stores.path }} sets {{ credential_stores.exported_secrets }} secret-looking variable(s) to a literal value ({{ credential_stores.secret_names }}). Every program you start inherits them, dotfile backups and sync tools copy them, and anything that can read your home folder, including a malicious package's install script, can read them.",
+    "fix": "Keep the value in a secrets store and fetch it when it is needed, not in the file.\n1. Rotate each key listed above: it has been sitting in a plain file.\n2. Store the new value in your system keychain or password manager (for example 'secret-tool store', 'security add-generic-password', 1Password CLI 'op read' or 'pass').\n3. Replace the line with a lookup that runs only when needed, or use a per-project tool such as direnv with a keychain-backed value.\n4. For AWS, prefer short-lived sessions ('aws configure sso' or AWS Vault) to exporting keys at all.\n",
+    "os": ["linux", "macos", "windows"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-CRED-006",
+    "title": "An npm token is stored in plain text ({{ credential_stores.path }})",
+    "category": "credential-exposure",
+    "severity": "medium",
+    "collector": "credential_stores",
+    "references": ["ATTACK-T1552.001", "ATTACK-T1195.002"],
+    "explain": "{{ credential_stores.path }} contains {{ credential_stores.plaintext_tokens }} registry login(s) written out in full. A publish token in this file lets anyone who copies it push packages under your name, which is how several 2025-2026 npm worms spread from one developer machine to thousands of projects.",
+    "fix": "1. Revoke the token on the registry and create a granular token with an expiry and only the packages it needs.\n2. Reference it from the environment instead of writing it down: '//registry.npmjs.org/:_authToken=${NPM_TOKEN}'.\n3. For publishing from CI, prefer trusted publishing (OIDC), which needs no long-lived token at all.\n",
+    "os": ["linux", "macos", "windows"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-CRED-007",
+    "title": "A PyPI password or token is stored in plain text ({{ credential_stores.path }})",
+    "category": "credential-exposure",
+    "severity": "medium",
+    "collector": "credential_stores",
+    "references": ["ATTACK-T1552.001", "ATTACK-T1195.002"],
+    "explain": "{{ credential_stores.path }} holds {{ credential_stores.plaintext_tokens }} upload credential(s) in plain text. Whoever copies the file can publish a release of your package.",
+    "fix": "1. Revoke the token on PyPI and create a new one scoped to a single project.\n2. Let twine read it from your keychain instead: 'keyring set https://upload.pypi.org/legacy/ __token__', then remove the password line.\n3. For releases from CI, use PyPI trusted publishing, which needs no stored token.\n",
+    "os": ["linux", "macos", "windows"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-CRED-008",
+    "title": "A kubeconfig embeds static cluster credentials ({{ credential_stores.path }})",
+    "category": "credential-exposure",
+    "severity": "medium",
+    "collector": "credential_stores",
+    "references": ["ATTACK-T1552.001", "ATTACK-T1078.004"],
+    "explain": "{{ credential_stores.path }} contains {{ credential_stores.static_credentials }} embedded credential(s): bearer tokens, client keys or passwords. Unlike a cloud login, these usually do not expire, so a copied kubeconfig keeps working against the cluster.",
+    "fix": "1. Switch each cluster entry to an exec plugin that fetches short-lived tokens ('aws eks update-kubeconfig', 'gcloud container clusters get-credentials', 'az aks get-credentials' or 'kubelogin').\n2. Revoke the embedded token or certificate on the cluster.\n3. Keep any kubeconfig that must hold static credentials readable by you alone ('chmod 600').\n",
+    "os": ["linux", "macos", "windows"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-CRED-009",
+    "title": "{{ credential_stores.tool }} stores a login token in plain text ({{ credential_stores.path }})",
+    "category": "credential-exposure",
+    "severity": "medium",
+    "collector": "credential_stores",
+    "references": ["ATTACK-T1552.001"],
+    "explain": "{{ credential_stores.path }} holds {{ credential_stores.plaintext_tokens }} login token(s) for {{ credential_stores.tool }}, written out in full. Anything that can read your home folder, a backup, or a package install script that goes looking can copy them and act as you on that service.",
+    "fix": "Move the token into your system keychain, then delete it from the file and revoke the old one.\n- GitHub CLI: run 'gh auth logout' and 'gh auth login' on a machine with a keyring (secret-service, macOS Keychain or Windows Credential Manager) so the token is not written to hosts.yml.\n- Cargo: set 'global-credential-providers = [\"cargo:libsecret\"]' (or \"cargo:macos-keychain\", \"cargo:wincred\") in ~/.cargo/config.toml, then 'cargo login' again.\n- Terraform: use a credentials helper, or set TF_TOKEN_<host> from your password manager instead of credentials.tfrc.json.\n- RubyGems: pass the key through GEM_HOST_API_KEY from your password manager when publishing.\n- Composer: provide auth through the COMPOSER_AUTH environment variable from your password manager.\n- netrc: use your tool's credential helper (for Git, a keychain-backed helper) instead of passwords in .netrc.\n",
+    "os": ["linux", "macos", "windows"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-CRED-010",
+    "title": "Keys are saved in your shell history ({{ credential_stores.path }})",
+    "category": "credential-exposure",
+    "severity": "high",
+    "collector": "credential_stores",
+    "references": ["ATTACK-T1552.003"],
+    "explain": "{{ credential_stores.path }} contains {{ credential_stores.secrets_found }} key(s) typed as part of a command ({{ credential_stores.secret_kinds }}; first at line {{ credential_stores.secret_lines }}). Your shell saved the whole line, so the key now sits in a plain file that backups, sync tools and any program running as you can read. History files are one of the first places credential-stealing malware looks.",
+    "fix": "Treat each key as leaked: replace it first, then clean up.\n1. Revoke the key where it was issued and create a new one.\n2. Remove the lines from {{ credential_stores.path }} with a text editor (close other terminals first, or they will write the old history back).\n3. To stop it happening again, do not put keys on the command line. Read them from your keychain or password manager when needed, for example 'export GITHUB_TOKEN=$(gh auth token)' or 'op run -- <command>'.\n4. As a safety net, make the shell skip lines that start with a space: 'HISTCONTROL=ignorespace' for bash, 'setopt HIST_IGNORE_SPACE' for zsh.\n",
+    "os": ["linux", "macos", "windows"],
     "profiles": []
   },
   {
@@ -224,6 +296,30 @@
     "references": ["ATTACK-T1610", "ATTACK-T1133"],
     "explain": "{{ dev_tool_config.path }} opens the Docker API on {{ dev_tool_config.detail }} with no authentication. Any program running as any user on this computer \u2014 a malicious package's install script, another account \u2014 can start a container with this machine's disk mounted and become root here. (An API reachable from the network is reported separately, from the open port.)",
     "fix": "Remove the tcp:// entry from daemon.json (or untick 'Expose daemon on tcp://localhost:2375 without TLS' in Docker Desktop \u2192 Settings \u2192 General) and use the default socket. For remote access use ssh://user@host as the Docker host, or TLS with client certificates on port 2376.",
+    "os": ["linux", "macos", "windows"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-DEV-010",
+    "title": "npm runs install scripts from packages automatically ({{ dev_tool_config.path }})",
+    "category": "developer-tools",
+    "severity": "low",
+    "collector": "dev_tool_config",
+    "references": ["ATTACK-T1195.002", "ATTACK-T1059"],
+    "explain": "By default, 'npm install' runs scripts that packages ship (preinstall, install, postinstall) with your account's full access. That is how the 2025-2026 npm worms spread: one poisoned release of a popular package ran a script on every machine that installed it and copied tokens, SSH keys and cloud credentials. Your user settings ({{ dev_tool_config.path }}) do not turn this off.",
+    "fix": "Turn install scripts off for your account, then allow them only where a project needs them.\n1. Run 'npm config set ignore-scripts true'.\n2. If a package needs its build step (for example a native module), run it on purpose: 'npm rebuild <package>' inside that project.\n3. Commands you start yourself, such as 'npm test' and 'npm run build', keep working.\n",
+    "os": ["linux", "macos", "windows"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-DEV-011",
+    "title": "{{ dev_tool_config.tool }} installs brand-new package versions with no waiting period ({{ dev_tool_config.path }})",
+    "category": "developer-tools",
+    "severity": "low",
+    "collector": "dev_tool_config",
+    "references": ["ATTACK-T1195.002"],
+    "explain": "Malicious package releases are usually caught and removed within hours or days. With no waiting period set in {{ dev_tool_config.path }}, {{ dev_tool_config.tool }} installs a version published minutes ago, which is the window attackers rely on. A short delay lets the registry and scanners catch a bad release before it reaches this machine.",
+    "fix": "{{ dev_tool_config.how_to_fix }}",
     "os": ["linux", "macos", "windows"],
     "profiles": []
   },
@@ -781,12 +877,12 @@
   },
   {
     "id": "BLWK-NET-005",
-    "title": "A database or development service listens on all interfaces (port {{ listening_ports.port }}, behind the firewall)",
+    "title": "A database or development service listens on all interfaces (port {{ listening_ports.port }}, default-deny firewall)",
     "category": "network-egress",
     "severity": "medium",
     "collector": "listening_ports",
     "references": ["ATTACK-T1133"],
-    "explain": "A database or development service listens on every network interface (port {{ listening_ports.port }}, on {{ listening_ports.listen_address }}). The host firewall denies incoming connections by default, so it isn't directly reachable \u2014 but its safety now depends on that firewall. Ports published by Docker bypass ufw unless DOCKER-USER rules restrict them, and a single \"allow\" rule added later reopens it.",
+    "explain": "A database or development service listens on every network interface (port {{ listening_ports.port }}, on {{ listening_ports.listen_address }}). The host firewall denies incoming connections by default, so unless something opened this port it isn't directly reachable \u2014 but its safety now depends on that firewall. Bulwark can't see your allow rules: if you (or a tool) allowed this port, it is open to the network, and ports published by Docker bypass ufw unless DOCKER-USER rules restrict them. Check with: sudo ufw status numbered",
     "fix": "Bind it to this computer only, so it doesn't depend on the firewall.\n1. For Docker Compose, change the port line from '{{ listening_ports.port }}:{{ listening_ports.port }}' to '127.0.0.1:{{ listening_ports.port }}:{{ listening_ports.port }}' and restart the stack.\n2. For a service installed directly, set its listen or bind address to 127.0.0.1.\n3. If it must stay reachable from other machines, restrict it in DOCKER-USER (for Docker) or with a ufw rule scoped to your private network (e.g. your tailnet), and accept the risk here.\n",
     "os": ["linux"],
     "profiles": []
@@ -1076,6 +1172,18 @@
     "references": ["CIS-5.2", "ATTACK-T1552.004"],
     "explain": "The file at {{ ssh_private_keys.path }} (format: {{ ssh_private_keys.key_format }}) is a private key, but its encryption header could not be parsed, so Bulwark cannot confirm whether it is passphrase-protected. Rather than guess \u2014 and risk reporting a plaintext key as safe \u2014 it is surfaced here for you to check by hand. A healthy key does not normally hit this state, so the file may be truncated, corrupted, or in a format this version doesn't fully recognize.",
     "fix": "Inspect the key directly: 'ssh-keygen -y -f {{ ssh_private_keys.path }}' will prompt for a passphrase if one is set (and error out plainly if the file is malformed). If it is unprotected, add a passphrase with 'ssh-keygen -p -f {{ ssh_private_keys.path }}'. If the file is corrupt or not actually a key you use, remove or restore it.\n",
+    "os": ["linux", "macos"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-SSH-014",
+    "title": "SSH key uses a weak algorithm: {{ ssh_private_keys.path }}",
+    "category": "ssh-remote-access",
+    "severity": "medium",
+    "collector": "ssh_private_keys",
+    "references": ["ATTACK-T1552.004"],
+    "explain": "{{ ssh_private_keys.path }} is a {{ ssh_private_keys.key_algorithm }} key ({{ ssh_private_keys.key_bits }} bits for RSA). DSA keys are disabled by default in current OpenSSH, and RSA keys shorter than 2048 bits can be broken with affordable computing. Servers increasingly refuse both, and those that still accept them offer little protection.",
+    "fix": "Create a modern key, switch to it, then retire the old one.\n1. Run 'ssh-keygen -t ed25519' (with a passphrase) to create a new key.\n2. Add the new public key wherever the old one is accepted: servers' ~/.ssh/authorized_keys, GitHub, GitLab, and so on.\n3. Remove the old public key from those places, then delete the old key pair.\nIf something you connect to only supports RSA, use 'ssh-keygen -t rsa -b 4096' instead.\n",
     "os": ["linux", "macos"],
     "profiles": []
   },

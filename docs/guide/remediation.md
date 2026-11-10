@@ -9,8 +9,25 @@ Bulwark fixes the problems that are **safe to fix automatically**, and hands you
 for the ones that aren't. That split is the whole design: a scanner that edits your `sshd_config` or
 `sudoers` and gets it wrong has locked you out of your own machine — a strictly worse outcome than
 the finding it was trying to resolve. So fixes divide by blast radius. The reversible, low-risk ones
-Bulwark automates — always **dry-run first, always with a backup**. The genuinely dangerous ones it
+Bulwark automates — always **dry-run first**; file-writing fixers report backups and validation, while permission fixes report the modes they change. The genuinely dangerous ones it
 shows you and gets out of the way.
+
+![From scan to fix in five steps: scan, understand, preview every change, apply only after you confirm, then check again. Results stay on this computer, secrets are shown masked, a skipped check never counts as passed, and risky SSH changes are reviewed one at a time.](/diagrams/scan-to-fix.svg)
+
+## Fix now in Scan
+
+**Fix now** sits beside **Scan now**. It is enabled
+only when current evaluated findings have a supported non-lockout fix, and disabled
+during scan/fix work. The first click prepares the existing host-wide safe-fix preview;
+it never applies changes. Review every proposed path and setting, then choose Apply
+or Cancel. Administrator access may be required even for preview. An error or
+cancelled privilege request is not a successful preview.
+
+The bulk set excludes SSH PasswordAuthentication and PermitRootLogin. Their
+individual risk confirmations remain in the finding workflow. A profile/cache
+reference in Secrets is not an eligible fix or proof of credential exposure.
+
+![Synthetic Fix now review; changes require a separate Apply confirmation](/screenshots/fix-review.png)
 
 ## What Bulwark can fix for you
 
@@ -54,7 +71,7 @@ bulwarkctl ai redact
 bulwarkctl ai redact --apply
 ```
 
-In the desktop app this is the **Redact** button on the Agent Security tab.
+In the desktop app this is the **Remove secret from this file** action on an expanded agent finding in Scan.
 
 **Only the credential's own bytes are replaced.** Everything around it — the `KEY=` name, the quotes
 around the value, the line ending that ends it — survives byte-for-byte, so a redacted `.env` still
@@ -112,7 +129,7 @@ An MCP server is a program running as you. Treat it like one.
 | Finding | Fix |
 |---|---|
 | `BLWK-AI-014` base-URL override | Remove the `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` override unless it points at a proxy you trust — pointed at an attacker host it ships your API key in the auth header. |
-| `BLWK-AI-012` hidden Unicode | Strip the zero-width / bidirectional control characters from the instruction file. They're invisible to you and read by the model (the ["Rules File Backdoor"](https://www.pillar.security/blog/new-vulnerability-in-github-copilot-and-cursor-how-hackers-can-weaponize-code-agents)). |
+| `BLWK-AI-012` hidden Unicode | Delete the hidden characters from the instruction file (bidirectional controls, invisible Tag characters, or long runs of zero-width characters; the finding shows any hidden text decoded). They're invisible to you and read by the model (the ["Rules File Backdoor"](https://www.pillar.security/blog/new-vulnerability-in-github-copilot-and-cursor-how-hackers-can-weaponize-code-agents)). |
 | `BLWK-AI-013` injection phrases | Read the flagged line. This is a low-confidence heuristic — confirm before trusting the file. |
 
 ### Secret hygiene (High → Medium)

@@ -12,7 +12,15 @@ import path from "path";
 // window itself. Never set by cargo tauri dev/build or CI; opt-in only.
 const mockTauri = process.env.VITE_MOCK_TAURI === "true";
 
-export default defineConfig({
+export default defineConfig(({ command }) => {
+  // A production bundle must never carry the fixture-backed mocks: a build started from a shell
+  // that still has the flag exported would otherwise ship an app that shows sample data.
+  if (command === "build" && mockTauri)
+    throw new Error("VITE_MOCK_TAURI is set: refusing to build with the Tauri mocks. Unset it.");
+  return config;
+});
+
+const config = defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {

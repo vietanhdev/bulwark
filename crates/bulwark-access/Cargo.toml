@@ -1,0 +1,16 @@
+[package]
+name = "bulwark-access"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+libc.workspace = true
+# For `homefs`, the one hardened way to read a file inside a home folder.
+bulwark-core = { path = "../bulwark-core" }
+
+[dev-dependencies]
+tempfile = "3"

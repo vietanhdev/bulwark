@@ -1,0 +1,15 @@
+id: BLWK-CRED-007
+title: "A PyPI password or token is stored in plain text ({{ credential_stores.path }})"
+category: credential-exposure
+severity: medium
+collector: credential_stores
+os: [linux, macos, windows]
+condition: kind == "pypirc" and plaintext_tokens > 0
+explain: >
+  {{ credential_stores.path }} holds {{ credential_stores.plaintext_tokens }} upload credential(s) in plain
+  text. Whoever copies the file can publish a release of your package.
+fix: |
+  1. Revoke the token on PyPI and create a new one scoped to a single project.
+  2. Let twine read it from your keychain instead: 'keyring set https://upload.pypi.org/legacy/ __token__', then remove the password line.
+  3. For releases from CI, use PyPI trusted publishing, which needs no stored token.
+references: [ATTACK-T1552.001, ATTACK-T1195.002]

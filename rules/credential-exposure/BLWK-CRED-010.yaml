@@ -1,0 +1,21 @@
+id: BLWK-CRED-010
+title: "Keys are saved in your shell history ({{ credential_stores.path }})"
+category: credential-exposure
+severity: high
+collector: credential_stores
+os: [linux, macos, windows]
+# secrets_found is emitted only when the history file was read. Only recognisable provider keys
+# count (the high-confidence patterns), and only service names and line numbers are kept.
+condition: kind == "shell_history" and secrets_found > 0
+explain: >
+  {{ credential_stores.path }} contains {{ credential_stores.secrets_found }} key(s) typed as part of a
+  command ({{ credential_stores.secret_kinds }}; {{ credential_stores.secret_lines }}). Your
+  shell saved the whole line, so the key now sits in a plain file that backups, sync tools and any program
+  running as you can read. History files are one of the first places credential-stealing malware looks.
+fix: |
+  Treat each key as leaked: replace it first, then clean up.
+  1. Revoke the key where it was issued and create a new one.
+  2. Remove the lines from {{ credential_stores.path }} with a text editor (close other terminals first, or they will write the old history back).
+  3. To stop it happening again, do not put keys on the command line. Read them from your keychain or password manager when needed, for example 'export GITHUB_TOKEN=$(gh auth token)' or 'op run -- <command>'.
+  4. As a safety net, make the shell skip lines that start with a space: 'HISTCONTROL=ignorespace' for bash, 'setopt HIST_IGNORE_SPACE' for zsh.
+references: [ATTACK-T1552.003]

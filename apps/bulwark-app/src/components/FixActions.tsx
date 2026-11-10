@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AlertTriangle, Check, Loader2, ShieldCheck, Wrench } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -104,9 +104,11 @@ function FixPanel({
         </p>
       ) : (
         <p className="text-xs font-medium">
-          {changeCount === 0
-            ? "Nothing to change — this is already in the state the fix would put it in."
-            : `${title}: ${changeCount} change${changeCount === 1 ? "" : "s"} would be made. Nothing has been written yet.`}
+          {error && !report
+            ? "Preview unavailable. No changes can be confirmed without a successful preview."
+            : changeCount === 0
+              ? "Nothing to change — this is already in the state the fix would put it in."
+              : `${title}: ${changeCount} change${changeCount === 1 ? "" : "s"} would be made. Nothing has been written yet.`}
         </p>
       )}
 
@@ -297,5 +299,109 @@ export function FixAllButton({ onFixed }: { onFixed?: () => void }) {
         setError(null);
       }}
     />
+  );
+}
+
+/** Header entry into the existing safe-fix preview. Opening never applies changes. */
+export function FixNowButton({
+  disabled,
+  reason,
+  onReviewChange,
+  onFixed,
+}: {
+  disabled: boolean;
+  reason: string;
+  onReviewChange: (open: boolean) => void;
+  onFixed: () => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const descriptionId = useId();
+  const [report, setReport] = useState<CombinedFixReport | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [applied, setApplied] = useState(false);
+  async function run(apply: boolean) {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await invoke<CombinedFixReport>("fix_all", { apply });
+      setReport(result);
+      if (apply) setApplied(true);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  function dismiss() {
+    if (busy) return;
+    dialog.current?.close();
+  }
+  function closed() {
+    onReviewChange(false);
+    if (applied) onFixed();
+  }
+  return (
+    <>
+      <span title={reason} className="inline-flex">
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={disabled || busy}
+          aria-describedby={descriptionId}
+          onClick={() => {
+            setReport(null);
+            setError(null);
+            setApplied(false);
+            onReviewChange(true);
+            dialog.current?.showModal();
+            void run(false);
+          }}
+        >
+          <Wrench className="size-4" aria-hidden="true" />
+          Fix now
+        </Button>
+      </span>
+      <span id={descriptionId} className="sr-only">
+        {reason}
+      </span>
+      <dialog
+        ref={dialog}
+        aria-label="Review safe fixes"
+        onCancel={(event) => {
+          if (busy) event.preventDefault();
+        }}
+        onClose={closed}
+        className="fixed inset-0 m-auto max-h-[85vh] w-[min(640px,90vw)] overflow-auto rounded-lg border border-border bg-background p-5 text-foreground shadow-lg backdrop:bg-black/50"
+      >
+        <h2 className="text-base font-semibold">Review safe fixes</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Reviews the existing supported safe-fix set across this host. Administrator access may be requested
+          for preview and again for apply. Review every proposed path and setting before confirming.
+        </p>
+        {busy && (
+          <p role="status" className="mt-3 text-sm">
+            {report ? "Applying confirmed changes…" : "Preparing preview; no changes are being applied…"}
+          </p>
+        )}
+        {(report || error) && (
+          <FixPanel
+            title="Safe autofix set"
+            report={report}
+            applied={applied}
+            busy={busy}
+            error={error}
+            note={
+              <>
+                SSH PasswordAuthentication and PermitRootLogin are excluded. Those require individual review
+                because they can lock you out.
+              </>
+            }
+            onApply={() => run(true)}
+            onDismiss={dismiss}
+          />
+        )}
+      </dialog>
+    </>
   );
 }

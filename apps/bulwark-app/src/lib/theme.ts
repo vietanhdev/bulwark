@@ -21,7 +21,7 @@ export const ACCENTS: { id: Accent; label: string; swatch: string }[] = [
   { id: "aubergine", label: "Aubergine", swatch: "oklch(0.42 0.15 342)" },
 ];
 
-/** Chrome (sidebar + titlebar) colour options. The swatch is the light-mode `--ink` tint. */
+/** Chrome (titlebar) colour options. The swatch is the light-mode `--ink` tint. */
 export const CHROMES: { id: Chrome; label: string; swatch: string }[] = [
   { id: "graphite", label: "Graphite", swatch: "oklch(0.24 0.006 260)" },
   { id: "aubergine", label: "Aubergine", swatch: "oklch(0.22 0.07 350)" },
@@ -31,7 +31,7 @@ export const CHROMES: { id: Chrome; label: string; swatch: string }[] = [
   { id: "indigo", label: "Indigo", swatch: "oklch(0.23 0.07 290)" },
 ];
 
-// Defaults: a teal accent on a neutral graphite sidebar. Every other hue already means something
+// Defaults: a teal accent on a neutral graphite titlebar. Every other hue already means something
 // here (red important, orange should fix, blue minor, green fixed), so an orange or blue primary
 // button read as a severity. Teal says "action" and nothing else. Ubuntu's orange/aubergine and the
 // other accents remain one click away in Settings.
@@ -47,7 +47,7 @@ const prefersDark = () =>
 
 export function getStoredTheme(): ThemeMode {
   const v = localStorage.getItem(THEME_KEY);
-  return v === "light" || v === "dark" || v === "system" ? v : "system";
+  return v === "light" || v === "dark" || v === "system" ? v : "dark";
 }
 
 export function getStoredAccent(): Accent {

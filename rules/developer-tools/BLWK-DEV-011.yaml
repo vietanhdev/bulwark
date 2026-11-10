@@ -1,0 +1,17 @@
+id: BLWK-DEV-011
+title: "{{ dev_tool_config.tool }} installs brand-new package versions with no waiting period ({{ dev_tool_config.path }})"
+category: developer-tools
+severity: low
+collector: dev_tool_config
+os: [linux, macos, windows]
+# One row per package manager in use: npm (min-release-age or before), bun ([install]
+# minimumReleaseAge) and uv (exclude-newer). Each key is from that tool's own reference and is off
+# by default. Only the user-level file is read, so this is a suggestion, hence low.
+condition: kind in ["npm_user", "bun_user", "uv_user"] and no_release_cooldown == true
+explain: >
+  Malicious package releases are usually caught and removed within hours or days. With no waiting period
+  set in {{ dev_tool_config.path }}, {{ dev_tool_config.tool }} installs a version published minutes ago,
+  which is the window attackers rely on. A short delay lets the registry and scanners catch a bad release
+  before it reaches this machine.
+fix: "{{ dev_tool_config.how_to_fix }}"
+references: [ATTACK-T1195.002]

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { FileCheck2, Fingerprint, Loader2 } from "lucide-react";
+import { ChevronRight, FileCheck2, Fingerprint, Info, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { CommandBlock } from "@/components/ui/copy-button";
@@ -33,7 +33,7 @@ const FIM_RULE_PREFIX = "BLWK-FIM-";
 export function IntegrityView() {
   const platform = usePlatform();
   const { revision, bump, running } = useRevision();
-  // The compliance scan (launched from the Overview) is what recomputes file-integrity findings, and
+  // The compliance scan (launched from Scan) is what recomputes file-integrity findings, and
   // it marks "fim" running for the duration — so this tab shows a live indicator instead of sitting
   // silent while that scan populates it.
   const fimRunning = running.has("fim");
@@ -78,10 +78,7 @@ export function IntegrityView() {
   // check behind it.
   if (platform === "windows") {
     return (
-      <PageShell
-        title="File changes"
-        description="Bulwark hashes a curated set of security-critical files and tells you when one of them changes."
-      >
+      <PageShell title="File changes" description="Compare tracked system files with a saved baseline.">
         <div className="rounded-lg border border-dashed border-border px-6 py-14 text-center">
           <FileCheck2 className="mx-auto h-7 w-7 text-muted-foreground/40" strokeWidth={1.5} />
           <p className="mt-3 text-sm font-medium">Not available on Windows yet.</p>
@@ -97,7 +94,7 @@ export function IntegrityView() {
   return (
     <PageShell
       title="File changes"
-      description="Bulwark hashes a curated set of security-critical files and tells you when one of them changes."
+      description="Compare tracked system files with a saved baseline."
       action={
         <Button onClick={runBaseline} disabled={baselining}>
           {baselining ? <Loader2 className="h-4 w-4 animate-spin" /> : <Fingerprint className="h-4 w-4" />}
@@ -105,14 +102,17 @@ export function IntegrityView() {
         </Button>
       }
     >
-      <div className="flex flex-col gap-8">
+      <div className="flex flex-col gap-6">
         {/* The single most important thing to understand about this feature, and the reason it
-            is a deliberate button rather than something Bulwark does for you on first run. */}
-        <Callout tone="info">
-          A baseline is only as trustworthy as the moment you take it. Bulwark never records one
-          automatically, because a baseline captured after a compromise would quietly enshrine the compromise
-          as "known good". Record one when you have reason to believe the host is clean.
-        </Callout>
+            is a deliberate button rather than something Bulwark does for you on first run. Kept to
+            one visible line so the results stay above the fold; the reasoning is one click away. */}
+        <p className="flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
+          <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+          <span>
+            Record a baseline only when you believe this machine is clean — it becomes &ldquo;known
+            good&rdquo;. Bulwark never records one automatically.
+          </span>
+        </p>
 
         {error && <Callout tone="critical">{error}</Callout>}
 
@@ -124,32 +124,12 @@ export function IntegrityView() {
         )}
 
         <section>
-          <SectionLabel>What's watched</SectionLabel>
-          <div className="rounded-lg border border-border bg-card p-4">
-            <p className="text-sm leading-relaxed text-muted-foreground">
-              A small, curated set of files that actually matter for this threat model — account and
-              authentication config (<code className="font-mono">/etc/passwd</code>, PAM), the SSH daemon
-              config (<code className="font-mono">sshd_config</code>), and the privilege-escalation binaries (
-              <code className="font-mono">sudo</code>, <code className="font-mono">su</code>). Deliberately
-              not a whole-filesystem baseline: AIDE already does that, and a diff with thousands of benign
-              entries is one nobody reads.
-            </p>
-            <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
-              Those are the world-readable ones. <code className="font-mono">/etc/shadow</code> and{" "}
-              <code className="font-mono">/etc/sudoers</code> can only be read by root, so baselining them has
-              to happen from the CLI:
-            </p>
-            <CommandBlock command="sudo bulwark fim baseline --privileged" className="mt-2.5" />
-          </div>
-        </section>
-
-        <section>
           <SectionLabel>Integrity findings</SectionLabel>
           {fimRunning && (
             <div className="mb-3 flex items-center gap-2.5 rounded-md border border-border bg-muted/40 px-3 py-2.5">
               <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
               <div className="font-mono text-[11px] text-muted-foreground">
-                Checking file integrity (started from Overview)…
+                Checking file integrity (started from Scan)…
               </div>
             </div>
           )}
@@ -162,7 +142,7 @@ export function IntegrityView() {
               <p className="mt-1 text-sm text-muted-foreground">
                 {hasScanned
                   ? "Nothing has drifted from the recorded baseline."
-                  : "Run a scan from the Overview to compare these files against the baseline."}
+                  : "Run a scan from Scan to compare these files against the baseline."}
               </p>
             </div>
           ) : (
@@ -187,6 +167,33 @@ export function IntegrityView() {
             </div>
           )}
         </section>
+
+        <details className="credential-disclosure border-t border-border pt-3 text-sm text-muted-foreground">
+          <summary className="flex w-fit cursor-pointer list-none items-center gap-2 rounded py-1 text-xs focus-visible:outline-2 focus-visible:outline-primary">
+            <ChevronRight className="disclosure-chevron size-3.5" aria-hidden="true" />
+            <span className="font-medium text-foreground">What&apos;s watched, and why</span>
+          </summary>
+          <div className="mt-2 max-w-3xl space-y-3 pl-5 leading-relaxed">
+            <p>
+              A small, curated set of files that actually matter for this threat model — account and
+              authentication config (<code className="font-mono">/etc/passwd</code>, PAM), the SSH daemon
+              config (<code className="font-mono">sshd_config</code>), and the privilege-escalation binaries (
+              <code className="font-mono">sudo</code>, <code className="font-mono">su</code>). Deliberately
+              not a whole-filesystem baseline: AIDE already does that, and a diff with thousands of benign
+              entries is one nobody reads.
+            </p>
+            <p>
+              A baseline is only as trustworthy as the moment you take it: one captured after a compromise
+              would quietly enshrine the compromise as &ldquo;known good&rdquo;.
+            </p>
+            <p>
+              Those are the world-readable files. <code className="font-mono">/etc/shadow</code> and{" "}
+              <code className="font-mono">/etc/sudoers</code> can only be read by root, so baselining them has
+              to happen from the CLI:
+            </p>
+            <CommandBlock command="sudo bulwark fim baseline --privileged" />
+          </div>
+        </details>
       </div>
     </PageShell>
   );

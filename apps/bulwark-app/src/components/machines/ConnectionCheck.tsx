@@ -3,13 +3,14 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronRight,
   Circle,
   KeyRound,
+  Lightbulb,
   Loader2,
   RefreshCw,
   ShieldAlert,
   ShieldCheck,
-  Lightbulb,
   XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -172,8 +173,11 @@ function StepRow({
           <div className="mt-2 flex flex-col gap-1.5 text-sm leading-relaxed">
             {!children && <RichText text={step.problem.hint} />}
             {step.problem.detail && (
-              <details className="text-xs text-muted-foreground">
-                <summary className="cursor-pointer select-none">What ssh said</summary>
+              <details className="credential-disclosure text-xs text-muted-foreground">
+                <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded focus-visible:outline-2 focus-visible:outline-primary select-none">
+                  <ChevronRight className="disclosure-chevron size-3.5" aria-hidden="true" />
+                  What ssh said
+                </summary>
                 <pre className="mt-1 font-mono break-words whitespace-pre-wrap">{step.problem.detail}</pre>
               </details>
             )}

@@ -89,14 +89,11 @@ export function AnalyticsView() {
   const empty = runs !== null && runs.length === 0;
 
   return (
-    <PageShell
-      title="Activity"
-      description="How this host's security posture is trending over time — findings per scan, what's open now, how much risk you've accepted, and the full scan-by-scan history — drawn from every scan Bulwark has recorded."
-    >
+    <PageShell title="History" description="Previous runs, open findings and accepted risks.">
       {empty ? (
         <div className="rounded-lg border border-dashed border-border py-14 text-center">
           <p className="text-sm font-medium">No scans recorded yet.</p>
-          <p className="mt-1 text-sm text-muted-foreground">Run a scan from the Overview to start a trend.</p>
+          <p className="mt-1 text-sm text-muted-foreground">Run a scan from Scan to start a trend.</p>
         </div>
       ) : (
         <div className="flex flex-col gap-8">
@@ -106,8 +103,8 @@ export function AnalyticsView() {
             <StatTile label="Accepted risk" value={accepted.length} tone="info" />
             <StatTile label="Scans recorded" value={runs?.length ?? 0} tone="info" />
             <StatTile
-              label="Since last scan"
-              value={delta === null ? "—" : delta > 0 ? `+${delta}` : `${delta}`}
+              label="Change since last scan"
+              value={delta === null ? "—" : delta > 0 ? `+${delta}` : delta < 0 ? `−${-delta}` : "0"}
               tone={delta === null || delta === 0 ? "info" : delta > 0 ? "critical" : "resolved"}
             />
           </div>

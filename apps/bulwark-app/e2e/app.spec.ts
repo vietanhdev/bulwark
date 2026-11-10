@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { VIEWS, expectShellReady } from "./fixtures";
+import { expectShellReady } from "./fixtures";
 
 test.describe("app shell", () => {
   test("loads with the Bulwark title and no console errors", async ({ page }) => {
@@ -16,16 +16,16 @@ test.describe("app shell", () => {
     expect(errors, `console errors:\n${errors.join("\n")}`).toEqual([]);
   });
 
-  test("sidebar lists every navigation item", async ({ page }) => {
+  test("primary navigation stays compact", async ({ page }) => {
     await page.goto("/");
     const nav = page.locator("nav");
-    for (const { label } of VIEWS) {
+    for (const label of ["Scan", "Secrets", "Tools", "Settings"]) {
       await expect(nav.getByRole("button", { name: new RegExp(label) }).first()).toBeVisible();
     }
   });
 
-  test("opens on the overview/home view by default", async ({ page }) => {
+  test("opens on Scan without automatically running it", async ({ page }) => {
     await page.goto("/");
-    await expect(page.getByRole("heading", { name: "Home", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Scan", exact: true })).toBeVisible();
   });
 });

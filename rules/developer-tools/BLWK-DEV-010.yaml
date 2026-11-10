@@ -1,0 +1,20 @@
+id: BLWK-DEV-010
+title: "npm runs install scripts from packages automatically ({{ dev_tool_config.path }})"
+category: developer-tools
+severity: low
+collector: dev_tool_config
+os: [linux, macos, windows]
+# One npm_user row per home that uses npm. Only the user-level file is read, so a project or
+# system npmrc that sets ignore-scripts is not seen: this is a suggestion, hence low.
+condition: kind == "npm_user" and install_scripts_auto == true
+explain: >
+  By default, 'npm install' runs scripts that packages ship (preinstall, install, postinstall) with your
+  account's full access. That is how the 2025-2026 npm worms spread: one poisoned release of a popular
+  package ran a script on every machine that installed it and copied tokens, SSH keys and cloud
+  credentials. Your user settings ({{ dev_tool_config.path }}) do not turn this off.
+fix: |
+  Turn install scripts off for your account, then allow them only where a project needs them.
+  1. Run 'npm config set ignore-scripts true'.
+  2. If a package needs its build step (for example a native module), run it on purpose: 'npm rebuild <package>' inside that project.
+  3. Commands you start yourself, such as 'npm test' and 'npm run build', keep working.
+references: [ATTACK-T1195.002, ATTACK-T1059]

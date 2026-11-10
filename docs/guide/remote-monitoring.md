@@ -30,14 +30,14 @@ What Bulwark deliberately does **not** do: real-time kernel telemetry, log shipp
 platform; if you have a few machines and want to know what's wrong with them and how to fix it,
 Bulwark is the lighter tool.
 
-![The Remote page: each machine's system, connection state, open issues, and when it was last and will next be scanned](/screenshots/machines.png)
+![Tools → Remote hosts: each machine's system, connection state, open issues, and when it was last and will next be scanned](/screenshots/machines.png)
 
 ## How it works
 
 ```mermaid
 flowchart LR
   subgraph you["Your computer"]
-    app["Bulwark app<br/>(Remote machines page)"] -->|runs| cli["bulwarkctl hosts scan"]
+    app["Bulwark app<br/>(Tools → Remote hosts)"] -->|runs| cli["bulwarkctl hosts scan"]
     cron["cron / systemd timer"] -->|runs| cli
     cli --> reg[("bulwark.db<br/>machine list")]
     cli --> hdb[("remotes/&lt;id&gt;.db<br/>one per machine")]
@@ -114,7 +114,7 @@ otherwise in `%USERPROFILE%\.ssh\authorized_keys` on that PC.
 
 ## Adding a machine
 
-**In the app:** **Remote** in the sidebar → **Add machine**. Enter `user@host`, an IP address, or pick a Host alias
+**In the app:** **Tools → Remote hosts → Add machine**. Enter `user@host`, an IP address, or pick a Host alias
 from your `~/.ssh/config`. Bulwark then walks through the connection:
 
 1. **Trust its identity.** The first time, Bulwark shows the machine's host key fingerprint and the
@@ -146,7 +146,7 @@ Other options: `--port`, `--identity ~/.ssh/key`, `--jump me@bastion` (ProxyJump
 
 Open a machine to see its **connection** and its **last scan** side by side — a machine can answer
 and still have a failed scan, or be offline with a recent scan's results still worth reading — and
-its issues grouped by cause, the same way Home groups this computer's. Fixes run on that machine,
+its issues grouped by cause, the same way Scan groups this computer's. Fixes run on that machine,
 so each issue carries the command to run there, and the page shows the `ssh` command to open a
 session.
 

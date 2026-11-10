@@ -5,7 +5,7 @@ import HeroDemo from "./HeroDemo.vue";
 import ChecksIndex from "./ChecksIndex.vue";
 import CliDemo from "./CliDemo.vue";
 
-// Same pairing as the desktop app (apps/bulwark-app/src/styles.css): Archivo for prose, IBM
+// The documentation retains Archivo for prose, IBM
 // Plex Mono for anything that is data — rule IDs, paths, commands, config directives. These
 // pages are as monospace-heavy as the app's screens are, so the mono is the face carrying the
 // identity in both places. Plex Mono has no variable build on fontsource, hence three
@@ -29,12 +29,12 @@ export default {
       "home-hero-info-before": () =>
         h("div", { class: "hero-eyebrow" }, [
           h("span", { class: "hero-eyebrow-dot" }),
-          "For developers and the AI agents they run",
+          "Security checks for your dev machine",
         ]),
       "home-hero-actions-after": () =>
         h("div", { class: "hero-trust" }, [
           h("span", { class: "hero-trust-chip" }, "Apache-2.0"),
-          h("span", { class: "hero-trust-chip" }, "100% local — no telemetry"),
+          h("span", { class: "hero-trust-chip" }, "Runs locally · you approve every fix"),
           h("span", { class: "hero-trust-chip" }, "Linux · macOS · Windows"),
         ]),
       // The product directly under the hero headline, above the fold: the CLI's real output first,

@@ -1,11 +1,9 @@
 [Desktop Entry]
-# Hardcoded rather than {{categories}} / {{comment}}: Tauri's single `category` can only say
-# "Utility", which files Bulwark away from security tools in the app grid, and {{comment}} falls back
-# to the Cargo package description — a developer note GNOME shows users as the tooltip.
-Categories=System;Security;Utility;
-Comment=Security for your dev machines, the servers they reach, and your AI coding tools
-GenericName=Security Scanner
-Keywords=security;scanner;hardening;audit;ssh;antivirus;monitoring;
+# Developer-tool identity: the everyday checks are on Scan, the system tools under Tools.
+Categories=Development;Utility;
+Comment=Scan your dev machine for risky AI-agent settings, leaked keys and unsafe configs
+GenericName=Developer Security Scanner
+Keywords=developer;configuration;aws;sessions;ssh;tools;
 Exec={{exec}}
 # Load-bearing, and it is only correct by coincidence of {{exec}} == the binary
 # name. GTK advertises the *binary name* as the Wayland app_id (measured with

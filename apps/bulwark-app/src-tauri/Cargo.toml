@@ -15,6 +15,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+bulwark-access = { path = "../../../crates/bulwark-access" }
 bulwark-core = { path = "../../../crates/bulwark-core" }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"

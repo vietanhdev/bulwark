@@ -1,33 +1,39 @@
 import { test, expect } from "@playwright/test";
+import { goToView } from "./fixtures";
 
 test.describe("scan flow", () => {
   test("running a scan enters the scanning state and completes", async ({ page }) => {
     await page.goto("/");
+    await goToView(page, "Scan");
 
     const run = page.getByRole("button", { name: /scan now/i });
     await expect(run).toBeVisible();
     await run.click();
 
     // While the (mocked) scan streams findings, the control becomes a Stop button.
-    await expect(page.getByRole("button", { name: /stop/i })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
+    await expect(page.locator(".task-activity")).toBeVisible();
+    await expect(page.getByText(/of \d+ checks pass/)).toHaveCount(0);
 
     // When it finishes, the runnable control returns.
     await expect(page.getByRole("button", { name: /scan now/i })).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator(".task-activity")).toHaveCount(0);
   });
 
   test("scan profile can be narrowed to a single scanner", async ({ page }) => {
     await page.goto("/");
+    await goToView(page, "Scan");
     // What "Scan now" covers is one line in the summary card; "Change" reveals the toggles.
     const summary = page.getByText(/^checks:/i).first();
     await expect(summary).toBeVisible();
     await page.getByRole("button", { name: /^change$/i }).click();
     // AI assistant checks are part of Checkups: there is no separate toggle for them.
     await expect(page.getByRole("switch", { name: /ai assistants/i })).toHaveCount(0);
-    const virus = page.getByRole("switch", { name: /virus scan/i });
+    const virus = page.getByRole("switch", { name: /malware scan/i });
     await expect(virus).toHaveAttribute("aria-checked", "false");
     await virus.click();
     await expect(virus).toHaveAttribute("aria-checked", "true");
-    await expect(summary).toContainText(/virus scan/i);
+    await expect(summary).toContainText(/malware scan/i);
     await expect(page.getByRole("button", { name: /scan now/i })).toBeEnabled();
   });
 });
@@ -35,6 +41,7 @@ test.describe("scan flow", () => {
 test.describe("AI assistant findings", () => {
   test("appear in the Home list with a preview-first remove action", async ({ page }) => {
     await page.goto("/");
+    await goToView(page, "Scan");
     // Each problem is one collapsed row: title and recommendation, details behind a click.
     const row = page.getByRole("button", { name: /anthropic api key exposed/i });
     await expect(row).toBeVisible();
@@ -56,6 +63,7 @@ test.describe("AI assistant findings", () => {
 test.describe("SSH key protection", () => {
   test("the unprotected-key problem offers a passphrase form inline", async ({ page }) => {
     await page.goto("/");
+    await goToView(page, "Scan");
     const row = page.getByRole("button", { name: /ssh private key is not passphrase-protected/i });
     await expect(row).toBeVisible();
     await expect(row).toContainText(/lock the key with a passphrase/i);
@@ -79,4 +87,17 @@ test.describe("SSH key protection", () => {
     await page.getByRole("button", { name: /protect unencrypted keys/i }).click();
     await expect(page.getByText(/1 protected/i)).toBeVisible();
   });
+});
+
+test("a file that could not be checked is a note, not a failed scan", async ({ page }) => {
+  await page.goto("/?scanUnread=1");
+  await page.getByRole("button", { name: "Scan now", exact: true }).click();
+  const note = page.getByText(/1 file could not be checked/);
+  await expect(note).toBeVisible({ timeout: 15000 });
+  // The scan still counts as complete: its findings headline, no failure wording, Fix now usable.
+  await expect(page.getByRole("heading", { name: /findings? to review/ })).toBeVisible();
+  await expect(page.getByText("Scan needs attention")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Fix now", exact: true })).toBeEnabled();
+  await note.click();
+  await expect(page.getByText(/Could not check \/home\/user\/\.netrc/)).toBeVisible();
 });

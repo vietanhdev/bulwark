@@ -5,7 +5,9 @@ severity: medium
 collector: credential_stores
 os: [linux, macos]
 # git_config rows carry no readable_by_others field; the kind guard keeps them out cleanly.
-condition: kind != "git_config" and readable_by_others == true
+# Shell startup files and ~/.aws/config are world-readable by default and are read only for
+# secrets written into them (CRED-005, CRED-001), so their mode alone is not a finding.
+condition: kind != "git_config" and kind != "shell_startup" and kind != "shell_history" and kind != "aws_config" and readable_by_others == true
 explain: >
   {{ credential_stores.path }} holds a login token for a tool ({{ credential_stores.kind }}), and other users or
   programs on this computer can read it (permissions {{ credential_stores.mode }}). Token files should be

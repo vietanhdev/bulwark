@@ -1653,6 +1653,7 @@ mod tests {
             collector_errors: vec![CollectorError {
                 collector: "sshd_config".into(),
                 message: "denied".into(),
+                skipped: false,
             }],
             privileged_collectors_skipped: vec!["sudoers".into()],
             rules_evaluated: vec!["BLWK-SSH-001".into()],

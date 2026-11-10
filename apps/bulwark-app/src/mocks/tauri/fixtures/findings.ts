@@ -107,6 +107,31 @@ export const findings: Finding[] = [
       "3. Delete keys for machines you no longer use.\n" +
       "Stronger options: keep keys in a password manager's SSH agent (Bitwarden, 1Password, KeePassXC), or use a hardware key that cannot be copied at all ('ssh-keygen -t ed25519-sk' with a YubiKey).",
   })),
+  // Keys typed into commands and saved by the shell (rule text from BLWK-CRED-010).
+  {
+    id: "f-cred-010",
+    context: {
+      path: "/home/user/.zsh_history",
+      kind: "shell_history",
+      secrets_found: 3,
+      secret_kinds: "AWS access token, OpenAI API key",
+      secret_lines: "lines 412, 1830, 1831",
+    },
+    rule_id: "BLWK-CRED-010",
+    severity: "high" as const,
+    title: "Keys are saved in your shell history (/home/user/.zsh_history)",
+    explanation:
+      "/home/user/.zsh_history contains 3 key(s) typed as part of a command (AWS access token, OpenAI API " +
+      "key; lines 412, 1830, 1831). Your shell saved the whole line, so the key now sits in a plain " +
+      "file that backups, sync tools and any program running as you can read. History files are one of the " +
+      "first places credential-stealing malware looks.",
+    fix_hint:
+      "Treat each key as leaked: replace it first, then clean up.\n" +
+      "1. Revoke the key where it was issued and create a new one.\n" +
+      "2. Remove the lines from /home/user/.zsh_history with a text editor (close other terminals first, or they will write the old history back).\n" +
+      "3. To stop it happening again, do not put keys on the command line. Read them from your keychain or password manager when needed, for example 'export GITHUB_TOKEN=$(gh auth token)' or 'op run -- <command>'.\n" +
+      "4. As a safety net, make the shell skip lines that start with a space: 'HISTCONTROL=ignorespace' for bash, 'setopt HIST_IGNORE_SPACE' for zsh.",
+  },
   // AI assistant findings, as the dashboard stores them (file, line and redactability in `context`).
   {
     id: "f-ai-001",

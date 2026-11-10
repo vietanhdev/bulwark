@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 560" width="1200" height="560" font-family="-apple-system, 'Segoe UI', Ubuntu, Roboto, 'Helvetica Neue', Arial, sans-serif" role="img" aria-labelledby="t d">
+  <title id="t">Where Bulwark fits</title>
+  <desc id="d">Four layers of a developer machine and who covers each. Developer tools and AI agents: Bulwark&#x27;s main focus (agent settings, MCP servers, hooks, secrets in AI context, Git, SSH, Docker and npm settings, how credentials are stored); endpoint tools usually do not look here. Operating system: covered by Bulwark (SSH, permissions, services, OS hardening mapped to CIS and MITRE ATT&amp;CK); pair with Lynis or OpenSCAP for formal compliance. Malware and live attacks: partly covered (ClamAV scans, compromise indicators, auth-log analysis); pair with antivirus or EDR for real-time protection. Your code&#x27;s dependencies: partly covered (package-manager settings such as plain-HTTP registries or TLS off); pair with npm audit, Snyk, Socket or Dependabot for known-vulnerable packages.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f7fafc"/><stop offset="1" stop-color="#eef3f8"/></linearGradient>
+    <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f2468f"/><stop offset="1" stop-color="#c2185b"/></linearGradient><linearGradient id="g2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffab3d"/><stop offset="1" stop-color="#ef6c1a"/></linearGradient><linearGradient id="g3" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3f8ef0"/><stop offset="1" stop-color="#1d5fc2"/></linearGradient><linearGradient id="g4" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8f6bff"/><stop offset="1" stop-color="#5b3fd6"/></linearGradient><linearGradient id="g5" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#19b3a3"/><stop offset="1" stop-color="#0b7f86"/></linearGradient><linearGradient id="g6" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ef5350"/><stop offset="1" stop-color="#b71c1c"/></linearGradient><linearGradient id="g7" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5cc15a"/><stop offset="1" stop-color="#2e8b3a"/></linearGradient><linearGradient id="g8" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4b5565"/><stop offset="1" stop-color="#262c36"/></linearGradient>
+    <filter id="sh" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#1b2a3a" flood-opacity="0.12"/></filter>
+    <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" fill="none" stroke="#dfe7ef" stroke-width="1"/></pattern>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#9aabbd"/></marker>
+  </defs>
+  <rect width="1200" height="560" rx="18" fill="url(#bg)"/>
+  <rect width="1200" height="560" rx="18" fill="url(#grid)" opacity="0.6"/>
+  <text x="32" y="48" font-size="24" font-weight="700" fill="#16202c">Where Bulwark fits</text>
+  <text x="32" y="72" font-size="14" fill="#5b6b7d">Bulwark covers the developer layer that endpoint tools miss. Pair it with these for the rest.</text>
+  <text x="300" y="112" font-size="12" font-weight="700" letter-spacing="1" fill="#7a8a9c">BULWARK</text>
+  <text x="806" y="112" font-size="12" font-weight="700" letter-spacing="1" fill="#7a8a9c">PAIR IT WITH</text>
+  <g transform="translate(32 124)" filter="url(#sh)">
+    <rect width="1136" height="96" rx="14" fill="#fff" stroke="#0b7f86" stroke-width="2"/>
+    <g transform="translate(18 26)"><rect width="44" height="44" rx="12.2" fill="url(#g5)"/><g transform="scale(1.222)"><rect x="11" y="11" width="14" height="14" rx="2" fill="none" stroke="#fff" stroke-width="2.2"/><path d="M15 8v3M21 8v3M15 25v3M21 25v3M8 15h3M8 21h3M25 15h3M25 21h3" stroke="#fff" stroke-width="2" stroke-linecap="round"/></g></g>
+    <text x="76" y="44" font-size="16.5" font-weight="700" fill="#16202c">Developer tools</text>
+    <text x="76" y="65" font-size="16.5" font-weight="700" fill="#16202c">and AI agents</text>
+    <g transform="translate(268 20)"><rect width="92" height="24" rx="12" fill="#0b7f86" opacity="0.12"/><circle cx="14" cy="12" r="6" fill="#0b7f86" stroke="#0b7f86" stroke-width="2"/><text x="26" y="16.5" font-size="12" font-weight="700" fill="#0b6b70">Main focus</text></g>
+    <text x="380" y="34" font-size="13.5" fill="#2b3a4a">Agent settings, MCP servers, repo hooks,</text>
+    <text x="380" y="54" font-size="13.5" fill="#2b3a4a">secrets in AI context, Git/SSH/Docker/npm</text>
+    <text x="380" y="74" font-size="13.5" fill="#2b3a4a">settings, how credentials are stored.</text>
+    <path d="M752 16V80" stroke="#e1e8f0"/>
+    <text x="774" y="34" font-size="13.5" fill="#5b6b7d">Usually nothing: endpoint and</text>
+    <text x="774" y="54" font-size="13.5" fill="#5b6b7d">device-management tools don&#x27;t</text>
+    <text x="774" y="74" font-size="13.5" fill="#5b6b7d">look at developer tooling.</text>
+  </g>
+  <g transform="translate(32 232)" filter="url(#sh)">
+    <rect width="1136" height="96" rx="14" fill="#fff" stroke="#e1e8f0" stroke-width="1"/>
+    <g transform="translate(18 26)"><rect width="44" height="44" rx="12.2" fill="url(#g3)"/><g transform="scale(1.222)"><path d="M18 8l9 3v6c0 6-4 10-9 12-5-2-9-6-9-12v-6z" fill="none" stroke="#fff" stroke-width="2.2" stroke-linejoin="round"/></g></g>
+    <text x="76" y="44" font-size="16.5" font-weight="700" fill="#16202c">Operating</text>
+    <text x="76" y="65" font-size="16.5" font-weight="700" fill="#16202c">system</text>
+    <g transform="translate(268 20)"><rect width="92" height="24" rx="12" fill="#0b7f86" opacity="0.12"/><circle cx="14" cy="12" r="6" fill="#0b7f86" stroke="#0b7f86" stroke-width="2"/><text x="26" y="16.5" font-size="12" font-weight="700" fill="#0b6b70">Covered</text></g>
+    <text x="380" y="34" font-size="13.5" fill="#2b3a4a">SSH, file permissions, exposed services,</text>
+    <text x="380" y="54" font-size="13.5" fill="#2b3a4a">OS hardening. Mapped to CIS and</text>
+    <text x="380" y="74" font-size="13.5" fill="#2b3a4a">MITRE ATT&amp;CK.</text>
+    <path d="M752 16V80" stroke="#e1e8f0"/>
+    <text x="774" y="34" font-size="13.5" fill="#5b6b7d">Lynis or OpenSCAP when you need</text>
+    <text x="774" y="54" font-size="13.5" fill="#5b6b7d">formal compliance reports.</text>
+  </g>
+  <g transform="translate(32 340)" filter="url(#sh)">
+    <rect width="1136" height="96" rx="14" fill="#fff" stroke="#e1e8f0" stroke-width="1"/>
+    <g transform="translate(18 26)"><rect width="44" height="44" rx="12.2" fill="url(#g6)"/><g transform="scale(1.222)"><rect x="12" y="12" width="12" height="15" rx="6" fill="none" stroke="#fff" stroke-width="2.2"/><path d="M8 16h4M24 16h4M8 23h4M24 23h4M14 9l2 3M22 9l-2 3" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></g></g>
+    <text x="76" y="44" font-size="16.5" font-weight="700" fill="#16202c">Malware and</text>
+    <text x="76" y="65" font-size="16.5" font-weight="700" fill="#16202c">live attacks</text>
+    <g transform="translate(268 20)"><rect width="92" height="24" rx="12" fill="#e3a008" opacity="0.12"/><circle cx="14" cy="12" r="6" fill="none" stroke="#e3a008" stroke-width="2"/><path d="M14 6a6 6 0 0 1 0 12z" fill="#e3a008"/><text x="26" y="16.5" font-size="12" font-weight="700" fill="#8a5a00">Partly</text></g>
+    <text x="380" y="34" font-size="13.5" fill="#2b3a4a">ClamAV scans, compromise indicators,</text>
+    <text x="380" y="54" font-size="13.5" fill="#2b3a4a">auth-log analysis. No real-time</text>
+    <text x="380" y="74" font-size="13.5" fill="#2b3a4a">kernel-level monitoring.</text>
+    <path d="M752 16V80" stroke="#e1e8f0"/>
+    <text x="774" y="34" font-size="13.5" fill="#5b6b7d">Antivirus or EDR for real-time</text>
+    <text x="774" y="54" font-size="13.5" fill="#5b6b7d">protection.</text>
+  </g>
+  <g transform="translate(32 448)" filter="url(#sh)">
+    <rect width="1136" height="96" rx="14" fill="#fff" stroke="#e1e8f0" stroke-width="1"/>
+    <g transform="translate(18 26)"><rect width="44" height="44" rx="12.2" fill="url(#g2)"/><g transform="scale(1.222)"><path d="M9 13l9-5 9 5v10l-9 5-9-5z M9 13l9 5 9-5M18 18v10" fill="none" stroke="#fff" stroke-width="2.2" stroke-linejoin="round"/></g></g>
+    <text x="76" y="44" font-size="16.5" font-weight="700" fill="#16202c">Your code&#x27;s</text>
+    <text x="76" y="65" font-size="16.5" font-weight="700" fill="#16202c">dependencies</text>
+    <g transform="translate(268 20)"><rect width="92" height="24" rx="12" fill="#e3a008" opacity="0.12"/><circle cx="14" cy="12" r="6" fill="none" stroke="#e3a008" stroke-width="2"/><path d="M14 6a6 6 0 0 1 0 12z" fill="#e3a008"/><text x="26" y="16.5" font-size="12" font-weight="700" fill="#8a5a00">Partly</text></g>
+    <text x="380" y="34" font-size="13.5" fill="#2b3a4a">Package-manager settings: plain-HTTP</text>
+    <text x="380" y="54" font-size="13.5" fill="#2b3a4a">registries, TLS checks off.</text>
+    <path d="M752 16V80" stroke="#e1e8f0"/>
+    <text x="774" y="34" font-size="13.5" fill="#5b6b7d">npm audit, Snyk, Socket or</text>
+    <text x="774" y="54" font-size="13.5" fill="#5b6b7d">Dependabot for known-vulnerable</text>
+    <text x="774" y="74" font-size="13.5" fill="#5b6b7d">packages.</text>
+  </g>
+</svg>

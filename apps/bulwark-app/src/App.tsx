@@ -3,7 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TitleBar } from "@/components/TitleBar";
-import { Sidebar, type View } from "@/components/Sidebar";
+import { WorkbenchNav, type View } from "@/components/Sidebar";
+import { ToolsView } from "@/components/ToolsView";
+import { SecretsView } from "@/components/SecretsView";
 import { OverviewView } from "@/components/OverviewView";
 import { AntivirusView } from "@/components/AntivirusView";
 import { IntegrityView } from "@/components/IntegrityView";
@@ -16,20 +18,31 @@ import { RevisionProvider, useRevision } from "@/lib/revision";
 import { cn } from "@/lib/utils";
 
 const VIEWS: { id: View; render: (active: boolean, navigate: (v: View) => void) => React.ReactNode }[] = [
-  { id: "overview", render: (_active, navigate) => <OverviewView onNavigate={navigate} /> },
+  { id: "overview", render: (active, navigate) => <OverviewView active={active} onNavigate={navigate} /> },
   {
     id: "machines",
     render: (active, navigate) => <MachinesView active={active} onNavigate={navigate} />,
   },
   { id: "antivirus", render: (active) => <AntivirusView active={active} /> },
+  { id: "access", render: (active, navigate) => <SecretsView active={active} onNavigate={navigate} /> },
   { id: "integrity", render: () => <IntegrityView /> },
   { id: "rules", render: () => <RulesView /> },
-  { id: "compliance", render: () => <ComplianceView /> },
+  { id: "compliance", render: (active) => <ComplianceView active={active} /> },
+  { id: "tools", render: (_active, navigate) => <ToolsView onNavigate={navigate} /> },
   { id: "analytics", render: () => <AnalyticsView /> },
   { id: "settings", render: (active) => <SettingsView active={active} /> },
 ];
 
 function Shell() {
+  useEffect(() => {
+    const update = () => document.documentElement.toggleAttribute("data-motion-paused", document.hidden);
+    update();
+    document.addEventListener("visibilitychange", update);
+    return () => {
+      document.removeEventListener("visibilitychange", update);
+      document.documentElement.removeAttribute("data-motion-paused");
+    };
+  }, []);
   const [view, setViewRaw] = useState<View>("overview");
   const [monitoringEnabled, setMonitoringEnabled] = useState<boolean | null>(null);
   const { revision, bump } = useRevision();
@@ -79,16 +92,16 @@ function Shell() {
   }, [bump, refreshChrome]);
 
   return (
-    <div className="app-shell flex h-screen flex-col bg-background text-foreground">
+    <div className="app-shell workbench flex h-screen flex-col bg-background text-foreground">
       <TitleBar />
-      <div className="flex min-h-0 flex-1">
-        <Sidebar view={view} onChange={setView} monitoringEnabled={monitoringEnabled} />
+      <div className="flex min-h-0 flex-1 flex-col">
+        <WorkbenchNav view={view} onChange={setView} monitoringEnabled={monitoringEnabled} />
         <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
           {/* Mounted once first visited, then kept alive and merely hidden on every later
               switch away — see the `visited` state above for why this isn't the more obvious
               `{view === "x" && <X/>}`. */}
           {VIEWS.filter(({ id }) => visited.has(id)).map(({ id, render }) => (
-            <div key={id} className={cn("h-full", view !== id && "hidden")}>
+            <div key={id} className={cn("view-transition h-full", view !== id && "hidden")}>
               {render(view === id, setView)}
             </div>
           ))}

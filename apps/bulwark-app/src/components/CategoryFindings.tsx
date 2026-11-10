@@ -131,7 +131,7 @@ export function CategoryFindings({
         onClick={onToggle}
         aria-expanded={!collapsed}
         title={info.blurb}
-        className="mb-2 flex items-center gap-1.5 rounded text-xs font-semibold tracking-wide text-muted-foreground uppercase hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        className="mb-2 flex items-center gap-1.5 rounded text-xs font-semibold tracking-wide text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
       >
         <ChevronRight
           className={cn("h-3.5 w-3.5 shrink-0 transition-transform", !collapsed && "rotate-90")}

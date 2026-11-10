@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Minus, Square, X } from "lucide-react";
 import { ShieldMark } from "@/components/ShieldMark";
@@ -15,11 +15,15 @@ export function TitleBar() {
   // Native apps dim their chrome when the window loses focus. Its absence is one of the
   // fastest tells that a frameless window was built without looking at how the platform's own
   // apps behave.
-  const [focused, setFocused] = useState(true);
 
   useEffect(() => {
-    const unlistenPromise = appWindow.onFocusChanged(({ payload }) => setFocused(payload));
+    const update = (value: boolean) => {
+      document.documentElement.toggleAttribute("data-window-inactive", !value);
+    };
+    const unlistenPromise = appWindow.onFocusChanged(({ payload }) => update(payload));
+    appWindow.isFocused().then(update);
     return () => {
+      document.documentElement.removeAttribute("data-window-inactive");
       unlistenPromise.then((unlisten) => unlisten());
     };
   }, []);
@@ -27,9 +31,10 @@ export function TitleBar() {
   return (
     <div
       className={cn(
-        "flex h-10 shrink-0 items-center justify-between border-b border-ink-border bg-ink pr-1.5 transition-opacity duration-200",
-        mac ? "pl-[78px]" : "pl-3",
-        !focused && "opacity-60",
+        // A native title bar shows the arrow pointer and never selects its text; without this,
+        // WebKitGTK shows a text I-beam over the wordmark and a drag can start a selection.
+        "workbench-chrome flex h-9 shrink-0 cursor-default select-none items-center justify-between border-b border-ink-border bg-ink pr-1.5 transition-opacity duration-200",
+        mac ? "pl-[78px]" : "pl-5",
       )}
     >
       {/* `data-tauri-drag-region` is Tauri's own cross-platform drag mechanism — the CSS
@@ -42,9 +47,12 @@ export function TitleBar() {
         <ShieldMark data-tauri-drag-region className="h-4 w-4 text-primary" />
         <span
           data-tauri-drag-region
-          className="font-heading text-[13px] font-semibold tracking-tight text-ink-fg"
+          className="font-heading text-sm font-semibold tracking-tight text-ink-fg"
         >
           Bulwark
+        </span>
+        <span data-tauri-drag-region className="text-[11px] text-ink-muted">
+          / developer tools
         </span>
       </div>
       {!mac && <WindowControls />}

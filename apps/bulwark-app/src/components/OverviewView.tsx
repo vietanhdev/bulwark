@@ -1,8 +1,10 @@
+import { WorkbenchIcon } from "./WorkbenchIcon";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { Check, ChevronRight, Radar, RotateCw, Square } from "lucide-react";
+import { Check, ChevronRight, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
+import { TaskActivity } from "@/components/TaskActivity";
 import { PageShell } from "@/components/PageShell";
 import { RedactButton } from "@/components/RedactButton";
 import { SshKeyProtect } from "@/components/SshKeyProtect";
@@ -11,7 +13,7 @@ import { withLocation } from "@/lib/findings";
 import { type ProtectionStatus } from "@/components/StatusHero";
 import { type Finding } from "@/components/FindingCard";
 import { CategoryFindings, groupFindingsByCategory } from "@/components/CategoryFindings";
-import { FixAllButton } from "@/components/FixActions";
+import { FixNowButton } from "@/components/FixActions";
 import { useFixCapabilities } from "@/lib/fixes";
 import { SEVERITY_ORDER, SeverityDot, severityLabel, type Severity } from "@/components/Severity";
 import { type View } from "@/components/Sidebar";
@@ -46,7 +48,7 @@ interface DashboardSnapshot {
 
 type ScanEvent =
   | { event: "finding"; data: Finding }
-  | { event: "collectorError"; data: { collector: string; message: string } }
+  | { event: "collectorError"; data: { collector: string; message: string; skipped?: boolean } }
   | { event: "privilegedSkipped"; data: { collectors: string[] } }
   | {
       event: "complete";
@@ -68,10 +70,10 @@ type ScanKind = "compliance" | "antivirus";
 const SCAN_KINDS: { id: ScanKind; label: string; hint: string }[] = [
   {
     id: "compliance",
-    label: "Checkups",
+    label: "Configuration + agents",
     hint: "System settings, SSH, startup programs, stored credentials and AI assistants",
   },
-  { id: "antivirus", label: "Virus scan", hint: "ClamAV signature scan — minutes, not seconds" },
+  { id: "antivirus", label: "Malware scan", hint: "ClamAV signature scan — minutes, not seconds" },
 ];
 
 // Fast, safe, and what you almost always want. Antivirus is deliberately off by default: it's a
@@ -95,7 +97,7 @@ interface ScanRunResult {
   findings: Finding[];
   host_fingerprint: string;
   privileged_collectors_skipped: string[];
-  collector_errors: { collector: string; message: string }[];
+  collector_errors: { collector: string; message: string; skipped?: boolean }[];
 }
 
 // Opt-in "need" tags a rule's `profiles` field can reference — a process-accounting check is
@@ -105,13 +107,18 @@ interface ScanRunResult {
 // adding a rule (docs/guide/architecture.md, Profiles).
 const PROFILE_NEEDS = ["server"];
 
+const isDeveloperFinding = (finding: Finding) =>
+  /^(BLWK-DEV-|BLWK-SSH-|BLWK-CRED-|BLWK-AI-)/.test(finding.rule_id);
+
 const bySeverity = (a: Finding, b: Finding) =>
   SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity);
 
-export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) {
-  const { revision, bump, setScannerRunning } = useRevision();
+export function OverviewView({ active, onNavigate }: { active: boolean; onNavigate: (v: View) => void }) {
+  const { revision, bump, setScannerRunning, running } = useRevision();
 
   const [scanning, setScanning] = useState(false);
+  const [fixReview, setFixReview] = useState(false);
+  const [snapshotRevision, setSnapshotRevision] = useState<number | null>(null);
   const [elevating, setElevating] = useState(false);
   const [findings, setFindings] = useState<Finding[]>([]);
   // Findings whose rule was suppressed: accepted risk, still present. Tracked separately so the
@@ -120,6 +127,9 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
   const [suppressed, setSuppressed] = useState<Finding[]>([]);
   const [skippedPrivileged, setSkippedPrivileged] = useState<string[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
+  // Files a collector could not read (a link leaving the home folder, a pipe). A skipped check,
+  // shown as a note: it does not make the scan a failed one or hold back Fix now.
+  const [unreadFiles, setUnreadFiles] = useState<string[]>([]);
   const [host, setHost] = useState<string | null>(null);
   const [privilegedRunDone, setPrivilegedRunDone] = useState(false);
   const [hasScanned, setHasScanned] = useState(false);
@@ -171,8 +181,12 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
         setSkippedPrivileged(snap.meta.privileged_collectors_skipped);
         setRulesEvaluated(new Set(snap.rules_evaluated ?? []));
         setHasScanned(true);
+        setSnapshotRevision(revision);
         setStreamed(false);
       })
+      .catch(() =>
+        setErrors((previous) => [...previous, "Could not load saved scan results. Retry the scan."]),
+      )
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `scanning` guards, it must not retrigger
   }, [revision]);
@@ -231,7 +245,10 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
   const mainFindings = useMemo(() => visibleFindings.filter((f) => !isMinor(f)), [visibleFindings]);
   const minorFindings = useMemo(() => visibleFindings.filter(isMinor), [visibleFindings]);
   const groupedFindings = useMemo(
-    () => groupFindingsByCategory(mainFindings, (id) => ruleCategoryById.get(id) ?? "other"),
+    () =>
+      groupFindingsByCategory(mainFindings, (id) => ruleCategoryById.get(id) ?? "other").sort(
+        (a, b) => Number(b.items.some(isDeveloperFinding)) - Number(a.items.some(isDeveloperFinding)),
+      ),
     [mainFindings, ruleCategoryById],
   );
   const minorGrouped = useMemo(
@@ -263,7 +280,30 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
   const fixCapabilities = useFixCapabilities();
   // Only offer the bulk fix when at least one issue on screen actually has a fixer — otherwise the
   // button previews an empty change set, which reads as a broken feature rather than an honest one.
-  const anyFixable = visibleFindings.some((f) => fixCapabilities.has(f.rule_id));
+  const anyFixable = findings.some(
+    (f) =>
+      rulesEvaluated.has(f.rule_id) &&
+      fixCapabilities.has(f.rule_id) &&
+      !fixCapabilities.get(f.rule_id)!.lockout_risk,
+  );
+  const fixDisabled =
+    loading ||
+    scanning ||
+    running.size > 0 ||
+    elevating ||
+    fixReview ||
+    cancelled ||
+    errors.length > 0 ||
+    snapshotRevision !== revision ||
+    !anyFixable;
+  const fixReason =
+    fixReview || scanning || running.size > 0 || elevating
+      ? "Wait for the current scan or fix review to finish."
+      : errors.length > 0 || cancelled || snapshotRevision !== revision
+        ? "Complete a scan before reviewing fixes."
+        : !anyFixable
+          ? "No supported safe fixes in the latest evaluated findings."
+          : "Preview supported safe fixes before confirming any changes.";
   const toggleCategory = (category: string) =>
     setCollapsedCategories((prev) => {
       const next = new Set(prev);
@@ -294,7 +334,8 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
             setSkippedPrivileged(msg.data.collectors);
             break;
           case "collectorError":
-            setErrors((prev) => [...prev, `${msg.data.collector}: ${msg.data.message}`]);
+            if (msg.data.skipped) setUnreadFiles((prev) => [...prev, msg.data.message]);
+            else setErrors((prev) => [...prev, `${msg.data.collector}: ${msg.data.message}`]);
             break;
           case "error":
             setErrors((prev) => [...prev, msg.data.message]);
@@ -406,6 +447,7 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
     setSuppressed([]);
     setSkippedPrivileged([]);
     setErrors([]);
+    setUnreadFiles([]);
     setThreats([]);
     setProgress(null);
     setPrivilegedRunDone(false);
@@ -446,6 +488,7 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
   async function runPrivilegedScan() {
     setElevating(true);
     setErrors([]);
+    setUnreadFiles([]);
     try {
       const result = await invoke<ScanRunResult>("scan_privileged");
       // Arrives as one complete result, not a stream — so it lands at rest rather than having
@@ -453,7 +496,8 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
       setStreamed(false);
       setFindings([...result.findings].map(withLocation).sort(bySeverity));
       setSkippedPrivileged(result.privileged_collectors_skipped);
-      setErrors(result.collector_errors.map((e) => `${e.collector}: ${e.message}`));
+      setErrors(result.collector_errors.filter((e) => !e.skipped).map((e) => `${e.collector}: ${e.message}`));
+      setUnreadFiles(result.collector_errors.filter((e) => e.skipped).map((e) => e.message));
       setHost(result.host_fingerprint);
       setPrivilegedRunDone(true);
       bump();
@@ -487,25 +531,36 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
 
   return (
     <PageShell
-      title="Home"
+      title="Scan"
+      description="Checks your AI agents, keys, credentials and developer tools."
       action={
         <>
-          {/* The same scan from a terminal or CI: the CLI ships in the same package. */}
+          {/* Configuration checks from a terminal or CI: the CLI ships in the same package. */}
           <span
             className="hidden items-center gap-1 rounded-md border border-border bg-muted/50 py-0.5 pr-0.5 pl-2 font-mono text-[11px] text-muted-foreground md:flex"
-            title="Run the same scan from a terminal or CI"
+            title="Run configuration checks from a terminal or CI"
           >
             $ bulwark scan
             <CopyButton value="bulwark scan" className="h-5 w-5" />
           </span>
+          <FixNowButton
+            disabled={fixDisabled}
+            reason={fixReason}
+            onReviewChange={setFixReview}
+            onFixed={runScan}
+          />
           {scanning ? (
             <Button onClick={stopScan} variant="outline" size="sm">
               <Square className="h-3.5 w-3.5 fill-current" />
               Stop
             </Button>
           ) : (
-            <Button onClick={runScan} disabled={selectedKinds.size === 0} size="sm">
-              <Radar className="h-4 w-4" />
+            <Button
+              onClick={runScan}
+              disabled={selectedKinds.size === 0 || fixReview || running.size > 0 || elevating}
+              size="sm"
+            >
+              <WorkbenchIcon kind="scan" className="size-4" />
               Scan now
             </Button>
           )}
@@ -515,11 +570,13 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
       <div className="flex flex-col gap-8">
         <HomeSummary
           status={status}
+          incomplete={errors.length > 0 || cancelled}
+          evaluated={rulesEvaluated.size || (agentScanned ? 1 : 0)}
           problemCount={mainProblemCount}
           minorCount={minorProblemCount}
           bySeverity={problemsBySeverity}
           host={host}
-          hardening={hardening}
+          hardening={scanning || errors.length > 0 || cancelled ? null : hardening}
           scanLabel={
             SCAN_KINDS.filter((k) => selectedKinds.has(k.id))
               .map((k) => k.label)
@@ -527,7 +584,6 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
           }
           onToggleOptions={() => setScopeOpen((o) => !o)}
           optionsOpen={scopeOpen}
-          fixAll={anyFixable ? <FixAllButton onFixed={runScan} /> : null}
           skippedPrivileged={privilegedRunDone ? 0 : skippedPrivileged.length}
           onRunPrivileged={runPrivilegedScan}
           elevating={elevating}
@@ -618,7 +674,7 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
                 })}
               </div>
               <p className="text-xs text-muted-foreground">
-                Virus scan is off by default because a full ClamAV sweep takes minutes. Server checks add
+                Malware scan is off by default because a full ClamAV sweep takes minutes. Server checks add
                 rules that only matter on machines other people connect to.
               </p>
             </div>
@@ -626,10 +682,11 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
         )}
 
         {scanning && (
-          <div className="flex items-center gap-2.5 rounded-md border border-border bg-muted/40 px-3 py-2.5">
-            <RotateCw className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+          // The summary headline already says "Checking your setup…"; this line only shows progress.
+          <div className="flex items-center gap-3 rounded-lg bg-muted/40 px-3 py-2">
+            <TaskActivity task="scan" active={active} phrase={false} className="[&_svg]:size-5" />
             <div className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">
-              {progress ?? "Scanning…"}
+              {progress ?? "Starting…"}
             </div>
           </div>
         )}
@@ -653,7 +710,7 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
                 .map((t) => t.signature)
                 .join(", ")}
             </span>{" "}
-            Open the Antivirus tab for the full list.
+            Open Tools → Malware scan for the full list.
           </Callout>
         )}
 
@@ -663,8 +720,29 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
           </Callout>
         ))}
 
+        {unreadFiles.length > 0 && (
+          <details className="credential-disclosure rounded-md bg-muted/50 px-3 py-2 text-xs">
+            <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded focus-visible:outline-2 focus-visible:outline-primary">
+              <ChevronRight className="disclosure-chevron size-3.5" aria-hidden="true" />
+              {unreadFiles.length} {unreadFiles.length === 1 ? "file" : "files"} could not be checked. The
+              checks that read {unreadFiles.length === 1 ? "it" : "them"} are not counted as passed.
+            </summary>
+            <ul className="mt-2 space-y-1 pl-5 text-muted-foreground">
+              {unreadFiles.map((m) => (
+                <li key={m} className="[overflow-wrap:anywhere]">
+                  {m.charAt(0).toUpperCase() + m.slice(1)}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+
         <section>
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+            {/* Labels the list below; with nothing listed yet it only added an empty heading. */}
+            {(findings.length > 0 || suppressed.length > 0) && (
+              <h2 className="text-xs font-medium text-muted-foreground">Findings · developer checks first</h2>
+            )}
             <div className="flex items-baseline gap-2">
               {suppressed.length > 0 && (
                 // Accepted risk is present, not resolved — surface it here (and it still counts
@@ -686,7 +764,7 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
                   .filter((k) => findings.some((f) => scanOf(f) === k))
                   .map((k) => {
                     const on = scanFilter === k;
-                    const label = k === "file-integrity" ? "File changes" : "Checkups";
+                    const label = k === "file-integrity" ? "File changes" : "Configuration";
                     const count = findings.filter((f) => scanOf(f) === k).length;
                     return (
                       <button
@@ -722,18 +800,39 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
             )}
           </div>
 
-          {findings.length === 0 && !scanning && !loading && (
-            <div className="rounded-lg border border-dashed border-border py-14 text-center">
-              <p className="text-sm font-medium">
-                {hasScanned ? "Nothing to fix on the last scan." : "This host hasn't been scanned yet."}
-              </p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {hasScanned
-                  ? "Every rule that ran came back clean."
-                  : "Run a scan to check its configuration against the rule pack."}
-              </p>
-            </div>
-          )}
+          {findings.length === 0 &&
+            !scanning &&
+            !loading &&
+            !hasScanned &&
+            errors.length === 0 &&
+            !cancelled && <FirstRunGuide onScan={runScan} onOpenSecrets={() => onNavigate("access")} />}
+          {findings.length === 0 &&
+            !scanning &&
+            !loading &&
+            (hasScanned || errors.length > 0 || cancelled) && (
+              <div className="rounded-lg border border-dashed border-border py-14 text-center">
+                <p className="text-sm font-medium">
+                  {errors.length > 0 || cancelled
+                    ? "No complete result from this attempt."
+                    : hasScanned
+                      ? skippedPrivileged.length > 0
+                        ? "Some checks still need administrator access."
+                        : rulesEvaluated.size > 0 || agentScanned
+                          ? "No findings in the completed checks."
+                          : "No checks recorded."
+                      : "This host hasn't been scanned yet."}
+                </p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {errors.length > 0 || cancelled
+                    ? "Review the error or run a new scan."
+                    : hasScanned
+                      ? skippedPrivileged.length > 0
+                        ? "Skipped checks have not established whether there is a problem."
+                        : "This result covers only checks that actually ran."
+                      : "Run a scan to check its configuration against the rule pack."}
+                </p>
+              </div>
+            )}
 
           {findings.length > 0 && visibleFindings.length === 0 && (
             <div className="rounded-lg border border-dashed border-border py-10 text-center">
@@ -820,6 +919,8 @@ export function OverviewView({ onNavigate }: { onNavigate: (v: View) => void }) 
  */
 function HomeSummary({
   status,
+  incomplete,
+  evaluated,
   problemCount,
   minorCount,
   bySeverity,
@@ -828,12 +929,13 @@ function HomeSummary({
   scanLabel,
   onToggleOptions,
   optionsOpen,
-  fixAll,
   skippedPrivileged,
   onRunPrivileged,
   elevating,
 }: {
   status: ProtectionStatus;
+  incomplete: boolean;
+  evaluated: number;
   problemCount: number;
   minorCount: number;
   bySeverity: { sev: Severity; count: number }[];
@@ -842,7 +944,6 @@ function HomeSummary({
   scanLabel: string;
   onToggleOptions: () => void;
   optionsOpen: boolean;
-  fixAll: React.ReactNode;
   skippedPrivileged: number;
   onRunPrivileged: () => void;
   elevating: boolean;
@@ -850,42 +951,62 @@ function HomeSummary({
   const scanned = status !== "idle" && status !== "scanning";
   const headline =
     status === "scanning"
-      ? "Checking this computer…"
-      : !scanned
-        ? "Let's check this computer"
-        : problemCount === 0
-          ? minorCount > 0
-            ? "No urgent problems"
-            : "All clear"
-          : `${problemCount} ${problemCount === 1 ? "problem" : "problems"} to fix`;
-  const detail = !scanned
-    ? "Scan now checks secrets, supply chain, exposed services, AI agents, SSH and the OS."
-    : problemCount === 0
-      ? minorCount > 0
-        ? `${minorCount} low-risk ${minorCount === 1 ? "suggestion" : "suggestions"} below, when you have time.`
-        : "Every check that ran came back clean."
-      : null;
+      ? "Checking your setup…"
+      : incomplete
+        ? "Scan needs attention"
+        : !scanned
+          ? "Ready to check your setup"
+          : problemCount === 0
+            ? minorCount > 0
+              ? "No urgent problems"
+              : skippedPrivileged > 0
+                ? "Checks need access"
+                : evaluated > 0
+                  ? "No findings in completed checks"
+                  : "No completed checks recorded"
+            : `${problemCount} ${problemCount === 1 ? "finding" : "findings"} to review`;
+  const detail = incomplete
+    ? "Some work did not finish. Review the details below before retrying."
+    : !scanned
+      ? "One scan checks this computer in a few seconds. Nothing leaves it."
+      : problemCount === 0
+        ? minorCount > 0
+          ? `${minorCount} low-risk ${minorCount === 1 ? "suggestion" : "suggestions"} below, when you have time.`
+          : skippedPrivileged > 0
+            ? "Some checks could not run. Allow administrator access to finish them."
+            : evaluated > 0
+              ? "Every check that ran came back clean."
+              : "Run a scan to collect current results."
+        : null;
 
   return (
-    <section className="rounded-lg border border-border bg-card px-5 py-4">
+    <section className="border-b border-border pb-4">
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
         <div className="min-w-0">
-          <h2 className="font-heading text-xl font-semibold">{headline}</h2>
-          {detail ? (
+          <h2 className="font-heading text-base font-medium">{headline}</h2>
+          {status === "scanning" ? null : detail ? (
             <p className="mt-0.5 text-sm text-muted-foreground">{detail}</p>
           ) : (
             <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-              {bySeverity.map(({ sev, count }) => (
-                <span key={sev} className="flex items-center gap-1.5">
-                  <SeverityDot severity={sev} />
-                  <span className="font-semibold tabular-nums">{count}</span>
-                  <span className="text-muted-foreground">{severityLabel(sev)}</span>
+              {/* Only the severities the headline counts; listing Low/Info here made "7 findings"
+                  sit above a breakdown that summed to 9. Minor ones are named for what they are. */}
+              {bySeverity
+                .filter(({ sev }) => sev !== "low" && sev !== "info")
+                .map(({ sev, count }) => (
+                  <span key={sev} className="flex items-center gap-1.5">
+                    <SeverityDot severity={sev} />
+                    <span className="font-semibold tabular-nums">{count}</span>
+                    <span className="text-muted-foreground">{severityLabel(sev)}</span>
+                  </span>
+                ))}
+              {minorCount > 0 && (
+                <span className="text-muted-foreground">
+                  + {minorCount} low-risk {minorCount === 1 ? "suggestion" : "suggestions"}
                 </span>
-              ))}
+              )}
             </p>
           )}
         </div>
-        {fixAll && <div className="shrink-0">{fixAll}</div>}
       </div>
 
       {skippedPrivileged > 0 && (
@@ -912,7 +1033,7 @@ function HomeSummary({
             type="button"
             onClick={onToggleOptions}
             aria-expanded={optionsOpen}
-            className="text-primary underline-offset-2 hover:underline"
+            className="ml-1 text-primary underline-offset-2 hover:underline"
           >
             {optionsOpen ? "Done" : "Change"}
           </button>
@@ -922,8 +1043,70 @@ function HomeSummary({
             {hardening.passing} of {hardening.evaluated} checks pass
           </span>
         )}
-        {host && <span className="truncate font-mono">{host}</span>}
+        {host && (
+          <details className="credential-disclosure">
+            <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded focus-visible:outline-2 focus-visible:outline-primary">
+              <ChevronRight className="disclosure-chevron size-3.5" aria-hidden="true" />
+              Host details
+            </summary>
+            <span className="block pt-1 font-mono">{host}</span>
+          </details>
+        )}
       </div>
     </section>
+  );
+}
+
+/** Shown only before the very first scan: what Bulwark will do, in the order the user does it. */
+function FirstRunGuide({ onScan, onOpenSecrets }: { onScan: () => void; onOpenSecrets: () => void }) {
+  const steps = [
+    {
+      title: "Scan this computer",
+      text: "Checks your AI coding agents, MCP servers, keys, stored credentials and package-manager settings. It only reads; nothing is changed.",
+      action: (
+        <Button size="sm" onClick={onScan}>
+          Start the first scan
+        </Button>
+      ),
+    },
+    {
+      title: "Read what it found",
+      text: "Each problem says what is wrong, why it matters and how to fix it, worst first. A check that could not run is shown as skipped, never as passed.",
+    },
+    {
+      title: "Fix with a preview",
+      text: "Fix now lists every change before anything is written. You confirm, then a new scan shows it worked.",
+    },
+    {
+      title: "See where your secrets live",
+      text: "Secrets lists which tools hold your credentials and whether each is in a keychain or in plain text. Names only, never values.",
+      action: (
+        <Button size="sm" variant="outline" onClick={onOpenSecrets}>
+          Open Secrets
+        </Button>
+      ),
+    },
+  ];
+  return (
+    <ol
+      aria-label="Getting started"
+      className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-card"
+    >
+      {steps.map((step, i) => (
+        <li key={step.title} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
+          <span
+            aria-hidden="true"
+            className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium tabular-nums text-muted-foreground"
+          >
+            {i + 1}
+          </span>
+          <div className="min-w-0 flex-1 basis-64">
+            <p className="text-sm font-medium">{step.title}</p>
+            <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{step.text}</p>
+          </div>
+          {step.action}
+        </li>
+      ))}
+    </ol>
   );
 }

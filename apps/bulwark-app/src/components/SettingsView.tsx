@@ -130,161 +130,225 @@ export function SettingsView({ active = true }: { active?: boolean }) {
   }
 
   return (
-    <PageShell
-      title="Settings"
-      description="How Bulwark looks, how often it checks this computer on its own, and the built-in tools that keep it safe."
-    >
-      <div className="flex flex-col gap-8">
-        <section>
-          <SectionLabel>Appearance</SectionLabel>
-          <p className="mb-3 text-sm leading-relaxed text-muted-foreground">
-            Match Bulwark to your desktop — light or dark, plus an accent and sidebar colour to suit your
-            setup.
-          </p>
-          <AppearanceSettings />
-        </section>
+    <PageShell title="Settings" description="Appearance, schedules and local tool preferences.">
+      <div className="md:grid md:grid-cols-[9.5rem_minmax(0,1fr)] md:gap-8">
+        <SectionIndex />
+        <div className="flex min-w-0 flex-col gap-8">
+          <section id="settings-appearance" className="scroll-mt-28">
+            <SectionLabel>Appearance</SectionLabel>
+            <p className="mb-3 text-sm leading-relaxed text-muted-foreground">
+              Choose a theme, accent and window chrome.
+            </p>
+            <AppearanceSettings />
+          </section>
 
-        <section>
-          <SectionLabel>Continuous monitoring</SectionLabel>
-          <p className="mb-3 text-sm leading-relaxed text-muted-foreground">
-            Bulwark re-runs its unprivileged checks on a timer and tells you when something genuinely new
-            shows up. Not a live kernel-level watch — enough to catch configuration drift without you having
-            to remember to look.
-          </p>
-
-          {status && (
-            <div className="flex flex-col gap-4">
-              <div className="flex items-center justify-between gap-4 rounded-lg border border-border bg-card p-4">
-                <div className="flex items-center gap-3">
-                  <div
-                    className={cn(
-                      "flex h-10 w-10 shrink-0 items-center justify-center rounded-full",
-                      status.enabled ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground",
-                    )}
-                  >
-                    <Radar className={cn("h-5 w-5", status.enabled && "animate-pulse")} strokeWidth={1.75} />
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium">
-                      {status.enabled ? "Monitoring active" : "Monitoring paused"}
-                    </div>
-                    <div className="font-mono text-xs text-muted-foreground">
-                      {status.enabled
-                        ? `Next check in ${formatCountdown(status.next_tick_at, now)}`
-                        : "Not watching for changes"}
-                    </div>
-                  </div>
-                </div>
-                <Switch
-                  checked={status.enabled}
-                  disabled={toggleBusy}
-                  onCheckedChange={toggle}
-                  aria-label="Continuous monitoring"
-                />
-              </div>
-
-              {toggleError && <Callout tone="critical">Couldn't change monitoring: {toggleError}</Callout>}
-
-              <div>
-                <div className="mb-2 text-xs font-medium text-muted-foreground">Check every</div>
-                <div className="flex flex-wrap gap-2">
-                  {INTERVAL_PRESETS.map((m) => (
-                    <Button
-                      key={m}
-                      size="sm"
-                      variant={status.interval_minutes === m ? "default" : "outline"}
-                      onClick={() => setIntervalMinutes(m)}
-                      className="font-mono"
-                    >
-                      {m < 60 ? `${m} min` : `${m / 60} hr`}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-2.5">
-                <Stat icon={CheckCircle2} label="Checks run" value={status.ticks_completed} />
-                <Stat icon={Timer} label="Last check" value={formatRelative(status.last_tick_at, now)} />
-                <Stat icon={Bell} label="New last check" value={status.last_tick_new_findings} />
-              </div>
-
-              <Callout tone="info">
-                Checks that need root — reading <code>/etc/sudoers</code>, for instance — never run
-                unattended, because an unattended loop can't answer a password prompt. Run those from the
-                Overview when Bulwark flags them as skipped.
-              </Callout>
-            </div>
-          )}
-        </section>
-
-        <AiScanSettings active={active} />
-
-        <section id="alerts" className="scroll-mt-28">
-          <SectionLabel>Alerts</SectionLabel>
-          <NotificationsSettings />
-        </section>
-
-        <section>
-          <SectionLabel>SSH hardening</SectionLabel>
-          <p className="mb-3 text-sm text-muted-foreground">
-            One-click fixes for the two most common SSH weaknesses on a workstation — plaintext private keys
-            and loose <code>~/.ssh</code> permissions. Both run on your own files, need no elevation, and keep
-            a backup or preview before touching anything.
-          </p>
-          <SshKeyProtect />
-          <SshPermFix />
-        </section>
-
-        <section>
-          <SectionLabel>About</SectionLabel>
-          <div className="rounded-lg border border-border bg-card p-5">
-            <div className="flex items-center gap-3.5">
-              <ShieldMark className="h-11 w-11 shrink-0 text-primary" />
-              <div>
-                <div className="font-heading text-lg font-semibold tracking-tight">Bulwark</div>
-                <div className="mt-0.5 font-mono text-xs text-muted-foreground">
-                  {version ? `v${version}` : "…"}
-                  {tauriVersion && ` · Tauri ${tauriVersion}`}
-                </div>
-              </div>
-            </div>
-
-            <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
-              A Linux host security scanner with a native CLI and desktop GUI. Bulwark checks a machine's
-              configuration against a declarative rule pack — SSH hardening, systemd and cron persistence,
-              sudoers, kernel and sysctl hardening, file permissions, logging, rootkit indicators — and
-              explains every finding in plain language with a concrete fix, alongside ClamAV virus scanning,
-              file-integrity monitoring, and continuous background checks.
+          <section id="settings-monitoring" className="scroll-mt-28">
+            <SectionLabel>Continuous monitoring</SectionLabel>
+            <p className="mb-3 text-sm leading-relaxed text-muted-foreground">
+              Bulwark re-runs its unprivileged checks on a timer and tells you when something genuinely new
+              shows up. Not a live kernel-level watch — enough to catch configuration drift without you having
+              to remember to look.
             </p>
 
-            <div className="mt-4 grid grid-cols-1 gap-2.5 sm:grid-cols-3">
-              <LinkCard href={REPO_URL} icon={Code2}>
-                Source on GitHub
-              </LinkCard>
-              <LinkCard href={`${REPO_URL}/issues`} icon={FileText}>
-                Report an issue
-              </LinkCard>
-              <div className="flex items-center gap-2.5 rounded-md border border-border px-3 py-2.5 text-sm">
-                <Scale className="h-4 w-4 shrink-0 text-muted-foreground" />
-                Apache-2.0
+            {status && (
+              <div className="flex flex-col gap-4">
+                <div className="flex items-center justify-between gap-4 rounded-lg border border-border bg-card p-4">
+                  <div className="flex items-center gap-3">
+                    <div
+                      className={cn(
+                        "flex h-10 w-10 shrink-0 items-center justify-center rounded-full",
+                        status.enabled ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground",
+                      )}
+                    >
+                      <Radar className={"h-5 w-5"} strokeWidth={1.75} />
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium">
+                        {status.enabled ? "Monitoring active" : "Monitoring paused"}
+                      </div>
+                      <div className="font-mono text-xs text-muted-foreground">
+                        {status.enabled
+                          ? `Next check in ${formatCountdown(status.next_tick_at, now)}`
+                          : "Not watching for changes"}
+                      </div>
+                    </div>
+                  </div>
+                  <Switch
+                    checked={status.enabled}
+                    disabled={toggleBusy}
+                    onCheckedChange={toggle}
+                    aria-label="Continuous monitoring"
+                  />
+                </div>
+
+                {toggleError && <Callout tone="critical">Couldn't change monitoring: {toggleError}</Callout>}
+
+                <div>
+                  <div className="mb-2 text-xs font-medium text-muted-foreground">Check every</div>
+                  <div className="flex flex-wrap gap-2">
+                    {INTERVAL_PRESETS.map((m) => (
+                      <Button
+                        key={m}
+                        size="sm"
+                        variant={status.interval_minutes === m ? "default" : "outline"}
+                        onClick={() => setIntervalMinutes(m)}
+                        className="font-mono"
+                      >
+                        {m < 60 ? `${m} min` : `${m / 60} hr`}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2.5">
+                  <Stat icon={CheckCircle2} label="Checks run" value={status.ticks_completed} />
+                  <Stat icon={Timer} label="Last check" value={formatRelative(status.last_tick_at, now)} />
+                  <Stat icon={Bell} label="New last check" value={status.last_tick_new_findings} />
+                </div>
+
+                <Callout tone="info">
+                  Checks that need root — reading <code>/etc/sudoers</code>, for instance — never run
+                  unattended, because an unattended loop can't answer a password prompt. Run those from the
+                  Scan when Bulwark flags them as skipped.
+                </Callout>
+              </div>
+            )}
+          </section>
+
+          <div id="settings-ai" className="scroll-mt-28">
+            <AiScanSettings active={active} />
+          </div>
+
+          <section id="alerts" className="scroll-mt-28">
+            <SectionLabel>Alerts</SectionLabel>
+            <NotificationsSettings />
+          </section>
+
+          <section id="settings-ssh" className="scroll-mt-28">
+            <SectionLabel>SSH hardening</SectionLabel>
+            <p className="mb-3 text-sm text-muted-foreground">
+              One-click fixes for the two most common SSH weaknesses on a workstation — plaintext private keys
+              and loose <code>~/.ssh</code> permissions. Both run on your own files, need no elevation, and
+              keep a backup or preview before touching anything.
+            </p>
+            <SshKeyProtect />
+            <SshPermFix />
+          </section>
+
+          <section id="settings-about" className="scroll-mt-28">
+            <SectionLabel>About</SectionLabel>
+            <div className="rounded-lg border border-border bg-card p-5">
+              <div className="flex items-center gap-3.5">
+                <ShieldMark className="h-11 w-11 shrink-0 text-primary" />
+                <div>
+                  <div className="font-heading text-lg font-semibold tracking-tight">Bulwark</div>
+                  <div className="mt-0.5 font-mono text-xs text-muted-foreground">
+                    {version ? `v${version}` : "…"}
+                    {tauriVersion && ` · Tauri ${tauriVersion}`}
+                  </div>
+                </div>
+              </div>
+
+              <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
+                Bulwark scans your dev machine for risky AI-agent settings, MCP servers, leaked keys,
+                plain-text credentials and unsafe package-manager configs, in seconds. It explains each
+                problem in plain words, previews every fix before you apply it, and shows which tools hold
+                your credentials without ever reading a value. Nothing leaves your computer.
+              </p>
+
+              <div className="mt-4 grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+                <LinkCard href={REPO_URL} icon={Code2}>
+                  Source on GitHub
+                </LinkCard>
+                <LinkCard href={`${REPO_URL}/issues`} icon={FileText}>
+                  Report an issue
+                </LinkCard>
+                <div className="flex items-center gap-2.5 rounded-md border border-border px-3 py-2.5 text-sm">
+                  <Scale className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  Apache-2.0
+                </div>
               </div>
             </div>
-          </div>
-        </section>
+          </section>
 
-        <section>
-          <SectionLabel>How Bulwark compares</SectionLabel>
-          <div className="overflow-hidden rounded-lg border border-border bg-card">
-            {COMPARISON.map(({ name, note }, i) => (
-              <div key={name} className={cn("px-4 py-3", i > 0 && "border-t border-border")}>
-                <div className="text-sm font-medium">{name}</div>
-                <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{note}</p>
-              </div>
-            ))}
-          </div>
-        </section>
+          <section id="settings-compare" className="scroll-mt-28">
+            <SectionLabel>How Bulwark compares</SectionLabel>
+            <div className="overflow-hidden rounded-lg border border-border bg-card">
+              {COMPARISON.map(({ name, note }, i) => (
+                <div key={name} className={cn("px-4 py-3", i > 0 && "border-t border-border")}>
+                  <div className="text-sm font-medium">{name}</div>
+                  <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{note}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
       </div>
     </PageShell>
+  );
+}
+
+const SECTIONS = [
+  ["settings-appearance", "Appearance"],
+  ["settings-monitoring", "Monitoring"],
+  ["settings-ai", "AI assistants"],
+  ["alerts", "Alerts"],
+  ["settings-ssh", "SSH hardening"],
+  ["settings-about", "About"],
+  ["settings-compare", "Comparison"],
+] as const;
+
+/** Settings runs to several screens; this keeps every section one click away. A sticky list beside
+ *  the content at normal widths, a scrollable chip row at the minimum window width. The current
+ *  section follows scrolling so the list doubles as a "where am I". */
+function SectionIndex() {
+  const [current, setCurrent] = useState<string>(SECTIONS[0][0]);
+  useEffect(() => {
+    const first = document.getElementById(SECTIONS[0][0]);
+    const viewport = first?.closest("[data-slot=scroll-area-viewport]");
+    if (!viewport) return;
+    const onScroll = () => {
+      const top = viewport.getBoundingClientRect().top + 120;
+      let active: string = SECTIONS[0][0];
+      for (const [id] of SECTIONS) {
+        const el = document.getElementById(id);
+        if (el && el.getBoundingClientRect().top <= top) active = id;
+      }
+      // At the very bottom the last short sections can never reach the top; mark the last one.
+      if (viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 4)
+        active = SECTIONS[SECTIONS.length - 1][0];
+      setCurrent(active);
+    };
+    viewport.addEventListener("scroll", onScroll, { passive: true });
+    return () => viewport.removeEventListener("scroll", onScroll);
+  }, []);
+  const jump = (id: string) => {
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    document.getElementById(id)?.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+    setCurrent(id);
+  };
+  return (
+    <nav
+      aria-label="Settings sections"
+      className="-mx-1 mb-5 flex gap-1 overflow-x-auto px-1 pb-1 md:sticky md:top-24 md:mx-0 md:mb-0 md:h-fit md:flex-col md:overflow-visible md:px-0"
+    >
+      {SECTIONS.map(([id, label]) => (
+        <button
+          key={id}
+          type="button"
+          onClick={() => jump(id)}
+          aria-current={current === id ? "location" : undefined}
+          className={cn(
+            "shrink-0 whitespace-nowrap rounded-md px-2.5 py-1.5 text-left text-xs transition-colors focus-visible:outline-2 focus-visible:outline-primary",
+            current === id
+              ? "bg-muted font-medium text-foreground"
+              : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+          )}
+        >
+          {label}
+        </button>
+      ))}
+    </nav>
   );
 }
 

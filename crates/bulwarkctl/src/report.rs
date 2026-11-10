@@ -602,11 +602,13 @@ pub fn render(scan: &ScanRun, ignores: &Ignores, opts: &ReportOptions) -> String
         ));
     }
     for e in &scan.collector_errors {
-        gaps.push(st.yellow(&format!(
-            "{} failed: {}",
-            e.collector,
-            clip(&safe(&e.message), 140)
-        )));
+        // One unreadable file is a skipped check, said in its own words; anything else is a
+        // collector that failed.
+        gaps.push(st.yellow(&if e.skipped {
+            clip(&safe(&e.message), 200)
+        } else {
+            format!("{} failed: {}", e.collector, clip(&safe(&e.message), 140))
+        }));
     }
     for e in &scan.rule_load_errors {
         gaps.push(st.yellow(&format!(

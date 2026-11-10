@@ -1,3 +1,4 @@
+mod access;
 mod ai_security;
 mod machines;
 mod monitoring;
@@ -81,6 +82,8 @@ enum ScanEvent {
     CollectorError {
         collector: String,
         message: String,
+        /// One file that could not be checked, as opposed to a collector that failed.
+        skipped: bool,
     },
     PrivilegedSkipped {
         collectors: Vec<String>,
@@ -324,6 +327,7 @@ async fn scan_start(
             let _ = on_event.send(ScanEvent::CollectorError {
                 collector: e.collector.clone(),
                 message: e.message.clone(),
+                skipped: e.skipped,
             });
         }
         if !scan.privileged_collectors_skipped.is_empty() {
@@ -1273,6 +1277,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            access::access_aws_snapshot,
+            access::secrets_detect,
+            access::secrets_inventory,
             host_platform,
             custom_rules_info,
             custom_rules_open,
