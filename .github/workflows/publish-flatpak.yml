@@ -95,13 +95,22 @@ jobs:
       - name: GUI launch test (the CLI smoke test cannot catch a GUI crash)
         run: |
           set -uo pipefail
-          sudo apt-get install -y -qq xvfb imagemagick x11-apps >/dev/null
+          sudo apt-get install -y -qq xvfb imagemagick x11-apps dbus >/dev/null
           export DISPLAY=:99
           Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 &
           sleep 3
+          # A session bus, as every desktop has. Without one the app starts anyway and skips
+          # single-instance, so this test could never notice a sandbox that refuses the app
+          # its bus name: it passed for months while the manifest granted a name the app had
+          # stopped asking for.
+          BUS="$(dbus-daemon --session --fork --print-address=1 --print-pid=1)"
+          DBUS_SESSION_BUS_ADDRESS="$(printf '%s\n' "$BUS" | sed -n 1p)"
+          BUS_PID="$(printf '%s\n' "$BUS" | sed -n 2p)"
+          export DBUS_SESSION_BUS_ADDRESS
+          [ -n "$DBUS_SESSION_BUS_ADDRESS" ] || { echo "FAIL: could not start a session bus"; exit 1; }
           # No --socket overrides: run it exactly as a user would, so a missing runtime
           # library or a wrong permission fails here rather than on someone's desktop.
-          timeout 60 flatpak run com.vietanhdev.bulwark >"$RUNNER_TEMP/gui.log" 2>&1 &
+          timeout 120 flatpak run com.vietanhdev.bulwark >"$RUNNER_TEMP/gui.log" 2>&1 &
           APP_PID=$!
           sleep 25
           echo "----- GUI output -----"; cat "$RUNNER_TEMP/gui.log"; echo "----------------------"
@@ -134,7 +143,25 @@ jobs:
             echo "WARN: no screenshot captured; rendering not verified"
           fi
 
+          # Starting it again must hand over to the running app and exit, not open a second
+          # one. This is the only check that proves the sandbox lets the app own its
+          # single-instance bus name (<app-id>.SingleInstance), which the manifest no longer
+          # declares because Flatpak grants an app the names under its own id.
+          if kill -0 $APP_PID 2>/dev/null; then
+            timeout 20 flatpak run com.vietanhdev.bulwark >"$RUNNER_TEMP/second.log" 2>&1
+            rc=$?
+            if [ "$rc" -eq 0 ]; then
+              echo "second launch handed over to the first and exited"
+            else
+              echo "FAIL: a second launch did not hand over to the running app (exit $rc)"
+              sed 's/^/  second: /' "$RUNNER_TEMP/second.log" | head -20
+              fail=1
+            fi
+            kill -0 $APP_PID 2>/dev/null || { echo "FAIL: the first app died when a second was started"; fail=1; }
+          fi
+
           kill $APP_PID 2>/dev/null || true
+          kill "$BUS_PID" 2>/dev/null || true
           [ $fail -eq 0 ] && echo "GUI launch OK"
           exit $fail
 

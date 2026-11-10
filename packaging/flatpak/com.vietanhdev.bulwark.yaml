@@ -9,10 +9,10 @@
 # scripts/flatpak-gen-sources.sh into cargo-sources.json + node-sources.json.
 
 app-id: com.vietanhdev.bulwark
-# tauri.conf.json's identifier matches this exactly, and must keep matching: Flathub's
-# linter rejects owning a D-Bus name outside the app-id prefix, and the single-instance
-# name below is derived from the identifier. They disagreed until 0.8.6 (a `vietanhnv`
-# typo), which is what finally forced the rename.
+# tauri.conf.json's identifier matches this exactly, and must keep matching: the app's
+# single-instance bus name is <identifier>.SingleInstance, and Flatpak grants an app the
+# names under its own app-id, and only those, without a finish-arg. They disagreed until
+# 0.8.6 (a `vietanhnv` typo), which is what finally forced the rename.
 
 runtime: org.gnome.Platform
 runtime-version: '50'
@@ -69,28 +69,23 @@ finish-args:
   # If a blank or corrupted window ever reappears on some driver, they are the usual
   # workarounds (tauri-apps/tauri#8970, #10626) — but reach for them with evidence, and
   # prefer per-user `flatpak override` over shipping the cost to everyone.
-  # tauri-plugin-single-instance claims a session-bus name at startup, and Flatpak blocks
-  # owning any name the manifest does not declare, so this declaration is required for the
-  # plugin to work at all. It does NOT explain the blank window that was being chased when
-  # it was added: a refused name ownership returns org.freedesktop.DBus.Error.AccessDenied,
-  # a bus error, never a portal error. That was --share=network (see above). Documented at
-  # https://v2.tauri.app/plugin/single-instance/#usage-in-snap-and-flatpak
+  # No --own-name for single-instance, on purpose.
   #
-  # The name is derived from tauri.conf.json's *identifier*, with dots and dashes turned
-  # into underscores. It must match what the binary actually asks for, so never edit it
-  # here alone — change the identifier and let check-packaging-consistency.sh re-derive it.
-  # Flathub additionally requires an owned name to sit under the app-id, which is why the
-  # identifier had to stop being com.vietanhnv.bulwark.
+  # tauri-plugin-single-instance claims a session-bus name at startup. Since plugin 2.4 that
+  # name is <identifier>.SingleInstance, here com.vietanhdev.bulwark.SingleInstance, and
+  # Flatpak lets every app own its own app-id and any name under it without being asked. So
+  # nothing has to be declared, as long as the Tauri identifier equals the app-id (which
+  # check-packaging-consistency.sh asserts).
   #
-  # ORDER MATTERS, and not in a way the manifest hints at. Both flags write the same key
-  # in the built metadata, so the last one wins — and `own` is strictly stronger than
-  # `talk`. Listing own-name first (as this file did) silently produced
-  #   org.com_vietanhdev_bulwark.SingleInstance=talk
-  # and the plugin still could not claim the name, so the app stayed broken while the
-  # manifest looked correct. Keep talk-name first, exactly as the Tauri docs show it.
-  # Verify with: flatpak info --show-permissions com.vietanhdev.bulwark  (must read `=own`)
-  - --talk-name=org.com_vietanhdev_bulwark.SingleInstance
-  - --own-name=org.com_vietanhdev_bulwark.SingleInstance
+  # This file used to carry
+  #   --talk-name=org.com_vietanhdev_bulwark.SingleInstance
+  #   --own-name=org.com_vietanhdev_bulwark.SingleInstance
+  # the name the plugin used BEFORE 2.4 ("org." + the identifier with underscores). The
+  # plugin stopped asking for it, the grant stayed, and the consistency check kept deriving
+  # the old spelling, so a permission nothing used was asserted on every run. It was also one
+  # of the three finish-args Flathub's linter rejects (an owned name outside the app-id).
+  # publish-flatpak.yml starts the app twice on a session bus to prove a second launch hands
+  # over to the first without it.
   # Run two specific tools on the host, because neither can live in the sandbox.
   #
   # flatpak-builder-lint flags this, and rightly — it is a genuine widening. The case:

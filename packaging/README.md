@@ -332,10 +332,16 @@ Three things follow from that choice:
   strips them from every system program the app starts. It keys on `APPDIR`, which the
   launcher sets, so it already covers the snap.
 
+**No `plugs:` or `slots:`.** The Snap Store rejects them on a classic snap
+("confinement 'classic' not allowed with plugs/slots"), and an unconfined app needs none:
+it claims its single-instance bus name like any other program. An earlier recipe declared
+a dbus slot and plug for it, and every upload would have been refused for that alone.
+
 **The GUI is launch-tested, not inferred from the CLI.** `scripts/test-snap-gui.sh` starts
 the installed snap on a virtual display on a runner with no WebKit of its own, and fails
 unless the app resolves its rules, loads the embedded frontend, runs the snap's own
-`WebKitWebProcess`, paints a real interface and stops when asked. `ci.yml`'s `snap-build`
+`WebKitWebProcess`, paints a real interface, hands a second launch over to the first
+(on a session bus the test starts) and stops when asked. `ci.yml`'s `snap-build`
 job runs it on every pull request and `publish-snap.yml` runs it before the upload step.
 The old checks drove only `bulwark.cli`, which shares a folder with the GUI and none of
 its code; that is how the broken snap stayed green.
@@ -460,26 +466,33 @@ Finally: fork `flathub/flathub` (**uncheck** "copy the master branch only"), bra
 off `new-pr`, copy the staged files in, and open the PR against the **`new-pr` base
 branch** — not `master`.
 
-#### The three permissions Flathub will argue with
+#### The permissions Flathub will argue with
 
-`appstream` passes clean. `manifest` reports three errors, none of them bugs to
-silently paper over:
+`appstream` passes clean. `manifest` reported three errors. One is gone because the
+manifest no longer asks for it; the other two are not bugs to silently paper over:
 
 | Linter error | Status |
 |---|---|
 | `finish-args-host-ro-filesystem-access` | **Needs an exception.** `--filesystem=host:ro` is the product: an auditor that cannot read the host's `/etc` has nothing to audit. Never drop it to quiet the linter — that ships a scanner which silently sees nothing. |
 | `finish-args-flatpak-spawn-access` | **Needs an exception, and there is a precedent against it.** It exists for host `clamscan` and `flatpak-spawn --host pkexec` privileged scans. See below. |
-| `finish-args-own-name-org.com_vietanhdev_bulwark.SingleInstance` | **Needs an exception.** Buys only window re-focus on relaunch — the weakest of the three, and the obvious one to drop. See below. |
+| `finish-args-own-name-org.com_vietanhdev_bulwark.SingleInstance` | **Removed (after 0.15.0).** The manifest no longer declares this name. See below. Re-run the linter on the generated submission to confirm before relying on it. |
 
-**The bus-name error is not the one the app-id rename fixed, and this is easy to get
-wrong.** `tauri-plugin-single-instance` builds its name as `org.` + identifier with
-dots and dashes turned into underscores, so the app owns
-`org.com_vietanhdev_bulwark.SingleInstance` — which begins `org.`, not
-`com.vietanhdev.bulwark`, and so sits outside the app-id prefix no matter what the
-identifier says. Renaming away from `com.vietanhnv.bulwark` was still necessary for
-consistency, but it did not clear this error and cannot. Note that
-`scripts/check-packaging-consistency.sh` reports this name `ok`: it verifies the name
-agrees with the identifier, not that Flathub will accept it. Different question.
+**The bus-name error came from a permission nothing used.** `tauri-plugin-single-instance`
+used to build its name as `org.` + identifier with dots and dashes turned into
+underscores (`org.com_vietanhdev_bulwark.SingleInstance`), which sits outside the app-id
+prefix no matter what the identifier says, hence the lint error. Plugin 2.4 changed the
+name to `<identifier>.SingleInstance`, here `com.vietanhdev.bulwark.SingleInstance`, and
+Flatpak lets an app own its app-id and anything under it without a finish-arg. The app
+moved to the new name with a dependency update; the manifest kept granting the old one,
+and `scripts/check-packaging-consistency.sh` kept deriving the old spelling and reporting
+it `ok`. It surfaced only when the Snap Store rejected an upload over the same
+declaration.
+
+Now: neither manifest declares a single-instance name, the consistency check fails if one
+comes back, and both launch tests start the app twice on a session bus and require the
+second launch to hand over to the first. Those tests had no session bus before, so
+single-instance was never exercised by CI at all. What must stay true is that the Tauri
+identifier equals the Flatpak app-id.
 
 **The `pkexec` path has been refused before.** flatpak-builder-lint#1037 (OneKey),
 from a Flathub maintainer: *"You aren't going to get an exception for launching
@@ -498,7 +511,7 @@ Before submitting, read Flathub's linter-exceptions policy in full. Verbatim:
 > arbitrary bus name access will not be granted if there are signs of LLM usage in
 > the software** or in the exception PR.
 
-All three of Bulwark's lint errors are in that named list, and the test is "signs of
+Both of Bulwark's remaining lint errors are in that named list, and the test is "signs of
 LLM usage **in the software**", not merely in the PR text. This is a stricter rule
 than the general generative-AI policy in the submission requirements, and unlike
 that one it carries no mature-project carve-out. The stated penalty is *permanent*
