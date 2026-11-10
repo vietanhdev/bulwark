@@ -13,6 +13,6 @@ pkgbase = bulwarkctl
 	optdepends = curl: Telegram and e-mail alerts (bulwarkctl notify)
 	options = !lto
 	source = bulwarkctl-0.15.0.tar.gz::https://github.com/vietanhdev/bulwark/archive/refs/tags/v0.15.0.tar.gz
-	sha256sums = 177ff272d6e43c9a3bbdae028a3424f14ee3b07ef64cb47426bcf3d59ba8c040
+	sha256sums = 765d15a0052f9177697dc55d61ed96c4ba45b8143dd3437bf4cff12476138bb2
 
 pkgname = bulwarkctl
