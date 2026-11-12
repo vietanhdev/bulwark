@@ -10,6 +10,15 @@ name: Publish PPA (CLI)
 # Launchpad reports rejections and build failures only by email; the wait turns them into a
 # red run here.
 #
+# Three jobs, so that a red run can be resumed without uploading again:
+#   publish-ppa     builds, signs and uploads (the irreversible part)
+#   wait-published  waits for Launchpad; no secrets, uploads nothing
+#   install-test    installs from the live PPA
+# Launchpad's build queue can be longer than a job may run (0.15.0 waited about seven hours
+# for an x86_64 builder), and then the wait ends red with nothing wrong. "Re-run failed jobs"
+# starts the wait again and leaves the upload alone. "Re-run all jobs" would upload the same
+# source once more under the next revision, so the upload job refuses that.
+#
 # Required repository secrets:
 #   LAUNCHPAD_GPG_PRIVATE_KEY  — ASCII-armored private key registered on the
 #                                Launchpad account that owns ppa:vietanhng/bulwark.
@@ -42,10 +51,11 @@ jobs:
   publish-ppa:
     if: github.triggering_actor == 'vietanhdev'
     runs-on: ubuntu-24.04
-    # Launchpad builds the vendored Rust tree from scratch; arm64 can take well over an hour.
-    timeout-minutes: 300
+    timeout-minutes: 90
     outputs:
       series: ${{ steps.upload.outputs.series }}
+      upstream: ${{ steps.upload.outputs.upstream }}
+      ppa_rev: ${{ steps.upload.outputs.ppa_rev }}
     steps:
       - uses: actions/checkout@v7
 
@@ -108,10 +118,23 @@ jobs:
         run: |
           set -euo pipefail
           UPSTREAM=$(python3 -c 'import re;print(re.search(r"\[workspace\.package\][^\[]*?version\s*=\s*\"([^\"]+)\"",open("Cargo.toml").read(),re.S).group(1))')
-          [ "$PPA_REV" = "auto" ] && PPA_REV=$(scripts/ppa-launchpad.py next-rev --upstream "$UPSTREAM")
+          if [ "$PPA_REV" = "auto" ]; then
+            # A second attempt of this job means "Re-run all jobs" (or a re-run after the upload
+            # itself failed). If a revision of this version already reached Launchpad for every
+            # series asked for, the upload happened: uploading again would only publish the same
+            # source as the next revision, which cannot be taken back.
+            if [ "$GITHUB_RUN_ATTEMPT" -gt 1 ] && [ "$DRY_RUN" != "true" ]; then
+              have=$(scripts/ppa-launchpad.py complete-rev --upstream "$UPSTREAM" --series "$SERIES")
+              if [ -n "$have" ]; then
+                echo "::error::Launchpad already has $UPSTREAM revision $have for every series ($SERIES), so this re-run would upload the same source again as revision $((have + 1)). To keep waiting for the builds, use 'Re-run failed jobs'. To check what is live, run the 'Test PPA package' workflow. To upload a new revision on purpose, start a new run."
+                exit 1
+              fi
+            fi
+            PPA_REV=$(scripts/ppa-launchpad.py next-rev --upstream "$UPSTREAM")
+          fi
           echo "upstream $UPSTREAM, PPA revision $PPA_REV"
-          echo "UPSTREAM=$UPSTREAM" >> "$GITHUB_ENV"
-          echo "PPA_REV=$PPA_REV" >> "$GITHUB_ENV"
+          echo "upstream=$UPSTREAM" >> "$GITHUB_OUTPUT"
+          echo "ppa_rev=$PPA_REV" >> "$GITHUB_OUTPUT"
           echo "series=$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1].split()))' "$SERIES")" >> "$GITHUB_OUTPUT"
           # A version has ONE .orig, shared by every series and revision. If Launchpad already
           # has it, build from those exact bytes (a tree rebuilt from this commit would differ
@@ -179,15 +202,28 @@ jobs:
             echo "::endgroup::"
           done
 
+  # Its own job on purpose: it holds no secret and uploads nothing, so it is safe to run again
+  # ("Re-run failed jobs") when Launchpad's queue outlasts it.
+  wait-published:
+    needs: publish-ppa
+    if: github.triggering_actor == 'vietanhdev' && github.event.inputs.dry_run != 'true'
+    runs-on: ubuntu-24.04
+    # Launchpad builds the vendored Rust tree from scratch; arm64 can take well over an hour,
+    # and either architecture can sit in the queue for hours before that.
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v7
+
       - name: Wait for Launchpad to accept, build and publish every series
-        if: github.event.inputs.dry_run != 'true'
         env:
           SERIES: ${{ github.event.inputs.series }}
+          UPSTREAM: ${{ needs.publish-ppa.outputs.upstream }}
+          PPA_REV: ${{ needs.publish-ppa.outputs.ppa_rev }}
         run: scripts/ppa-launchpad.py wait --upstream "$UPSTREAM" --rev "$PPA_REV" --series "$SERIES" --timeout-min 270
 
   # Install what users get: the published package, from the live PPA, on both architectures.
   install-test:
-    needs: publish-ppa
+    needs: [publish-ppa, wait-published]
     if: github.triggering_actor == 'vietanhdev' && github.event.inputs.dry_run != 'true'
     strategy:
       fail-fast: false
@@ -196,3 +232,4 @@ jobs:
     uses: ./.github/workflows/test-ppa.yml
     with:
       series: ${{ matrix.series }}
+      expect_upstream: ${{ needs.publish-ppa.outputs.upstream }}

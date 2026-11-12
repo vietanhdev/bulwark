@@ -5,6 +5,8 @@ Launchpad answers an upload by email, never by failing the dput, so without thes
 a rejected or failed upload looks exactly like a successful one in CI. Subcommands:
 
   next-rev   --upstream V                  print the next free PPA revision for V
+  complete-rev --upstream V --series "a b" print the highest revision of V that Launchpad
+                                           accepted for every listed series, or nothing
   fetch-orig --upstream V --out DIR        download V's published .orig into DIR, verified
                                            against its .dsc; prints the path, or nothing if
                                            V has never been uploaded
@@ -76,6 +78,19 @@ def rev_of(version):
 def cmd_next_rev(a):
     revs = [rev_of(s["source_package_version"]) for s in sources(a.upstream)]
     print(max(revs, default=0) + 1)
+
+
+def cmd_complete_rev(a):
+    wanted = set(a.series.split())
+    by_rev = {}
+    for s in sources(a.upstream):
+        version = s["source_package_version"]
+        m = re.search(r"-0ppa(\d+)~([a-z]+)1$", version)
+        if m:
+            by_rev.setdefault(int(m.group(1)), set()).add(m.group(2))
+    complete = [rev for rev, series in by_rev.items() if wanted <= series]
+    if wanted and complete:
+        print(max(complete))
 
 
 def cmd_fetch_orig(a):
@@ -153,7 +168,9 @@ def cmd_wait(a):
             return
         if time.time() > deadline:
             sys.exit(f"::error::timed out after {a.timeout_min} min waiting for "
-                     f"{', '.join(sorted(set(pending) - done))}")
+                     f"{', '.join(sorted(set(pending) - done))}. Nothing failed: Launchpad has "
+                     "not finished building or publishing. 'Re-run failed jobs' waits again "
+                     "without uploading anything.")
         time.sleep(POLL_SECONDS)
 
 
@@ -163,6 +180,10 @@ def main():
     s = sub.add_parser("next-rev")
     s.add_argument("--upstream", required=True)
     s.set_defaults(fn=cmd_next_rev)
+    s = sub.add_parser("complete-rev")
+    s.add_argument("--upstream", required=True)
+    s.add_argument("--series", required=True)
+    s.set_defaults(fn=cmd_complete_rev)
     s = sub.add_parser("fetch-orig")
     s.add_argument("--upstream", required=True)
     s.add_argument("--out", required=True)

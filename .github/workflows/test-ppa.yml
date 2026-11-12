@@ -9,22 +9,33 @@ name: Test PPA package (live install)
 #
 # Run it AFTER a series' build has published in the PPA (a freshly-uploaded series
 # 403s on apt update until its first binary is published). Manual + weekly.
+#
+# It also checks WHICH version was installed. Launchpad builds each architecture on its own
+# queue, so for hours after an upload one architecture can serve the new version while the
+# other still serves the previous one, and a build that fails on one architecture leaves it
+# there for good (Launchpad reports that by email only). An install test that accepts any
+# version passes through all of that: it did, on 0.15.0, with arm64 on 0.15.0 and x86_64 on
+# 0.13.0. So the installed package must be the newest source the PPA publishes for the series.
 on:
   workflow_dispatch:
     inputs:
       series:
-        description: "Ubuntu series codename to test (must be published in the PPA)"
+        description: "Ubuntu series to test (must be published in the PPA)"
         type: choice
-        options: [resolute, noble, stonking]
-        default: resolute
+        options: [all, noble, resolute, stonking]
+        default: all
   # Called by publish-ppa.yml once every series it uploaded is built and published.
   workflow_call:
     inputs:
       series:
         type: string
         required: true
+      expect_upstream:
+        description: "Upstream version that must be installed (e.g. 0.15.0)"
+        type: string
+        default: ""
   schedule:
-    - cron: "17 6 * * 1" # weekly — catch a PPA that silently stops working
+    - cron: "17 6 * * 1" # weekly, every series: catch a PPA that silently stops working
 
 permissions:
   contents: read
@@ -44,13 +55,17 @@ jobs:
       # A series that published one arch but not the other should say which one broke.
       fail-fast: false
       matrix:
+        # One series when it is named; all of them for `all` and for the weekly run, which
+        # has no inputs. Keep this list in step with publish-ppa.yml's default.
+        series: ${{ fromJSON((inputs.series == '' || inputs.series == 'all') && '["noble","resolute","stonking"]' || format('["{0}"]', inputs.series)) }}
+        arch: [x86_64, aarch64]
         include:
           - { arch: x86_64,  runner: ubuntu-24.04 }
           - { arch: aarch64, runner: ubuntu-24.04-arm }
-    name: install-from-ppa (${{ matrix.arch }})
+    name: install-from-ppa (${{ matrix.series }}, ${{ matrix.arch }})
     # Clean container of the target series (Ubuntu images carry codename tags, and are
     # multi-arch, so this resolves to the runner's architecture).
-    container: ubuntu:${{ inputs.series || 'resolute' }}
+    container: ubuntu:${{ matrix.series }}
     steps:
       - name: Add the PPA and install bulwarkctl
         run: |
@@ -62,11 +77,40 @@ jobs:
             echo "::error::expected ${{ matrix.arch }} but this runner is $(uname -m)"; exit 1; }
           apt-get update
           apt-get install -y --no-install-recommends software-properties-common ca-certificates
-          add-apt-repository -y ppa:vietanhng/bulwark
+          # -s also enables the PPA's source index, which the version check below reads.
+          add-apt-repository -y -s ppa:vietanhng/bulwark
           apt-get update
           # --no-install-recommends skips the optional clamav to keep the test lean;
           # bulwarkctl works fully without it.
           apt-get install -y --no-install-recommends bulwarkctl
+
+      - name: The installed version is the one the PPA publishes
+        env:
+          SERIES: ${{ matrix.series }}
+          ARCH: ${{ matrix.arch }}
+          EXPECT_UPSTREAM: ${{ inputs.expect_upstream }}
+        run: |
+          set -eu
+          installed=$(dpkg-query -W -f='${Version}' bulwarkctl)
+          # The newest source the PPA publishes for this series, from apt's own (signed) index.
+          published=""
+          for v in $(apt-cache showsrc bulwark | awk '$1 == "Version:" {print $2}'); do
+            if [ -z "$published" ] || dpkg --compare-versions "$v" gt "$published"; then published=$v; fi
+          done
+          echo "installed: $installed    published source: ${published:-none}"
+          [ -n "$published" ] || { echo "::error::the PPA's source index lists no 'bulwark' for $SERIES"; exit 1; }
+          if [ "$installed" != "$published" ]; then
+            echo "::error::$SERIES $ARCH installs $installed, but the PPA publishes $published. This architecture's build is still queued, failed, or not published yet: https://launchpad.net/~vietanhng/+archive/ubuntu/bulwark/+packages"
+            exit 1
+          fi
+          upstream=${installed%%-*}
+          if [ -n "$EXPECT_UPSTREAM" ] && [ "$upstream" != "$EXPECT_UPSTREAM" ]; then
+            echo "::error::expected $EXPECT_UPSTREAM, but $SERIES $ARCH installs $installed"; exit 1
+          fi
+          # The binary must report the version its package claims.
+          reported=$(bulwarkctl --version)
+          [ "$reported" = "bulwarkctl $upstream" ] || {
+            echo "::error::package $installed contains a binary that reports '$reported'"; exit 1; }
 
       - name: Smoke-test the installed package
         run: |
@@ -81,4 +125,4 @@ jobs:
           grep -q '"rules_loaded"' /tmp/scan.json
           grep -q '"rules_loaded": *0' /tmp/scan.json && { echo "::error::scan loaded 0 rules"; exit 1; } || true
           bulwarkctl fix list | grep -i "Available autofixes" >/dev/null && echo "fix preview OK"
-          echo "PPA package installs and runs on ${{ inputs.series || 'resolute' }} (${{ matrix.arch }}) ✅"
+          echo "PPA package installs and runs on ${{ matrix.series }} (${{ matrix.arch }}) ✅"

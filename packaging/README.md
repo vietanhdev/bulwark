@@ -468,14 +468,42 @@ branch** — not `master`.
 
 #### The permissions Flathub will argue with
 
-`appstream` passes clean. `manifest` reported three errors. One is gone because the
-manifest no longer asks for it; the other two are not bugs to silently paper over:
+`appstream` passes clean. `manifest` reported three errors when this section was first
+written. One is gone because the manifest no longer asks for it; the other two are not bugs
+to silently paper over:
 
 | Linter error | Status |
 |---|---|
 | `finish-args-host-ro-filesystem-access` | **Needs an exception.** `--filesystem=host:ro` is the product: an auditor that cannot read the host's `/etc` has nothing to audit. Never drop it to quiet the linter — that ships a scanner which silently sees nothing. |
 | `finish-args-flatpak-spawn-access` | **Needs an exception, and there is a precedent against it.** It exists for host `clamscan` and `flatpak-spawn --host pkexec` privileged scans. See below. |
-| `finish-args-own-name-org.com_vietanhdev_bulwark.SingleInstance` | **Removed (after 0.15.0).** The manifest no longer declares this name. See below. Re-run the linter on the generated submission to confirm before relying on it. |
+| `finish-args-own-name-org.com_vietanhdev_bulwark.SingleInstance` | **Removed (after 0.15.0).** The manifest no longer declares this name. See below. |
+
+**What the linter says now (re-run on 2026-11-11).** The linter has changed since the table
+above was written. Its current container image (`ghcr.io/flathub/flatpak-builder-lint`,
+3.0.0 development build), run on the in-repo manifest with the pinned `shared-modules`
+checked out, reports the same thing for the manifest shipped in 0.15.0 and for today's:
+
+- `finish-args-flatpak-spawn-access` as a **warning**, no longer an error
+- nothing for `--filesystem=host:ro`, and nothing for a bus name outside the app-id (its
+  source now has an error only for the opposite case, a name *under* the app-id declared
+  needlessly, which is one more reason not to add the new single-instance name)
+- `runtime-update-available-to-org.gnome.Platform-51` as a warning: the manifest is on
+  GNOME 50. Moving to 51 changes the bundled WebKitGTK, so do it only with a build and the
+  launch test in `publish-flatpak.yml`, never as a one-line bump
+- `manifest-json-warnings` as an error, only because the in-repo manifest was linted without
+  its generated `cargo-sources.json` and `node-sources.json`; lint the generated submission
+  to get a result without it
+
+So the linter no longer blocks on the two permissions. That is a fact about the tool only:
+the inclusion policy and the exceptions policy quoted in this file are applied by reviewers,
+and they were not re-read for this check. To repeat it:
+
+```bash
+git submodule update --init packaging/flatpak/shared-modules
+docker run --rm -v "$PWD/packaging/flatpak:/work" -w /work \
+  ghcr.io/flathub/flatpak-builder-lint:latest manifest com.vietanhdev.bulwark.yaml
+# it writes a .flatpak-builder folder into packaging/flatpak; remove it afterwards
+```
 
 **The bus-name error came from a permission nothing used.** `tauri-plugin-single-instance`
 used to build its name as `org.` + identifier with dots and dashes turned into
@@ -563,9 +591,14 @@ is always a deliberate click.
 
 | Workflow | What it does | Secrets used |
 |---|---|---|
-| `publish-ppa.yml` | Builds the signed source package(s), `dput`s them to `ppa:vietanhng/bulwark`, waits until Launchpad has accepted, built and published every series on every enabled architecture, then runs `test-ppa.yml` against the live PPA. Inputs: `series`, `ppa_rev` (`auto` picks the next free revision), `dry_run`. A re-upload of a version reuses its published `.orig`, so it can run from any commit. | `LAUNCHPAD_GPG_PRIVATE_KEY`, `LAUNCHPAD_GPG_PASSPHRASE` |
+| `publish-ppa.yml` | Builds the signed source package(s), `dput`s them to `ppa:vietanhng/bulwark`, waits until Launchpad has accepted, built and published every series on every enabled architecture, then runs `test-ppa.yml` against the live PPA. The wait is a job of its own: when Launchpad's queue outlasts it (0.15.0 waited about seven hours for an x86_64 builder) the run ends red with nothing wrong, and **Re-run failed jobs** waits again without uploading. **Re-run all jobs** is refused once a revision has reached Launchpad for every series, because it would upload the same source again as the next revision. Inputs: `series`, `ppa_rev` (`auto` picks the next free revision), `dry_run`. A re-upload of a version reuses its published `.orig`, so it can run from any commit. | `LAUNCHPAD_GPG_PRIVATE_KEY`, `LAUNCHPAD_GPG_PASSPHRASE` |
 | `publish-snap.yml` | Builds the snap and releases to a channel. Input: `channel` (default `edge`). | `SNAPCRAFT_STORE_CREDENTIALS` |
 | `publish-flatpak.yml` | Builds `bulwark.flatpak`, uploads it as an artifact; attaches to a release if `release_tag` is given. | none |
+
+`test-ppa.yml` (manual, weekly, and called by `publish-ppa.yml`) installs from the live PPA on
+every series and both architectures, and fails unless the installed package is the newest
+source the PPA publishes for that series. Without that comparison it passes while one
+architecture still serves the previous release.
 
 ### GPG signing key (PPA) — already provisioned
 
@@ -610,6 +643,19 @@ finding:
 Nothing else is flagged, so the one remaining step is the forum request below, which a
 person has to write and post. An earlier upload was also refused for a dbus slot and plug
 ("confinement 'classic' not allowed with plugs/slots"); the recipe no longer declares any.
+
+A store reviewer then looked at that upload (revision 2) and set it to **Rejected**, with the
+standard note: make a request in the forum, following
+<https://forum.snapcraft.io/t/process-for-reviewing-classic-confinement-snaps/1460>. That
+page says a request is a new topic of its own (replies under the process topic are not
+reviewed), that the publisher is vetted as well as the snap, and that only the first upload
+is reviewed once classic is granted. Until then every run of `publish-snap.yml` ends red at
+its last step, after a build and a launch test that pass; running it again changes nothing.
+
+The request was posted on 2026-11-12:
+<https://forum.snapcraft.io/t/classic-confinement-request-for-bulwark/54165>. It says that no
+supported category fits and asks, if the answer is strict confinement, which interfaces could
+be auto-connected. `packaging/snap-classic-request.md` holds the text.
 
 **Classic confinement is gated on approval for _every_ channel** (edge included),
 not just `stable` — a classic snap is rejected on upload until the registered name
