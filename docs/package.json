@@ -13,7 +13,7 @@
   },
   "devDependencies": {
     "mermaid": "^11.16.0",
-    "playwright": "^1.64.1",
+    "playwright": "^1.65.0",
     "vitepress": "^1.6.4",
     "vitepress-plugin-mermaid": "^2.0.17"
   },
