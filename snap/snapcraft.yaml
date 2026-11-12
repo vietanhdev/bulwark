@@ -140,7 +140,8 @@ parts:
       # on its own. It used to fetch -linux-x64 unconditionally, which was invisible while the
       # only builder was amd64 and would have failed with a bare "cannot execute binary file"
       # the moment anyone built on arm. Derive it from the arch snapcraft is building FOR.
-      NODE_VER=22.12.0
+      # eslint and its plugins need ^22.13: 22.12.0 printed ten "Unsupported engine" warnings.
+      NODE_VER=22.23.4
       case "${CRAFT_ARCH_BUILD_FOR:-$(dpkg --print-architecture)}" in
         amd64)  NODE_ARCH=x64 ;;
         arm64)  NODE_ARCH=arm64 ;;
