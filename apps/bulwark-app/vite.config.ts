@@ -24,18 +24,24 @@ const config = defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./src"),
+      "@": path.resolve(import.meta.dirname, "./src"),
       ...(mockTauri
         ? {
-            "@tauri-apps/api/core": path.resolve(__dirname, "./src/mocks/tauri/core.ts"),
-            "@tauri-apps/api/event": path.resolve(__dirname, "./src/mocks/tauri/event.ts"),
-            "@tauri-apps/api/app": path.resolve(__dirname, "./src/mocks/tauri/app.ts"),
-            "@tauri-apps/api/window": path.resolve(__dirname, "./src/mocks/tauri/window.ts"),
-            "@tauri-apps/api/webview": path.resolve(__dirname, "./src/mocks/tauri/webview.ts"),
-            "@tauri-apps/plugin-dialog": path.resolve(__dirname, "./src/mocks/tauri/dialog.ts"),
+            "@tauri-apps/api/core": path.resolve(import.meta.dirname, "./src/mocks/tauri/core.ts"),
+            "@tauri-apps/api/event": path.resolve(import.meta.dirname, "./src/mocks/tauri/event.ts"),
+            "@tauri-apps/api/app": path.resolve(import.meta.dirname, "./src/mocks/tauri/app.ts"),
+            "@tauri-apps/api/window": path.resolve(import.meta.dirname, "./src/mocks/tauri/window.ts"),
+            "@tauri-apps/api/webview": path.resolve(import.meta.dirname, "./src/mocks/tauri/webview.ts"),
+            "@tauri-apps/plugin-dialog": path.resolve(import.meta.dirname, "./src/mocks/tauri/dialog.ts"),
           }
         : {}),
     },
+  },
+  build: {
+    // The whole app is one chunk on purpose: the webview loads it from the app bundle on disk,
+    // so splitting it would save no download and add requests. Vite's 500 kB default assumes a
+    // page fetched over a network.
+    chunkSizeWarningLimit: 1024,
   },
   clearScreen: false,
   server: {

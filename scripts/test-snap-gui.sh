@@ -55,6 +55,9 @@ sleep 3
 # (scripts/test-gui-packages-docker.sh).
 export WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_DISABLE_DMABUF_RENDERER=1
 export LIBGL_ALWAYS_SOFTWARE=1 GDK_BACKEND=x11
+# No accessibility bus on a runner: without this GTK logs "AT-SPI: Error retrieving accessibility
+# bus address" on every start.
+export NO_AT_BRIDGE=1
 
 # A session bus, as every desktop has. Without one the app starts anyway and simply skips
 # single-instance, so a test with no bus can never notice a snap that is not allowed to claim

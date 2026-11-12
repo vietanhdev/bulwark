@@ -196,6 +196,14 @@ export default withMermaid({
     optimizeDeps: {
       include: ["mermaid > fastdom", "mermaid > fastdom/extensions/fastdom-promised.js"],
     },
+    build: {
+      // Two files pass Vite's 500 kB default, both about 700 kB and both from the mermaid
+      // plugin: the site's main script, which carries mermaid's core, and one diagram type.
+      // The limit sits just above them so the build stays quiet today and still reports
+      // anything that grows past it. Loading mermaid only on pages with a diagram would be
+      // the real reduction.
+      chunkSizeWarningLimit: 800,
+    },
   },
 
   // Aqua palette matching the app's default theme (converted to hex since mermaid doesn't

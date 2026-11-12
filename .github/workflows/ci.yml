@@ -6,6 +6,13 @@ on:
   pull_request:
   workflow_dispatch:
 
+# actions/checkout runs `git init`, and git then prints a ten-line hint about the default branch
+# name into every job's log. Naming the branch here is the fix the hint itself asks for.
+env:
+  GIT_CONFIG_COUNT: 1
+  GIT_CONFIG_KEY_0: init.defaultBranch
+  GIT_CONFIG_VALUE_0: main
+
 # Only the owner may start jobs; triggering_actor also covers owner-initiated reruns.
 jobs:
   # Seconds-long static checks over the sandboxed packaging manifests. Deliberately first
@@ -36,7 +43,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Build snap
         id: build
-        uses: snapcore/action-build@v1
+        run: scripts/build-snap-ci.sh
       - name: Install and verify the built snap
         run: |
           set -euo pipefail
@@ -71,6 +78,12 @@ jobs:
 
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
+
+      # bulwark-app's build script stages the CLI as the GUI's sidecar and warns, on every
+      # build, when the CLI has not been built yet. The tests below build it anyway; doing it
+      # first costs nothing and keeps a warning that matters in a release out of this log.
+      - name: Build the CLI first
+        run: cargo build -p bulwarkctl
 
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -190,6 +203,15 @@ jobs:
       # wrote. The one place that could happen here was a sudo/pkexec scan whose database sits in
       # a folder another account can write to, and the CLI now refuses that (src/db_guard.rs).
       # REMOVE this line and raise libsqlite3-sys to 0.39 as soon as a diesel release allows it.
+      #
+      # The last four are "unmaintained" notices, which cargo audit prints as warnings. They are
+      # the same case as the first group: proc-macro-error comes in through the GTK3 bindings
+      # (glib-macros), and zbus_names/zvariant/zvariant_derive through zbus, which Tauri's
+      # notification, opener and single-instance plugins use. Listing them keeps this step's
+      # output empty until something new appears. One notice is deliberately NOT listed:
+      # RUSTSEC-2024-0449 (unsafe-libyaml) comes from serde_yaml, which bulwark-core depends on
+      # directly to read rules. That one is ours to fix by moving to a maintained YAML parser,
+      # so it stays visible.
       - name: cargo audit
         run: |
           cargo audit \
@@ -205,7 +227,11 @@ jobs:
             --ignore RUSTSEC-2024-0419 \
             --ignore RUSTSEC-2024-0420 \
             --ignore RUSTSEC-2025-0098 \
-            --ignore RUSTSEC-2026-0459
+            --ignore RUSTSEC-2026-0459 \
+            --ignore RUSTSEC-2024-0370 \
+            --ignore RUSTSEC-2026-0370 \
+            --ignore RUSTSEC-2026-0371 \
+            --ignore RUSTSEC-2026-0372
 
   changes:
     if: github.triggering_actor == 'vietanhdev'
@@ -264,7 +290,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: apps/bulwark-app/package-lock.json
       - run: npm ci
@@ -313,7 +339,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: docs/package-lock.json
       - run: npm ci
