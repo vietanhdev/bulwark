@@ -82,7 +82,7 @@ agent's other job — reading untrusted content and acting on it.
 
 Coding agents ingest text you did not write: a README, a GitHub issue, a dependency's source, an MCP
 tool description, a scraped web page. [OWASP LLM01: Prompt
-Injection](https://genai.owasp.org/llmrisk/llm012025-prompt-injection/) is the vulnerability where
+Injection](https://genai.owasp.org/llmrisk/llm01-prompt-injection/) is the vulnerability where
 that ingested text is treated as instructions. The indirect variant is the one that matters here:
 the attacker never talks to you or your model directly — they plant instructions in content the
 agent will later read.
@@ -193,8 +193,8 @@ depth, so in brief:
   Security ["Rules File Backdoor"](https://www.pillar.security/blog/new-vulnerability-in-github-copilot-and-cursor-how-hackers-can-weaponize-code-agents),
   built on Trojan Source, U+202A–202E / U+2066–2069) and prompt-injection-style directives.
 
-Or run the same scan from the desktop app's **Agent Security** tab, which offers a Redact button per
-finding.
+Or press **Scan now** in the desktop app: the same checks run as part of every scan, and a finding
+Bulwark can clean up offers **Remove secret from this file**.
 
 ## The habits that actually shrink the reservoir
 
@@ -219,7 +219,7 @@ ever arrives.
 
 ## References
 
-- OWASP, [LLM01:2025 Prompt Injection](https://genai.owasp.org/llmrisk/llm012025-prompt-injection/)
+- OWASP, [LLM01:2025 Prompt Injection](https://genai.owasp.org/llmrisk/llm01-prompt-injection/)
   and [LLM02:2025 Sensitive Information Disclosure](https://genai.owasp.org/llmrisk/llm022025-sensitive-information-disclosure/). Accessed July 2026.
 - Check Point Research, [Caught in the Hook: RCE and API Token Exfiltration Through Claude Code Project Files (CVE-2025-59536)](https://research.checkpoint.com/2026/rce-and-api-token-exfiltration-through-claude-code-project-files-cve-2025-59536/).
 - JFrog Security Research / NVD, [CVE-2025-6514 — OS command injection in mcp-remote](https://nvd.nist.gov/vuln/detail/CVE-2025-6514).

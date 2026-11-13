@@ -55,6 +55,15 @@ Each fixer is reversible and never widens access:
 - **`ssh protect`** adds one passphrase to every unencrypted key in `~/.ssh` at once, backing each up
   first — far better than leaving plaintext keys on disk.
 
+Three more fixers are run one at a time and are not part of `fix all`. Each needs root to apply:
+
+- **`fix sysctl`** writes the kernel network settings the scan asks for (ICMP redirects off, martian
+  logging on) to a file in `/etc/sysctl.d/` and reloads them, so they survive a reboot.
+- **`fix banner`** replaces the distribution's default `/etc/issue` and `/etc/issue.net` with a
+  legal warning banner. It never overwrites a banner someone already customised.
+- **`fix login-defs`** sets the password-ageing policy in `/etc/login.defs` (`PASS_MAX_DAYS`,
+  `PASS_MIN_DAYS`), backing the file up first.
+
 In the desktop app these live in **Settings → SSH hardening** (tighten permissions, protect keys).
 
 ### Leaked secrets: redaction
@@ -74,14 +83,19 @@ bulwarkctl ai redact --apply
 In the desktop app this is the **Remove secret from this file** action on an expanded agent finding in Scan.
 
 **Only the credential's own bytes are replaced.** Everything around it — the `KEY=` name, the quotes
-around the value, the line ending that ends it — survives byte-for-byte, so a redacted `.env` still
-parses and a redacted file has exactly as many lines as it started with. This matters more than it
+around the value, the line ending that ends it — survives byte-for-byte, so a redacted file has
+exactly as many lines as it started with. This matters more than it
 sounds: the detection patterns match a *terminator* after the secret (usually the newline itself),
 and a redactor that rewrote the whole matched span would delete it, welding the next line onto the
 placeholder.
 
-Two things it deliberately will *not* do:
+Three things it deliberately will *not* do:
 
+- **It won't rewrite a file that something reads the key back from.** Only session transcripts,
+  memory and instruction files inside an agent's own folder (`.claude`, `.codex`, `.cursor`, …) are
+  rewritten. A `.env` is never touched, and a key found in a project's settings or MCP config file
+  is reported but left in place: replacing it there would break whatever uses it. An instruction
+  file at the root of a project (a bare `CLAUDE.md`, say) is also reported and left for you to edit.
 - **It won't rotate the key for you.** Redaction removes the secret from disk; it cannot un-leak it.
   Anything that reached a transcript should be assumed compromised — go rotate it at the provider.
 - **It won't touch a low-confidence (`generic-*`) match.** Those are reported but never rewritten,

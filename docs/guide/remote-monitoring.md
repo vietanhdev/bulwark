@@ -51,9 +51,9 @@ flowchart LR
 
 - The SSH transport is the **system `ssh`**, so your `~/.ssh/config` (aliases, ports, keys, jump
   hosts, ProxyCommand) and your SSH agent work as-is.
-- If Bulwark is installed on the machine, that copy runs. If not, Bulwark copies itself and its
-  rules into a private `mktemp -d` directory, runs, and deletes it — after checking the machine's
-  CPU architecture can run it.
+- If Bulwark is installed on the machine, that copy runs. If not, Bulwark copies itself (one
+  file, with every check built in) into a private `mktemp -d` directory, runs, and deletes it —
+  after checking the machine's CPU architecture can run it.
 - Each machine's findings are kept in **its own database** on your computer. They never mix with
   this computer's results, and a scan of one machine can never mark another's issues as fixed.
 - The desktop app and the CLI share one machine list, so you can set things up in either.
@@ -278,8 +278,9 @@ Every failure comes with a plain-language reason and the next step; these are th
 | The machine didn't accept your SSH key | *Set up key access* with a password once, or load your key with `ssh-add`. With many keys in your agent, choose the right key file — Bulwark then offers only that one. |
 | Root checks need passwordless sudo | Add the scoped sudoers rule shown in the connection check, or turn root checks off. |
 | Bulwark can't run on this machine's processor | Install Bulwark on the machine; an installed copy always runs natively. |
+| Bulwark needs to be installed on this machine | Bulwark only copies itself from Linux to a Linux machine with the same processor. Install `bulwarkctl` there (Linux or macOS) or Bulwark for Windows, then scan again. |
 | This address now belongs to a different machine | Check where the address points. If the machine was renamed on purpose, *Accept new identity*. |
-| Bulwark can't scan this operating system yet | It's a Windows SSH shell. Monitor the machine's WSL instead (see *Which systems can be monitored*). |
+| Bulwark can't scan this operating system yet | The machine's shell answered in a way Bulwark doesn't recognise. On Windows, check that PowerShell is available to the SSH account and that Bulwark is installed there (see *Which systems can be monitored*). Bulwark checks back once a day. |
 | No checks for this system yet | The scan ran, but nothing applies there yet. Nothing to fix; Bulwark checks back daily. |
 | The machine isn't answering | Bulwark keeps retrying, less often. Check the machine is on and reachable. |
 

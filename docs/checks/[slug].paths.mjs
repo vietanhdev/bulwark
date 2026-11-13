@@ -25,9 +25,17 @@ function inline(text) {
     /\{\{\s*[\w]+\.(\w+)\s*\}\}/g,
     (_, field) => `‹${field.replace(/_/g, " ")}›`,
   );
-  return escapeHtml(withPlaceholders)
-    .replace(/(^|[\s(])'([^'\n]+?)'(?=$|[\s).,;:!?])/g, "$1`$2`")
+  // Quoted commands become inline code. They are taken out before the HTML escaping and put
+  // back after it: markdown escapes the content of a code span itself, so escaping it here as
+  // well printed 'npm rebuild <package>' on the page as "npm rebuild &lt;package&gt;".
+  const code = [];
+  const prose = withPlaceholders.replace(
+    /(^|[\s(])'([^'\n]+?)'(?=$|[\s).,;:!?])/g,
+    (_, before, command) => `${before}\u0000${code.push(command) - 1}\u0000`,
+  );
+  return escapeHtml(prose)
     .replace(/(^|[\s(])"([^"\n]+?)"(?=$|[\s).,;:!?])/g, "$1“$2”")
+    .replace(/\u0000(\d+)\u0000/g, (_, i) => `\`${code[Number(i)]}\``)
     .replace(/\bbulwarkctl\b/g, "bulwark");
 }
 

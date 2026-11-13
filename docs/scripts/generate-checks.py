@@ -123,6 +123,42 @@ def ai_checks() -> list[dict]:
     return out
 
 
+def per_tool_fixes() -> str:
+    """The fix text of a rule whose `fix` is filled in per finding.
+
+    BLWK-DEV-011's fix is `{{ dev_tool_config.how_to_fix }}`: the collector supplies a different
+    sentence for npm, bun and uv. A page built from the rule alone would show an empty
+    placeholder under "How to fix it", so the sentences are read from the collector, one line
+    per tool, the same way the AI checks are read from detectors.rs.
+    """
+    src = (ROOT / "crates/bulwark-core/src/collectors/dev_tools.rs").read_text()
+    entries = re.findall(
+        r'tool:\s*"([^"]+)",(?:(?!UserPractices\s*\{).)*?how_to_fix:\s*"((?:[^"\\]|\\.)*)"',
+        src,
+        re.S,
+    )
+    expected = len(re.findall(r'how_to_fix:\s*"', src))
+    if not entries or len(entries) != expected:
+        sys.exit(f"parsed {len(entries)} of {expected} per-tool fixes in dev_tools.rs; update the regex")
+    # The source text is a Rust string literal; its escapes (\", \\) are also valid JSON ones.
+    return "\n".join(tool + ": " + json.loads('"' + text + '"') for tool, text in entries)
+
+
+# Rules whose whole `fix` is one templated value, and where that value comes from.
+TEMPLATED_FIX = {"{{ dev_tool_config.how_to_fix }}": per_tool_fixes}
+
+
+def fix_text(rule: dict) -> str:
+    fix = rule["fix"].strip()
+    if fix in TEMPLATED_FIX:
+        return TEMPLATED_FIX[fix]()
+    # Any other fix that is nothing but a template would render as a bare placeholder on the
+    # page. Refuse it here, so it is a failed check instead of a page with no fix on it.
+    if re.fullmatch(r"\{\{[^}]*\}\}", fix):
+        sys.exit(f"{rule['id']}: its fix is only a template ({fix}); add it to TEMPLATED_FIX")
+    return fix
+
+
 def config_checks() -> list[dict]:
     out = []
     for path in sorted((ROOT / "rules").rglob("*.yaml")):
@@ -134,7 +170,7 @@ def config_checks() -> list[dict]:
                 "category": r["category"],
                 "severity": r["severity"],
                 "explain": " ".join(r["explain"].split()),
-                "fix": r["fix"].strip(),
+                "fix": fix_text(r),
                 "references": r.get("references", []),
                 "collector": r["collector"],
                 "condition": r["condition"],

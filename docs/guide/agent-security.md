@@ -20,7 +20,7 @@ VS Code and its forks (VS Code Insiders, VSCodium, Cursor, Windsurf, Kiro).
    account the agents run as can become root without a password anyway.
 
 In the desktop app these checks run as part of every **Scan now** and their problems appear on
-the **Scan** page with everything else (configure extra folders in **Settings → AI assistant checks**). From a
+the **Scan** page with everything else (configure extra folders in **Settings → AI assistants**). From a
 terminal, `bulwark ai scan` runs only these checks (`bulwarkctl ai scan` with the CLI-only
 package). Each check below links to its own page with the full explanation and fix.
 
@@ -149,11 +149,12 @@ Because every developer's layout differs, the scanned workspace set is derived, 
   `~/code`, `~/git`, … — for directories carrying any supported agent's marker (`.claude/`,
   `CLAUDE.md`, `.cursor/`, `.mcp.json`, `AGENTS.md`, `.kiro/`, `opencode.json`, `.goosehints`,
   `.github/instructions/`, …). `node_modules`, `.git`, and build trees are skipped.
-- **Roots you add** in the tab's settings, plus any you exclude.
+- **Folders you add** in **Settings → AI assistants**, plus any you exclude there (`--root` and
+  `--exclude` on the command line).
 
 Global `$HOME` tool state (`~/.claude/`, `~/.codex/`, `~/.gemini/`, `~/.config/<agent>/`, the
 VS Code-family user directories, …) is always included. The desktop app also runs a periodic background sweep and notifies you when a
-new secret or risky config appears — toggleable from the tab.
+new secret or risky config appears. Turn it off in **Settings → AI assistants**.
 
 ## Redaction
 
@@ -162,7 +163,8 @@ it are two deliberate, separate acts, the same stance file-integrity baselining 
 
 - **Dry run first.** `bulwarkctl ai redact` (no flags) reports exactly which files would change
   and how many secrets each holds, touching nothing.
-- **Apply explicitly.** `bulwarkctl ai redact --apply` (or the tab's **Redact** button) rewrites
+- **Apply explicitly.** `bulwarkctl ai redact --apply` (or **Remove secret from this file** on an
+  opened finding in the app) rewrites
   the files, replacing each high-confidence secret with an inert placeholder. Before overwriting,
   it writes a `0600` backup of every file it touches, and it preserves the original file's
   permissions on the rewritten copy. Only high-confidence provider secrets are redacted — the
@@ -194,7 +196,7 @@ The report leads with what to fix — one line per problem, worst first, why it 
 step — and ends with what Bulwark can do for you:
 
 ```text
-Bulwark 0.13.1 · AI coding agents · 1 project · 4 agent files checked
+Bulwark 0.15.0 · AI coding agents · 1 project · 4 agent files checked
 
 4 problems to fix  1 critical · 3 high
 
