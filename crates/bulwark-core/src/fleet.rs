@@ -710,7 +710,8 @@ pub enum HostHealth {
     Unsupported,
     /// Several connectivity failures in a row.
     Unreachable,
-    /// The last successful scan is more than two intervals old.
+    /// The last successful scan is more than two intervals old, or the latest attempt failed to
+    /// connect (fewer times than "unreachable" needs) and nothing open would otherwise say so.
     Stale,
     /// Up to date, with critical or high findings open.
     AtRisk,
@@ -737,10 +738,18 @@ pub fn health(host: &RemoteHost, counts: &FindingCounts, now: DateTime<Utc>) -> 
     if host.is_stale(now) {
         return HostHealth::Stale;
     }
+    // One or two failed connections are tolerated before a machine is called unreachable (a
+    // reboot, a laptop asleep). The findings shown are still the last scan's, so open issues
+    // still read as such; but "Healthy" would claim the machine was checked and is fine, while
+    // the latest attempt never reached it. That reads as out of date instead.
+    let connection_failing =
+        matches!(host.last_status, Some(LastStatus::Failed(k)) if k.is_connectivity());
     if counts.critical + counts.high > 0 {
         HostHealth::AtRisk
     } else if counts.total() > 0 {
         HostHealth::Issues
+    } else if connection_failing {
+        HostHealth::Stale
     } else {
         HostHealth::Healthy
     }
@@ -1155,6 +1164,28 @@ mod tests {
         h.last_status = Some(LastStatus::Failed(RemoteErrorKind::AuthFailed));
         h.consecutive_failures = 5;
         assert_eq!(h.effective_interval(), Duration::minutes(60));
+    }
+
+    #[test]
+    fn a_failed_connection_is_never_healthy_even_before_it_counts_as_unreachable() {
+        let now = Utc::now();
+        let mut h = host();
+        h.last_success_at = Some(now - Duration::minutes(10));
+        h.last_attempt_at = Some(now);
+        h.last_status = Some(LastStatus::Failed(RemoteErrorKind::Unreachable));
+        h.consecutive_failures = 1;
+        let empty = FindingCounts::default();
+        assert_eq!(health(&h, &empty, now), HostHealth::Stale);
+        // Open issues from the last scan still read as issues.
+        let risky = FindingCounts {
+            high: 1,
+            ..Default::default()
+        };
+        assert_eq!(health(&h, &risky, now), HostHealth::AtRisk);
+        // A successful attempt afterwards: healthy again.
+        h.last_status = Some(LastStatus::Ok);
+        h.consecutive_failures = 0;
+        assert_eq!(health(&h, &empty, now), HostHealth::Healthy);
     }
 
     #[test]
