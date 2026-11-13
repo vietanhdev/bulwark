@@ -5,6 +5,7 @@ pub mod collectors;
 pub mod compliance;
 pub mod condition;
 pub mod engine;
+pub mod etc;
 pub mod fleet;
 pub mod homefs;
 pub mod logs;

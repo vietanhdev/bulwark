@@ -11,7 +11,7 @@ mod file_permissions;
 mod grub;
 mod host_firewall;
 mod logging;
-mod login_defs;
+pub(crate) mod login_defs;
 mod mac;
 mod macos_launchd;
 mod macos_security;

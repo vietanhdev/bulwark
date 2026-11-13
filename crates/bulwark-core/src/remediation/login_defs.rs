@@ -6,9 +6,10 @@
 //!
 //! `sshd.rs` inserts a block at the **top** of the file, because sshd is first-value-wins and
 //! `Include` drop-ins are expanded inline — being first is the only way to guarantee your value is
-//! the effective one. `login.defs` is the opposite: shadow's `getdef` loads the file line by line
-//! and each assignment overwrites the previous, so the **last** occurrence wins, and this project's
-//! `login_defs` collector reproduces that (its parse loop `insert`s on every match, overwriting).
+//! the effective one. `login.defs` differs by build: shadow's own `getdef` loads the file line by
+//! line and each assignment overwrites the previous, so the **last** occurrence wins (Debian,
+//! Ubuntu), while a build that reads it through libeconf (openSUSE, Fedora) keeps the **first**.
+//! The `login_defs` collector reproduces both, and this fixer plans with the same reading.
 //!
 //! Rather than depend on either reading, this fixer **replaces the existing directive in place**
 //! and only appends when the key is absent entirely. That is correct under first-wins and
@@ -19,11 +20,17 @@
 //!
 //! A commented-out `#PASS_MIN_DAYS 0` is left as a comment and the real directive appended, since
 //! uncommenting someone's annotation is a different edit from setting a value.
+//!
+//! Where shadow-utils reads drop-ins (`/etc/login.defs.d/*.defs`, through libeconf: openSUSE and
+//! Fedora), a value a drop-in sets overrides `/etc/login.defs`, so editing the main file would not
+//! change it. Such a key is left alone and the report names the drop-in. On a system that keeps the
+//! vendor's file in `/usr/etc` and has no `/etc/login.defs`, nothing is written at all: the vendor
+//! file is replaced by the next package update, and a new `/etc/login.defs` would replace every
+//! setting the vendor file makes. The report says which drop-in to create instead.
 
+use crate::collectors::login_defs::{read_files, read_settings, DefsFile, Settings};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-
-const MAIN_CONFIG: &str = "/etc/login.defs";
 
 /// One managed key. `is_insecure` mirrors the corresponding rule's condition exactly, so the fixer
 /// fires where — and only where — the scanner does.
@@ -94,6 +101,10 @@ pub struct LoginDefsReport {
     pub applied: bool,
     pub backup_path: Option<String>,
     pub note: Option<String>,
+    /// True when the settings cannot be written safely on this system, so `--apply` refuses and
+    /// `note` says what to put where by hand.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub by_hand: bool,
     /// What happened to this file's file-integrity baseline entry, when it has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline: Option<super::BaselineUpdate>,
@@ -106,14 +117,107 @@ impl LoginDefsReport {
 }
 
 /// Public entry point. `rules` selects which directives to consider, so a per-issue fix touches
-/// only its own key. Dry run unless `apply`.
+/// only its own key. Dry run unless `apply`. With `config_path` that one file is edited and read
+/// on its own; without it, the files the login tools really read are used (see [`crate::etc`]).
 pub fn harden_login_defs(
     rules: &[&str],
     config_path: Option<&Path>,
     backup_dir: &Path,
     apply: bool,
 ) -> anyhow::Result<LoginDefsReport> {
-    let path = config_path.unwrap_or_else(|| Path::new(MAIN_CONFIG));
+    if let Some(path) = config_path {
+        return harden_file(rules, path, &[], false, backup_dir, apply);
+    }
+    let main = Path::new(crate::etc::LOGIN_DEFS.etc);
+    let Some(files) = crate::etc::login_defs_files()? else {
+        anyhow::bail!("{} does not exist", main.display());
+    };
+    let mut read = read_files(&files)?;
+    if files.main != main {
+        return plan_for_vendor_file(rules, &read, files.econf, apply);
+    }
+    let drop_ins = read.split_off(1);
+    harden_file(rules, main, &drop_ins, files.econf, backup_dir, apply)
+}
+
+/// The changes the rules ask for, given what the login tools read now.
+fn plan(rules: &[&str], settings: &Settings) -> Vec<(&'static Directive, LoginDefsChange)> {
+    let mut changes = Vec::new();
+    for d in DIRECTIVES.iter().filter(|d| rules.contains(&d.rule_id)) {
+        let written = settings.number(d.key);
+        // What the system does with what is written: a missing or negative value is "no limit".
+        let in_effect = written.filter(|v| *v >= 0).unwrap_or(d.no_limit);
+        if !(d.is_insecure)(in_effect) {
+            continue;
+        }
+        changes.push((
+            d,
+            LoginDefsChange {
+                key: d.key.to_string(),
+                current: match written {
+                    Some(v) if v >= 0 => v.to_string(),
+                    Some(v) => format!("{v}, which means no limit"),
+                    None => "not set, which means no limit".to_string(),
+                },
+                desired: d.desired.to_string(),
+                why: d.why.to_string(),
+                status: LoginDefsChangeStatus::WouldSet,
+            },
+        ));
+    }
+    changes
+}
+
+/// The plan for a system whose login tools read the vendor's file; see [`harden_login_defs`].
+fn plan_for_vendor_file(
+    rules: &[&str],
+    files: &[DefsFile],
+    econf: bool,
+    apply: bool,
+) -> anyhow::Result<LoginDefsReport> {
+    let settings = read_settings(files, econf);
+    let mut report = LoginDefsReport {
+        config_path: files[0].path.clone(),
+        changes: plan(rules, &settings).into_iter().map(|(_, c)| c).collect(),
+        ..Default::default()
+    };
+    if report.changes.is_empty() {
+        return Ok(report);
+    }
+    let lines: Vec<String> = report
+        .changes
+        .iter()
+        .map(|c| format!("{} {}", c.key, c.desired))
+        .collect();
+    let message = format!(
+        "this system has no {etc}, so the login tools read the vendor's file {vendor}. Bulwark does \
+         not edit that file (the next package update replaces it) and does not create {etc} (it \
+         would replace every setting the vendor file makes). Put these lines in a new file \
+         {dir}/90-password-age{suffix} (the name must end in {suffix}, and a file there whose name \
+         sorts later wins): {lines}",
+        etc = crate::etc::LOGIN_DEFS.etc,
+        vendor = files[0].path,
+        dir = crate::etc::LOGIN_DEFS_DROP_IN_DIR,
+        suffix = crate::etc::LOGIN_DEFS_DROP_IN_SUFFIX,
+        lines = lines.join("; ")
+    );
+    if apply {
+        anyhow::bail!(message);
+    }
+    report.by_hand = true;
+    report.note = Some(message);
+    Ok(report)
+}
+
+/// Edits `path`, the main file, read together with `drop_ins` (applied after it).
+fn harden_file(
+    rules: &[&str],
+    path: &Path,
+    drop_ins: &[DefsFile],
+    econf: bool,
+    backup_dir: &Path,
+    apply: bool,
+) -> anyhow::Result<LoginDefsReport> {
     let mut report = LoginDefsReport {
         config_path: path.display().to_string(),
         ..Default::default()
@@ -122,25 +226,38 @@ pub fn harden_login_defs(
         anyhow::bail!("{} does not exist", path.display());
     }
     let original = std::fs::read_to_string(path)?;
+    let origin = path.display().to_string();
+    let settings_with = |text: &str| {
+        let mut files = vec![DefsFile {
+            path: origin.clone(),
+            text: text.to_string(),
+        }];
+        files.extend(drop_ins.iter().map(|f| DefsFile {
+            path: f.path.clone(),
+            text: f.text.clone(),
+        }));
+        read_settings(&files, econf)
+    };
 
-    for d in DIRECTIVES.iter().filter(|d| rules.contains(&d.rule_id)) {
-        let written = effective_value(&original, d.key);
-        // What the system does with what is written: a missing or negative value is "no limit".
-        let in_effect = written.filter(|v| *v >= 0).unwrap_or(d.no_limit);
-        if !(d.is_insecure)(in_effect) {
-            continue;
+    // A key a drop-in sets is out of this file's reach: the drop-in is read after it.
+    let settings = settings_with(&original);
+    let mut elsewhere = Vec::new();
+    for (d, change) in plan(rules, &settings) {
+        match settings.get(d.key) {
+            Some(set) if set.file != origin => elsewhere.push(format!(
+                "{} is {} in {}, which overrides {}; change it there",
+                d.key, set.raw, set.file, origin
+            )),
+            _ => report.changes.push(change),
         }
-        report.changes.push(LoginDefsChange {
-            key: d.key.to_string(),
-            current: match written {
-                Some(v) if v >= 0 => v.to_string(),
-                Some(v) => format!("{v}, which means no limit"),
-                None => "not set, which means no limit".to_string(),
-            },
-            desired: d.desired.to_string(),
-            why: d.why.to_string(),
-            status: LoginDefsChangeStatus::WouldSet,
-        });
+    }
+    if !elsewhere.is_empty() {
+        let message = elsewhere.join(". ");
+        if report.changes.is_empty() {
+            // Nothing this file can change, and "already within thresholds" would be false.
+            anyhow::bail!(message);
+        }
+        report.note = Some(message);
     }
 
     if !apply || report.changes.is_empty() {
@@ -171,10 +288,12 @@ pub fn harden_login_defs(
     report.applied = true;
     report.baseline = super::update_baseline_after_fix(path, hash_before.as_deref());
 
-    // Re-read through the same parser the rules use. Writing a file is not evidence the value is
-    // now what we intended — a botched replace would otherwise be reported as a success.
+    // Re-read through the same reading the rules use, drop-ins included. Writing a file is not
+    // evidence the value is now what we intended — a botched replace would otherwise be reported
+    // as a success.
+    let after = settings_with(&text);
     for change in &report.changes {
-        let now = effective_value(&text, &change.key);
+        let now = after.number(&change.key);
         if now.map(|n| n.to_string()).as_deref() != Some(change.desired.as_str()) {
             report.note = Some(format!(
                 "{} did not read back as {} after the edit — check {} by hand",
@@ -188,24 +307,15 @@ pub fn harden_login_defs(
     Ok(report)
 }
 
-/// The value shadow (and this project's collector) would end up with: scan every uncommented
-/// `KEY value` line, last one wins.
+/// The value one file sets for `key`, read the way shadow-utils without libeconf reads it: every
+/// uncommented `KEY value` line, last one wins.
+#[cfg(test)]
 fn effective_value(text: &str, key: &str) -> Option<i64> {
-    let mut found = None;
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let mut parts = line.splitn(2, char::is_whitespace);
-        if parts.next() != Some(key) {
-            continue;
-        }
-        if let Ok(n) = parts.next().unwrap_or_default().trim().parse::<i64>() {
-            found = Some(n);
-        }
-    }
-    found
+    let file = DefsFile {
+        path: "login.defs".to_string(),
+        text: text.to_string(),
+    };
+    read_settings(&[file], false).number(key)
 }
 
 /// Replace every uncommented occurrence of `key` with `key <value>`, preserving position; append
@@ -461,6 +571,97 @@ mod tests {
             Some(99999),
             "the other rule's directive must be untouched"
         );
+    }
+
+    fn defs(path: &str, text: &str) -> DefsFile {
+        DefsFile {
+            path: path.to_string(),
+            text: text.to_string(),
+        }
+    }
+
+    /// Fedora and openSUSE apply `/etc/login.defs.d/*.defs` after `/etc/login.defs`. A value a
+    /// drop-in sets cannot be changed from the main file, so it is named instead of "fixed".
+    #[test]
+    fn a_key_a_drop_in_sets_is_reported_not_edited() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("login.defs");
+        std::fs::write(&cfg, STOCK).unwrap();
+        let drop_in = [defs(
+            "/etc/login.defs.d/50-site.defs",
+            "PASS_MAX_DAYS 99999\n",
+        )];
+        let b = dir.path().join("b");
+
+        let r = harden_file(&all_rules(), &cfg, &drop_in, true, &b, true).unwrap();
+        assert!(r.applied);
+        assert_eq!(r.changes.len(), 1);
+        assert_eq!(r.changes[0].key, "PASS_MIN_DAYS");
+        let note = r.note.unwrap();
+        assert!(note.contains("/etc/login.defs.d/50-site.defs"), "{note}");
+        let text = std::fs::read_to_string(&cfg).unwrap();
+        assert_eq!(
+            effective_value(&text, "PASS_MAX_DAYS"),
+            Some(99999),
+            "left alone"
+        );
+
+        // Only that key to fix: an error, never "already within thresholds".
+        let err = harden_file(&["BLWK-ACCT-002"], &cfg, &drop_in, true, &b, true).unwrap_err();
+        assert!(err.to_string().contains("50-site.defs"), "{err}");
+    }
+
+    /// The benign side: a drop-in that sets a compliant value counts, and nothing is planned.
+    #[test]
+    fn a_compliant_drop_in_is_the_value_in_effect() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("login.defs");
+        std::fs::write(&cfg, STOCK).unwrap();
+        let drop_in = [defs(
+            "/etc/login.defs.d/50-site.defs",
+            "PASS_MAX_DAYS 90\nPASS_MIN_DAYS 1\n",
+        )];
+        let r = harden_file(
+            &all_rules(),
+            &cfg,
+            &drop_in,
+            true,
+            &dir.path().join("b"),
+            true,
+        )
+        .unwrap();
+        assert!(r.changes.is_empty() && !r.applied);
+        assert_eq!(std::fs::read_to_string(&cfg).unwrap(), STOCK);
+    }
+
+    #[test]
+    fn the_vendor_file_is_never_written_and_the_note_names_a_drop_in() {
+        let files = [defs(
+            "/usr/etc/login.defs",
+            "UMASK 022\nENCRYPT_METHOD SHA512\n",
+        )];
+        let preview = plan_for_vendor_file(&all_rules(), &files, true, false).unwrap();
+        assert!(preview.by_hand && !preview.applied);
+        assert_eq!(preview.changes.len(), 2);
+        let note = preview.note.unwrap();
+        assert!(
+            note.contains("/etc/login.defs.d/90-password-age.defs"),
+            "{note}"
+        );
+        assert!(note.contains("PASS_MAX_DAYS 90; PASS_MIN_DAYS 1"), "{note}");
+        let err = plan_for_vendor_file(&all_rules(), &files, true, true).unwrap_err();
+        assert!(err.to_string().contains(".defs"), "{err}");
+
+        // Already within policy through a drop-in: nothing to do, nothing refused.
+        let files = [
+            defs("/usr/etc/login.defs", ""),
+            defs(
+                "/etc/login.defs.d/90-password-age.defs",
+                "PASS_MAX_DAYS 90\nPASS_MIN_DAYS 1\n",
+            ),
+        ];
+        let done = plan_for_vendor_file(&all_rules(), &files, true, true).unwrap();
+        assert!(done.changes.is_empty() && !done.by_hand);
     }
 
     #[test]

@@ -76,6 +76,7 @@ pub(crate) fn run(action: FixAction) -> anyhow::Result<i32> {
                         sshd_report.changes.len()
                     );
                     print_sshd_changes(&sshd_report, "    ");
+                    print_by_hand(sshd_report.by_hand, sshd_report.note.as_deref(), "    ");
                 }
                 Err(e) => {
                     say!("\n• fix sshd        sshd_config hardening — unavailable: {e}");
@@ -116,6 +117,7 @@ pub(crate) fn run(action: FixAction) -> anyhow::Result<i32> {
                         r.pending_count()
                     );
                     print_login_defs_changes(&r, "    ");
+                    print_by_hand(r.by_hand, r.note.as_deref(), "    ");
                 }
                 Err(e) => say!("\n• fix login-defs  unavailable: {e}"),
             }
@@ -451,7 +453,11 @@ fn fix_all(
         &login_defs_backup_dir(home),
         false,
     ) {
-        if login_defs.pending_count() > 0 {
+        if login_defs.by_hand {
+            if let Some(note) = &login_defs.note {
+                report.not_included.push(format!("fix login-defs: {note}"));
+            }
+        } else if login_defs.pending_count() > 0 {
             let settings: Vec<String> = login_defs
                 .changes
                 .iter()
@@ -764,8 +770,17 @@ fn print_login_defs_report(report: &bulwark_core::LoginDefsReport, apply: bool) 
         say!("note: {n}");
     }
     print_baseline_note(report.baseline.as_ref(), "");
-    if !apply {
+    if report.by_hand {
+        say!("\nNothing is written on this system: make the change by hand as the note says.");
+    } else if !apply {
         say!("\nPreview only. Re-run with --apply (as root) to set them.");
+    }
+}
+
+/// The note of a fixer that cannot write on this system and says what to do by hand.
+fn print_by_hand(by_hand: bool, note: Option<&str>, indent: &str) {
+    if let (true, Some(note)) = (by_hand, note) {
+        say!("{indent}by hand: {note}");
     }
 }
 
@@ -878,6 +893,8 @@ fn print_sshd_report(report: &bulwark_core::SshdHardeningReport, apply: bool) {
             say!("Backup of the original: {b}");
         }
         say!("Undo: restore the backup, or delete the '# BEGIN bulwark-hardening' block.");
+    } else if report.by_hand {
+        say!("\nNothing is written on this system: make the change by hand as the note says.");
     } else if apply {
         say!("\nNothing was applied (only lockout-risky directives were pending — add --include-auth).");
     } else {

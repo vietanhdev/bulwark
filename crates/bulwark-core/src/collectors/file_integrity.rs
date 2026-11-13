@@ -26,22 +26,38 @@ use std::path::{Path, PathBuf};
 /// World-readable on a stock install — verified against this project's own dev machine.
 /// `/etc/ssh/sshd_config` isn't installed here (no sshd on this dev box) but is `644` on any
 /// real sshd install, consistent with the existing `sshd_config` collector also not
-/// requiring privilege.
+/// requiring privilege. A file one system ships `600` is reported as "needs an administrator scan"
+/// (see `needs_admin` below), not as a failure.
+///
+/// Each configuration file is watched in both places a program may read it from (see
+/// [`crate::etc`]): openSUSE keeps the vendor's copy under `/usr/etc` or `/usr/lib/pam.d` and has
+/// none in `/etc` unless the administrator made one, and a tampered vendor copy is read just the
+/// same. A path that does not exist is skipped, so on other systems the extra entries add nothing.
 pub const UNPRIVILEGED_WATCHED_PATHS: &[&str] = &[
     "/etc/passwd",
-    "/etc/ssh/sshd_config",
+    crate::etc::SSHD_CONFIG.etc,
+    crate::etc::SSHD_CONFIG.vendor,
     "/etc/pam.d/common-auth",
+    crate::etc::PAM_COMMON_AUTH_VENDOR,
     "/etc/pam.d/sshd",
+    crate::etc::PAM_SSHD_VENDOR,
     "/etc/crontab",
-    "/etc/login.defs",
+    crate::etc::LOGIN_DEFS.etc,
+    crate::etc::LOGIN_DEFS.vendor,
     "/usr/bin/sudo",
     "/bin/su",
     "/usr/bin/su",
 ];
 
 /// Root-only on a stock install (`/etc/shadow` `640`, `/etc/sudoers` `440` — verified, not
-/// assumed) — see the module doc for why these are a separate collector.
-pub const PRIVILEGED_WATCHED_PATHS: &[&str] = &["/etc/shadow", "/etc/sudoers"];
+/// assumed) — see the module doc for why these are a separate collector. The vendor's sudoers is
+/// here too: openSUSE ships it world-readable today, but it was `440` before and the policy in it
+/// matters as much as `/etc/sudoers`.
+pub const PRIVILEGED_WATCHED_PATHS: &[&str] = &[
+    "/etc/shadow",
+    crate::etc::SUDOERS.etc,
+    crate::etc::SUDOERS.vendor,
+];
 
 fn baseline_path() -> PathBuf {
     if let Ok(p) = std::env::var("BULWARK_FIM_BASELINE") {

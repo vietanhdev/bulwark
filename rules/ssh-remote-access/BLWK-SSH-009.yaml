@@ -8,10 +8,10 @@ collector: sshd_config
 # addresses gets the same exposure.
 condition: gateway_ports in ["yes", "clientspecified"]
 explain: >
-  GatewayPorts is set to "{{ sshd.gateway_ports }}" in sshd_config. By default, a port an
+  GatewayPorts is "{{ sshd.gateway_ports }}" (from {{ sshd.gateway_ports_from }}). By default, a port an
   SSH client forwards to this host is only reachable from localhost; with "yes" it is
   reachable from anywhere on the network, and with "clientspecified" whenever the client asks
   for that — turning an individual user's ad-hoc SSH tunnel into an accidental (or
   deliberate) network-wide exposure of whatever it points at.
-fix: "Set 'GatewayPorts no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'."
+fix: "Put 'GatewayPorts no' in /etc/ssh/sshd_config.d/00-hardening.conf and reload the SSH service ('sudo sshd -t' checks it first). sshd keeps the first value it reads and reads that folder first; if sshd_config has no Include line for it, put the line at the top of /etc/ssh/sshd_config. Do not edit files under /usr/etc: updates replace them."
 references: [ATTACK-T1090]

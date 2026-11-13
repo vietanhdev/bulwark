@@ -229,6 +229,10 @@ The two parsers still differ on some files, and it matters because an agent's YA
 
 Cover: the `yaml` unit tests (limits, depth on a small stack, error text), and next to the detectors `a_hostile_yaml_manifest_is_refused_in_time_and_still_searched_as_text`, `a_yaml_manifest_cannot_hide_its_servers_behind_a_tag_a_mark_or_an_alias`, `hostile_yaml_settings_are_refused_in_time_and_still_searched_as_text`.
 
+### System config may live in `/usr/etc`
+
+openSUSE Tumbleweed and Leap 16 ship `sshd_config`, `sudoers` and `login.defs` under `/usr/etc` (PAM under `/usr/lib/pam.d`) and have no `/etc` copy until an administrator makes one, which then replaces the vendor file whole; `login.defs` also takes `*.defs` drop-ins through libeconf (Fedora too). Ask `bulwark_core::etc` which file a program reads (`SSHD_CONFIG.in_use()`, `login_defs_files()`, `pam_service_files()`) instead of naming an `/etc` path; never write under `/usr/etc` and never create the missing `/etc` file in a fixer (both fixers say which drop-in to create instead). The rules were measured with `sshd -T`, `sudo -l` and `useradd`; see `docs/guide/architecture.md` §8.
+
 ### Undetermined is not a pass
 
 A collector marks a value it couldn't read with `<field>_known: false` (BitLocker without elevation, a root-only file). `Condition::reads_unknown_field` makes the engine treat any rule whose condition reads such a value as **not evaluated** — no finding, no error, and not in `rules_evaluated` — so a later scan that can't see a setting never resolves the finding an elevated scan raised, and the hardening score never counts it. The usual `x_known == true and x == …` guard alone evaluates to a clean `false`; that is exactly the gap this closes. Conditions about the marker itself (`x_known == false`, the "couldn't determine" checks) stay evaluable. Regression: `a_rule_reading_an_undetermined_value_is_not_evaluated`.

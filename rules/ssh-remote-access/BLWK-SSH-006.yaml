@@ -5,9 +5,10 @@ severity: medium
 collector: sshd_config
 condition: permit_user_environment == "yes"
 explain: >
-  PermitUserEnvironment is set to "{{ sshd.permit_user_environment }}" in sshd_config,
+  PermitUserEnvironment is "{{ sshd.permit_user_environment }}" (from
+  {{ sshd.permit_user_environment_from }}),
   letting an SSH client set arbitrary environment variables for its session (via
   ~/.ssh/environment or SendEnv) — including ones like LD_PRELOAD that can hijack the
   behavior of programs the session later runs.
-fix: "Set 'PermitUserEnvironment no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'."
+fix: "Put 'PermitUserEnvironment no' in /etc/ssh/sshd_config.d/00-hardening.conf and reload the SSH service ('sudo sshd -t' checks it first). sshd keeps the first value it reads and reads that folder first; if sshd_config has no Include line for it, put the line at the top of /etc/ssh/sshd_config. Do not edit files under /usr/etc: updates replace them."
 references: [CIS-5.2.6]

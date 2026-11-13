@@ -9,8 +9,8 @@ collector: login_defs
 profiles: [server]
 condition: pass_min_days == 0
 explain: >
-  PASS_MIN_DAYS in /etc/login.defs is 0 — a user forced to rotate a leaked password can
+  PASS_MIN_DAYS is 0 (from {{ login_defs.pass_min_days_from }}) — a user forced to rotate a leaked password can
   immediately change it right back to the old (compromised) one, defeating the point of
   the forced rotation.
-fix: "Set 'PASS_MIN_DAYS 1' (or your organization's policy) in /etc/login.defs."
+fix: "Set 'PASS_MIN_DAYS 1' (or your organization's policy) in /etc/login.defs, or in the file named above if it is not that one. If there is no /etc/login.defs and the defaults are in /usr/etc/login.defs, do not create one (it would replace all of those defaults) and do not edit the /usr/etc file (updates replace it): put the line in a new file /etc/login.defs.d/90-password-age.defs instead."
 references: [CIS-6.2.1]

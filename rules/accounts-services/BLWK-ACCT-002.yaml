@@ -10,7 +10,8 @@ collector: login_defs
 profiles: [server]
 condition: pass_max_days > 365
 explain: >
-  PASS_MAX_DAYS in /etc/login.defs is {{ login_defs.pass_max_days }} — passwords never
-  expire in any practical sense, so a leaked credential stays valid indefinitely.
-fix: "Set 'PASS_MAX_DAYS 90' (or your organization's policy) in /etc/login.defs."
+  PASS_MAX_DAYS is {{ login_defs.pass_max_days }} (from {{ login_defs.pass_max_days_from }})
+  — passwords never expire in any practical sense, so a leaked credential stays valid
+  indefinitely.
+fix: "Set 'PASS_MAX_DAYS 90' (or your organization's policy) in /etc/login.defs, or in the file named above if it is not that one. If there is no /etc/login.defs and the defaults are in /usr/etc/login.defs, do not create one (it would replace all of those defaults) and do not edit the /usr/etc file (updates replace it): put the line in a new file /etc/login.defs.d/90-password-age.defs instead."
 references: [CIS-6.2.1]

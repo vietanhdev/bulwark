@@ -5,15 +5,18 @@ severity: high
 collector: sshd_config
 condition: password_authentication == "yes"
 explain: >
-  PasswordAuthentication is set to "{{ sshd.password_authentication }}" in sshd_config,
-  which allows an attacker to brute-force their way in with a password guess instead of
-  needing a private key. It is the OpenSSH default and a brute-force *exposure* rather than a
+  PasswordAuthentication is "{{ sshd.password_authentication }}" (from
+  {{ sshd.password_authentication_from }}), which allows an attacker to brute-force their way
+  in with a password guess instead of needing a private key. It is the OpenSSH default and a brute-force *exposure* rather than a
   definite compromise, so it's rated high (aligning with CIS's L1 treatment and with
   BLWK-SSH-002), not critical.
 fix: >
-  Set 'PasswordAuthentication no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'.
+  Put 'PasswordAuthentication no' in /etc/ssh/sshd_config.d/00-hardening.conf and reload the
+  SSH service ('sudo sshd -t' checks it first). sshd keeps the first value it reads and reads
+  that folder first; if sshd_config has no Include line for it, put the line at the top of
+  /etc/ssh/sshd_config. Do not edit files under /usr/etc: updates replace them.
   IMPORTANT: confirm key-based login works in a SECOND session before you rely on this — if
   the only working credential is a password and no key is installed, you will lock yourself
-  out on the next login. Existing sessions survive the restart; a new key-authenticated login
+  out on the next login. Existing sessions survive the reload; a new key-authenticated login
   must succeed first.
 references: [CIS-5.2.10, ATTACK-T1110]
