@@ -83,6 +83,13 @@ The easiest start is an existing check: every [check page](/checks/) shows its r
 `<` `>` `<=` `>=` with `and`/`or`/`not`, one collector per check. Validate a folder with
 `bulwarkctl rules validate ~/.config/bulwark/rules`.
 
+Two things about the YAML itself that the validator will point at, with the line:
+
+- `id`, `title`, `category`, `severity`, `collector` and `condition` need a value. A bare
+  `explain:`, `fix:` or `references:` is read as empty.
+- A quoted value that runs on to the next line must be indented under its key. For long text the
+  `>` form above is easier.
+
 Rules that keep custom checks honest:
 
 - An id can't start with `BLWK-` or reuse a built-in id, so a custom check can never stand in for one

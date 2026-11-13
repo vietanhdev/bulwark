@@ -189,6 +189,17 @@ fn default_rule_os() -> Vec<OperatingSystem> {
 /// and each row is evaluated against the rule's condition independently.
 pub type Fact = BTreeMap<String, serde_json::Value>;
 
+/// Reads a key written with nothing after it (`references:`, `fix:`) as the type's empty value,
+/// the way rule files have always been read. A rule copied from another one often keeps such a
+/// line; refusing the file for it would break rules that loaded before.
+pub(crate) fn blank_as_empty<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 /// A rule as authored in YAML. See docs/guide/architecture.md §5.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Rule {
@@ -198,9 +209,11 @@ pub struct Rule {
     pub severity: Severity,
     pub collector: String,
     pub condition: String,
+    #[serde(deserialize_with = "blank_as_empty")]
     pub explain: String,
+    #[serde(deserialize_with = "blank_as_empty")]
     pub fix: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "blank_as_empty")]
     pub references: Vec<String>,
     /// Which OS(es) this rule applies to. Defaults to `[linux]` so all pre-existing rule
     /// files need no change — every rule authored before this field existed was implicitly
@@ -215,14 +228,14 @@ pub struct Rule {
     /// mostly a server-hardening concern, not something a laptop user needs surfaced by
     /// default. No fixed enum of valid tags on purpose: adding a new need is "write it in a
     /// YAML file," matching this project's "no Rust required to add a rule" philosophy.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "blank_as_empty")]
     pub profiles: Vec<String>,
     /// Host traits on which this rule does not apply, e.g. `[wsl]` for a check about something the
     /// Windows host owns rather than the distro (the WSL2 kernel, its network stack, console
     /// logins). Matched against the detected traits in the profile's `needs`. A rule skipped this way
     /// is reported in `ScanRun::rules_not_applicable`, never as evaluated — "doesn't apply" is not
     /// "passed".
-    #[serde(default)]
+    #[serde(default, deserialize_with = "blank_as_empty")]
     pub skip_on: Vec<String>,
 }
 
@@ -313,6 +326,26 @@ impl ScanRun {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_rule_with_blank_optional_lines_still_loads() {
+        // `references:` and `fix:` with nothing after them, as a rule copied from another one
+        // often has. They read as empty, as they always did; a blank `title:` is still refused.
+        let text = "id: MY-001\ntitle: t\ncategory: c\nseverity: low\ncollector: x\n\
+                    condition: a == 1\nexplain:\nfix:\nreferences:\nprofiles:\nskip_on:\n";
+        let rule: Rule = crate::yaml::from_str(text).unwrap();
+        assert_eq!(rule.explain, "");
+        assert_eq!(rule.fix, "");
+        assert!(rule.references.is_empty() && rule.profiles.is_empty() && rule.skip_on.is_empty());
+        assert!(crate::yaml::from_str::<Rule>(&text.replace("title: t", "title:")).is_err());
+        // Left out altogether, the lists are empty too.
+        let short = "id: MY-002\ntitle: t\ncategory: c\nseverity: low\ncollector: x\n\
+                     condition: a == 1\nexplain: e\nfix: f\n";
+        assert!(crate::yaml::from_str::<Rule>(short)
+            .unwrap()
+            .references
+            .is_empty());
+    }
 
     /// `bulwark-app`'s privileged-scan path (see `apps/bulwark-app/src-tauri/src/lib.rs`)
     /// depends entirely on `bulwarkctl scan --json`'s stdout deserializing back into a

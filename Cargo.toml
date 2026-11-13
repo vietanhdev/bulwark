@@ -20,7 +20,7 @@ homepage = "https://bulwark.nrl.ai"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml = "0.9"
+serde-saphyr = { version = "2.1.1", default-features = false, features = ["deserialize"] }
 diesel = { version = "2.4", features = ["sqlite", "returning_clauses_for_sqlite_3_35"] }
 diesel_migrations = { version = "2.4", features = ["sqlite"] }
 # Bundled SQLite so a build never depends on the host having libsqlite3-dev, and every platform

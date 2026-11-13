@@ -17,6 +17,7 @@ pub mod remediation;
 pub mod sandbox;
 pub mod schema;
 pub mod store;
+pub(crate) mod yaml;
 
 pub use ai_scan::{
     redact::redact_paths as ai_redact_paths, scan as run_ai_scan, AiFinding, AiScanOptions,

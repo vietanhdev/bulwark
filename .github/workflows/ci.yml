@@ -200,10 +200,9 @@ jobs:
       # the same case as the first group: proc-macro-error comes in through the GTK3 bindings
       # (glib-macros), and zbus_names/zvariant/zvariant_derive through zbus, which Tauri's
       # notification, opener and single-instance plugins use. Listing them keeps this step's
-      # output empty until something new appears. One notice is deliberately NOT listed:
-      # RUSTSEC-2024-0449 (unsafe-libyaml) comes from serde_yaml, which bulwark-core depends on
-      # directly to read rules. That one is ours to fix by moving to a maintained YAML parser,
-      # so it stays visible.
+      # output empty until something new appears. The notice that used to be left visible on
+      # purpose, RUSTSEC-2024-0449 (unsafe-libyaml, through serde_yaml), needs no entry: it was
+      # fixed by moving bulwark-core to serde-saphyr (crates/bulwark-core/src/yaml.rs).
       - name: cargo audit
         run: |
           cargo audit \

@@ -294,16 +294,16 @@ mod tests {
             Some(env!("CARGO_PKG_VERSION"))
         );
         // Valid YAML, with the fields every agent requires.
-        let y: serde_yaml::Value = serde_yaml::from_str(fm).unwrap();
+        let y = crate::yaml::to_json(fm).unwrap();
         assert_eq!(y["name"].as_str(), Some("bulwark"));
-        assert!(y["allowed-tools"].as_sequence().is_some());
+        assert!(y["allowed-tools"].as_array().is_some());
     }
 
     #[test]
     fn nothing_that_changes_the_machine_is_pre_approved() {
         let text = render("bulwarkctl");
-        let y: serde_yaml::Value = serde_yaml::from_str(frontmatter(&text).unwrap()).unwrap();
-        for tool in y["allowed-tools"].as_sequence().unwrap() {
+        let y = crate::yaml::to_json(frontmatter(&text).unwrap()).unwrap();
+        for tool in y["allowed-tools"].as_array().unwrap() {
             let t = tool.as_str().unwrap();
             assert!(!t.contains("apply") && !t.contains("sudo"), "{t}");
             assert!(
