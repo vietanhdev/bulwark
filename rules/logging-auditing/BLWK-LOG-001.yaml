@@ -14,5 +14,5 @@ explain: >
   No auditd binary was found. Without it, there's no kernel-level record of privileged
   syscalls (file access, exec, permission changes) — the trail that makes a break-in
   reviewable after the fact instead of just a guess.
-fix: "Install auditd (e.g. 'apt install auditd') and enable it with 'systemctl enable --now auditd'."
+fix: "Install the audit daemon with your package manager (the package is 'auditd' on Debian and Ubuntu, 'audit' on Fedora, RHEL, Arch and Alpine), then start it and have it start at boot (with systemd: 'systemctl enable --now auditd')."
 references: [CIS-4.1]

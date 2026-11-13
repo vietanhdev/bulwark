@@ -4,10 +4,12 @@
 //! privilege) and a fixed set of sensitive `/etc` files (root-scoped). Both flow through one
 //! [`tighten_permissions`] engine so the safety rules live in exactly one place:
 //!
-//!   * **Only ever tightens, never loosens.** A target is changed only when its current mode grants
-//!     permission bits *beyond* the desired mode (`current & !desired & 0o777 != 0`). A file already
-//!     at or stricter than the target (e.g. a `600` `/etc/passwd` where `644` is expected) is left
-//!     untouched — the fix can never widen access.
+//!   * **Only ever removes permission bits, never adds one.** A target is changed only when its
+//!     current mode grants bits *beyond* the desired mode (`current & !desired & 0o777 != 0`), and
+//!     the new mode is `current & desired` — the bits both have — never `desired` itself. Setting
+//!     `desired` outright used to turn a `660` `known_hosts` into `644` (everyone gains read) and
+//!     a `440` key into `600`. A file already at or stricter than the target (e.g. a `600`
+//!     `/etc/passwd` where `644` is expected) is left untouched.
 //!   * **Never follows a symlink.** `symlink_metadata` classifies the entry; a symlink is reported
 //!     and skipped, so a planted link in `~/.ssh` can't redirect a `chmod` onto an arbitrary file.
 //!   * **Records the prior mode** in the result. A `chmod` is trivially reversible, so no content
@@ -22,10 +24,15 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone)]
 pub struct PermTarget {
     pub path: PathBuf,
-    /// The canonical secure mode (permission bits only, e.g. `0o600`).
+    /// The canonical secure mode (permission bits only, e.g. `0o600`). The most access the file
+    /// may keep: bits outside it are removed, bits inside it are never added.
     pub desired: u32,
     /// Short description of what this file is, e.g. "private key" — shown in output.
     pub label: &'static str,
+    /// True for a file a scan without admin rights reads (`sshd_config`). Taking read access away
+    /// from other accounts is still the right fix, but those scans then lose the checks that read
+    /// it, and the result says so instead of leaving the user to work it out.
+    pub read_by_ordinary_scans: bool,
 }
 
 impl PermTarget {
@@ -34,7 +41,14 @@ impl PermTarget {
             path: path.into(),
             desired,
             label,
+            read_by_ordinary_scans: false,
         }
+    }
+
+    /// Marks a file that scans without admin rights read — see the field.
+    pub fn read_by_ordinary_scans(mut self) -> Self {
+        self.read_by_ordinary_scans = true;
+        self
     }
 }
 
@@ -63,6 +77,10 @@ pub struct PermResult {
     pub current_mode: Option<String>,
     pub desired_mode: String,
     pub outcome: PermOutcome,
+    /// Something the user should know about this change, in plain words: the file can no longer
+    /// be read by scans without admin rights, or its owner still has no read access.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -98,8 +116,9 @@ pub fn tighten_permissions(targets: &[PermTarget], apply: bool) -> PermReport {
             path: t.path.display().to_string(),
             label: t.label.to_string(),
             current_mode: None,
-            desired_mode: desired_mode.clone(),
+            desired_mode,
             outcome: PermOutcome::Missing,
+            note: None,
         };
 
         // symlink_metadata does NOT follow the final symlink, so we can tell a link apart from a
@@ -145,26 +164,26 @@ pub fn tighten_permissions(targets: &[PermTarget], apply: bool) -> PermReport {
             continue;
         }
 
+        // The bits both modes have. Never `desired` itself: that would add whatever `desired` has
+        // and the file lacks (a `660` known_hosts would gain world read on its way to `644`).
+        let tightened = current & t.desired & 0o777;
         let from = format!("{current:o}");
+        let to = format!("{tightened:o}");
+        result.note = change_note(t, current, tightened, apply);
         if !apply {
-            result.outcome = PermOutcome::WouldTighten {
-                from,
-                to: desired_mode,
-            };
+            result.outcome = PermOutcome::WouldTighten { from, to };
             report.would_tighten += 1;
             report.results.push(result);
             continue;
         }
 
-        match crate::platform::set_file_mode(&t.path, t.desired & 0o777) {
+        match crate::platform::set_file_mode(&t.path, tightened) {
             Ok(()) => {
-                result.outcome = PermOutcome::Tightened {
-                    from,
-                    to: desired_mode,
-                };
+                result.outcome = PermOutcome::Tightened { from, to };
                 report.tightened += 1;
             }
             Err(e) => {
+                result.note = None;
                 result.outcome = PermOutcome::Failed {
                     reason: e.to_string(),
                 };
@@ -174,6 +193,28 @@ pub fn tighten_permissions(targets: &[PermTarget], apply: bool) -> PermReport {
         report.results.push(result);
     }
     report
+}
+
+/// What the user should know about a change beyond the two modes.
+fn change_note(t: &PermTarget, current: u32, tightened: u32, apply: bool) -> Option<String> {
+    let path = t.path.display();
+    // Removing bits can't take read away from an owner who had it (every target keeps owner
+    // read), but it can't give it back either. A key at `044` ends at `000`: say so, because the
+    // fix is the owner's to make and this tool only ever removes access.
+    if tightened & 0o400 == 0 {
+        return Some(format!(
+            "the owner of {path} has no read access (it had none before either). Bulwark only \
+             removes access, so add it yourself if you need it: chmod u+r {path}"
+        ));
+    }
+    if t.read_by_ordinary_scans && current & 0o004 != 0 && tightened & 0o004 == 0 {
+        return Some(format!(
+            "{} only an administrator can read {path}, so scans without sudo can no longer check \
+             it. `sudo bulwarkctl scan --privileged` still covers it.",
+            if apply { "From now on" } else { "After this" }
+        ));
+    }
+    None
 }
 
 /// Build the `~/.ssh` permission targets for a given ssh directory. Each entry is classified so we
@@ -234,7 +275,9 @@ fn is_private_key_file(path: &Path) -> bool {
 
 /// The sensitive `/etc` files worth pinning to a canonical mode, matching what the
 /// `file_permissions` collector watches (research report §7). Root-scoped: chmod here needs
-/// privilege, which the CLI enforces before calling.
+/// privilege, which the CLI enforces before calling. Each mode is the most access the file may
+/// keep, so a file is changed whenever it grants anything beyond it — a stock `644` `sshd_config`
+/// included, not only a group- or world-writable one.
 pub fn etc_permission_targets() -> Vec<PermTarget> {
     vec![
         PermTarget::new("/etc/shadow", 0o640, "/etc/shadow (password hashes)"),
@@ -242,7 +285,10 @@ pub fn etc_permission_targets() -> Vec<PermTarget> {
         PermTarget::new("/etc/passwd", 0o644, "/etc/passwd"),
         PermTarget::new("/etc/group", 0o644, "/etc/group"),
         PermTarget::new("/etc/sudoers", 0o440, "/etc/sudoers"),
-        PermTarget::new("/etc/ssh/sshd_config", 0o600, "sshd_config"),
+        // 600 is what CIS asks for. A stock install ships it 644 and the `sshd_config` collector
+        // reads it without admin rights, hence the flag: the change is reported together with
+        // what it costs an ordinary scan.
+        PermTarget::new("/etc/ssh/sshd_config", 0o600, "sshd_config").read_by_ordinary_scans(),
     ]
 }
 
@@ -301,6 +347,130 @@ mod tests {
         let r = tighten_permissions(&targets, true);
         assert_eq!(r.already_ok, 1);
         assert_eq!(mode_of(&f), 0o600);
+    }
+
+    /// The tester's cases: the old code set `desired` outright, so a `660` known_hosts became
+    /// `644` (everyone gained read), a `440` key became `600` (the owner gained write) and a
+    /// `604` shadow became `640` (the group gained read).
+    #[test]
+    fn a_fix_never_adds_a_permission_bit() {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, current, desired, expected) in [
+            ("known_hosts", 0o660, 0o644, 0o640),
+            ("key", 0o440, 0o600, 0o400),
+            ("shadow", 0o604, 0o640, 0o600),
+            ("sudoers", 0o666, 0o440, 0o440),
+            ("dir-like", 0o751, 0o700, 0o700),
+        ] {
+            let f = dir.path().join(name);
+            fs::write(&f, "x").unwrap();
+            fs::set_permissions(&f, fs::Permissions::from_mode(current)).unwrap();
+            let targets = vec![PermTarget::new(f.clone(), desired, "x")];
+
+            let preview = tighten_permissions(&targets, false);
+            assert_eq!(
+                preview.results[0].outcome,
+                PermOutcome::WouldTighten {
+                    from: format!("{current:o}"),
+                    to: format!("{expected:o}"),
+                },
+                "{name}: the preview must show the mode that will really be set"
+            );
+
+            let r = tighten_permissions(&targets, true);
+            assert_eq!(r.tightened, 1, "{name}");
+            let after = mode_of(&f);
+            assert_eq!(
+                after, expected,
+                "{name}: {current:o} with target {desired:o}"
+            );
+            assert_eq!(
+                after & !current,
+                0,
+                "{name}: {current:o} → {after:o} added a permission bit"
+            );
+
+            // Running it again changes nothing.
+            let again = tighten_permissions(&targets, true);
+            assert_eq!((again.tightened, again.already_ok), (0, 1), "{name}");
+            assert_eq!(mode_of(&f), expected);
+        }
+    }
+
+    /// Every pair of modes, not just the ones someone thought of.
+    #[test]
+    fn no_pair_of_modes_can_add_a_bit() {
+        for desired in [0o600u32, 0o644, 0o640, 0o440, 0o700] {
+            for current in 0..=0o777u32 {
+                if !is_too_permissive(current, desired) {
+                    continue;
+                }
+                let tightened = current & desired & 0o777;
+                assert_eq!(tightened & !current, 0);
+                assert_eq!(tightened & !desired, 0);
+                assert!(
+                    !is_too_permissive(tightened, desired),
+                    "second run is a no-op"
+                );
+            }
+        }
+    }
+
+    /// The one result that is not usable: an owner who could not read the file still cannot.
+    /// The fix removes what others had, adds nothing, and says what is left to do.
+    #[test]
+    fn an_owner_without_read_access_is_told_and_not_given_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = dir.path().join("id_ed25519");
+        fs::write(&key, "x").unwrap();
+        fs::set_permissions(&key, fs::Permissions::from_mode(0o044)).unwrap();
+        let targets = vec![PermTarget::new(key.clone(), 0o600, "private key")];
+        let r = tighten_permissions(&targets, true);
+        assert_eq!(r.tightened, 1);
+        assert_eq!(
+            mode_of(&key),
+            0o000,
+            "group and world read removed, nothing added"
+        );
+        let note = r.results[0].note.as_deref().unwrap_or_default();
+        assert!(note.contains("chmod u+r"), "{note}");
+        // An ordinary tightening carries no note.
+        fs::set_permissions(&key, fs::Permissions::from_mode(0o644)).unwrap();
+        let r = tighten_permissions(&targets, true);
+        assert_eq!(r.results[0].note, None);
+    }
+
+    /// `sshd_config` going from 644 to 600 is correct and costs ordinary scans their SSH checks.
+    /// The result says so, in the preview and after applying, and only for a file marked as read
+    /// by those scans.
+    #[test]
+    fn hiding_a_file_from_ordinary_scans_is_said_out_loud() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("sshd_config");
+        fs::write(&cfg, "x").unwrap();
+        fs::set_permissions(&cfg, fs::Permissions::from_mode(0o644)).unwrap();
+        let marked =
+            vec![PermTarget::new(cfg.clone(), 0o600, "sshd_config").read_by_ordinary_scans()];
+
+        let preview = tighten_permissions(&marked, false);
+        let note = preview.results[0].note.clone().unwrap_or_default();
+        assert!(note.contains("sudo bulwarkctl scan --privileged"), "{note}");
+
+        let applied = tighten_permissions(&marked, true);
+        assert_eq!(mode_of(&cfg), 0o600);
+        assert!(applied.results[0]
+            .note
+            .as_deref()
+            .is_some_and(|n| n.contains("scans without sudo can no longer check")));
+
+        // Group-readable only (640 → 600): ordinary scans could not read it before either.
+        fs::set_permissions(&cfg, fs::Permissions::from_mode(0o640)).unwrap();
+        assert_eq!(tighten_permissions(&marked, true).results[0].note, None);
+        // The real target list marks sshd_config, and nothing whose exposure was the problem.
+        let etc = etc_permission_targets();
+        let flagged: Vec<_> = etc.iter().filter(|t| t.read_by_ordinary_scans).collect();
+        assert_eq!(flagged.len(), 1);
+        assert_eq!(flagged[0].path, Path::new("/etc/ssh/sshd_config"));
     }
 
     #[test]

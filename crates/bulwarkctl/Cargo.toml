@@ -25,6 +25,10 @@ chrono.workspace = true
 # No-echo passphrase prompt for `ssh protect`. Tiny, no transitive bloat.
 rpassword = "7"
 
+# Terminal width for the report, and the standard "reader went away" exit (see `main.rs`).
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [dev-dependencies]
 tempfile = "3"
 serde_json.workspace = true

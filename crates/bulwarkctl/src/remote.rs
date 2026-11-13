@@ -1305,14 +1305,13 @@ pub fn trust(
         .into_iter()
         .find(|k| k.fingerprint == fingerprint.trim())
     else {
-        return fail(
-            RemoteErrorKind::Other,
-            format!(
-                "{} doesn't present a key with fingerprint {fingerprint}, so nothing was trusted. \
-                 Check that the whole fingerprint was copied; if it was, the key you are being \
-                 shown is not the machine's",
-                target.spec
-            ),
+        // A plain error, not a `RemoteError`: those are shown under their kind's title, and the
+        // only kind that fits is "The scan failed" — there was no scan.
+        anyhow::bail!(
+            "{} doesn't present a key with fingerprint {fingerprint}, so nothing was trusted. \
+             Check that the whole fingerprint was copied; if it was, the key you are being \
+             shown is not the machine's",
+            target.spec
         );
     };
     if replace {

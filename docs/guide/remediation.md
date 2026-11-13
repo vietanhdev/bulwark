@@ -35,18 +35,32 @@ The `fix` command is the front door for the safe autofixes. Everything previews 
 changes anything with `--apply`:
 
 ```bash
-bulwarkctl fix list             # preview every available fix, changes nothing
-bulwarkctl fix ssh-perms --apply    # tighten ~/.ssh (dir 700, keys/config 600) — no privilege needed
-sudo bulwarkctl fix all --apply     # the safe set: ~/.ssh + /etc permissions + non-lockout sshd hardening
+bulwarkctl fix list                 # preview every available fix, changes nothing
+bulwarkctl fix ssh-perms --apply    # tighten your own ~/.ssh (dir 700, keys/config 600), no sudo
+sudo bulwarkctl fix all --apply     # the safe set: /etc permissions + sshd settings that cannot lock you out + kernel network settings
 ```
+
+`fix all` applies only changes that cannot surprise you. Two fixes change wording or policy, so
+`fix all` lists them and leaves them for you to run by name: `fix banner` and `fix login-defs`.
+
+**Whose `~/.ssh`?** `fix ssh-perms` (and the `~/.ssh` part of `fix all`) works on the account it
+runs as. Under `sudo` that is root, so `sudo bulwarkctl fix all --apply` tightens `/root/.ssh` and
+says so; run `bulwarkctl fix ssh-perms --apply` without `sudo` for your own. Bulwark does not reach
+into another account's home folder as root.
 
 Each fixer is reversible and never widens access:
 
 - **`fix ssh-perms`** tightens over-permissive files in `~/.ssh` (directory to `700`, private keys /
-  `config` / `authorized_keys` to `600`). Only ever tightens, never follows a symlink, records the
-  prior mode.
-- **`fix etc-perms`** pins sensitive `/etc` files (`shadow` `640`, `sudoers` `440`, `sshd_config`
-  `600`) when they're world- or group-writable. Needs root.
+  `config` / `authorized_keys` to `600`, `known_hosts` and public keys to `644`). Those modes are
+  the most a file may keep: access beyond them is removed, and none is ever added, so a
+  `known_hosts` at `660` becomes `640`, not `644`. Never follows a symlink, and shows the mode
+  before and after.
+- **`fix etc-perms`** does the same for sensitive `/etc` files (`shadow` `640`, `sudoers` `440`,
+  `sshd_config` `600`, `passwd` and `group` `644`): any file that grants more than its mode is
+  tightened. That includes a stock `sshd_config` at `644`, which is readable by everyone and not
+  only when it is writable. Needs root. With `sshd_config` at `600`, a scan without `sudo` can no
+  longer read it, so its SSH checks run only under `sudo bulwarkctl scan --privileged`; the fixer
+  says this when it makes the change.
 - **`fix sshd`** hardens `/etc/ssh/sshd_config` to clear the SSH findings (X11/TCP forwarding off,
   `MaxAuthTries`, …) by inserting one managed block at the top of the file, backing up the file
   and validating with `sshd -t` before keeping it. The two directives that can lock you out —
@@ -64,17 +78,42 @@ Each fixer is reversible and never widens access:
   One case it cannot fix: a directive set inside a `Match all` block. sshd applies that block
   after everything else, so a line at the top of the file does not win. `fix sshd` names the
   directive and leaves it for you to change in that block.
+
+Three more fixers can be run by name. Each needs root to apply; `fix all` includes `fix sysctl` but not the other two, which change wording and policy:
+
+- **`fix sysctl`** saves two kernel network settings in `/etc/sysctl.d/` (ICMP redirects off,
+  martian logging on) and applies them to the running system. Each line of its output says what
+  happened to that setting, and the command exits non-zero if one could not be applied. In a
+  container the kernel belongs to the host, so the settings are saved but cannot take effect there.
+- **`fix banner`** replaces `/etc/issue` and `/etc/issue.net` with a warning banner, but only
+  where the file still holds the distribution's default text (getty's codes, or just the OS name
+  and version). A banner someone wrote, or a file someone emptied, is reported and left exactly as
+  it is. A symbolic link (Fedora ships `/etc/issue` as one) is replaced by a regular file; the file
+  it pointed to is not changed. Not part of `fix all`.
+- **`fix login-defs`** sets `PASS_MAX_DAYS 90` and `PASS_MIN_DAYS 1` in `/etc/login.defs` where
+  the current value is outside the rule's threshold. A missing line or `-1` means "no limit" and
+  is fixed too. Not part of `fix all`.
 - **`ssh protect`** adds one passphrase to every unencrypted key in `~/.ssh` at once, backing each up
   first — far better than leaving plaintext keys on disk.
 
-Three more fixers are run one at a time and are not part of `fix all`. Each needs root to apply:
+### Fixes and the file-integrity baseline
 
-- **`fix sysctl`** writes the kernel network settings the scan asks for (ICMP redirects off, martian
-  logging on) to a file in `/etc/sysctl.d/` and reloads them, so they survive a reboot.
-- **`fix banner`** replaces the distribution's default `/etc/issue` and `/etc/issue.net` with a
-  legal warning banner. It never overwrites a banner someone already customised.
-- **`fix login-defs`** sets the password-ageing policy in `/etc/login.defs` (`PASS_MAX_DAYS`,
-  `PASS_MIN_DAYS`), backing the file up first.
+Some of these files are on the file-integrity watch list (`sshd_config`, `login.defs`). If you recorded a baseline with `bulwarkctl fim baseline`, a fixer that rewrites one
+of them also brings that file's baseline entry up to date, so the next scan does not report
+Bulwark's own edit as "modified since baseline":
+
+```mermaid
+flowchart TD
+  f["A fixer rewrites a watched file"] --> q{"Did the file match its<br/>baseline entry before the fix?"}
+  q -->|yes| u["Entry updated<br/>(the output says: baseline updated)"]
+  q -->|no| k["Baseline left alone<br/>(the output says: already differed)"]
+  q -->|no entry / no baseline| n["Nothing to do"]
+  k --> s["Next scan still reports the file"]
+```
+
+The second branch is deliberate. A file that had already changed since the baseline was changed
+by something other than this fix, and updating its entry would hide that. Look at the file, then
+record a new baseline yourself.
 
 In the desktop app these live in **Settings → SSH hardening** (tighten permissions, protect keys).
 

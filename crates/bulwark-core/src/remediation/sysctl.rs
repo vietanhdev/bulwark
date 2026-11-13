@@ -174,6 +174,21 @@ impl SysctlHardeningReport {
     pub fn pending_count(&self) -> usize {
         self.changes.len()
     }
+
+    /// How many settings an apply could not put into effect on the running system (the write to
+    /// `/proc/sys` failed, or the value did not read back). Zero for a preview. A front-door must
+    /// not report an apply as done while this is non-zero.
+    pub fn not_in_effect(&self) -> usize {
+        self.changes
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c.status,
+                    SysctlChangeStatus::Failed { .. } | SysctlChangeStatus::SetButNotLive
+                )
+            })
+            .count()
+    }
 }
 
 /// Public entry point. `rules` selects which knobs to consider (so a per-issue fix touches only
@@ -278,10 +293,8 @@ fn harden_with(
     // Back up an existing drop-in before rewriting it. A chmod is reversible from the report
     // alone; a file rewrite is not, so this one keeps a copy.
     if conf_path.exists() {
-        std::fs::create_dir_all(backup_dir)?;
-        let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
-        let backup = backup_dir.join(format!("99-bulwark-hardening.conf.{stamp}.bak"));
-        std::fs::copy(conf_path, &backup)?;
+        let backup =
+            super::write_backup(backup_dir, "99-bulwark-hardening.conf", existing.as_bytes())?;
         report.backup_path = Some(backup.display().to_string());
     }
 
@@ -293,7 +306,8 @@ fn harden_with(
     if let Some(parent) = conf_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(conf_path, next)?;
+    // One rename, and never through a link: the drop-in is ours, a link in its place is not.
+    super::replace_file(conf_path, next.as_bytes(), 0o644)?;
     report.applied = true;
 
     // Now make it effective on the running kernel. Persisted scopes and live interfaces alike are

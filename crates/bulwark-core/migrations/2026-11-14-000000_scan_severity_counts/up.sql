@@ -1,0 +1,16 @@
+-- How many findings of each severity a scan left open, kept with the scan run.
+--
+-- `total_findings` already records how many findings a run left open, and it is recorded at the
+-- time of the run because it cannot be worked out later: reconciliation moves each finding row to
+-- the newest run that saw it, so the `findings` table only ever describes the present. The same
+-- is true of the split by severity, and `bulwarkctl history` (and any trend over time) needs it:
+-- "12 findings" then and "12 findings" now can be one critical problem apart.
+--
+-- A JSON object, {"critical":0,"high":2,"medium":5,"low":3,"info":2}, legible in `sqlite3` like
+-- the other JSON columns of this table. It counts exactly what `total_findings` counts (open
+-- findings the user has not chosen to ignore), so the five numbers add up to that column.
+--
+-- Nullable, with no default, on purpose: a run recorded before this migration has no split, and
+-- there is no way to recover one. NULL reads as "not recorded" and is shown as the total alone.
+-- Back-filling zeros would claim those runs found nothing of any severity.
+ALTER TABLE scan_runs ADD COLUMN severity_counts TEXT;

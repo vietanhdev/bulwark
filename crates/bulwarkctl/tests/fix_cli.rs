@@ -253,6 +253,11 @@ fn etc_perms_apply_without_root_is_refused() {
 
 #[test]
 fn fix_all_applies_user_scoped_and_skips_root_gracefully() {
+    // As root, `fix all --apply` is the real thing: it would change /etc on whatever machine runs
+    // the tests. The root path is exercised in a throw-away container instead.
+    if running_as_root() {
+        return;
+    }
     let home = tempfile::tempdir().unwrap();
     let ssh = home.path().join(".ssh");
     fs::create_dir(&ssh).unwrap();
@@ -300,4 +305,120 @@ fn fix_list_runs_and_previews() {
         out.contains("ssh protect"),
         "should mention the passphrase fix too"
     );
+}
+
+/// The tester's cases: `known_hosts` at 660 became 644 (everyone gained read) and a key at 440
+/// became 600. A fix removes access; it never adds any, and a second run changes nothing.
+#[test]
+fn ssh_perms_never_adds_a_permission_bit() {
+    let home = tempfile::tempdir().unwrap();
+    let ssh = home.path().join(".ssh");
+    fs::create_dir(&ssh).unwrap();
+    fs::set_permissions(&ssh, fs::Permissions::from_mode(0o770)).unwrap();
+    let known_hosts = ssh.join("known_hosts");
+    fs::write(&known_hosts, "h ssh-ed25519 AAAA\n").unwrap();
+    fs::set_permissions(&known_hosts, fs::Permissions::from_mode(0o660)).unwrap();
+    let key = ssh.join("k");
+    fs::write(
+        &key,
+        "-----BEGIN OPENSSH PRIVATE KEY-----\nx\n-----END OPENSSH PRIVATE KEY-----\n",
+    )
+    .unwrap();
+    fs::set_permissions(&key, fs::Permissions::from_mode(0o440)).unwrap();
+
+    let (out, ok) = run_fix(home.path(), &["ssh-perms"]);
+    assert!(ok, "{out}");
+    assert!(
+        out.contains("660 → 640"),
+        "the preview shows the real new mode:\n{out}"
+    );
+
+    let (out, ok) = run_fix(home.path(), &["ssh-perms", "--apply"]);
+    assert!(ok, "{out}");
+    assert_eq!(
+        mode_of(&known_hosts),
+        0o640,
+        "world must not gain read:\n{out}"
+    );
+    assert_eq!(
+        mode_of(&key),
+        0o400,
+        "the owner must not gain write:\n{out}"
+    );
+    assert_eq!(mode_of(&ssh), 0o700);
+
+    let (out, ok) = run_fix(home.path(), &["ssh-perms", "--apply"]);
+    assert!(
+        ok && out.contains("Nothing to do"),
+        "a second run changes nothing:\n{out}"
+    );
+    assert_eq!(mode_of(&known_hosts), 0o640);
+    assert_eq!(mode_of(&key), 0o400);
+}
+
+/// `fix all` applied the banner and password-age fixers although its help listed neither. Its
+/// JSON form (what the desktop app reads) carries neither report now, and lists them instead.
+#[test]
+fn fix_all_leaves_wording_and_policy_changes_to_be_run_by_name() {
+    let home = tempfile::tempdir().unwrap();
+    let out = Command::new(bin())
+        .args(["fix", "all", "--root-only", "--json"])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("not JSON ({e}): {}", String::from_utf8_lossy(&out.stdout)));
+    assert!(report["banner"].is_null(), "{report}");
+    assert!(report["login_defs"].is_null(), "{report}");
+    assert!(report["not_included"].is_array(), "{report}");
+    assert!(
+        !report["etc_perms"].is_null(),
+        "the permission part still runs: {report}"
+    );
+    assert_eq!(report["applied"], false);
+
+    let (out, ok) = run_fix(home.path(), &["all"]);
+    assert!(ok, "{out}");
+    assert!(
+        !out.contains("[banner]") && !out.contains("[login.defs]"),
+        "{out}"
+    );
+    assert!(out.contains("[sysctl]") || out.contains("sysctl"), "{out}");
+}
+
+/// `fix login-defs` answered "already within thresholds" for a file with aging disabled (`-1`)
+/// and for one with no such lines, while the scan reported both as "no limit".
+#[test]
+fn login_defs_fixes_disabled_and_missing_password_aging() {
+    let home = tempfile::tempdir().unwrap();
+    for content in ["PASS_MAX_DAYS -1\nPASS_MIN_DAYS -1\n", "UMASK 022\n"] {
+        let cfg = home.path().join("login.defs");
+        fs::write(&cfg, content).unwrap();
+        let cfg_arg = cfg.to_str().unwrap();
+        let (out, ok) = run_fix(home.path(), &["login-defs", "--config", cfg_arg]);
+        assert!(ok, "{out}");
+        assert!(!out.contains("already within"), "{out}");
+        assert!(out.contains("no limit"), "{out}");
+        assert_eq!(
+            fs::read_to_string(&cfg).unwrap(),
+            content,
+            "a preview writes nothing"
+        );
+
+        let (out, ok) = run_fix(home.path(), &["login-defs", "--config", cfg_arg, "--apply"]);
+        assert!(ok, "{out}");
+        let text = fs::read_to_string(&cfg).unwrap();
+        assert!(
+            text.contains("PASS_MAX_DAYS 90") && text.contains("PASS_MIN_DAYS 1"),
+            "{text}"
+        );
+
+        let (out, ok) = run_fix(home.path(), &["login-defs", "--config", cfg_arg, "--apply"]);
+        assert!(ok && out.contains("Nothing to do"), "{out}");
+        assert_eq!(
+            fs::read_to_string(&cfg).unwrap(),
+            text,
+            "a second run changes nothing"
+        );
+    }
 }

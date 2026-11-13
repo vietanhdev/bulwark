@@ -30,6 +30,10 @@ diesel::table! {
         // 2026-07-19-000000_scan_rules_evaluated; '[]' on every row written before it, which
         // reads as "no evidence kept" rather than "nothing ran clean". See that migration.
         rules_evaluated -> Text,
+        // JSON object of open findings per severity, as this run left them. Added by
+        // 2026-11-14-000000_scan_severity_counts; NULL on every row written before it, which
+        // reads as "not recorded", never as zero. See that migration.
+        severity_counts -> Nullable<Text>,
     }
 }
 

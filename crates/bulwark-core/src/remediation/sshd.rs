@@ -529,6 +529,9 @@ fn harden_with(
 
     // Back up the file as it is (0600) before writing.
     let backup_path = write_backup(backup_dir, path, &original)?;
+    // So the file-integrity baseline can follow this edit, and only this edit (see
+    // `update_baseline_after_fix`).
+    let hash_before = super::hash_before_fix(path);
 
     // Preserve the original file's mode across the rewrite.
     let orig_mode = crate::platform::file_mode(&std::fs::metadata(path)?)
@@ -562,6 +565,14 @@ fn harden_with(
                 });
             }
         }
+    }
+
+    if let Some(update) = super::update_baseline_after_fix(path, hash_before.as_deref()) {
+        let said = update.message();
+        report.note = Some(match report.note.take() {
+            Some(earlier) => format!("{earlier}. {said}"),
+            None => said,
+        });
     }
 
     for c in changes.iter_mut() {

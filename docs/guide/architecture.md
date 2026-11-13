@@ -338,7 +338,7 @@ There's no network API — the "client" and "server" are the same process, expos
 | `bulwarkctl rules validate <path>` | Lint a rule file without running a scan (used in CI for the bundled pack) | `0` valid / `1` invalid |
 | `bulwarkctl fim baseline` | Record the current hashes of the watched files as the known-good baseline. Never runs automatically — a baseline taken *after* a compromise would enshrine it as clean | `0` |
 | `bulwarkctl fim baseline --privileged` | Also baseline the root-only paths (`/etc/shadow`, `/etc/sudoers`); refuses unless run as root | `0` |
-| `bulwarkctl history` | List past `ScanRun`s (shared with the GUI's history) | `0` |
+| `bulwarkctl history [--limit N]` | List past scans (shared with the GUI's history): date, how many checks ran, whether it had admin rights, findings by severity | `0` |
 | `bulwarkctl scan --ssh [user@]host` | One-off scan of another machine over SSH; results in that machine's own history | like `scan` |
 | `bulwarkctl hosts add\|list\|set\|remove\|show` | Manage the machines Bulwark monitors (shared with the GUI's Remote page) | `0` |
 | `bulwarkctl hosts test <machine>` | Step-by-step connection check with the fix for each failure, plus connection-security advice | `0` ready / `3` not ready |
@@ -346,7 +346,7 @@ There's no network API — the "client" and "server" are the same process, expos
 | `bulwarkctl hosts setup-key <machine> [--password-stdin]` | Install Bulwark's restricted monitoring key, signing in once | `0` / `3` |
 | `bulwarkctl hosts scan <machine…> \| --all \| --due` | Scan and record; `--due` for cron | like `scan`, `3` if any machine couldn't be scanned |
 | `bulwarkctl notify telegram\|email\|status\|test\|report\|disable` | Configure and use Telegram / e-mail alerts | `0` / `3` if delivery failed |
-| `bulwarkctl logs scan` | Decode + correlate the current boot's journal (or `--since=<spec>` / `--from-file <path>`); `--json` for machine-readable output | `0` clean / `1` ≥medium / `2` critical, like `scan` |
+| `bulwarkctl logs scan` | Decode + correlate the current boot's journal (or `--since=<spec>` / `--from-file <path>`); `--json` for machine-readable output | `0` clean / `1` ≥medium / `2` critical, like `scan`; `2` also when nothing could be analysed (no events read, none understood, or no decoders/rules), with no check mark |
 | `bulwarkctl logs rules list` / `rules validate <path>` | Inspect the log-rule pack; `validate` also cross-checks each rule's `decoder:` names a real decoder | `0` / `1` |
 | `bulwarkctl logs decoders list` / `decoders validate <path>` | Inspect the decoder pack | `0` / `1` |
 

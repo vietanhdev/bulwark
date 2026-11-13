@@ -32,11 +32,14 @@ struct Directive {
     rule_id: &'static str,
     desired: &'static str,
     why: &'static str,
-    /// The rule's own condition, as a predicate on the currently-set value.
+    /// The rule's own condition, as a predicate on the value in effect.
     is_insecure: fn(i64) -> bool,
-    /// What to assume when the key is absent from the file. `None` means "absent is fine" —
-    /// never invent a finding for a key the rule couldn't have read either.
-    default_when_absent: Option<i64>,
+    /// The value in effect when the key is absent or negative. login.defs(5): `-1` is assumed
+    /// when the line is missing, and a negative value switches the limit off. The `login_defs`
+    /// collector stores exactly these numbers for that case, so the rule fires — and this fixer
+    /// has to agree, or it answers "already within thresholds" about a finding the scan just
+    /// reported (Arch ships neither line; `PASS_MAX_DAYS -1` is how aging is disabled by hand).
+    no_limit: i64,
 }
 
 const DIRECTIVES: &[Directive] = &[
@@ -47,9 +50,8 @@ const DIRECTIVES: &[Directive] = &[
         why: "a password that never effectively expires keeps a leaked credential valid forever (BLWK-ACCT-002)",
         // Rule: pass_max_days > 365.
         is_insecure: |v| v > 365,
-        // Absent means shadow's built-in default (99999) applies — which is insecure, but the
-        // collector reports no field at all, so the rule cannot fire and neither will we.
-        default_when_absent: None,
+        // No limit: passwords never expire, the 99999 other distributions write for the same.
+        no_limit: 99_999,
     },
     Directive {
         key: "PASS_MIN_DAYS",
@@ -58,7 +60,8 @@ const DIRECTIVES: &[Directive] = &[
         why: "a zero minimum age lets a user cycle straight back to the compromised password (BLWK-ACCT-003)",
         // Rule: pass_min_days == 0.
         is_insecure: |v| v == 0,
-        default_when_absent: None,
+        // No limit: no minimum age.
+        no_limit: 0,
     },
 ];
 
@@ -91,6 +94,9 @@ pub struct LoginDefsReport {
     pub applied: bool,
     pub backup_path: Option<String>,
     pub note: Option<String>,
+    /// What happened to this file's file-integrity baseline entry, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<super::BaselineUpdate>,
 }
 
 impl LoginDefsReport {
@@ -118,14 +124,19 @@ pub fn harden_login_defs(
     let original = std::fs::read_to_string(path)?;
 
     for d in DIRECTIVES.iter().filter(|d| rules.contains(&d.rule_id)) {
-        let current = effective_value(&original, d.key).or(d.default_when_absent);
-        let Some(v) = current else { continue };
-        if !(d.is_insecure)(v) {
+        let written = effective_value(&original, d.key);
+        // What the system does with what is written: a missing or negative value is "no limit".
+        let in_effect = written.filter(|v| *v >= 0).unwrap_or(d.no_limit);
+        if !(d.is_insecure)(in_effect) {
             continue;
         }
         report.changes.push(LoginDefsChange {
             key: d.key.to_string(),
-            current: v.to_string(),
+            current: match written {
+                Some(v) if v >= 0 => v.to_string(),
+                Some(v) => format!("{v}, which means no limit"),
+                None => "not set, which means no limit".to_string(),
+            },
             desired: d.desired.to_string(),
             why: d.why.to_string(),
             status: LoginDefsChangeStatus::WouldSet,
@@ -136,10 +147,16 @@ pub fn harden_login_defs(
         return Ok(report);
     }
 
-    std::fs::create_dir_all(backup_dir)?;
-    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
-    let backup = backup_dir.join(format!("login.defs.{stamp}.bak"));
-    std::fs::write(&backup, &original)?;
+    // A link is not edited through and not replaced: unlike a banner, nothing says a regular file
+    // here is what the administrator wants, and the file it points at may be shared.
+    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        anyhow::bail!(
+            "{} is a symbolic link, so it was not changed. Edit the file it points to by hand",
+            path.display()
+        );
+    }
+
+    let backup = super::write_backup(backup_dir, "login.defs", original.as_bytes())?;
     report.backup_path = Some(backup.display().to_string());
 
     let mut text = original.clone();
@@ -147,8 +164,12 @@ pub fn harden_login_defs(
         text = set_directive(&text, &change.key, &change.desired);
         change.status = LoginDefsChangeStatus::Set;
     }
-    std::fs::write(path, &text)?;
+    // Taken before the write: the baseline is only brought up to date if the file matched it
+    // until now (see `update_baseline_after_fix`).
+    let hash_before = super::hash_before_fix(path);
+    super::replace_file(path, text.as_bytes(), 0o644)?;
     report.applied = true;
+    report.baseline = super::update_baseline_after_fix(path, hash_before.as_deref());
 
     // Re-read through the same parser the rules use. Writing a file is not evidence the value is
     // now what we intended — a botched replace would otherwise be reported as a success.
@@ -335,6 +356,76 @@ mod tests {
             "a commented annotation must not be rewritten"
         );
         assert_eq!(effective_value(&out, "PASS_MIN_DAYS"), Some(1));
+    }
+
+    /// The collector reports a missing or negative value as "no limit" (99999 / 0), so the rules
+    /// fire on it. The fixer used to answer "already within thresholds" for both.
+    #[test]
+    fn disabled_or_missing_aging_is_no_limit_and_gets_fixed() {
+        for (name, content) in [
+            (
+                "disabled",
+                "PASS_MAX_DAYS\t-1\nPASS_MIN_DAYS\t-1\nUMASK 022\n",
+            ),
+            ("missing", "# nothing about password age here\nUMASK 022\n"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let cfg = dir.path().join("login.defs");
+            std::fs::write(&cfg, content).unwrap();
+            let backups = dir.path().join("b");
+
+            let preview = harden_login_defs(&all_rules(), Some(&cfg), &backups, false).unwrap();
+            assert_eq!(preview.changes.len(), 2, "{name}: both keys mean no limit");
+            assert!(
+                preview
+                    .changes
+                    .iter()
+                    .all(|c| c.current.contains("no limit")),
+                "{name}: {:?}",
+                preview.changes
+            );
+            assert_eq!(std::fs::read_to_string(&cfg).unwrap(), content);
+
+            let r = harden_login_defs(&all_rules(), Some(&cfg), &backups, true).unwrap();
+            assert!(r.applied && r.note.is_none(), "{name}: {:?}", r.note);
+            let text = std::fs::read_to_string(&cfg).unwrap();
+            assert_eq!(effective_value(&text, "PASS_MAX_DAYS"), Some(90), "{name}");
+            assert_eq!(effective_value(&text, "PASS_MIN_DAYS"), Some(1), "{name}");
+            assert!(text.contains("UMASK 022"));
+
+            // Running it again changes nothing.
+            let again = harden_login_defs(&all_rules(), Some(&cfg), &backups, true).unwrap();
+            assert!(again.changes.is_empty() && !again.applied, "{name}");
+            assert_eq!(std::fs::read_to_string(&cfg).unwrap(), text);
+        }
+    }
+
+    /// The edit is one rename, keeps the file's own mode, and never goes through a link.
+    #[cfg(unix)]
+    #[test]
+    fn the_file_keeps_its_mode_and_a_link_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("login.defs");
+        std::fs::write(&cfg, STOCK).unwrap();
+        std::fs::set_permissions(&cfg, std::fs::Permissions::from_mode(0o640)).unwrap();
+        harden_login_defs(&all_rules(), Some(&cfg), &dir.path().join("b"), true).unwrap();
+        let mode = std::fs::metadata(&cfg).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o640);
+
+        let real = dir.path().join("real.defs");
+        std::fs::write(&real, STOCK).unwrap();
+        let link = dir.path().join("link.defs");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let err = harden_login_defs(&all_rules(), Some(&link), &dir.path().join("b"), true)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("symbolic link"), "{err}");
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), STOCK);
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
     }
 
     /// A host already inside policy must not be edited at all — the fixer fires exactly where the

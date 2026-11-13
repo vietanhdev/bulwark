@@ -278,14 +278,13 @@ export function OverviewView({ active, onNavigate }: { active: boolean; onNaviga
   // it has already dealt with.
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
   const fixCapabilities = useFixCapabilities();
-  // Only offer the bulk fix when at least one issue on screen actually has a fixer — otherwise the
-  // button previews an empty change set, which reads as a broken feature rather than an honest one.
-  const anyFixable = findings.some(
-    (f) =>
-      rulesEvaluated.has(f.rule_id) &&
-      fixCapabilities.has(f.rule_id) &&
-      !fixCapabilities.get(f.rule_id)!.lockout_risk,
-  );
+  // Only offer the bulk fix when at least one issue on screen is one it applies: a fixer that is
+  // not part of it (lockout risk, or a wording/policy change) would leave an empty preview, which
+  // reads as a broken feature rather than an honest one.
+  const anyFixable = findings.some((f) => {
+    const cap = fixCapabilities.get(f.rule_id);
+    return rulesEvaluated.has(f.rule_id) && !!cap && cap.in_fix_all && !cap.lockout_risk;
+  });
   const fixDisabled =
     loading ||
     scanning ||

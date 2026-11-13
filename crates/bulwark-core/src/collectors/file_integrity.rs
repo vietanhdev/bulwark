@@ -328,6 +328,168 @@ pub fn resolve_baseline_path() -> PathBuf {
     baseline_path()
 }
 
+/// What happened to a watched file's baseline entry after one of Bulwark's own fixers rewrote the
+/// file. Returned by [`update_baseline_after_fix`]; `None` from there means there was nothing to
+/// do (the file is not watched, no baseline is recorded, or the baseline has no entry for it).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum BaselineUpdate {
+    /// The entry now records the file as the fix left it, so the next scan does not report
+    /// Bulwark's own edit as tampering.
+    Updated { path: String },
+    /// The file no longer matched its entry *before* the fix touched it. Recording the new hash
+    /// would hide that earlier, unexplained change, so the baseline is left exactly as it was and
+    /// the next scan still reports the file.
+    AlreadyDiffered { path: String },
+    /// The entry should have been updated and could not be.
+    Failed { path: String, reason: String },
+}
+
+impl BaselineUpdate {
+    /// One plain line for a fixer's output.
+    pub fn message(&self) -> String {
+        match self {
+            BaselineUpdate::Updated { path } => format!(
+                "file-integrity baseline updated for {path}, so this change is not reported as tampering"
+            ),
+            BaselineUpdate::AlreadyDiffered { path } => format!(
+                "{path} already differed from its file-integrity baseline before this fix, so the \
+                 baseline was not updated. Check what else changed in the file, then record a new \
+                 baseline with: {}",
+                rebaseline_command()
+            ),
+            BaselineUpdate::Failed { path, reason } => format!(
+                "the file-integrity baseline for {path} could not be updated ({reason}). The next \
+                 scan will report the file as changed until a new baseline is recorded: run \
+                 `bulwarkctl fim baseline` as the account whose baseline it is (with sudo and \
+                 --privileged if that is how it was recorded)"
+            ),
+        }
+    }
+}
+
+/// The command that records a fresh baseline for the account this process runs as.
+fn rebaseline_command() -> &'static str {
+    if crate::platform::is_root() {
+        "sudo bulwarkctl fim baseline --privileged"
+    } else {
+        "bulwarkctl fim baseline"
+    }
+}
+
+/// The hash of `path` as it is right now, in the form the baseline stores. A fixer calls this
+/// *before* it rewrites a file and hands the result to [`update_baseline_after_fix`]. `None` when
+/// the file can't be hashed.
+pub fn hash_before_fix(path: &Path) -> Option<String> {
+    let key = path.to_str()?;
+    compute_hashes(&[path.to_path_buf()]).remove(key)
+}
+
+/// Call after a fixer has rewritten `path`: if the file is on the watch list and the baseline this
+/// account uses has an entry for it, bring that entry up to date — but only when `hash_before`
+/// (from [`hash_before_fix`], taken before the rewrite) equalled the entry. A file that had
+/// already drifted from its baseline keeps its old entry, so the earlier change is still reported.
+///
+/// Returns `None` when there is nothing to say: the file is not watched, there is no baseline, the
+/// baseline has no entry for it, or the fix left the file's contents as they were.
+pub fn update_baseline_after_fix(path: &Path, hash_before: Option<&str>) -> Option<BaselineUpdate> {
+    let watched: Vec<&str> = UNPRIVILEGED_WATCHED_PATHS
+        .iter()
+        .chain(PRIVILEGED_WATCHED_PATHS)
+        .copied()
+        .collect();
+    update_baseline_after_fix_at(path, hash_before, &baseline_path(), &watched)
+}
+
+/// Why root must leave the baseline at `baseline_file` alone, if it must: the file or its folder
+/// belongs to another account. `None` for any other user, who can only reach their own files.
+#[cfg(unix)]
+fn not_roots_own(baseline_file: &Path) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    if !crate::platform::is_root() {
+        return None;
+    }
+    let file_ok = std::fs::symlink_metadata(baseline_file)
+        .is_ok_and(|m| m.file_type().is_file() && m.uid() == 0);
+    let dir_ok = baseline_file
+        .parent()
+        .and_then(|d| std::fs::symlink_metadata(d).ok())
+        .is_some_and(|m| m.file_type().is_dir() && m.uid() == 0);
+    (!(file_ok && dir_ok)).then(|| {
+        format!(
+            "{} belongs to another account, and root does not rewrite another account's files",
+            baseline_file.display()
+        )
+    })
+}
+
+#[cfg(not(unix))]
+fn not_roots_own(_baseline_file: &Path) -> Option<String> {
+    None
+}
+
+/// Testable core of [`update_baseline_after_fix`]: explicit baseline file and watch list.
+fn update_baseline_after_fix_at(
+    path: &Path,
+    hash_before: Option<&str>,
+    baseline_file: &Path,
+    watched: &[&str],
+) -> Option<BaselineUpdate> {
+    let key = path.to_str()?;
+    if !watched.contains(&key) {
+        return None;
+    }
+    let path_string = key.to_string();
+    if !baseline_file.exists() {
+        return None;
+    }
+    // Root only reads and rewrites a baseline that is root's own. With a preserved `HOME`
+    // (`sudo -E`, or macOS) the baseline path is inside another account's home: a file that
+    // account can swap for a pipe or a link, in a folder it can point anywhere.
+    if let Some(reason) = not_roots_own(baseline_file) {
+        return Some(BaselineUpdate::Failed {
+            path: path_string,
+            reason,
+        });
+    }
+    let text = std::fs::read_to_string(baseline_file).ok()?;
+    let recorded = parse_hash_lines(&text).remove(key)?;
+    let Some(before) = hash_before else {
+        return Some(BaselineUpdate::Failed {
+            path: path_string,
+            reason: "the file could not be read before the fix".into(),
+        });
+    };
+    if before != recorded {
+        return Some(BaselineUpdate::AlreadyDiffered { path: path_string });
+    }
+    let Some(now) = compute_hashes(&[path.to_path_buf()]).remove(key) else {
+        return Some(BaselineUpdate::Failed {
+            path: path_string,
+            reason: "the file could not be read after the fix".into(),
+        });
+    };
+    if now == recorded {
+        return None;
+    }
+    // Only this file's line changes; every other entry stays exactly as it was recorded.
+    let mut next = String::with_capacity(text.len());
+    for line in text.lines() {
+        match line.split_once("  ") {
+            Some((_, p)) if p == key => next.push_str(&format!("{now}  {key}")),
+            _ => next.push_str(line),
+        }
+        next.push('\n');
+    }
+    match write_no_follow(baseline_file, next.as_bytes()) {
+        Ok(()) => Some(BaselineUpdate::Updated { path: path_string }),
+        Err(e) => Some(BaselineUpdate::Failed {
+            path: path_string,
+            reason: e.to_string(),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -551,5 +713,118 @@ mod tests {
         assert!(rows
             .iter()
             .all(|r| r.get("kind") == Some(&Value::String("file".into()))));
+    }
+
+    /// A fixer's own edit must not come back as "modified since baseline" — but only its own edit.
+    #[test]
+    fn a_fix_updates_only_its_own_baseline_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.conf");
+        let b = dir.path().join("b.conf");
+        std::fs::write(&a, "one\n").unwrap();
+        std::fs::write(&b, "other\n").unwrap();
+        let baseline = dir.path().join("baseline.txt");
+        let watched = [a.to_str().unwrap(), b.to_str().unwrap()];
+        establish_baseline_at(&watched, &baseline).unwrap();
+        let b_line_before = std::fs::read_to_string(&baseline)
+            .unwrap()
+            .lines()
+            .find(|l| l.ends_with("b.conf"))
+            .unwrap()
+            .to_string();
+
+        let before = hash_before_fix(&a);
+        assert!(
+            before.is_some(),
+            "sha256sum must be available for this test"
+        );
+        std::fs::write(&a, "one, fixed\n").unwrap();
+        let outcome = update_baseline_after_fix_at(&a, before.as_deref(), &baseline, &watched);
+        assert_eq!(
+            outcome,
+            Some(BaselineUpdate::Updated {
+                path: a.to_str().unwrap().to_string()
+            })
+        );
+
+        let rows = collect_for(&watched, &baseline, false);
+        assert!(
+            rows.iter()
+                .all(|r| r.get("changed") == Some(&Value::Bool(false))),
+            "the fixed file must not read as changed: {rows:?}"
+        );
+        let text = std::fs::read_to_string(&baseline).unwrap();
+        assert!(text.contains(&b_line_before), "other entries are untouched");
+        assert_eq!(text.lines().count(), 2);
+    }
+
+    /// The laundering case: the file had already changed before the fix. The baseline must keep
+    /// its old entry so that earlier change is still reported.
+    #[test]
+    fn a_fix_never_hides_a_change_made_before_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.conf");
+        std::fs::write(&a, "one\n").unwrap();
+        let baseline = dir.path().join("baseline.txt");
+        let watched = [a.to_str().unwrap()];
+        establish_baseline_at(&watched, &baseline).unwrap();
+        let recorded = std::fs::read_to_string(&baseline).unwrap();
+
+        // Someone else edits the file, then the fixer runs.
+        std::fs::write(&a, "one\nbackdoor\n").unwrap();
+        let before = hash_before_fix(&a);
+        std::fs::write(&a, "one\nbackdoor\nfixed\n").unwrap();
+        let outcome = update_baseline_after_fix_at(&a, before.as_deref(), &baseline, &watched);
+        assert_eq!(
+            outcome,
+            Some(BaselineUpdate::AlreadyDiffered {
+                path: a.to_str().unwrap().to_string()
+            })
+        );
+        assert_eq!(std::fs::read_to_string(&baseline).unwrap(), recorded);
+        let rows = collect_for(&watched, &baseline, false);
+        assert_eq!(rows[0].get("changed"), Some(&Value::Bool(true)));
+        assert!(outcome.unwrap().message().contains("not updated"));
+    }
+
+    #[test]
+    fn a_fix_says_nothing_about_a_file_the_baseline_does_not_cover() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.conf");
+        let other = dir.path().join("unwatched.conf");
+        std::fs::write(&a, "one\n").unwrap();
+        std::fs::write(&other, "x\n").unwrap();
+        let baseline = dir.path().join("baseline.txt");
+        let watched = [a.to_str().unwrap()];
+
+        // No baseline recorded at all: a fixer must not create one.
+        let before = hash_before_fix(&a);
+        std::fs::write(&a, "two\n").unwrap();
+        assert_eq!(
+            update_baseline_after_fix_at(&a, before.as_deref(), &baseline, &watched),
+            None
+        );
+        assert!(!baseline.exists());
+
+        // A baseline exists, but the file is not on the watch list.
+        establish_baseline_at(&watched, &baseline).unwrap();
+        let recorded = std::fs::read_to_string(&baseline).unwrap();
+        assert_eq!(
+            update_baseline_after_fix_at(&other, Some("0"), &baseline, &watched),
+            None
+        );
+        // Watched, baselined, but the "fix" changed nothing.
+        let before = hash_before_fix(&a);
+        assert_eq!(
+            update_baseline_after_fix_at(&a, before.as_deref(), &baseline, &watched),
+            None
+        );
+        // Watched and baselined, but its state before the fix is unknown: never updated.
+        std::fs::write(&a, "three\n").unwrap();
+        assert!(matches!(
+            update_baseline_after_fix_at(&a, None, &baseline, &watched),
+            Some(BaselineUpdate::Failed { .. })
+        ));
+        assert_eq!(std::fs::read_to_string(&baseline).unwrap(), recorded);
     }
 }

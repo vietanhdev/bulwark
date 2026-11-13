@@ -42,6 +42,9 @@ pub struct FixCapabilityDto {
     pub kind: bulwark_core::FixKind,
     pub lockout_risk: bool,
     pub needs_root: bool,
+    /// Whether "Fix all safe issues" applies it. Wording and policy changes (banner, password
+    /// ageing) are fixed one at a time.
+    pub in_fix_all: bool,
 }
 
 /// The rules an autofix can actually clear. The frontend renders a Fix button for exactly these and
@@ -60,6 +63,7 @@ pub async fn fix_capabilities() -> Vec<FixCapabilityDto> {
             kind: c.kind,
             lockout_risk: c.lockout_risk,
             needs_root: c.needs_root,
+            in_fix_all: c.in_fix_all,
         })
         .collect()
 }

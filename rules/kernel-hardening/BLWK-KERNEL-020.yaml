@@ -19,5 +19,7 @@ explain: >
 fix: >
   If '{{ module_blacklist.module }}' isn't actually needed on this host, add
   'install {{ module_blacklist.module }} /bin/true' to a file under /etc/modprobe.d/
-  (e.g. /etc/modprobe.d/blacklist-rare.conf) and run 'update-initramfs -u'.
+  (e.g. /etc/modprobe.d/blacklist-rare.conf), then rebuild the boot image so it applies early
+  too ('update-initramfs -u' on Debian and Ubuntu, 'dracut -f' on Fedora and RHEL,
+  'mkinitcpio -P' on Arch).
 references: [CIS-1.1.1]

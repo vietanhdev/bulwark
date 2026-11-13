@@ -21,6 +21,8 @@ explain: >
 fix: >
   On a server with no legitimate need for USB storage, add
   'install usb-storage /bin/true' to a file under /etc/modprobe.d/
-  (e.g. /etc/modprobe.d/blacklist-usb-storage.conf) and run 'update-initramfs -u'.
+  (e.g. /etc/modprobe.d/blacklist-usb-storage.conf), then rebuild the boot image so it
+  applies early too ('update-initramfs -u' on Debian and Ubuntu, 'dracut -f' on Fedora and
+  RHEL, 'mkinitcpio -P' on Arch).
   Do NOT apply this to a workstation — you will break all removable media on it.
 references: [CIS-1.1.1]
