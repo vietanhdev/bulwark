@@ -223,7 +223,7 @@ pub fn load_rules<'a>(pack: impl Into<PackSource<'a>>) -> (Vec<LoadedRule>, Vec<
                 continue;
             }
         };
-        let rule: Rule = match serde_yaml::from_str(&text) {
+        let rule: Rule = match crate::yaml::from_str(&text) {
             Ok(r) => r,
             Err(e) => {
                 errors.push(RuleLoadError {

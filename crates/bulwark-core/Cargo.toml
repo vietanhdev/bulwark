@@ -14,7 +14,7 @@ categories = ["os::linux-apis", "config", "development-tools"]
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml.workspace = true
+serde-saphyr.workspace = true
 diesel.workspace = true
 diesel_migrations.workspace = true
 libsqlite3-sys.workspace = true

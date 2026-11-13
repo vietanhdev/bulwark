@@ -837,7 +837,7 @@ pub fn detect_mcp(content: &str) -> Vec<Detection> {
 /// `config.yaml` / `.continue/mcpServers/*.yaml` (`mcpServers:` as a list). YAML is converted to the
 /// same JSON value model so every tool's servers go through one set of checks.
 pub fn detect_mcp_yaml(content: &str) -> Vec<Detection> {
-    match serde_yaml::from_str::<serde_json::Value>(content) {
+    match crate::yaml::to_json(content) {
         Ok(v) => detect_mcp_value(content, &v),
         Err(_) => mcp_unparsed(content),
     }
@@ -1894,6 +1894,48 @@ mod tests {
             "Bash(npm run test)",
         ] {
             assert!(!is_dangerous_permission(e), "{e}");
+        }
+    }
+
+    /// A manifest in a scanned home folder is written by whoever owns that folder, and a root scan
+    /// reads it. Whatever it holds, reading it ends in time and without a panic, and a manifest
+    /// that cannot be parsed is still searched as text, as it always was.
+    #[test]
+    fn a_hostile_yaml_manifest_is_refused_in_time_and_still_searched_as_text() {
+        use crate::yaml::hostile;
+        for (name, doc) in hostile::essentials() {
+            let started = std::time::Instant::now();
+            let found = detect_mcp_yaml(&doc);
+            assert!(started.elapsed() < hostile::DEADLINE, "{name}");
+            assert!(found.is_empty(), "{name}: {found:?}");
+        }
+        let unreadable = format!("{}# starts mcp-remote\n", hostile::billion_laughs());
+        let found = detect_mcp_yaml(&unreadable);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].rule_id, "BLWK-AI-004");
+        assert_eq!(found[0].line, Some(10));
+    }
+
+    /// What does not stop a manifest from being read: a byte-order mark, an application tag, a
+    /// value reused through an alias, or a null key. A manifest that cannot be read gets only the
+    /// text-level check above, so none of these may hide the servers in the file.
+    #[test]
+    fn a_yaml_manifest_cannot_hide_its_servers_behind_a_tag_a_mark_or_an_alias() {
+        let launch = "command: npx\n    args: [-y, some-server]\n";
+        for doc in [
+            "\u{feff}mcpServers:\r\n  s:\r\n    command: npx\r\n    args: [-y, some-server]\r\n"
+                .to_owned(),
+            format!("note: !mine anything\nmcpServers:\n  s:\n    {launch}"),
+            format!("mcpServers:\n  s: !server\n    {launch}"),
+            format!("shared: &launch\n    {launch}mcpServers:\n  s: *launch\n"),
+            format!("mcpServers:\n  ~:\n    {launch}"),
+            format!("null: ignored\nmcpServers:\n  s:\n    {launch}"),
+        ] {
+            let found = detect_mcp_yaml(&doc);
+            assert!(
+                found.iter().any(|d| d.rule_id == "BLWK-AI-003"),
+                "{doc:?}: {found:?}"
+            );
         }
     }
 }

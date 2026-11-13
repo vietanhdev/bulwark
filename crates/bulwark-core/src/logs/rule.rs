@@ -30,14 +30,16 @@ pub struct LogRule {
     /// Semantic tags this rule contributes (the vocabulary future sequence rules will key off).
     /// Not yet consumed by the threshold correlator, but authored now so the rule pack is
     /// forward-compatible.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::models::blank_as_empty")]
     pub groups: Vec<String>,
     /// Optional correlation. Absent ⇒ the rule fires once per matching event.
     #[serde(default)]
     pub correlate: Option<CorrelateSpec>,
+    #[serde(deserialize_with = "crate::models::blank_as_empty")]
     pub explain: String,
+    #[serde(deserialize_with = "crate::models::blank_as_empty")]
     pub fix: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::models::blank_as_empty")]
     pub references: Vec<String>,
     /// Whether a match should produce a finding. `false` marks a pure tagging/base rule that
     /// contributes semantics (via `groups`) without alerting on its own — the log analog of
@@ -74,7 +76,7 @@ pub fn load_log_rules<'a>(
                 continue;
             }
         };
-        let rule: LogRule = match serde_yaml::from_str(&text) {
+        let rule: LogRule = match crate::yaml::from_str(&text) {
             Ok(r) => r,
             Err(e) => {
                 errors.push(RuleLoadError {

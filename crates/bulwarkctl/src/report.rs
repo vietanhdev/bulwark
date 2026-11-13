@@ -269,7 +269,7 @@ impl Problem<'_> {
             }
         }
         // Most common first; a stable sort keeps first-seen order among equals.
-        kinds.sort_by(|a, b| b.1.cmp(&a.1));
+        kinds.sort_by_key(|k| std::cmp::Reverse(k.1));
         let others = kinds.len() - 1;
         Some(format!(
             "{} and {others} other {}{ending}",

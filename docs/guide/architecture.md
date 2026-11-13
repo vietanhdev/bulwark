@@ -540,9 +540,62 @@ flowchart LR
 - **Threat model:** Bulwark is itself an attractive target if compromised — broad read access across the system, and elevated write access for any future "apply fix" action. Rule files (and any future "apply fix") are a supply-chain-sensitive surface; signed/provenance-checked rule packs are required before any "install rules from the internet" feature ships (see §14).
 - **Reading a home folder as root.** A privileged scan reads dotfiles in the invoking user's home, and that user controls every name in it. `bulwark-core::homefs` is the one way collectors and the Secrets readers open such a file: it resolves every link (in the file name and in the folders above it), requires the result to stay inside the home folder, opens once without blocking, and then decides from the open descriptor — a regular file, really located in that home, owned by the home's owner. A link that leaves the home folder, a named pipe, or a file swapped mid-read is refused, and the row is reported as "could not check `<path>`", never as clean. Links that stay inside the home folder (how dotfile managers work) are followed.
 - **Nothing from the scanned machine is trusted as text.** Values substituted into a finding are made display-safe (control, bidirectional and invisible characters replaced, long values cut). A value placed in a rule's `fix` text must be one plain word, or it is replaced by a stand-in, so a file named `id; curl … | sh` can never become part of a command a user copies. A URL from a config file is reduced to scheme, host and port, because registry URLs carry credentials.
+- **YAML is parsed in one place, under fixed limits.** Rule packs, the compliance mappings and the YAML config of AI agents all go through `bulwark-core::yaml`. The agent files are written by the owner of the scanned home and read by a root scan, so the limits apply to every document. See [Reading YAML someone else wrote](#reading-yaml-someone-else-wrote) below.
 - **Known limitation — root-level compromise:** Bulwark cannot defend against an attacker who already has root on the machine it's running on. Such an attacker can disable rules, tamper with the local SQLite findings store, or replace the Bulwark binary itself, exactly as easily as they'd disable any other local defense — a local-only tool cannot be tamper-evident against the privilege level it's trying to detect. This is a structural limit of the v1 design (no phone-home, see Non-goals), not an oversight; it's stated here explicitly rather than left implicit. A future opt-in mode that ships scan results to a destination the same attacker doesn't control (e.g. remote syslog) would close this gap but is out of v1 scope.
 - **Network use is opt-in and lives in the front-doors.** Two features cross the network, both only when the user sets them up and both outside `bulwark-core`: monitoring other machines over SSH (to machines the user registers, with host keys verified) and alerts to Telegram / an SMTP server (machine names, severities and issue titles only — never evidence or secrets). Nothing is sent to the Bulwark project. See §4 and [Monitoring other machines](/guide/remote-monitoring).
 - **Audit logging:** every decision to hide something (ignoring a finding, turning a check off, turning it back on) is appended with its reason and time to `rule_suppression_events`, viewable in the app and with `bulwarkctl rules suppressions --audit`. Bulwark keeps no log of its own for privileged scans. Both are subject to the same limitation above if the attacker already has root.
+
+### Reading YAML someone else wrote
+
+```mermaid
+flowchart LR
+  packs["rules/, log-rules/, decoders/<br/>and custom rules<br/>(1 MiB per file)"] --> y
+  std["compliance standards<br/>(built in)"] --> y
+  home["agent config in a scanned home<br/>Goose, Continue, Aider, Open Interpreter<br/>(4 MiB per file)"] --> y
+  y["bulwark-core::yaml"] -->|"one thread per document<br/>16 MiB of stack"| p["serde-saphyr<br/>128 levels, 250,000 values,<br/>8 MiB of text"]
+  p -->|"typed struct"| typed["Rule, LogRule,<br/>Decoder, Standard"]
+  p -->|"JSON value"| det["MCP and settings<br/>detectors"]
+  p -->|"one line: reason, line, column"| err["RuleLoadError,<br/>or the text-only checks"]
+```
+
+The parser is `serde-saphyr`, written in safe Rust. It replaced `serde_yaml`, which was no longer
+maintained and parsed with a C library translated to unsafe Rust. Moving was also a matter of what
+a hostile file could do. Measured on the old parser in an unoptimised build: a 68 KB file that
+names one anchored value 500 times became 32 MB of text, and nothing but the file size limited the
+factor; a 14 KB file became four million values; and 400 KB of `{a: ` took 98 seconds to refuse.
+
+| Limit | Value | Why |
+|---|---|---|
+| Nesting | 128 levels | Reading recurses once per level. The old parser allowed the same depth. |
+| Values in the result | 250,000 | Counted after aliases are expanded, so an alias bomb stops here. |
+| Text in the result | 8 MiB | Also counted after aliases: twice the largest file a caller hands over. |
+| Parser stack | 16 MiB, on its own thread | An unoptimised build needs about 23 KiB of stack per level. A worker thread has 2 MiB and the main thread on Windows 1 MiB, so the depth limit would not be safe on the caller's stack. A panic in the parser ends that thread and is returned as an error. |
+
+The parser is built without its `include` and `properties` features, so a document cannot name a
+file to read or a variable to expand. Every hostile document in the test corpus ends within a few
+seconds in an unoptimised build, with an error or a result inside the limits.
+
+**What a document means is unchanged for everything Bulwark ships.** All 124 shipped YAML files
+(109 rules, 8 log rules, 4 decoders, 3 standards) were parsed with both parsers before the old one
+was removed and gave identical values. The options keep the old reading where the two parsers
+differ by default: `yes`, `no`, `on` and `off` are text, `0644` is text and `0o644` is a number,
+`<<` is an ordinary key, and a key given twice keeps its last value. Unit tests in `yaml.rs` pin
+each of these.
+
+The two parsers do not agree on every file, and the differences are worth knowing because an
+agent's YAML that cannot be parsed is not reported as an error: the detectors fall back to the
+checks that work on the text alone.
+
+- **Read now, refused before:** a file that starts with a byte-order mark, a value with an
+  application tag (`!secret x`), an integer too large for 64 bits, and a JSON-style surrogate
+  pair in a quoted string. A mapping key written `~` is read as the key `null`.
+- **Refused now, read before**, because the YAML specification forbids them and the old parser
+  did not check: a quoted value continued on a line indented no deeper than its key, a `#` comment
+  directly after a closing quote or bracket, and a lone `-` as a value inside `[ ]` or `{ }`.
+- **Still read in a rule file:** a bare `explain:`, `fix:`, `references:`, `profiles:` or
+  `skip_on:` loads as empty, as before (`models::blank_as_empty`). The parser itself refuses a
+  blank value for a text field or a list; the other fields (`id`, `title`, `condition`, …) are
+  refused when blank, with the line.
 
 ---
 

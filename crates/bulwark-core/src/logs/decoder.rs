@@ -87,7 +87,7 @@ pub fn load_decoders<'a>(
                 continue;
             }
         };
-        let decoder: Decoder = match serde_yaml::from_str(&text) {
+        let decoder: Decoder = match crate::yaml::from_str(&text) {
             Ok(d) => d,
             Err(e) => {
                 errors.push(RuleLoadError {

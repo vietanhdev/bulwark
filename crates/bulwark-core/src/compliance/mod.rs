@@ -170,7 +170,7 @@ pub fn all_standards() -> Vec<Standard> {
     EMBEDDED
         .iter()
         .map(|(id, text)| {
-            serde_yaml::from_str::<Standard>(text)
+            crate::yaml::from_str::<Standard>(text)
                 .unwrap_or_else(|e| panic!("embedded standard {id} is malformed: {e}"))
         })
         .collect()
