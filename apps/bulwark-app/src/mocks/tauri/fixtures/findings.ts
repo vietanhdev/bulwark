@@ -20,7 +20,7 @@ export const findings: Finding[] = [
   {
     id: "f-ssh-001",
     rule_id: "BLWK-SSH-001",
-    severity: "critical",
+    severity: "high",
     title: "SSH password authentication is enabled",
     explanation:
       'PasswordAuthentication is set to "yes" in sshd_config, which allows an attacker to ' +
@@ -30,7 +30,7 @@ export const findings: Finding[] = [
   {
     id: "f-persist-001",
     rule_id: "BLWK-PERSIST-001",
-    severity: "critical",
+    severity: "high",
     title: "systemd unit runs a tunneling tool",
     explanation:
       'The systemd unit "sync-helper.service" runs a command referencing a tunneling tool ' +
@@ -163,7 +163,7 @@ export const findings: Finding[] = [
   {
     id: "f-ai-002",
     rule_id: "BLWK-AI-002",
-    severity: "high",
+    severity: "critical",
     title: "Project-supplied Claude Code hooks run shell commands automatically",
     explanation:
       "This settings file defines hooks. Claude Code hooks run shell commands automatically on " +

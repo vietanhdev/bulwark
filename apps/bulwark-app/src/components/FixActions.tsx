@@ -235,9 +235,18 @@ export function FixIssueButton({
   );
 }
 
+/** What the bulk set found to do and left out, in words (see `CombinedFixReport.not_included`). */
+function leftOut(report: CombinedFixReport | null): string[] {
+  const lines = report?.not_included ?? [];
+  const names: string[] = [];
+  if (lines.some((l) => l.startsWith("fix banner"))) names.push("the login banner");
+  if (lines.some((l) => l.startsWith("fix login-defs"))) names.push("the password-age policy");
+  return names;
+}
+
 /**
  * "Fix all safe issues" — the whole mechanical remediation set in one pass: `~/.ssh` permissions,
- * sensitive `/etc` permissions, and the non-lockout sshd directives.
+ * sensitive `/etc` permissions, the non-lockout sshd directives and kernel network settings.
  *
  * The two lockout-risky auth directives are excluded, matching `bulwarkctl fix all`, where they sit
  * behind `--include-auth`. That exclusion is enforced in the backend (this button has no way to
@@ -397,6 +406,13 @@ export function FixNowButton({
               <>
                 SSH PasswordAuthentication and PermitRootLogin are excluded. Those require individual review
                 because they can lock you out.
+                {leftOut(report).length > 0 && (
+                  <>
+                    {" "}
+                    Also left out, because they change wording or policy: {leftOut(report).join(" and ")}. Use
+                    Fix on those findings to review them one at a time.
+                  </>
+                )}
               </>
             }
             onApply={() => run(true)}

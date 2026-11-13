@@ -829,10 +829,15 @@ const handlers: Record<string, (args: Args) => unknown> = {
       // Never includes the lockout-risky auth directives — mirrors the real `fix all --root-only`.
       sshd: mockSshd(apply, false),
       sysctl: mockSysctl(apply, "BLWK-KERNEL-016"),
-      banner: mockBanner(apply),
-      login_defs: mockLoginDefs(apply, "BLWK-ACCT-002"),
+      // Like the real `fix all`: the banner and password-age fixers are looked at, never applied.
+      banner: null,
+      login_defs: null,
       sshd_error: null,
       errors: [],
+      not_included: [
+        "fix banner: 2 login banner file(s) still hold the distribution's default text. Replace them with a warning banner by running: sudo bulwarkctl fix banner --apply",
+        "fix login-defs: the password-age policy in /etc/login.defs would change (PASS_MAX_DAYS 90). Set it by running: sudo bulwarkctl fix login-defs --apply",
+      ],
       applied: apply,
     };
   },

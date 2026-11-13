@@ -120,6 +120,9 @@ export interface CombinedFixReport {
   login_defs: LoginDefsReport | null;
   sshd_error: string | null;
   errors?: string[];
+  /** Fixes the bulk set found something to do for and left out, because they change wording or
+   *  policy (`fix banner`, `fix login-defs`). One line each, starting with the fixer's name. */
+  not_included?: string[];
   applied: boolean;
 }
 
