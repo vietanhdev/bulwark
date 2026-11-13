@@ -5,7 +5,7 @@ pub(crate) mod cmdline;
 mod credential_stores;
 pub use credential_stores::{token_files, TokenFile};
 mod cron;
-mod dev_tools;
+pub(crate) mod dev_tools;
 pub mod file_integrity;
 mod file_permissions;
 mod grub;

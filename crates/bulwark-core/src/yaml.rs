@@ -155,6 +155,16 @@ impl Error {
     }
 }
 
+/// The line and column an error message names, if it names one (see the `at line … column …`
+/// suffix added above). Callers that must not show the message, which can quote the document, use
+/// this instead.
+pub(crate) fn error_position(e: &Error) -> Option<(usize, usize)> {
+    let text = e.to_string();
+    let rest = &text[text.rfind(" at line ")? + " at line ".len()..];
+    let (line, column) = rest.split_once(" column ")?;
+    Some((line.trim().parse().ok()?, column.trim().parse().ok()?))
+}
+
 /// Reads one YAML document as `T`.
 pub(crate) fn from_str<T: DeserializeOwned + Send>(text: &str) -> Result<T, Error> {
     from_str_on_stack(text, PARSER_STACK_BYTES)
