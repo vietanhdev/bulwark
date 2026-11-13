@@ -1658,6 +1658,7 @@ mod tests {
             privileged_collectors_skipped: vec!["sudoers".into()],
             rules_evaluated: vec!["BLWK-SSH-001".into()],
             rules_not_applicable: vec![],
+            rules_needing_admin: vec![],
             cancelled: false,
             findings: vec![Finding {
                 id: Uuid::new_v4(),

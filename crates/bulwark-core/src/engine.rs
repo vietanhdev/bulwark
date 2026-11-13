@@ -560,6 +560,12 @@ pub fn run_scan_with_custom<'a>(
         }
     }
 
+    let rules_needing_admin = rules
+        .iter()
+        .filter(|l| privileged_collectors_skipped.contains(&l.rule.collector))
+        .map(|l| l.rule.id.clone())
+        .collect();
+
     ScanRun {
         id: scan_run_id,
         started_at,
@@ -571,6 +577,7 @@ pub fn run_scan_with_custom<'a>(
         privileged_collectors_skipped,
         rules_evaluated,
         rules_not_applicable,
+        rules_needing_admin,
         cancelled,
         findings,
     }

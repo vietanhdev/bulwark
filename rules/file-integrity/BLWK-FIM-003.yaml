@@ -3,7 +3,9 @@ title: "Not covered by the file-integrity baseline: {{ file_integrity.path }}"
 category: file-integrity
 severity: info
 collector: file_integrity
-condition: kind == "file" and baseline_exists == true and in_baseline == false and currently_present == true and unreadable == false
+# Also covers a file only an administrator may read (needs_admin): an ordinary scan can neither
+# record nor compare it, which is "not covered", not a failed check.
+condition: kind == "file" and baseline_exists == true and in_baseline == false and currently_present == true and (unreadable == false or needs_admin == true)
 explain: >
   {{ file_integrity.path }} is present but has no recorded baseline hash, so Bulwark can tell
   that it exists but not whether it has been tampered with. This fires per-file, on purpose:
@@ -12,5 +14,5 @@ explain: >
   to the watch list later — read as "verified clean" rather than "never checked". A file nobody
   ever baselined is not a file known to be good. (With no baseline recorded at all, that single
   fact is reported once, as BLWK-FIM-009, instead of once per watched file.)
-fix: "Run 'bulwarkctl fim baseline' now, while you trust this host, to record a known-good hash for this file (add '--privileged' to also cover /etc/shadow and /etc/sudoers)."
+fix: "Run 'bulwarkctl fim baseline' now, while you trust this host, to record a known-good hash for this file (add '--privileged' to also cover /etc/shadow and /etc/sudoers). If only an administrator can read the file, an ordinary scan cannot check it: record the baseline and scan with 'sudo bulwarkctl fim baseline --privileged' and 'sudo bulwarkctl scan --privileged'."
 references: []

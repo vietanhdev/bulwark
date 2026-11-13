@@ -290,6 +290,13 @@ pub struct ScanRun {
     /// was still thought to apply — are closed rather than left open forever.
     #[serde(default)]
     pub rules_not_applicable: Vec<String>,
+    /// Rules that did not run only because their collector needs admin rights and this scan had
+    /// none. `privileged_collectors_skipped` names the collectors; this names the checks, so a
+    /// report can say "18 checks need admin rights" instead of counting the same checks a second
+    /// time as "couldn't run". Not stored: it describes one run. Empty when an older engine
+    /// produced the JSON.
+    #[serde(default)]
+    pub rules_needing_admin: Vec<String>,
     /// True when the user stopped the scan before it finished. A cancelled run's findings are
     /// partial and must not be persisted as the host's current picture.
     #[serde(default)]
@@ -336,6 +343,7 @@ mod tests {
             privileged_collectors_skipped: vec!["sudoers".into()],
             rules_evaluated: vec!["BLWK-NET-001".into()],
             rules_not_applicable: vec![],
+            rules_needing_admin: vec![],
             cancelled: false,
             findings: vec![Finding {
                 id: Uuid::new_v4(),
@@ -392,6 +400,7 @@ mod tests {
             privileged_collectors_skipped: vec![],
             rules_evaluated: vec![],
             rules_not_applicable: vec![],
+            rules_needing_admin: vec![],
             cancelled: false,
             findings,
         }
