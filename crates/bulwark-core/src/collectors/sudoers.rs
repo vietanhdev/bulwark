@@ -375,15 +375,21 @@ impl Collector for SudoersCollector {
         true
     }
 
+    /// `/etc/sudoers`, or on a system that keeps the vendor's policy in `/usr/etc` and has no
+    /// `/etc` copy, that one (see [`crate::etc`]). The vendor file names both `/usr/etc/sudoers.d`
+    /// and `/etc/sudoers.d`, so its includes need nothing special.
     fn is_applicable(&self) -> bool {
-        Path::new("/etc/sudoers").exists()
+        crate::etc::SUDOERS.in_use().is_some()
     }
 
     fn collect(&self) -> anyhow::Result<Vec<Fact>> {
+        let root = crate::etc::SUDOERS
+            .in_use()
+            .ok_or_else(|| anyhow::anyhow!("no sudoers file: it was removed during the scan"))?;
         // Size-capped and never waiting on a pipe, like every other read: a policy file is a few
         // kilobytes, and one grown to hundreds of megabytes was read whole.
         Ok(collect_policy(
-            Path::new("/etc/sudoers"),
+            &root,
             &|path| super::read_system(path),
             &list_dir,
             &short_hostname(),
@@ -427,6 +433,11 @@ mod tests {
 
     /// A policy made of in-memory files; folders are derived from the file paths.
     fn policy(files: &[(&str, &str)]) -> Vec<Fact> {
+        policy_at("/etc/sudoers", files)
+    }
+
+    /// [`policy`] read from another main file.
+    fn policy_at(root: &str, files: &[(&str, &str)]) -> Vec<Fact> {
         let map: HashMap<PathBuf, String> = files
             .iter()
             .map(|(p, t)| (PathBuf::from(p), t.to_string()))
@@ -446,7 +457,32 @@ mod tests {
                 .collect();
             (!names.is_empty()).then_some(names)
         };
-        collect_policy(Path::new("/etc/sudoers"), &read, &list, "web1")
+        collect_policy(Path::new(root), &read, &list, "web1")
+    }
+
+    /// openSUSE Tumbleweed and Leap 16 ship the policy as `/usr/etc/sudoers` and no `/etc/sudoers`.
+    /// sudo then reads the vendor file, which includes the vendor's folder and then the
+    /// administrator's (`sudo -l -U` showed a NOPASSWD rule planted in either).
+    #[test]
+    fn the_vendor_policy_and_both_of_its_folders_are_read() {
+        let rule = "deploy ALL=(ALL) NOPASSWD: ALL\n";
+        let rows = policy_at(
+            "/usr/etc/sudoers",
+            &[
+                (
+                    "/usr/etc/sudoers",
+                    "Defaults targetpw\nALL ALL=(ALL) ALL\nroot ALL=(ALL:ALL) ALL\n\
+                     @includedir /usr/etc/sudoers.d\n@includedir /etc/sudoers.d\n",
+                ),
+                ("/usr/etc/sudoers.d/50-vendor", rule),
+                ("/etc/sudoers.d/90-admin", rule),
+            ],
+        );
+        let sources: Vec<String> = nopasswd_lines(&rows).into_iter().map(|(s, _)| s).collect();
+        assert_eq!(
+            sources,
+            ["/usr/etc/sudoers.d/50-vendor", "/etc/sudoers.d/90-admin"]
+        );
     }
 
     #[test]

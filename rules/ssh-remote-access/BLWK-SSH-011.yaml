@@ -5,8 +5,8 @@ severity: low
 collector: sshd_config
 condition: max_auth_tries > 6
 explain: >
-  MaxAuthTries is set to {{ sshd.max_auth_tries }} in sshd_config — well above the
+  MaxAuthTries is {{ sshd.max_auth_tries }} (from {{ sshd.max_auth_tries_from }}) — well above the
   recommended ceiling of 3-6. A high limit gives an online password-guessing attempt many
   more tries per TCP connection before being cut off.
-fix: "Set 'MaxAuthTries 3' (or up to 6) in /etc/ssh/sshd_config and run 'systemctl restart sshd'."
+fix: "Put 'MaxAuthTries 3' in /etc/ssh/sshd_config.d/00-hardening.conf and reload the SSH service ('sudo sshd -t' checks it first). sshd keeps the first value it reads and reads that folder first; if sshd_config has no Include line for it, put the line at the top of /etc/ssh/sshd_config. Do not edit files under /usr/etc: updates replace them. Any value up to 6 passes this check."
 references: [CIS-5.2.7, ATTACK-T1110]

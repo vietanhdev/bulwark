@@ -34,6 +34,8 @@
 //!     operator out of a box reached only by password; they are flagged `lockout_risk` and excluded
 //!     unless the caller explicitly asks to include them.
 
+#[cfg(test)]
+use crate::collectors::sshd::ConfigFile;
 use crate::collectors::sshd::{
     parse_sshd_config_with, resolve_include_glob, split_keyword, IncludeResolver,
 };
@@ -42,7 +44,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-const MAIN_CONFIG: &str = "/etc/ssh/sshd_config";
 const BEGIN_MARKER: &str = "# BEGIN bulwark-hardening";
 const END_MARKER: &str = "# END bulwark-hardening";
 
@@ -217,6 +218,10 @@ pub struct SshdHardeningReport {
     pub validated: Option<bool>,
     /// Non-fatal note surfaced to the user (e.g. "sshd -t not found, skipped validation").
     pub note: Option<String>,
+    /// True when the settings cannot be written safely on this system, so `--apply` refuses and
+    /// `note` says what to put where by hand. See [`harden_sshd_config`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub by_hand: bool,
 }
 
 impl SshdHardeningReport {
@@ -422,13 +427,29 @@ fn with_sudo_hint(e: anyhow::Error) -> anyhow::Error {
 
 /// Public entry point. `config_path` defaults to `/etc/ssh/sshd_config` when `None`. `backup_dir` is
 /// where the pre-change copy is written. With `apply = false` this only previews.
+///
+/// On a system that keeps the vendor's file in `/usr/etc` and has no `/etc/ssh/sshd_config`
+/// (openSUSE Tumbleweed, Leap 16) the plan is made against the file sshd really reads, but nothing
+/// is written: the vendor file is replaced by the next package update, and creating
+/// `/etc/ssh/sshd_config` would make sshd read that file *instead*, dropping every setting and
+/// `Include` the vendor file has (measured with `sshd -T`). The report then says which lines to put
+/// in a drop-in, and `apply` is refused.
 pub fn harden_sshd_config(
     config_path: Option<&Path>,
     backup_dir: &Path,
     apply: bool,
     include_lockout: bool,
 ) -> anyhow::Result<SshdHardeningReport> {
-    let path = config_path.unwrap_or_else(|| Path::new(MAIN_CONFIG));
+    if config_path.is_none() && crate::etc::SSHD_CONFIG.vendor_in_use() {
+        return plan_for_vendor_config(
+            Path::new(crate::etc::SSHD_CONFIG.vendor),
+            backup_dir,
+            apply,
+            include_lockout,
+            &resolve_include_glob,
+        );
+    }
+    let path = config_path.unwrap_or_else(|| Path::new(crate::etc::SSHD_CONFIG.etc));
     // Only `sshd -t`-validate the real system config. That path is edited as root (the CLI gates
     // `fix sshd --apply` on it), where sshd can read the root-only host keys and the check is
     // meaningful. An explicit `--config` path is for testing or a non-default file and is often
@@ -442,6 +463,51 @@ pub fn harden_sshd_config(
         include_lockout,
         validate,
         &resolve_include_glob,
+    )
+}
+
+/// The plan for a system whose sshd reads the vendor's file; see [`harden_sshd_config`].
+fn plan_for_vendor_config(
+    vendor: &Path,
+    backup_dir: &Path,
+    apply: bool,
+    include_lockout: bool,
+    resolve: &IncludeResolver,
+) -> anyhow::Result<SshdHardeningReport> {
+    let mut report = harden_with(vendor, backup_dir, false, include_lockout, false, resolve)?;
+    let lines: Vec<String> = report
+        .changes
+        .iter()
+        .filter(|c| c.status == SshdChangeStatus::WouldSet)
+        .map(|c| format!("{} {}", c.keyword, c.desired))
+        .collect();
+    if lines.is_empty() {
+        return Ok(report);
+    }
+    let message = vendor_config_message(vendor, &lines);
+    if apply {
+        anyhow::bail!(message);
+    }
+    report.by_hand = true;
+    report.note = Some(match report.note.take() {
+        Some(earlier) => format!("{earlier}. {message}"),
+        None => message,
+    });
+    Ok(report)
+}
+
+/// What to do by hand on a system whose sshd reads the vendor's file.
+fn vendor_config_message(vendor: &Path, lines: &[String]) -> String {
+    format!(
+        "this system has no {etc}, so sshd reads the vendor's file {vendor}. Bulwark does not edit \
+         that file (the next package update replaces it) and does not create {etc} (sshd would \
+         then read that file instead and lose every setting the vendor file makes). Put these \
+         lines in a new file {dir}/00-hardening.conf, which sshd reads before the vendor's \
+         settings: {lines}. Then check with 'sudo sshd -t' and reload sshd",
+        etc = crate::etc::SSHD_CONFIG.etc,
+        vendor = vendor.display(),
+        dir = crate::etc::SSHD_DROP_IN_DIR,
+        lines = lines.join("; ")
     )
 }
 
@@ -471,7 +537,8 @@ fn harden_with(
     // block taken out reported "would set … (was yes)" for ever after a successful run.
     //
     // A drop-in that cannot be read stops the fix: the plan would be made against a guess.
-    let effective = parse_sshd_config_with(&String::from_utf8_lossy(&original), resolve)
+    let origin = path.display().to_string();
+    let effective = parse_sshd_config_with(&String::from_utf8_lossy(&original), &origin, resolve)
         .map_err(with_sudo_hint)?;
     let mut changes = plan(&effective, include_lockout);
 
@@ -493,7 +560,7 @@ fn harden_with(
     // `Match all` block, whose values sshd copies over the global ones; a directive set there is
     // not something a line at the top of the file can change.
     let mut new_content = render(&changes);
-    let after = parse_sshd_config_with(&String::from_utf8_lossy(&new_content), resolve)?;
+    let after = parse_sshd_config_with(&String::from_utf8_lossy(&new_content), &origin, resolve)?;
     let out_of_reach: Vec<String> = DIRECTIVES
         .iter()
         .filter(|d| {
@@ -607,12 +674,12 @@ fn validate_sshd(path: &Path) -> Option<bool> {
 mod tests {
     use super::*;
 
-    fn no_includes(_: &str) -> anyhow::Result<Vec<String>> {
+    fn no_includes(_: &str) -> anyhow::Result<Vec<ConfigFile>> {
         Ok(Vec::new())
     }
 
     fn effective_of(text: &str) -> Fact {
-        parse_sshd_config_with(text, &no_includes).unwrap()
+        parse_sshd_config_with(text, "sshd_config", &no_includes).unwrap()
     }
 
     /// One run against a config in a temp folder, with no drop-ins and no `sshd -t`.
@@ -1052,12 +1119,60 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cfg = dir.path().join("sshd_config");
         std::fs::write(&cfg, "Include sshd_config.d/*.conf\nX11Forwarding yes\n").unwrap();
-        let denied = |_: &str| -> anyhow::Result<Vec<String>> {
+        let denied = |_: &str| -> anyhow::Result<Vec<ConfigFile>> {
             Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied).into())
         };
         let err =
             harden_with(&cfg, &dir.path().join("bak"), false, false, false, &denied).unwrap_err();
         assert!(err.to_string().contains("sudo"), "{err}");
+    }
+
+    /// With no `/etc/ssh/sshd_config`, creating one would make sshd read it instead of the vendor
+    /// file, and editing the vendor file is undone by the next update: the plan is shown, nothing
+    /// is written, and the note says which drop-in to create.
+    #[test]
+    fn the_vendor_file_is_planned_against_but_never_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let vendor = dir.path().join("sshd_config");
+        let text = "Include /etc/ssh/sshd_config.d/*.conf\nX11Forwarding yes\n";
+        std::fs::write(&vendor, text).unwrap();
+        let bak = dir.path().join("bak");
+
+        let preview = plan_for_vendor_config(&vendor, &bak, false, false, &no_includes).unwrap();
+        assert!(preview.by_hand);
+        assert!(!preview.applied);
+        assert!(preview
+            .changes
+            .iter()
+            .any(|c| c.keyword == "X11Forwarding" && c.status == SshdChangeStatus::WouldSet));
+        let note = preview.note.unwrap();
+        assert!(
+            note.contains("/etc/ssh/sshd_config.d/00-hardening.conf"),
+            "{note}"
+        );
+        assert!(note.contains("X11Forwarding no"), "{note}");
+        assert!(
+            !note.contains("PasswordAuthentication no"),
+            "a lockout directive is not listed without --include-auth: {note}"
+        );
+
+        let err = plan_for_vendor_config(&vendor, &bak, true, false, &no_includes).unwrap_err();
+        assert!(err.to_string().contains("00-hardening.conf"), "{err}");
+        assert_eq!(std::fs::read_to_string(&vendor).unwrap(), text);
+        assert!(
+            !bak.exists(),
+            "no backup either: nothing was going to be written"
+        );
+
+        // A hardened vendor configuration has nothing to say and nothing to refuse.
+        std::fs::write(
+            &vendor,
+            "PermitRootLogin no\nPasswordAuthentication no\nAllowTcpForwarding no\n\
+             AllowAgentForwarding no\n",
+        )
+        .unwrap();
+        let quiet = plan_for_vendor_config(&vendor, &bak, true, false, &no_includes).unwrap();
+        assert!(quiet.changes.is_empty() && !quiet.by_hand);
     }
 
     #[cfg(unix)]
@@ -1066,12 +1181,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cfg = dir.path().join("sshd_config");
         std::fs::write(&cfg, "Include sshd_config.d/*.conf\nX11Forwarding no\n").unwrap();
-        let drop_in = |_: &str| Ok(vec!["X11Forwarding yes\n".to_string()]);
+        let drop_in = |_: &str| {
+            Ok(crate::collectors::sshd::tests::included(&[
+                "X11Forwarding yes\n",
+            ]))
+        };
         let bak = dir.path().join("bak");
         let report = harden_with(&cfg, &bak, true, false, false, &drop_in).unwrap();
         assert!(report.applied);
         let text = std::fs::read_to_string(&cfg).unwrap();
-        let fact = parse_sshd_config_with(&text, &drop_in).unwrap();
+        let fact = parse_sshd_config_with(&text, "sshd_config", &drop_in).unwrap();
         assert_eq!(fact["x11_forwarding"], "no");
         // And it stays fixed without another write.
         let again = harden_with(&cfg, &bak, true, false, false, &drop_in).unwrap();

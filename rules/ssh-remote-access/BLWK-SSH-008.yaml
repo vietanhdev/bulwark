@@ -5,9 +5,9 @@ severity: medium
 collector: sshd_config
 condition: strict_modes == "no"
 explain: >
-  StrictModes is set to "{{ sshd.strict_modes }}" in sshd_config. With StrictModes off,
+  StrictModes is "{{ sshd.strict_modes }}" (from {{ sshd.strict_modes_from }}). With StrictModes off,
   sshd no longer verifies that a user's home directory and key files have safe ownership
   and permissions before trusting them — a world-writable home directory or key file then
   becomes a usable login bypass instead of a rejected, obviously-broken config.
-fix: "Set 'StrictModes yes' in /etc/ssh/sshd_config and run 'systemctl restart sshd'."
+fix: "Put 'StrictModes yes' in /etc/ssh/sshd_config.d/00-hardening.conf and reload the SSH service ('sudo sshd -t' checks it first). sshd keeps the first value it reads and reads that folder first; if sshd_config has no Include line for it, put the line at the top of /etc/ssh/sshd_config. Do not edit files under /usr/etc: updates replace them."
 references: [CIS-5.2.9]

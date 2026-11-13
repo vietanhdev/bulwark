@@ -451,6 +451,39 @@ flowchart TD
   `PermitUserEnvironment`) are the exception: there the first line wins as usual.
 - Bytes that are not UTF-8 are replaced, not refused: one Latin-1 character in a comment must not
   hide the lines around it.
+- Each value the rules read carries the file that set it (`password_authentication_from`, or
+  "OpenSSH's built-in default"), so a finding says where to change it.
+
+### Vendor configuration in `/usr/etc`
+
+openSUSE Tumbleweed and Leap 16 keep a package's defaults under `/usr/etc` (PAM's under
+`/usr/lib/pam.d`) and leave `/etc` for what the administrator changes. There, `/etc/ssh/sshd_config`,
+`/etc/sudoers` and `/etc/login.defs` do not exist, and the collectors used to call themselves "not
+applicable": every SSH check, the passwordless-sudo check and the password-age checks silently did
+not run. `crate::etc` now answers "which file does this program read" in one place, with rules
+measured with the programs themselves (`sshd -T`, `sudo -l`, `useradd`, a PAM service set to deny):
+
+```mermaid
+flowchart LR
+  E{"/etc copy exists?"} -->|"yes"| W["Read it, and only it<br/>(the vendor file is ignored whole)"]
+  E -->|"no"| V["Read the /usr/etc copy"]
+  W --> D["login.defs only: then apply *.defs drop-ins<br/>/usr/etc/login.defs.d first, /etc/login.defs.d after,<br/>later file wins key by key"]
+  V --> D
+```
+
+- **sshd, sudo**: the `/etc` file replaces the vendor file whole, its `Include` lines with it. The
+  vendor files include the `/etc` drop-in folder before their own, so a drop-in in `/etc` wins.
+- **login.defs** through libeconf (openSUSE, and Fedora too): drop-ins are `*.defs`, not `*.conf`;
+  within one file the first line for a key wins. Without libeconf (Debian, Ubuntu) only
+  `/etc/login.defs` is read and the last line wins. The collector tells the two apart by whether
+  `useradd` links libeconf, reading the program without running it.
+- **PAM**: each service file is looked for in `/etc/pam.d`, then `/usr/lib/pam.d`, then
+  `/usr/etc/pam.d`.
+
+The fixers never write under `/usr/etc` (the next package update replaces it) and never create the
+missing `/etc` file (it would replace every vendor setting). On such a system `fix sshd` and
+`fix login-defs` show their plan and say which drop-in to create; `--apply` refuses. The
+file-integrity watch covers both copies of each file.
 
 ---
 

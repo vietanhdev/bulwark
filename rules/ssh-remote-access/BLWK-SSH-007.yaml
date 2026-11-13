@@ -8,9 +8,9 @@ collector: sshd_config
 # a network interface on this host, which is what the rule describes.
 condition: permit_tunnel in ["yes", "point-to-point", "ethernet"]
 explain: >
-  PermitTunnel is set to "{{ sshd.permit_tunnel }}" in sshd_config. Unlike ordinary TCP
+  PermitTunnel is "{{ sshd.permit_tunnel }}" (from {{ sshd.permit_tunnel_from }}). Unlike ordinary TCP
   port forwarding, tun-device tunneling gives an SSH client a full virtual network
   interface into this host's network — a much broader pivot/VPN-like capability that's
   rarely needed and should be off by default.
-fix: "Set 'PermitTunnel no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'."
+fix: "Put 'PermitTunnel no' in /etc/ssh/sshd_config.d/00-hardening.conf and reload the SSH service ('sudo sshd -t' checks it first). sshd keeps the first value it reads and reads that folder first; if sshd_config has no Include line for it, put the line at the top of /etc/ssh/sshd_config. Do not edit files under /usr/etc: updates replace them."
 references: [ATTACK-T1572]

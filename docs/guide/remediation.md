@@ -79,6 +79,12 @@ Each fixer is reversible and never widens access:
   after everything else, so a line at the top of the file does not win. `fix sshd` names the
   directive and leaves it for you to change in that block.
 
+  On openSUSE Tumbleweed and Leap 16 there is usually no `/etc/ssh/sshd_config`: sshd reads the
+  vendor's `/usr/etc/ssh/sshd_config`. A package update replaces that file, and creating
+  `/etc/ssh/sshd_config` would make sshd read it *instead*, dropping every vendor setting. So there
+  `fix sshd` shows its plan, lists the lines to put in `/etc/ssh/sshd_config.d/00-hardening.conf`,
+  and `--apply` writes nothing.
+
 Three more fixers can be run by name. Each needs root to apply; `fix all` includes `fix sysctl` but not the other two, which change wording and policy:
 
 - **`fix sysctl`** saves two kernel network settings in `/etc/sysctl.d/` (ICMP redirects off,
@@ -92,7 +98,10 @@ Three more fixers can be run by name. Each needs root to apply; `fix all` includ
   it pointed to is not changed. Not part of `fix all`.
 - **`fix login-defs`** sets `PASS_MAX_DAYS 90` and `PASS_MIN_DAYS 1` in `/etc/login.defs` where
   the current value is outside the rule's threshold. A missing line or `-1` means "no limit" and
-  is fixed too. Not part of `fix all`.
+  is fixed too. Not part of `fix all`. Where a drop-in in `/etc/login.defs.d/` sets the value
+  (Fedora and openSUSE read them), it names that file instead of editing `/etc/login.defs`, which
+  the drop-in overrides. On a system with only the vendor's `/usr/etc/login.defs` it writes
+  nothing and says which drop-in to create.
 - **`ssh protect`** adds one passphrase to every unencrypted key in `~/.ssh` at once, backing each up
   first — far better than leaving plaintext keys on disk.
 

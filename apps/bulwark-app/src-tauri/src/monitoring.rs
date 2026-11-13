@@ -233,6 +233,12 @@ fn watched_paths() -> Vec<PathBuf> {
         PathBuf::from("/etc/sudoers.d"),
         PathBuf::from("/etc/cron.d"),
         PathBuf::from("/etc/crontab"),
+        // Vendor defaults on distributions that keep them in /usr/etc (openSUSE): the scan reads
+        // these when the /etc copy is absent (see bulwark_core's `etc` module).
+        PathBuf::from("/usr/etc/ssh/sshd_config"),
+        PathBuf::from("/usr/etc/ssh/sshd_config.d"),
+        PathBuf::from("/usr/etc/sudoers"),
+        PathBuf::from("/usr/etc/sudoers.d"),
     ];
     if let Ok(home) = bulwark_core::paths::home_var() {
         paths.push(PathBuf::from(home).join(".ssh/authorized_keys"));

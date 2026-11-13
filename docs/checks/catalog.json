@@ -58,8 +58,8 @@
    "title": "Password maximum age is excessively long",
    "category": "accounts-services",
    "severity": "low",
-   "explain": "PASS_MAX_DAYS in /etc/login.defs is {{ login_defs.pass_max_days }} — passwords never expire in any practical sense, so a leaked credential stays valid indefinitely.",
-   "fix": "Set 'PASS_MAX_DAYS 90' (or your organization's policy) in /etc/login.defs.",
+   "explain": "PASS_MAX_DAYS is {{ login_defs.pass_max_days }} (from {{ login_defs.pass_max_days_from }}) — passwords never expire in any practical sense, so a leaked credential stays valid indefinitely.",
+   "fix": "Set 'PASS_MAX_DAYS 90' (or your organization's policy) in /etc/login.defs, or in the file named above if it is not that one. If there is no /etc/login.defs and the defaults are in /usr/etc/login.defs, do not create one (it would replace all of those defaults) and do not edit the /usr/etc file (updates replace it): put the line in a new file /etc/login.defs.d/90-password-age.defs instead.",
    "references": [
     "CIS-6.2.1"
    ],
@@ -74,8 +74,8 @@
    "title": "Password minimum age is zero",
    "category": "accounts-services",
    "severity": "low",
-   "explain": "PASS_MIN_DAYS in /etc/login.defs is 0 — a user forced to rotate a leaked password can immediately change it right back to the old (compromised) one, defeating the point of the forced rotation.",
-   "fix": "Set 'PASS_MIN_DAYS 1' (or your organization's policy) in /etc/login.defs.",
+   "explain": "PASS_MIN_DAYS is 0 (from {{ login_defs.pass_min_days_from }}) — a user forced to rotate a leaked password can immediately change it right back to the old (compromised) one, defeating the point of the forced rotation.",
+   "fix": "Set 'PASS_MIN_DAYS 1' (or your organization's policy) in /etc/login.defs, or in the file named above if it is not that one. If there is no /etc/login.defs and the defaults are in /usr/etc/login.defs, do not create one (it would replace all of those defaults) and do not edit the /usr/etc file (updates replace it): put the line in a new file /etc/login.defs.d/90-password-age.defs instead.",
    "references": [
     "CIS-6.2.1"
    ],
@@ -90,8 +90,8 @@
    "title": "Password hashing rounds are not explicitly configured",
    "category": "accounts-services",
    "severity": "low",
-   "explain": "This host hashes passwords with SHA-512/256 (ENCRYPT_METHOD), but SHA_CRYPT_MIN_ROUNDS isn't set in /etc/login.defs, so new passwords get whatever the system's compiled-in default hashing cost is rather than a deliberately chosen one — fine until you actually need to raise the cost to keep pace with faster cracking hardware, at which point \"never configured\" means nobody has ever checked.",
-   "fix": "Set 'SHA_CRYPT_MIN_ROUNDS 5000' (or higher, per current guidance) in /etc/login.defs.",
+   "explain": "This host hashes passwords with SHA-512/256 (ENCRYPT_METHOD), but SHA_CRYPT_MIN_ROUNDS isn't set in {{ login_defs.config_file }}, so new passwords get whatever the system's compiled-in default hashing cost is rather than a deliberately chosen one — fine until you actually need to raise the cost to keep pace with faster cracking hardware, at which point \"never configured\" means nobody has ever checked.",
+   "fix": "Set 'SHA_CRYPT_MIN_ROUNDS 5000' (or higher, per current guidance) in /etc/login.defs. If there is no /etc/login.defs and the defaults are in /usr/etc/login.defs, put the line in a new file /etc/login.defs.d/90-hashing.defs instead: a new /etc/login.defs would replace all of those defaults, and updates replace the /usr/etc file.",
    "references": [
     "CIS-6.2.2"
    ],
@@ -106,7 +106,7 @@
    "title": "Default UMASK is not explicitly configured",
    "category": "accounts-services",
    "severity": "low",
-   "explain": "No default umask is configured — neither an explicit UMASK line in /etc/login.defs nor a pam_umask entry in /etc/pam.d. Without a deliberate value, new files created by shells that don't set their own umask fall back to whatever the system default happens to be — commonly 022, which leaves new files group/world-readable by default rather than requiring an explicit opt-in to share them.",
+   "explain": "No default umask is configured — neither an explicit UMASK line in {{ login_defs.config_file }} nor a pam_umask entry in the PAM configuration. Without a deliberate value, new files created by shells that don't set their own umask fall back to whatever the system default happens to be — commonly 022, which leaves new files group/world-readable by default rather than requiring an explicit opt-in to share them.",
    "fix": "Set 'UMASK 027' (or your organization's policy) in /etc/login.defs, or add pam_umask to the session stack.",
    "references": [
     "CIS-6.2.3"
@@ -1421,8 +1421,8 @@
    "title": "SSH password authentication is enabled",
    "category": "ssh-remote-access",
    "severity": "high",
-   "explain": "PasswordAuthentication is set to \"{{ sshd.password_authentication }}\" in sshd_config, which allows an attacker to brute-force their way in with a password guess instead of needing a private key. It is the OpenSSH default and a brute-force *exposure* rather than a definite compromise, so it's rated high (aligning with CIS's L1 treatment and with BLWK-SSH-002), not critical.",
-   "fix": "Set 'PasswordAuthentication no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'. IMPORTANT: confirm key-based login works in a SECOND session before you rely on this — if the only working credential is a password and no key is installed, you will lock yourself out on the next login. Existing sessions survive the restart; a new key-authenticated login must succeed first.",
+   "explain": "PasswordAuthentication is \"{{ sshd.password_authentication }}\" (from {{ sshd.password_authentication_from }}), which allows an attacker to brute-force their way in with a password guess instead of needing a private key. It is the OpenSSH default and a brute-force *exposure* rather than a definite compromise, so it's rated high (aligning with CIS's L1 treatment and with BLWK-SSH-002), not critical.",
+   "fix": "Put 'PasswordAuthentication no' in /etc/ssh/sshd_config.d/00-hardening.conf and reload the SSH service ('sudo sshd -t' checks it first). sshd keeps the first value it reads and reads that folder first; if sshd_config has no Include line for it, put the line at the top of /etc/ssh/sshd_config. Do not edit files under /usr/etc: updates replace them. IMPORTANT: confirm key-based login works in a SECOND session before you rely on this — if the only working credential is a password and no key is installed, you will lock yourself out on the next login. Existing sessions survive the reload; a new key-authenticated login must succeed first.",
    "references": [
     "CIS-5.2.10",
     "ATTACK-T1110"
@@ -1438,8 +1438,8 @@
    "title": "SSH root login is permitted",
    "category": "ssh-remote-access",
    "severity": "high",
-   "explain": "PermitRootLogin is set to \"{{ sshd.permit_root_login }}\", allowing direct root logins over SSH. A compromised root password or key is a single step from full system control.",
-   "fix": "Set 'PermitRootLogin no' (or 'prohibit-password' if key-based root access is required) in /etc/ssh/sshd_config.",
+   "explain": "PermitRootLogin is \"{{ sshd.permit_root_login }}\" (from {{ sshd.permit_root_login_from }}), allowing direct root logins over SSH. A compromised root password or key is a single step from full system control.",
+   "fix": "Put 'PermitRootLogin no' in /etc/ssh/sshd_config.d/00-hardening.conf and reload the SSH service ('sudo sshd -t' checks it first). sshd keeps the first value it reads and reads that folder first; if sshd_config has no Include line for it, put the line at the top of /etc/ssh/sshd_config. Do not edit files under /usr/etc: updates replace them. Use 'prohibit-password' instead of 'no' if key-based root access is required.",
    "references": [
     "CIS-5.2.8",
     "ATTACK-T1078"
@@ -1455,8 +1455,8 @@
    "title": "SSH allows empty passwords",
    "category": "ssh-remote-access",
    "severity": "critical",
-   "explain": "PermitEmptyPasswords is set to \"{{ sshd.permit_empty_passwords }}\" — any account with a blank password can log in over SSH with no credential at all.",
-   "fix": "Set 'PermitEmptyPasswords no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'.",
+   "explain": "PermitEmptyPasswords is \"{{ sshd.permit_empty_passwords }}\" (from {{ sshd.permit_empty_passwords_from }}) — any account with a blank password can log in over SSH with no credential at all.",
+   "fix": "Put 'PermitEmptyPasswords no' in /etc/ssh/sshd_config.d/00-hardening.conf and reload the SSH service ('sudo sshd -t' checks it first). sshd keeps the first value it reads and reads that folder first; if sshd_config has no Include line for it, put the line at the top of /etc/ssh/sshd_config. Do not edit files under /usr/etc: updates replace them.",
    "references": [
     "CIS-5.2.11"
    ],
@@ -1471,8 +1471,8 @@
    "title": "SSH X11 forwarding is enabled",
    "category": "ssh-remote-access",
    "severity": "low",
-   "explain": "X11Forwarding is set to \"{{ sshd.x11_forwarding }}\" in sshd_config. X11 forwarding exposes any local X server to whatever runs on the remote end of the session, and has a history of X11-protocol-level compromise (keystroke injection, screen capture).",
-   "fix": "Set 'X11Forwarding no' in /etc/ssh/sshd_config and run 'systemctl restart sshd', unless remote GUI apps are a deliberate requirement.",
+   "explain": "X11Forwarding is \"{{ sshd.x11_forwarding }}\" (from {{ sshd.x11_forwarding_from }}). X11 forwarding exposes any local X server to whatever runs on the remote end of the session, and has a history of X11-protocol-level compromise (keystroke injection, screen capture).",
+   "fix": "Put 'X11Forwarding no' in /etc/ssh/sshd_config.d/00-hardening.conf and reload the SSH service ('sudo sshd -t' checks it first). sshd keeps the first value it reads and reads that folder first; if sshd_config has no Include line for it, put the line at the top of /etc/ssh/sshd_config. Do not edit files under /usr/etc: updates replace them. Leave it on only if remote GUI apps are a deliberate requirement.",
    "references": [
     "CIS-5.2.4"
    ],
@@ -1487,8 +1487,8 @@
    "title": "SSH TCP forwarding/tunneling is enabled",
    "category": "ssh-remote-access",
    "severity": "low",
-   "explain": "AllowTcpForwarding is set to \"{{ sshd.allow_tcp_forwarding }}\" in sshd_config (\"yes\" and \"all\" allow both directions, \"local\" and \"remote\" one each). TCP forwarding lets any SSH user open port tunnels through this host — the exact mechanism used to pivot into internal networks or to reach services (like VNC) that are only supposed to be reachable from localhost.",
-   "fix": "Set 'AllowTcpForwarding no' in /etc/ssh/sshd_config, or restrict it per-user with a Match block, unless tunneling is a deliberate requirement.",
+   "explain": "AllowTcpForwarding is \"{{ sshd.allow_tcp_forwarding }}\" (from {{ sshd.allow_tcp_forwarding_from }}; \"yes\" and \"all\" allow both directions, \"local\" and \"remote\" one each). TCP forwarding lets any SSH user open port tunnels through this host — the exact mechanism used to pivot into internal networks or to reach services (like VNC) that are only supposed to be reachable from localhost.",
+   "fix": "Put 'AllowTcpForwarding no' in /etc/ssh/sshd_config.d/00-hardening.conf and reload the SSH service ('sudo sshd -t' checks it first). sshd keeps the first value it reads and reads that folder first; if sshd_config has no Include line for it, put the line at the top of /etc/ssh/sshd_config. Do not edit files under /usr/etc: updates replace them. Or restrict it per-user with a Match block, if tunneling is a deliberate requirement.",
    "references": [
     "CIS-5.2.5",
     "ATTACK-T1572"
@@ -1504,8 +1504,8 @@
    "title": "SSH permits user-set environment variables",
    "category": "ssh-remote-access",
    "severity": "medium",
-   "explain": "PermitUserEnvironment is set to \"{{ sshd.permit_user_environment }}\" in sshd_config, letting an SSH client set arbitrary environment variables for its session (via ~/.ssh/environment or SendEnv) — including ones like LD_PRELOAD that can hijack the behavior of programs the session later runs.",
-   "fix": "Set 'PermitUserEnvironment no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'.",
+   "explain": "PermitUserEnvironment is \"{{ sshd.permit_user_environment }}\" (from {{ sshd.permit_user_environment_from }}), letting an SSH client set arbitrary environment variables for its session (via ~/.ssh/environment or SendEnv) — including ones like LD_PRELOAD that can hijack the behavior of programs the session later runs.",
+   "fix": "Put 'PermitUserEnvironment no' in /etc/ssh/sshd_config.d/00-hardening.conf and reload the SSH service ('sudo sshd -t' checks it first). sshd keeps the first value it reads and reads that folder first; if sshd_config has no Include line for it, put the line at the top of /etc/ssh/sshd_config. Do not edit files under /usr/etc: updates replace them.",
    "references": [
     "CIS-5.2.6"
    ],
@@ -1520,8 +1520,8 @@
    "title": "SSH tun-device (layer 2/3) tunneling is enabled",
    "category": "ssh-remote-access",
    "severity": "medium",
-   "explain": "PermitTunnel is set to \"{{ sshd.permit_tunnel }}\" in sshd_config. Unlike ordinary TCP port forwarding, tun-device tunneling gives an SSH client a full virtual network interface into this host's network — a much broader pivot/VPN-like capability that's rarely needed and should be off by default.",
-   "fix": "Set 'PermitTunnel no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'.",
+   "explain": "PermitTunnel is \"{{ sshd.permit_tunnel }}\" (from {{ sshd.permit_tunnel_from }}). Unlike ordinary TCP port forwarding, tun-device tunneling gives an SSH client a full virtual network interface into this host's network — a much broader pivot/VPN-like capability that's rarely needed and should be off by default.",
+   "fix": "Put 'PermitTunnel no' in /etc/ssh/sshd_config.d/00-hardening.conf and reload the SSH service ('sudo sshd -t' checks it first). sshd keeps the first value it reads and reads that folder first; if sshd_config has no Include line for it, put the line at the top of /etc/ssh/sshd_config. Do not edit files under /usr/etc: updates replace them.",
    "references": [
     "ATTACK-T1572"
    ],
@@ -1536,8 +1536,8 @@
    "title": "SSH StrictModes is disabled",
    "category": "ssh-remote-access",
    "severity": "medium",
-   "explain": "StrictModes is set to \"{{ sshd.strict_modes }}\" in sshd_config. With StrictModes off, sshd no longer verifies that a user's home directory and key files have safe ownership and permissions before trusting them — a world-writable home directory or key file then becomes a usable login bypass instead of a rejected, obviously-broken config.",
-   "fix": "Set 'StrictModes yes' in /etc/ssh/sshd_config and run 'systemctl restart sshd'.",
+   "explain": "StrictModes is \"{{ sshd.strict_modes }}\" (from {{ sshd.strict_modes_from }}). With StrictModes off, sshd no longer verifies that a user's home directory and key files have safe ownership and permissions before trusting them — a world-writable home directory or key file then becomes a usable login bypass instead of a rejected, obviously-broken config.",
+   "fix": "Put 'StrictModes yes' in /etc/ssh/sshd_config.d/00-hardening.conf and reload the SSH service ('sudo sshd -t' checks it first). sshd keeps the first value it reads and reads that folder first; if sshd_config has no Include line for it, put the line at the top of /etc/ssh/sshd_config. Do not edit files under /usr/etc: updates replace them.",
    "references": [
     "CIS-5.2.9"
    ],
@@ -1552,8 +1552,8 @@
    "title": "SSH GatewayPorts exposes forwarded ports to the network",
    "category": "ssh-remote-access",
    "severity": "medium",
-   "explain": "GatewayPorts is set to \"{{ sshd.gateway_ports }}\" in sshd_config. By default, a port an SSH client forwards to this host is only reachable from localhost; with \"yes\" it is reachable from anywhere on the network, and with \"clientspecified\" whenever the client asks for that — turning an individual user's ad-hoc SSH tunnel into an accidental (or deliberate) network-wide exposure of whatever it points at.",
-   "fix": "Set 'GatewayPorts no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'.",
+   "explain": "GatewayPorts is \"{{ sshd.gateway_ports }}\" (from {{ sshd.gateway_ports_from }}). By default, a port an SSH client forwards to this host is only reachable from localhost; with \"yes\" it is reachable from anywhere on the network, and with \"clientspecified\" whenever the client asks for that — turning an individual user's ad-hoc SSH tunnel into an accidental (or deliberate) network-wide exposure of whatever it points at.",
+   "fix": "Put 'GatewayPorts no' in /etc/ssh/sshd_config.d/00-hardening.conf and reload the SSH service ('sudo sshd -t' checks it first). sshd keeps the first value it reads and reads that folder first; if sshd_config has no Include line for it, put the line at the top of /etc/ssh/sshd_config. Do not edit files under /usr/etc: updates replace them.",
    "references": [
     "ATTACK-T1090"
    ],
@@ -1568,8 +1568,8 @@
    "title": "SSH agent forwarding is enabled",
    "category": "ssh-remote-access",
    "severity": "low",
-   "explain": "AllowAgentForwarding is set to \"{{ sshd.allow_agent_forwarding }}\" in sshd_config. Agent forwarding lets anyone with root (or the forwarding user's privileges) on this host make use of the connecting client's SSH agent to authenticate onward as that client, without ever seeing the private key itself — a well-known lateral-movement technique on multi-hop SSH setups.",
-   "fix": "Set 'AllowAgentForwarding no' in /etc/ssh/sshd_config unless agent forwarding is a deliberate requirement.",
+   "explain": "AllowAgentForwarding is \"{{ sshd.allow_agent_forwarding }}\" (from {{ sshd.allow_agent_forwarding_from }}). Agent forwarding lets anyone with root (or the forwarding user's privileges) on this host make use of the connecting client's SSH agent to authenticate onward as that client, without ever seeing the private key itself — a well-known lateral-movement technique on multi-hop SSH setups.",
+   "fix": "Put 'AllowAgentForwarding no' in /etc/ssh/sshd_config.d/00-hardening.conf and reload the SSH service ('sudo sshd -t' checks it first). sshd keeps the first value it reads and reads that folder first; if sshd_config has no Include line for it, put the line at the top of /etc/ssh/sshd_config. Do not edit files under /usr/etc: updates replace them. Leave it on only if agent forwarding is a deliberate requirement.",
    "references": [
     "ATTACK-T1563"
    ],
@@ -1584,8 +1584,8 @@
    "title": "SSH allows an excessive number of authentication attempts per connection",
    "category": "ssh-remote-access",
    "severity": "low",
-   "explain": "MaxAuthTries is set to {{ sshd.max_auth_tries }} in sshd_config — well above the recommended ceiling of 3-6. A high limit gives an online password-guessing attempt many more tries per TCP connection before being cut off.",
-   "fix": "Set 'MaxAuthTries 3' (or up to 6) in /etc/ssh/sshd_config and run 'systemctl restart sshd'.",
+   "explain": "MaxAuthTries is {{ sshd.max_auth_tries }} (from {{ sshd.max_auth_tries_from }}) — well above the recommended ceiling of 3-6. A high limit gives an online password-guessing attempt many more tries per TCP connection before being cut off.",
+   "fix": "Put 'MaxAuthTries 3' in /etc/ssh/sshd_config.d/00-hardening.conf and reload the SSH service ('sudo sshd -t' checks it first). sshd keeps the first value it reads and reads that folder first; if sshd_config has no Include line for it, put the line at the top of /etc/ssh/sshd_config. Do not edit files under /usr/etc: updates replace them. Any value up to 6 passes this check.",
    "references": [
     "CIS-5.2.7",
     "ATTACK-T1110"

@@ -16,10 +16,11 @@ collector: sshd_config
 # The last two are narrower than yes, so the text names the value instead of saying "on".
 condition: allow_tcp_forwarding in ["yes", "all", "local", "remote"]
 explain: >
-  AllowTcpForwarding is set to "{{ sshd.allow_tcp_forwarding }}" in sshd_config ("yes" and
+  AllowTcpForwarding is "{{ sshd.allow_tcp_forwarding }}" (from
+  {{ sshd.allow_tcp_forwarding_from }}; "yes" and
   "all" allow both directions, "local" and "remote" one each). TCP forwarding lets any SSH
   user open port tunnels through this host — the exact mechanism used to pivot into internal
   networks or to reach services (like VNC) that are only supposed to be reachable from
   localhost.
-fix: "Set 'AllowTcpForwarding no' in /etc/ssh/sshd_config, or restrict it per-user with a Match block, unless tunneling is a deliberate requirement."
+fix: "Put 'AllowTcpForwarding no' in /etc/ssh/sshd_config.d/00-hardening.conf and reload the SSH service ('sudo sshd -t' checks it first). sshd keeps the first value it reads and reads that folder first; if sshd_config has no Include line for it, put the line at the top of /etc/ssh/sshd_config. Do not edit files under /usr/etc: updates replace them. Or restrict it per-user with a Match block, if tunneling is a deliberate requirement."
 references: [CIS-5.2.5, ATTACK-T1572]

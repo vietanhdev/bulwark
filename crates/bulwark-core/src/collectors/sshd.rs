@@ -1,22 +1,15 @@
 use super::Collector;
+use crate::etc::{io_error, is_absent, read_config_file};
 use crate::models::Fact;
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 pub struct SshdConfigCollector;
 
-const MAIN_CONFIG: &str = "/etc/ssh/sshd_config";
-const CONFIG_DIR: &str = "/etc/ssh";
-
 /// sshd gives up with "Too many recursive configuration includes" past this depth
 /// (`SERVCONF_MAX_DEPTH` in servconf.c).
 const MAX_INCLUDE_DEPTH: usize = 16;
-
-/// No real sshd configuration is anywhere near this size. A larger file is reported as an error,
-/// never read in part.
-const MAX_CONFIG_BYTES: u64 = 4 * 1024 * 1024;
 
 /// One security-relevant sshd directive.
 struct Known {
@@ -296,20 +289,36 @@ enum Scope {
     Conditional,
 }
 
-/// Maps one `Include` pattern (as written in the file, quotes already removed) to the text of each
-/// file it matches, in the order sshd reads them. An error means a matched file could not be read,
-/// which leaves the whole configuration undetermined.
-pub(crate) type IncludeResolver<'a> = dyn Fn(&str) -> anyhow::Result<Vec<String>> + 'a;
+/// One configuration file: where it is, and what it says.
+pub(crate) struct ConfigFile {
+    pub path: String,
+    pub text: String,
+}
 
-/// The first value seen for each key, kept apart for the global scope and for `Match all` blocks.
+/// Maps one `Include` pattern (as written in the file, quotes already removed) to each file it
+/// matches, in the order sshd reads them. An error means a matched file could not be read, which
+/// leaves the whole configuration undetermined.
+pub(crate) type IncludeResolver<'a> = dyn Fn(&str) -> anyhow::Result<Vec<ConfigFile>> + 'a;
+
+/// What the `<field>_from` fact says for a setting no file makes.
+pub(crate) const BUILT_IN_DEFAULT: &str = "OpenSSH's built-in default (no file sets it)";
+
+/// The suffix of the fact naming the file a setting came from: `password_authentication_from`.
+/// A finding names that file, so a user changes the setting where it is made — and on a system
+/// that keeps the vendor's settings in `/usr/etc` learns not to edit a file the next package
+/// update replaces.
+pub(crate) const FROM_SUFFIX: &str = "_from";
+
+/// The first value seen for each key and the file it came from, kept apart for the global scope
+/// and for `Match all` blocks.
 #[derive(Default)]
 struct Seen {
-    global: BTreeMap<String, Value>,
-    match_all: BTreeMap<String, Value>,
+    global: BTreeMap<String, (Value, String)>,
+    match_all: BTreeMap<String, (Value, String)>,
 }
 
 impl Seen {
-    fn record(&mut self, keyword: &str, args: &[String], scope: Scope) {
+    fn record(&mut self, keyword: &str, args: &[String], scope: Scope, origin: &str) {
         let lower = keyword.to_ascii_lowercase();
         let (key, in_match, value) = match SSHD_DEFAULTS.iter().find(|k| k.directive == lower) {
             // Every directive the rules read takes one argument.
@@ -326,14 +335,15 @@ impl Seen {
             &mut self.global
         };
         // sshd keeps the first value it obtains for a keyword; a later line is ignored.
-        seen.entry(key).or_insert_with(|| coerce_value(&value));
+        seen.entry(key)
+            .or_insert_with(|| (coerce_value(&value), origin.to_string()));
     }
 }
 
 /// Walks one file's text, following `Include`s. The checks below are each taken from servconf.c
 /// (`process_server_config_line_depth`), not inferred from configs seen in the wild.
 fn walk(
-    text: &str,
+    file: &ConfigFile,
     mut scope: Scope,
     depth: usize,
     resolve: &IncludeResolver,
@@ -345,7 +355,7 @@ fn walk(
              includes itself?) — sshd refuses such a configuration"
         );
     }
-    for line in text.split('\n') {
+    for line in file.text.split('\n') {
         let Some((keyword, rest)) = split_keyword(line) else {
             continue;
         };
@@ -380,14 +390,17 @@ fn walk(
         if args.is_empty() {
             continue; // only a comment after the keyword: sshd rejects the line
         }
-        seen.record(keyword, &args, scope);
+        seen.record(keyword, &args, scope, &file.path);
     }
     Ok(())
 }
 
 /// Parses sshd_config text into a flat fact map of the values in force for every connection,
-/// following `Include`s through `resolve`. Split from disk access so it is unit-testable with
-/// fixture text and a fake include resolver.
+/// following `Include`s through `resolve`. `origin` is the file the text came from. Split from disk
+/// access so it is unit-testable with fixture text and a fake include resolver.
+///
+/// Each directive the rules read also gets a `<field>_from` fact: the file whose line set the value
+/// in force, or [`BUILT_IN_DEFAULT`].
 ///
 /// The semantics are OpenSSH's own:
 ///   * **Defaults** stand for directives that are absent.
@@ -406,17 +419,37 @@ fn walk(
 ///     line comes first — `PasswordAuthentication no` followed by `Match all` and
 ///     `PasswordAuthentication yes` accepts passwords. The few keywords that are not allowed in a
 ///     `Match` block are not copied; inside `Match all` they behave like any other global line.
-pub fn parse_sshd_config_with(text: &str, resolve: &IncludeResolver) -> anyhow::Result<Fact> {
+pub(crate) fn parse_sshd_config_with(
+    text: &str,
+    origin: &str,
+    resolve: &IncludeResolver,
+) -> anyhow::Result<Fact> {
     let mut seen = Seen::default();
-    walk(text, Scope::Global, 0, resolve, &mut seen)?;
+    let main = ConfigFile {
+        path: origin.to_string(),
+        text: text.to_string(),
+    };
+    walk(&main, Scope::Global, 0, resolve, &mut seen)?;
 
     // Start from the compiled-in defaults; explicit directives override, absent ones stand.
+    let mut values: BTreeMap<String, (Value, String)> = SSHD_DEFAULTS
+        .iter()
+        .map(|k| {
+            (
+                k.field.to_string(),
+                (coerce_value(k.default), BUILT_IN_DEFAULT.to_string()),
+            )
+        })
+        .collect();
+    values.extend(seen.global);
+    values.extend(seen.match_all);
     let mut fact = Fact::new();
-    for k in SSHD_DEFAULTS {
-        fact.insert(k.field.to_string(), coerce_value(k.default));
+    for (key, (value, from)) in values {
+        if SSHD_DEFAULTS.iter().any(|k| k.field == key) {
+            fact.insert(format!("{key}{FROM_SUFFIX}"), Value::String(from));
+        }
+        fact.insert(key, value);
     }
-    fact.extend(seen.global);
-    fact.extend(seen.match_all);
     Ok(fact)
 }
 
@@ -424,7 +457,8 @@ pub fn parse_sshd_config_with(text: &str, resolve: &IncludeResolver) -> anyhow::
 /// a single file (currently the unit tests).
 #[cfg(test)]
 pub fn parse_sshd_config(text: &str) -> Fact {
-    parse_sshd_config_with(text, &|_| Ok(Vec::new())).expect("no includes to fail on")
+    parse_sshd_config_with(text, "sshd_config", &|_| Ok(Vec::new()))
+        .expect("no includes to fail on")
 }
 
 /// One part of a file-name pattern.
@@ -565,23 +599,6 @@ fn atoms_match(atoms: &[Atom], name: &[u8]) -> bool {
     atoms[a..].iter().all(|atom| matches!(atom, Atom::Star))
 }
 
-/// Keeps the cause in the error chain: the engine looks there for "permission denied" to tell a
-/// scan that needs admin rights from one that failed.
-fn io_error(what: &str, path: &Path, e: std::io::Error) -> anyhow::Error {
-    let message = format!(
-        "could not {what} {}: {e}",
-        crate::engine::display_safe(&path.display().to_string())
-    );
-    anyhow::Error::new(e).context(message)
-}
-
-fn is_absent(e: &std::io::Error) -> bool {
-    matches!(
-        e.kind(),
-        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-    )
-}
-
 /// The paths an absolute pattern matches, as sshd's `glob(pattern, 0, …)` call returns them:
 /// wildcards may appear in any component, a name starting with `.` is matched only by a pattern
 /// that spells the dot out, and the result is in byte order (sshd_config(5): "processed in lexical
@@ -648,41 +665,13 @@ fn glob_paths(pattern: &str) -> anyhow::Result<Vec<PathBuf>> {
     Ok(matched)
 }
 
-/// Reads one configuration file as text. Bytes that are not UTF-8 are replaced, not refused: sshd
-/// reads bytes, and one Latin-1 character in a comment must not hide the lines around it.
-fn read_config_file(path: &Path) -> anyhow::Result<String> {
-    let meta = std::fs::metadata(path).map_err(|e| io_error("read", path, e))?;
-    if meta.is_dir() {
-        // `Include dir/*` also matches sub-folders. sshd opens one, reads nothing and carries on.
-        return Ok(String::new());
-    }
-    if !meta.is_file() {
-        // A pipe or device would block or never end.
-        anyhow::bail!(
-            "could not read {}: it is not a regular file",
-            crate::engine::display_safe(&path.display().to_string())
-        );
-    }
-    let mut bytes = Vec::new();
-    std::fs::File::open(path)
-        .and_then(|file| file.take(MAX_CONFIG_BYTES + 1).read_to_end(&mut bytes))
-        .map_err(|e| io_error("read", path, e))?;
-    if bytes.len() as u64 > MAX_CONFIG_BYTES {
-        anyhow::bail!(
-            "could not read {}: it is larger than {} MiB",
-            crate::engine::display_safe(&path.display().to_string()),
-            MAX_CONFIG_BYTES / (1024 * 1024)
-        );
-    }
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
-}
-
 /// Reads the files one `Include` pattern matches, in the order sshd applies them. A pattern that
-/// does not start with `/` is relative to `config_dir` (`/etc/ssh`), whichever file it appears in.
+/// does not start with `/` is relative to `config_dir` (`/etc/ssh`), whichever file it appears in
+/// — the vendor's `/usr/etc/ssh/sshd_config` included (measured with `sshd -T`).
 /// No match is not an error (sshd carries on too); a matched file that cannot be read is, because
 /// the values it sets are then unknown — skipping it would report whatever the readable files say
 /// as if it were the whole configuration.
-fn read_includes(config_dir: &Path, pattern: &str) -> anyhow::Result<Vec<String>> {
+fn read_includes(config_dir: &Path, pattern: &str) -> anyhow::Result<Vec<ConfigFile>> {
     if pattern.starts_with('~') {
         // sshd passes this to glob as it is, without expanding `~`, so what it matches depends on
         // the folder sshd was started from.
@@ -698,20 +687,30 @@ fn read_includes(config_dir: &Path, pattern: &str) -> anyhow::Result<Vec<String>
     };
     glob_paths(&full)?
         .iter()
-        .map(|path| read_config_file(path))
+        .map(|path| {
+            Ok(ConfigFile {
+                path: path.display().to_string(),
+                text: read_config_file(path)?,
+            })
+        })
         .collect()
 }
 
 /// The include resolver for the real system: patterns are relative to `/etc/ssh`.
-pub(crate) fn resolve_include_glob(pattern: &str) -> anyhow::Result<Vec<String>> {
-    read_includes(Path::new(CONFIG_DIR), pattern)
+pub(crate) fn resolve_include_glob(pattern: &str) -> anyhow::Result<Vec<ConfigFile>> {
+    read_includes(Path::new(crate::etc::SSHD_CONFIG_DIR), pattern)
 }
 
 /// The effective configuration of the sshd whose main file is `main` and whose relative includes
-/// resolve against `config_dir`.
+/// resolve against `config_dir`, with `config_file` naming the main file.
 fn read_effective_config(main: &Path, config_dir: &Path) -> anyhow::Result<Fact> {
     let text = read_config_file(main)?;
-    parse_sshd_config_with(&text, &|pattern| read_includes(config_dir, pattern))
+    let origin = main.display().to_string();
+    let mut fact = parse_sshd_config_with(&text, &origin, &|pattern| {
+        read_includes(config_dir, pattern)
+    })?;
+    fact.insert("config_file".to_string(), Value::String(origin));
+    Ok(fact)
 }
 
 impl Collector for SshdConfigCollector {
@@ -719,21 +718,38 @@ impl Collector for SshdConfigCollector {
         "sshd_config"
     }
 
+    /// `/etc/ssh/sshd_config`, or on a system that keeps the vendor's file in `/usr/etc` and has no
+    /// `/etc` copy, that one (see [`crate::etc`]).
     fn is_applicable(&self) -> bool {
-        Path::new(MAIN_CONFIG).exists()
+        crate::etc::SSHD_CONFIG.in_use().is_some()
     }
 
     fn collect(&self) -> anyhow::Result<Vec<Fact>> {
+        let main = crate::etc::SSHD_CONFIG
+            .in_use()
+            .ok_or_else(|| anyhow::anyhow!("no sshd_config: it was removed during the scan"))?;
         Ok(vec![read_effective_config(
-            Path::new(MAIN_CONFIG),
-            Path::new(CONFIG_DIR),
+            &main,
+            Path::new(crate::etc::SSHD_CONFIG_DIR),
         )?])
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// Included files with made-up names, for a fake include resolver.
+    pub(crate) fn included(texts: &[&str]) -> Vec<ConfigFile> {
+        texts
+            .iter()
+            .enumerate()
+            .map(|(i, text)| ConfigFile {
+                path: format!("/etc/ssh/sshd_config.d/{i}.conf"),
+                text: text.to_string(),
+            })
+            .collect()
+    }
 
     fn get<'a>(fact: &'a Fact, key: &str) -> &'a Value {
         fact.get(key)
@@ -955,9 +971,9 @@ mod tests {
         let main = "Include /etc/ssh/sshd_config.d/*.conf\nPasswordAuthentication no\n";
         let resolve = |glob: &str| {
             assert!(glob.contains("sshd_config.d"));
-            Ok(vec!["PasswordAuthentication yes\n".to_string()])
+            Ok(included(&["PasswordAuthentication yes\n"]))
         };
-        let fact = parse_sshd_config_with(main, &resolve).unwrap();
+        let fact = parse_sshd_config_with(main, "sshd_config", &resolve).unwrap();
         assert_eq!(
             fact.get("password_authentication").unwrap(),
             "yes",
@@ -972,12 +988,12 @@ mod tests {
         let asked = std::cell::RefCell::new(Vec::new());
         let resolve = |pattern: &str| {
             asked.borrow_mut().push(pattern.to_string());
-            Ok(vec![match pattern {
-                "/etc/ssh/a.conf" => "X11Forwarding yes\n".to_string(),
-                _ => "PermitRootLogin yes\nX11Forwarding no\n".to_string(),
-            }])
+            Ok(included(&[match pattern {
+                "/etc/ssh/a.conf" => "X11Forwarding yes\n",
+                _ => "PermitRootLogin yes\nX11Forwarding no\n",
+            }]))
         };
-        let fact = parse_sshd_config_with(main, &resolve).unwrap();
+        let fact = parse_sshd_config_with(main, "sshd_config", &resolve).unwrap();
         assert_eq!(
             *asked.borrow(),
             ["/etc/ssh/a.conf", "/etc/ssh/b c.conf"],
@@ -992,11 +1008,11 @@ mod tests {
     fn a_match_inside_an_included_file_ends_with_that_file() {
         let main = "Include extra.conf\nPasswordAuthentication yes\nPermitRootLogin yes\n";
         let resolve = |_: &str| {
-            Ok(vec![
-                "Match User bob\nPasswordAuthentication no\nPermitRootLogin no\n".to_string(),
-            ])
+            Ok(included(&[
+                "Match User bob\nPasswordAuthentication no\nPermitRootLogin no\n",
+            ]))
         };
-        let fact = parse_sshd_config_with(main, &resolve).unwrap();
+        let fact = parse_sshd_config_with(main, "sshd_config", &resolve).unwrap();
         assert_eq!(get(&fact, "password_authentication"), "yes");
         assert_eq!(get(&fact, "permit_root_login"), "yes");
     }
@@ -1006,35 +1022,63 @@ mod tests {
         // Nothing in it can apply globally, so a file there that this scan cannot read must not
         // make the whole result undetermined either.
         let main = "PasswordAuthentication no\nMatch User ci\nInclude ci.conf\n";
-        let resolve = |_: &str| -> anyhow::Result<Vec<String>> {
+        let resolve = |_: &str| -> anyhow::Result<Vec<ConfigFile>> {
             panic!("an include inside a conditional block was read")
         };
-        let fact = parse_sshd_config_with(main, &resolve).unwrap();
+        let fact = parse_sshd_config_with(main, "sshd_config", &resolve).unwrap();
         assert_eq!(get(&fact, "password_authentication"), "no");
     }
 
     #[test]
     fn an_include_under_match_all_is_part_of_that_block() {
         let main = "PasswordAuthentication no\nMatch all\nInclude late.conf\n";
-        let resolve = |_: &str| Ok(vec!["PasswordAuthentication yes\n".to_string()]);
-        let fact = parse_sshd_config_with(main, &resolve).unwrap();
+        let resolve = |_: &str| Ok(included(&["PasswordAuthentication yes\n"]));
+        let fact = parse_sshd_config_with(main, "sshd_config", &resolve).unwrap();
         assert_eq!(get(&fact, "password_authentication"), "yes");
     }
 
     #[test]
     fn an_include_that_cannot_be_read_fails_the_whole_parse() {
         let main = "Include /etc/ssh/sshd_config.d/*.conf\nPasswordAuthentication no\n";
-        let resolve = |_: &str| -> anyhow::Result<Vec<String>> {
+        let resolve = |_: &str| -> anyhow::Result<Vec<ConfigFile>> {
             Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied).into())
         };
-        assert!(parse_sshd_config_with(main, &resolve).is_err());
+        assert!(parse_sshd_config_with(main, "sshd_config", &resolve).is_err());
     }
 
     #[test]
     fn a_file_that_includes_itself_is_an_error_not_a_hang() {
-        let resolve = |_: &str| Ok(vec!["Include loop.conf\n".to_string()]);
-        let err = parse_sshd_config_with("Include loop.conf\n", &resolve).unwrap_err();
+        let resolve = |_: &str| Ok(included(&["Include loop.conf\n"]));
+        let err =
+            parse_sshd_config_with("Include loop.conf\n", "sshd_config", &resolve).unwrap_err();
         assert!(err.to_string().contains("nested"), "{err}");
+    }
+
+    /// A finding names the file whose line is in force, so a user changes it there — and on a
+    /// system with the vendor's file in `/usr/etc` learns that the value comes from a file the next
+    /// package update replaces.
+    #[test]
+    fn each_value_names_the_file_that_set_it() {
+        let main = "Include /etc/ssh/sshd_config.d/*.conf\nX11Forwarding yes\n\
+                    PasswordAuthentication no\nMatch all\nGatewayPorts yes\n";
+        let resolve = |_: &str| Ok(included(&["PasswordAuthentication yes\n"]));
+        let fact = parse_sshd_config_with(main, "/usr/etc/ssh/sshd_config", &resolve).unwrap();
+        assert_eq!(
+            get(&fact, "password_authentication_from"),
+            "/etc/ssh/sshd_config.d/0.conf"
+        );
+        assert_eq!(
+            get(&fact, "x11_forwarding_from"),
+            "/usr/etc/ssh/sshd_config"
+        );
+        assert_eq!(
+            get(&fact, "gateway_ports_from"),
+            "/usr/etc/ssh/sshd_config",
+            "a Match all value names its file too"
+        );
+        assert_eq!(get(&fact, "permit_root_login_from"), BUILT_IN_DEFAULT);
+        // Only the directives the rules read get one; other keywords stay as they were.
+        assert!(!fact.contains_key("include_from"));
     }
 
     #[test]
@@ -1237,6 +1281,46 @@ mod tests {
             assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o644) }, 0);
             let err = effective(&dir).unwrap_err();
             assert!(err.to_string().contains("not a regular file"), "{err}");
+        }
+
+        /// Tumbleweed's layout: no `/etc/ssh/sshd_config`, the vendor file includes the admin's
+        /// drop-ins first and the vendor's after them. `sshd -T` there: a drop-in in either folder
+        /// takes effect, and the admin's wins over the vendor's.
+        #[test]
+        fn the_vendor_file_and_both_drop_in_folders_are_read_in_sshds_order() {
+            let root = tempfile::tempdir().unwrap();
+            let etc = root.path().join("etc/ssh");
+            let usr = root.path().join("usr/etc/ssh");
+            fs::create_dir_all(etc.join("sshd_config.d")).unwrap();
+            fs::create_dir_all(usr.join("sshd_config.d")).unwrap();
+            fs::write(
+                usr.join("sshd_config"),
+                format!(
+                    "Include {e}/sshd_config.d/*.conf\nInclude {u}/sshd_config.d/*.conf\n\
+                     X11Forwarding yes\n",
+                    e = etc.display(),
+                    u = usr.display()
+                ),
+            )
+            .unwrap();
+            fs::write(
+                usr.join("sshd_config.d/50-b.conf"),
+                "MaxAuthTries 2\nGatewayPorts yes\n",
+            )
+            .unwrap();
+            fs::write(etc.join("sshd_config.d/50-b.conf"), "MaxAuthTries 4\n").unwrap();
+            let fact = read_effective_config(&usr.join("sshd_config"), &etc).unwrap();
+            assert_eq!(get(&fact, "max_auth_tries"), &Value::from(4));
+            assert_eq!(
+                get(&fact, "max_auth_tries_from"),
+                &Value::from(etc.join("sshd_config.d/50-b.conf").display().to_string())
+            );
+            assert_eq!(get(&fact, "gateway_ports"), "yes");
+            assert_eq!(get(&fact, "x11_forwarding"), "yes");
+            assert_eq!(
+                get(&fact, "config_file"),
+                &Value::from(usr.join("sshd_config").display().to_string())
+            );
         }
 
         /// A collector over a throw-away folder, to drive the real engine.
