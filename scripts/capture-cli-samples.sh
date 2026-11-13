@@ -8,6 +8,8 @@
 # hosts are containers named devbox and web-01, the users are dev and deploy, the leaked key is
 # generated inside the container and never written out (the report shows only where it is).
 #
+# The commands run with LANG=C.UTF-8: without a UTF-8 locale the report uses ASCII symbols.
+#
 # Usage: scripts/capture-cli-samples.sh        (needs Docker; builds with -j4 under nice)
 set -euo pipefail
 
@@ -85,7 +87,7 @@ run() { # id, user, command — the report, exactly as a terminal would show it 
   local id=$1 user=$2
   shift 2
   echo "  $*"
-  docker exec -u "$user" -w "/home/dev" -e HOME="$([ "$user" = root ] && echo /root || echo /home/dev)" \
+  docker exec -u "$user" -w "/home/dev" -e LANG=C.UTF-8 -e HOME="$([ "$user" = root ] && echo /root || echo /home/dev)" \
     "$DEV" bash -c "$* 2>&1" >"$WORK/$id.txt" || true
 }
 
@@ -116,7 +118,7 @@ SAMPLES = [
     ("scan", "This computer", "bulwarkctl scan",
      ["root login is permitted", "forwards your agent"]),
     ("ssh", "A server", "bulwarkctl scan --ssh deploy@web-01",
-     ["password authentication", "auditd is not installed"]),
+     ["password authentication", "root login is permitted"]),
     ("fix", "Fix", "sudo bulwarkctl fix sshd", None),
     ("logs", "Logs", "bulwarkctl logs scan --from-file auth.log", None),
 ]
