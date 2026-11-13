@@ -10,11 +10,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn bin() -> PathBuf {
-    let mut p = std::env::current_exe().unwrap();
-    p.pop();
-    p.pop();
-    p.push("bulwarkctl");
-    p
+    // Cargo's own path to the binary. Guessing it from the test executable's folder broke when
+    // Cargo moved test executables under target/<profile>/build/.
+    PathBuf::from(env!("CARGO_BIN_EXE_bulwarkctl"))
 }
 
 fn mode_of(p: &Path) -> u32 {
