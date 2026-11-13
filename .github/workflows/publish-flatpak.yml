@@ -77,10 +77,10 @@ jobs:
         run: |
           set -euo pipefail
           flatpak install -y --user --noninteractive flathub \
-            org.gnome.Platform//50 \
-            org.gnome.Sdk//50 \
-            org.freedesktop.Sdk.Extension.rust-stable//25.08 \
-            org.freedesktop.Sdk.Extension.node20//25.08
+            org.gnome.Platform//51 \
+            org.gnome.Sdk//51 \
+            org.freedesktop.Sdk.Extension.rust-stable//26.08 \
+            org.freedesktop.Sdk.Extension.node22//26.08
 
       - name: Generate offline cargo/node sources
         run: scripts/flatpak-gen-sources.sh

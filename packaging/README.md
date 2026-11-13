@@ -369,9 +369,9 @@ Like Launchpad, Flatpak builds offline, so cargo **and** npm deps are pre-fetche
 #    Prefer the Flatpak build of flatpak-builder — it dodges distro mirror lag
 #    (a stale mirror can 404 the apt package). The apt package works too.
 flatpak install -y flathub org.flatpak.Builder    # or: sudo apt install flatpak-builder
-flatpak install -y flathub org.gnome.Sdk//50 \
-    org.freedesktop.Sdk.Extension.rust-stable//25.08 \
-    org.freedesktop.Sdk.Extension.node20//25.08
+flatpak install -y flathub org.gnome.Sdk//51 \
+    org.freedesktop.Sdk.Extension.rust-stable//26.08 \
+    org.freedesktop.Sdk.Extension.node22//26.08
 
 # 1. Generate the offline cargo/node source manifests (needs network).
 scripts/flatpak-gen-sources.sh          # -> packaging/flatpak/{cargo,node}-sources.json
@@ -387,7 +387,7 @@ scripts/flatpak-build-local.sh
 flatpak run com.vietanhdev.bulwark
 ```
 
-**Validated end-to-end** on a real `flatpak-builder 1.4.8` run (GNOME 50 runtime):
+**Validated end-to-end** on a real `flatpak-builder 1.4.8` run (GNOME 50 runtime at the time; the manifest is on GNOME 51 since 2026-11-13, built and launch-tested by `publish-flatpak.yml`):
 the offline npm + cargo build compiles both binaries, `appstreamcli compose`
 accepts the metainfo, and all finish-args apply. Both former `TODO(verify)` gaps
 are now closed — (a) `cargo build -p bulwark-app` links cleanly against the GNOME
@@ -492,9 +492,12 @@ checked out, reports the same thing for the manifest shipped in 0.15.0 and for t
 - nothing for `--filesystem=host:ro`, and nothing for a bus name outside the app-id (its
   source now has an error only for the opposite case, a name *under* the app-id declared
   needlessly, which is one more reason not to add the new single-instance name)
-- `runtime-update-available-to-org.gnome.Platform-51` as a warning: the manifest is on
-  GNOME 50. Moving to 51 changes the bundled WebKitGTK, so do it only with a build and the
-  launch test in `publish-flatpak.yml`, never as a one-line bump
+- `runtime-update-available-to-org.gnome.Platform-51` as a warning: the manifest was on
+  GNOME 50 then. It moved to 51 on 2026-11-13, which is not a one-number change: GNOME 51 is
+  built on freedesktop 26.08, so the two SDK extensions move to `//26.08`, and `node20` has no
+  such branch, so the manifest and the workflow use `node22`. A runtime move changes the
+  bundled WebKitGTK; do the next one the same way, with a build and the launch test in
+  `publish-flatpak.yml`
 - `manifest-json-warnings` as an error, only because the in-repo manifest was linted without
   its generated `cargo-sources.json` and `node-sources.json`; lint the generated submission
   to get a result without it

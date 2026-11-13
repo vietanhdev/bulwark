@@ -14,7 +14,7 @@
 #
 # Prereqs: run scripts/flatpak-gen-sources.sh first (generates the offline
 # cargo/node source manifests), and have `flatpak-builder` on PATH plus the
-# org.gnome.{Platform,Sdk}//50 + rust-stable/node20//25.08 SDK extensions installed.
+# org.gnome.{Platform,Sdk}//51 + rust-stable/node22//26.08 SDK extensions installed.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
