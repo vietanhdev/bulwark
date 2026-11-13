@@ -1427,8 +1427,8 @@ fn run_logs(action: LogsAction, db_path: Option<PathBuf>) -> anyhow::Result<()> 
 
             let mut source: Box<dyn LogSource> = match from_file {
                 Some(path) => {
-                    let file = std::fs::File::open(&path)
-                        .with_context(|| format!("opening {}", path.display()))?;
+                    // Refuses a folder and a pipe up front: reading either never ended.
+                    let file = bulwark_core::open_log_file(&path)?;
                     // syslog headers carry no year. Use the file's last-modified time as the
                     // reference so a rotated log from last year is dated correctly (and a Dec/Jan
                     // boundary is handled per-line by the source), falling back to now for a file

@@ -39,8 +39,8 @@ pub use collectors::{
 pub use condition::Condition;
 pub use engine::{load_rules, run_scan, Profile};
 pub use logs::{
-    load_decoders, load_log_rules, run_log_scan, JournalRange, JournaldSource, LogFinding,
-    LogScanRun, LogSource, SyslogLinesSource,
+    load_decoders, load_log_rules, open_log_file, run_log_scan, JournalRange, JournaldSource,
+    LogFinding, LogScanRun, LogSource, SyslogLinesSource,
 };
 pub use models::{
     finding_location, Fact, Finding, FindingIgnore, FindingStatus, Ignores, OperatingSystem, Rule,

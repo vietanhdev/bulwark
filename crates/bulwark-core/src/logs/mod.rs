@@ -26,7 +26,7 @@ use uuid::Uuid;
 pub use decoder::{load_decoders, DecodedEvent, Decoder};
 pub use event::RawEvent;
 pub use rule::{load_log_rules, LogRule};
-pub use source::{JournalRange, JournaldSource, LogSource, SyslogLinesSource};
+pub use source::{open_log_file, JournalRange, JournaldSource, LogSource, SyslogLinesSource};
 
 /// One raised log finding. Distinct from the config-scan [`Finding`](crate::models::Finding):
 /// it's timestamped at the triggering event and carries the correlation key/count, reflecting
@@ -140,6 +140,10 @@ impl LogScanRun {
     }
 }
 
+/// How many read errors a run keeps word for word. A source can fail on every line (a file full of
+/// broken JSON), and the list is stored and printed, so past this only the count is kept.
+const MAX_READ_ERRORS_KEPT: usize = 50;
+
 /// Evaluates a log rule's condition against a decoded fact, treating a reference to a field the
 /// event simply doesn't have as a non-match rather than an error. Log events are heterogeneous
 /// (a rule may reference `srcip`, which only auth-failure lines carry), so `MissingField` is the
@@ -173,6 +177,7 @@ pub fn run_log_scan<'d, 'r>(
     let mut rule_eval_errors = Vec::new();
     let mut events_read: u64 = 0;
     let mut events_decoded: u64 = 0;
+    let mut read_errors_total: u64 = 0;
 
     // Drain the source, then correlate in *chronological* order. The sliding-window correlator
     // assumes each event's timestamp is >= the last; out-of-order input (merged multi-host logs, a
@@ -188,8 +193,19 @@ pub fn run_log_scan<'d, 'r>(
                 events_read += 1;
                 raws.push(raw);
             }
-            Err(e) => read_errors.push(e.to_string()),
+            Err(e) => {
+                read_errors_total += 1;
+                if read_errors.len() < MAX_READ_ERRORS_KEPT {
+                    read_errors.push(e.to_string());
+                }
+            }
         }
+    }
+    if read_errors_total > read_errors.len() as u64 {
+        read_errors.push(format!(
+            "and {} more read error(s) not listed",
+            read_errors_total - read_errors.len() as u64
+        ));
     }
     raws.sort_by_key(|r| r.timestamp);
 
@@ -359,6 +375,217 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Lines captured from real servers: OpenSSH 9.6 on Ubuntu 24.04 (tagged `sshd`) and 10.0 on
+    /// Fedora 43 (tagged `sshd-session`), each after the same attempts against 127.0.0.1: wrong
+    /// passwords for root, two names that do not exist (one with a space), a wrong password over
+    /// IPv6, and key logins with three key types.
+    const REAL_SSHD_LOGS: &[(&str, &str)] = &[
+        (
+            "OpenSSH 9.6 (Ubuntu 24.04)",
+            include_str!("../../tests/data/sshd-openssh-9.6-ubuntu2404.txt"),
+        ),
+        (
+            "OpenSSH 10.0 (Fedora 43)",
+            include_str!("../../tests/data/sshd-openssh-10.0-fedora43.txt"),
+        ),
+    ];
+
+    #[test]
+    fn real_sshd_lines_decode_on_old_and_new_openssh() {
+        let (decoders, errors) = load_decoders(&bundled("decoders"));
+        assert!(errors.is_empty(), "{errors:?}");
+        for (name, log) in REAL_SSHD_LOGS {
+            let mut source = syslog_source(log);
+            let mut decoded: Vec<Fact> = Vec::new();
+            while let Some(event) = source.next_event() {
+                if let Some(d) = decoder::decode(&decoders, &event.unwrap()) {
+                    decoded.push(d.fact);
+                }
+            }
+            let with = |tag: &str| -> Vec<&Fact> {
+                decoded
+                    .iter()
+                    .filter(|f| f["tags"].to_string().contains(tag))
+                    .collect()
+            };
+            let field = |f: &Fact, k: &str| f[k].as_str().unwrap_or_default().to_string();
+
+            // Seven failed passwords: 3 root, 2 + 1 for unknown names, 1 over IPv6.
+            let failed = with("authentication_failed");
+            assert_eq!(failed.len(), 7, "{name}: {failed:?}");
+            assert!(failed.iter().any(|f| field(f, "srcip") == "::1"), "{name}");
+            // Unknown names: the two standalone lines and the three failed passwords.
+            let invalid = with("invalid_user");
+            assert_eq!(invalid.len(), 5, "{name}: {invalid:?}");
+            let standalone: Vec<&&Fact> = invalid
+                .iter()
+                .filter(|f| field(f, "message").starts_with("Invalid user"))
+                .collect();
+            assert_eq!(standalone.len(), 2, "{name}");
+            for f in &standalone {
+                assert_eq!(field(f, "srcip"), "127.0.0.1", "{name}");
+                assert!(f["srcport"].is_number(), "{name}: the port is captured");
+            }
+            assert!(
+                invalid.iter().any(|f| field(f, "user") == "odd name"),
+                "{name}: a name with a space is kept whole"
+            );
+            // Key logins: the line ends in `ssh2: ED25519 SHA256:…`, which must not stop it.
+            let accepted = with("authentication_success");
+            let by_key: Vec<&&Fact> = accepted
+                .iter()
+                .filter(|f| field(f, "message").contains("publickey"))
+                .collect();
+            assert_eq!(by_key.len(), 3, "{name}: {accepted:?}");
+            for f in &by_key {
+                assert_eq!(field(f, "srcip"), "127.0.0.1", "{name}");
+                assert!(
+                    matches!(field(f, "user").as_str(), "root" | "deploy"),
+                    "{name}"
+                );
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn real_sshd_logs_raise_the_root_login_finding_for_a_key_login() {
+        for (name, log) in REAL_SSHD_LOGS {
+            let scan = scan_bundled(log);
+            assert!(scan.warnings.is_empty(), "{name}: {:?}", scan.warnings);
+            let root_logins = scan
+                .findings
+                .iter()
+                .filter(|f| f.rule_id == "BLWK-LOG-SSH-003")
+                .count();
+            // Two key logins as root in both; Ubuntu's capture also has one password login.
+            assert!(
+                root_logins >= 2,
+                "{name}: {root_logins} root login finding(s)"
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_brute_force_logged_by_sshd_session_fires_like_one_logged_by_sshd() {
+        for program in ["sshd", "sshd-session", "sshd-auth"] {
+            let mut burst = String::new();
+            for i in 10..20 {
+                burst.push_str(&format!(
+                    "Nov 13 10:00:{i} h {program}[1]: Failed password for root from 203.0.113.5 port 4{i} ssh2\n"
+                ));
+            }
+            let scan = scan_bundled(&burst);
+            assert_eq!(scan.events_decoded, 10, "{program}");
+            assert_eq!(
+                scan.findings
+                    .iter()
+                    .filter(|f| f.rule_id == "BLWK-LOG-SSH-001")
+                    .count(),
+                1,
+                "{program}"
+            );
+        }
+        // A scan of names that do not exist, on a server that takes keys only: the standalone
+        // line is all it logs.
+        let mut spray = String::new();
+        for (i, user) in ["admin", "test", "oracle", "git", "", "ubuntu"]
+            .iter()
+            .enumerate()
+        {
+            spray.push_str(&format!(
+                "Nov 13 10:01:0{i} h sshd-session[2]: Invalid user {user} from 203.0.113.6 port 5{i}\n"
+            ));
+        }
+        let scan = scan_bundled(&spray);
+        assert_eq!(scan.events_decoded, 6);
+        assert!(scan
+            .findings
+            .iter()
+            .any(|f| f.rule_id == "BLWK-LOG-SSH-002"));
+    }
+
+    #[test]
+    fn lines_that_only_look_like_ssh_logins_do_not_decode() {
+        // Another program's line with the same words, and sshd lines that are not logins.
+        let scan = scan_bundled(
+            "Nov 13 10:00:00 h myapp[1]: Failed password for root from 203.0.113.5 port 1 ssh2\n\
+             Nov 13 10:00:01 h sshd-session[2]: Connection closed by authenticating user root 203.0.113.5 port 1 [preauth]\n\
+             Nov 13 10:00:02 h sshd[3]: Server listening on 0.0.0.0 port 22.\n\
+             Nov 13 10:00:03 h sshd-keygen[4]: Accepted publickey for root from 203.0.113.5 port 1 ssh2\n",
+        );
+        assert_eq!((scan.events_read, scan.events_decoded), (4, 0));
+        assert!(scan.findings.is_empty());
+    }
+
+    #[test]
+    fn a_username_cannot_inject_a_source_through_the_key_tail() {
+        // The tail after `ssh2` is only accepted when it looks like a key; a name made to look
+        // like the end of a line still leaves the real source captured.
+        let (decoders, _) = load_decoders(&bundled("decoders"));
+        let raw = RawEvent::new(
+            Utc::now(),
+            "Failed password for invalid user x from 198.51.100.9 port 1 ssh2: RSA SHA256:abc from 203.0.113.5 port 4022 ssh2",
+        )
+        .with_program("sshd-session");
+        let fact = decoder::decode(&decoders, &raw).expect("decodes").fact;
+        assert_eq!(fact["srcip"], "203.0.113.5");
+        assert_eq!(fact["srcport"], serde_json::json!(4022));
+    }
+
+    #[test]
+    fn a_source_that_fails_on_every_read_ends_instead_of_filling_memory() {
+        /// What reading a folder does: the same error, every time, forever.
+        struct AlwaysFails;
+        impl std::io::Read for AlwaysFails {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("Is a directory"))
+            }
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut source =
+                SyslogLinesSource::new(std::io::BufReader::new(AlwaysFails), chrono::Utc::now());
+            let _ = tx.send(run_log_scan(
+                &bundled("decoders"),
+                &bundled("log-rules"),
+                &mut source,
+            ));
+        });
+        let run = rx
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .expect("the scan must end");
+        assert_eq!(run.events_read, 0);
+        assert_eq!(run.read_errors.len(), 1, "{:?}", run.read_errors);
+        assert!(
+            run.warnings.iter().any(|w| w.contains("log source failed")),
+            "a failed read is not a clean log: {:?}",
+            run.warnings
+        );
+    }
+
+    #[test]
+    fn the_list_of_read_errors_is_bounded() {
+        /// A source that fails per event (a journal full of broken JSON), a million times.
+        struct ManyErrors(u32);
+        impl LogSource for ManyErrors {
+            fn next_event(&mut self) -> Option<anyhow::Result<RawEvent>> {
+                (self.0 > 0).then(|| {
+                    self.0 -= 1;
+                    Err(anyhow::anyhow!("line {} is not valid JSON", self.0))
+                })
+            }
+        }
+        let run = run_log_scan(
+            &bundled("decoders"),
+            &bundled("log-rules"),
+            &mut ManyErrors(1_000_000),
+        );
+        assert_eq!(run.read_errors.len(), MAX_READ_ERRORS_KEPT + 1);
+        assert!(run.read_errors.last().unwrap().contains("999950 more"));
     }
 
     #[cfg(target_os = "linux")]

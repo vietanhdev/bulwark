@@ -23,6 +23,14 @@ fn parse_login_defs(text: &str) -> Fact {
     build_fact(text, false)
 }
 
+/// `30 # x`, `30\t#x`, `30#x`: a whole number followed by a `#` comment.
+fn number_then_comment(value: &str) -> bool {
+    match value.split_once('#') {
+        Some((number, _)) => number.trim().parse::<i64>().is_ok(),
+        None => false,
+    }
+}
+
 fn build_fact(text: &str, umask_via_pam: bool) -> Fact {
     let mut fact = Fact::new();
     fact.insert(
@@ -35,6 +43,8 @@ fn build_fact(text: &str, umask_via_pam: bool) -> Fact {
     // silently ignored, so a rule about it must not fire. Absent means "distro default", which on
     // current systems is yescrypt — so default to a method for which sha-crypt rounds do not apply.
     let mut encrypt_method = "unset".to_string();
+    // Numeric settings written as `<number> # comment` (see below).
+    let mut ambiguous: Vec<&str> = Vec::new();
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -50,7 +60,18 @@ fn build_fact(text: &str, umask_via_pam: bool) -> Fact {
             "PASS_MAX_DAYS" | "PASS_MIN_DAYS" | "PASS_WARN_AGE" | "PASS_MIN_LEN" => {
                 if let Ok(n) = value.parse::<i64>() {
                     fact.insert(key.to_ascii_lowercase(), Value::from(n));
+                    ambiguous.retain(|k| *k != key);
+                } else if number_then_comment(value) {
+                    // `PASS_MAX_DAYS 30 # x`: what this means depends on the shadow-utils
+                    // installed. Measured with `useradd` and `/etc/shadow`: 4.13 (Ubuntu 24.04)
+                    // prints "cannot parse PASS_MAX_DAYS value" and applies no limit at all,
+                    // while 4.18 (Fedora 43) reads 30. Neither answer is safe to assume, so the
+                    // value is left out and the rule that reads it reports the line.
+                    fact.remove(&key.to_ascii_lowercase());
+                    ambiguous.push(key);
                 }
+                // Anything else (`7 8`, a word) is rejected by every version, which then uses
+                // the default: handled below like a missing line.
             }
             "SHA_CRYPT_MIN_ROUNDS" => {
                 fact.insert(
@@ -74,11 +95,25 @@ fn build_fact(text: &str, umask_via_pam: bool) -> Fact {
     // expire (the 99999 other distributions write for the same thing), no minimum age.
     let unlimited =
         |fact: &Fact, key: &str| fact.get(key).and_then(Value::as_i64).is_none_or(|n| n < 0);
-    if unlimited(&fact, "pass_max_days") {
+    if unlimited(&fact, "pass_max_days") && !ambiguous.contains(&"PASS_MAX_DAYS") {
         fact.insert("pass_max_days".to_string(), Value::from(99_999));
     }
-    if unlimited(&fact, "pass_min_days") {
+    if unlimited(&fact, "pass_min_days") && !ambiguous.contains(&"PASS_MIN_DAYS") {
         fact.insert("pass_min_days".to_string(), Value::from(0));
+    }
+    if !ambiguous.is_empty() {
+        // The row says why a value is missing, so the scan shows one plain line for this file
+        // instead of a bare "missing field" (see `homefs::COULD_NOT_READ`).
+        fact.insert("path".to_string(), Value::from("/etc/login.defs"));
+        fact.insert(
+            crate::homefs::COULD_NOT_READ.to_string(),
+            Value::from(format!(
+                "the {} line has a comment after its number; older versions of the login tools \
+                 then ignore the whole line and newer ones read the number, so the value in \
+                 effect is not known. Move the comment to a line of its own",
+                ambiguous.join(" and ")
+            )),
+        );
     }
     // SHA_CRYPT_MIN_ROUNDS is actionable only when the hashing scheme actually consults it.
     let sha_crypt_applies = matches!(encrypt_method.as_str(), "sha256" | "sha512");

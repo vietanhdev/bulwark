@@ -458,6 +458,76 @@ pub fn helper_is_plaintext_store(helpers: &str) -> bool {
         .any(|h| h == "store" || h.starts_with("store ") || h.ends_with("git-credential-store"))
 }
 
+/// Whether an AWS credentials file holds a secret key or session token (of any lifetime). The
+/// key *ID* that CRED-001 counts is not the secret; these two are.
+pub fn aws_holds_secret(text: &str) -> bool {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with('#') && !l.starts_with(';'))
+        .filter_map(|l| l.split_once('='))
+        .any(|(k, v)| {
+            matches!(
+                k.trim().to_ascii_lowercase().as_str(),
+                "aws_secret_access_key" | "aws_session_token"
+            ) && !v.trim().is_empty()
+        })
+}
+
+/// Whether JSON holds a non-empty string under a key that names a credential, at any depth.
+/// `None` when the text is not JSON (an empty file holds nothing).
+fn json_holds_secret(text: &str, keys: &[&str]) -> Option<bool> {
+    fn walk(v: &Value, keys: &[&str]) -> bool {
+        match v {
+            Value::Object(map) => map.iter().any(|(k, v)| {
+                let k = k.to_ascii_lowercase();
+                (keys.contains(&k.as_str()) && v.as_str().is_some_and(|s| !s.trim().is_empty()))
+                    || walk(v, keys)
+            }),
+            Value::Array(items) => items.iter().any(|v| walk(v, keys)),
+            _ => false,
+        }
+    }
+    if text.trim().is_empty() {
+        return Some(false);
+    }
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .map(|json| walk(&json, keys))
+}
+
+/// For BLWK-CRED-004: whether a store that is not one of the counted kinds holds a credential.
+/// `None` when that could not be told from what was read.
+fn opaque_store_holds_secret(kind: &str, text: &str, read_whole: bool) -> Option<bool> {
+    match kind {
+        // Google's application-default credentials: an authorised-user file carries a refresh
+        // token and client secret, a service-account file a private key.
+        "gcloud_adc" => json_holds_secret(text, &["refresh_token", "private_key", "client_secret"]),
+        // gcloud's SQLite store keeps each account's credential as JSON text in a row, which
+        // SQLite stores as is, so the key names are visible without opening it as a database
+        // (something a root scan must not do with a file its owner controls). A store with no
+        // account left (after `gcloud auth revoke`) has none of them.
+        "gcloud_credentials_db" => {
+            let found = ["refresh_token", "private_key", "access_token"]
+                .iter()
+                .any(|k| text.contains(k));
+            (found || read_whole).then_some(found)
+        }
+        // The file is the token.
+        "huggingface_token" => Some(!text.trim().is_empty()),
+        "railway_config" => json_holds_secret(
+            text,
+            &[
+                "token",
+                "accesstoken",
+                "refreshtoken",
+                "access_token",
+                "refresh_token",
+            ],
+        ),
+        _ => None,
+    }
+}
+
 fn store_fact(home: &Path, kind: &str, rel: &str) -> Option<Fact> {
     use crate::homefs::{open_in_home, HomeFile};
     let link = home.join(rel);
@@ -493,6 +563,7 @@ fn store_fact(home: &Path, kind: &str, rel: &str) -> Option<Fact> {
         {
             // `first_line` is unknown when the part before the tail was too large to count.
             let found = history_secrets(&text, first_line.unwrap_or(1));
+            fact.insert("holds_secret".into(), Value::Bool(found.count > 0));
             fact.insert("secrets_found".into(), Value::from(found.count));
             fact.insert("secret_kinds".into(), Value::String(found.kinds.join(", ")));
             let lines = found
@@ -520,18 +591,27 @@ fn store_fact(home: &Path, kind: &str, rel: &str) -> Option<Fact> {
             | "npmrc"
             | "pypirc"
             | "kube_config"
+            | "gcloud_adc"
+            | "gcloud_credentials_db"
+            | "huggingface_token"
+            | "railway_config"
     ) || token_file_tool(kind).is_some();
     if needs_content {
+        let read_whole = meta.len() <= super::MAX_COLLECTOR_READ_BYTES;
         if let Some(text) = crate::homefs::read_start(file, super::MAX_COLLECTOR_READ_BYTES) {
+            // `holds_secret` (BLWK-CRED-004) is set from the same parse as each kind's own count,
+            // so "this file is readable by others" is only ever said of a file with something in
+            // it. Where the parse failed it stays absent: undetermined, not "no secret".
+            let mut holds_secret: Option<bool> = None;
             match kind {
                 "aws_credentials" | "aws_config" => {
-                    fact.insert(
-                        "long_lived_keys".into(),
-                        Value::from(count_aws_long_lived_keys(&text)),
-                    );
+                    let keys = count_aws_long_lived_keys(&text);
+                    fact.insert("long_lived_keys".into(), Value::from(keys));
+                    holds_secret = Some(keys > 0 || aws_holds_secret(&text));
                 }
                 "shell_startup" => {
                     let names = exported_secret_names(&text);
+                    holds_secret = Some(!names.is_empty());
                     fact.insert("exported_secrets".into(), Value::from(names.len()));
                     // A file can set any number of them; name the first few.
                     const SHOWN: usize = 10;
@@ -547,21 +627,20 @@ fn store_fact(home: &Path, kind: &str, rel: &str) -> Option<Fact> {
                     fact.insert("secret_names".into(), Value::String(listed));
                 }
                 "npmrc" => {
-                    fact.insert(
-                        "plaintext_tokens".into(),
-                        Value::from(count_npm_plaintext_tokens(&text)),
-                    );
+                    let n = count_npm_plaintext_tokens(&text);
+                    fact.insert("plaintext_tokens".into(), Value::from(n));
+                    holds_secret = Some(n > 0);
                 }
                 "pypirc" => {
-                    fact.insert(
-                        "plaintext_tokens".into(),
-                        Value::from(count_pypirc_passwords(&text)),
-                    );
+                    let n = count_pypirc_passwords(&text);
+                    fact.insert("plaintext_tokens".into(), Value::from(n));
+                    holds_secret = Some(n > 0);
                 }
                 k if token_file_tool(k).is_some() => {
                     // Unparseable JSON leaves the count undetermined (a collector error), never 0.
                     if let Some(n) = count_token_file_entries(k, &text) {
                         fact.insert("plaintext_tokens".into(), Value::from(n));
+                        holds_secret = Some(n > 0);
                     }
                     fact.insert(
                         "tool".into(),
@@ -569,24 +648,26 @@ fn store_fact(home: &Path, kind: &str, rel: &str) -> Option<Fact> {
                     );
                 }
                 "kube_config" => {
-                    fact.insert(
-                        "static_credentials".into(),
-                        Value::from(count_kube_static_credentials(&text)),
-                    );
+                    let n = count_kube_static_credentials(&text);
+                    fact.insert("static_credentials".into(), Value::from(n));
+                    holds_secret = Some(n > 0);
                 }
                 "git_credentials" => {
-                    fact.insert(
-                        "stored_entries".into(),
-                        Value::from(count_git_credential_entries(&text)),
-                    );
+                    let n = count_git_credential_entries(&text);
+                    fact.insert("stored_entries".into(), Value::from(n));
+                    holds_secret = Some(n > 0);
                 }
                 "docker_config" => {
                     if let Some((inline, creds_store)) = docker_config_summary(&text) {
                         fact.insert("inline_auths".into(), Value::from(inline));
                         fact.insert("creds_store".into(), Value::Bool(creds_store));
+                        holds_secret = Some(inline > 0);
                     }
                 }
-                _ => {}
+                other => holds_secret = opaque_store_holds_secret(other, &text, read_whole),
+            }
+            if let Some(holds) = holds_secret {
+                fact.insert("holds_secret".into(), Value::Bool(holds));
             }
         }
     }
@@ -1131,6 +1212,194 @@ kubectl get secret app -o jsonpath='{.data.password}'
             !rendered.contains("AKIA"),
             "a key ID must never enter a fact"
         );
+    }
+
+    /// The real BLWK-CRED-004 condition from the shipped rule pack.
+    #[cfg(unix)]
+    fn cred_004() -> crate::condition::Condition {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../rules");
+        let (rules, errors) = crate::engine::load_rules(&dir);
+        assert!(errors.is_empty(), "{errors:?}");
+        rules
+            .into_iter()
+            .find(|r| r.rule.id == "BLWK-CRED-004")
+            .expect("BLWK-CRED-004 is in the pack")
+            .condition
+    }
+
+    /// Writes `text` world-readable at `rel` under a fresh home and returns its row.
+    #[cfg(unix)]
+    fn world_readable(kind: &str, rel: &str, text: &str) -> Fact {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, text).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        store_fact(home.path(), kind, rel).unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_world_readable_file_with_no_credential_in_it_is_not_reported() {
+        // The reported cases: an .npmrc that only sets a prefix, a Docker config that names a
+        // credential helper, and the rule's own advice (a token written as a reference).
+        let rule = cred_004();
+        for (kind, rel, text) in [
+            ("npmrc", ".npmrc", "prefix=/home/tester/.npm-global\n"),
+            (
+                "npmrc",
+                ".npmrc",
+                "//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n",
+            ),
+            (
+                "docker_config",
+                ".docker/config.json",
+                r#"{"credsStore":"secretservice"}"#,
+            ),
+            (
+                "docker_config",
+                ".docker/config.json",
+                r#"{"auths":{"ghcr.io":{}},"credsStore":"desktop"}"#,
+            ),
+            (
+                "pypirc",
+                ".pypirc",
+                "[distutils]\nindex-servers = pypi\n[pypi]\nusername = __token__\n",
+            ),
+            ("netrc", ".netrc", "# machines\n"),
+            (
+                "git_credentials",
+                ".git-credentials",
+                "\n# nothing stored\n",
+            ),
+            (
+                "aws_credentials",
+                ".aws/credentials",
+                "[default]\nregion = eu-west-1\n",
+            ),
+            (
+                "kube_config",
+                ".kube/config",
+                "apiVersion: v1\nusers:\n- name: dev\n  user:\n    exec:\n      command: aws\n",
+            ),
+            (
+                "gh_hosts",
+                ".config/gh/hosts.yml",
+                "github.com:\n    user: someone\n    git_protocol: ssh\n",
+            ),
+            (
+                "cargo_credentials",
+                ".cargo/credentials.toml",
+                "[registry]\n",
+            ),
+            (
+                "terraform_credentials",
+                ".terraform.d/credentials.tfrc.json",
+                "{}",
+            ),
+            ("gem_credentials", ".gem/credentials", "---\n"),
+            (
+                "composer_auth",
+                ".config/composer/auth.json",
+                r#"{"http-basic":{}}"#,
+            ),
+            (
+                "gcloud_adc",
+                ".config/gcloud/application_default_credentials.json",
+                "{}",
+            ),
+            (
+                "gcloud_credentials_db",
+                ".config/gcloud/credentials.db",
+                "SQLite format 3\0CREATE TABLE credentials",
+            ),
+            ("huggingface_token", ".cache/huggingface/token", "\n"),
+            (
+                "railway_config",
+                ".railway/config.json",
+                r#"{"projects":{},"user":{"token":""}}"#,
+            ),
+        ] {
+            let fact = world_readable(kind, rel, text);
+            assert_eq!(fact["readable_by_others"], Value::Bool(true), "{kind}");
+            assert_eq!(
+                fact.get("holds_secret"),
+                Some(&Value::Bool(false)),
+                "{kind} with {text:?}"
+            );
+            assert_eq!(rule.eval(&fact).ok(), Some(false), "{kind} with {text:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_world_readable_file_that_holds_a_credential_is_reported_for_every_kind() {
+        let rule = cred_004();
+        let v = fake_secret();
+        let cases: Vec<(&str, &str, String)> = vec![
+            ("npmrc", ".npmrc", format!("//registry.npmjs.org/:_authToken={v}\n")),
+            ("docker_config", ".docker/config.json", format!(r#"{{"auths":{{"ghcr.io":{{"auth":"{v}"}}}}}}"#)),
+            ("pypirc", ".pypirc", format!("[pypi]\nusername = __token__\npassword = {v}\n")),
+            ("netrc", ".netrc", format!("machine example.com login me password {v}\n")),
+            ("netrc", "_netrc", format!("machine example.com login me password {v}\n")),
+            ("git_credentials", ".git-credentials", "https://me:x@example.com\n".to_string()),
+            // A temporary key is not what CRED-001 counts, and is still a secret others can read.
+            ("aws_credentials", ".aws/credentials", format!("[default]\naws_access_key_id = ASIAEXAMPLE\naws_secret_access_key = {v}\naws_session_token = {v}\n")),
+            ("kube_config", ".kube/config", format!("users:\n- name: dev\n  user:\n    token: {v}\n")),
+            ("gh_hosts", ".config/gh/hosts.yml", format!("github.com:\n    oauth_token: {v}\n")),
+            ("cargo_credentials", ".cargo/credentials.toml", format!("[registry]\ntoken = \"{v}\"\n")),
+            ("terraform_credentials", ".terraform.d/credentials.tfrc.json", format!(r#"{{"credentials":{{"app.terraform.io":{{"token":"{v}"}}}}}}"#)),
+            ("gem_credentials", ".gem/credentials", format!("---\n:rubygems_api_key: {v}\n")),
+            ("composer_auth", ".config/composer/auth.json", format!(r#"{{"github-oauth":{{"github.com":"{v}"}}}}"#)),
+            ("gcloud_adc", ".config/gcloud/application_default_credentials.json", format!(r#"{{"type":"authorized_user","client_id":"x","client_secret":"{v}","refresh_token":"{v}"}}"#)),
+            ("gcloud_credentials_db", ".config/gcloud/credentials.db", format!("SQLite format 3\0...{{\"refresh_token\": \"{v}\"}}")),
+            ("huggingface_token", ".cache/huggingface/token", format!("{v}\n")),
+            ("huggingface_token", ".huggingface/token", format!("{v}\n")),
+            ("railway_config", ".railway/config.json", format!(r#"{{"user":{{"token":"{v}"}}}}"#)),
+        ];
+        // Every kind the collector reads is covered here or is one the rule leaves out by name.
+        let excluded = ["shell_history", "shell_startup", "aws_config"];
+        for (kind, _) in STORES {
+            assert!(
+                excluded.contains(kind) || cases.iter().any(|(k, _, _)| k == kind),
+                "{kind} has no CRED-004 case"
+            );
+        }
+        for (kind, rel, text) in &cases {
+            let fact = world_readable(kind, rel, text);
+            assert_eq!(fact.get("holds_secret"), Some(&Value::Bool(true)), "{kind}");
+            assert_eq!(rule.eval(&fact).ok(), Some(true), "{kind}");
+            assert!(
+                !serde_json::to_string(&fact).unwrap().contains(&v),
+                "{kind}: the value must not enter the row"
+            );
+            // The same file made private is not a finding.
+            let mut private = fact.clone();
+            private.insert("readable_by_others".into(), Value::Bool(false));
+            assert_eq!(rule.eval(&private).ok(), Some(false), "{kind}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_world_readable_file_that_could_not_be_parsed_is_undetermined_not_a_pass() {
+        let rule = cred_004();
+        for (kind, rel) in [
+            ("docker_config", ".docker/config.json"),
+            (
+                "terraform_credentials",
+                ".terraform.d/credentials.tfrc.json",
+            ),
+            (
+                "gcloud_adc",
+                ".config/gcloud/application_default_credentials.json",
+            ),
+            ("railway_config", ".railway/config.json"),
+        ] {
+            let fact = world_readable(kind, rel, "{broken");
+            assert!(!fact.contains_key("holds_secret"), "{kind}");
+            assert!(rule.eval(&fact).is_err(), "{kind}: reported, not passed");
+        }
     }
 
     #[test]

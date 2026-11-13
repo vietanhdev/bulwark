@@ -77,6 +77,16 @@ export const findings: Finding[] = [
     fix_hint: "Set 'PASS_MAX_DAYS 90' (or your organization's policy) in /etc/login.defs.",
   },
   {
+    id: "f-ssh-004",
+    rule_id: "BLWK-SSH-004",
+    severity: "low",
+    title: "SSH X11 forwarding is enabled",
+    explanation:
+      'X11Forwarding is set to "yes" in sshd_config. A server you connect to with X11 ' +
+      "forwarding can read the keystrokes and screen of your own desktop.",
+    fix_hint: "Set 'X11Forwarding no' in /etc/ssh/sshd_config and reload sshd.",
+  },
+  {
     id: "f-log-002",
     rule_id: "BLWK-LOG-002",
     severity: "low",

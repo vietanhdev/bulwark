@@ -23,6 +23,12 @@ pub struct Decoder {
     /// decoders are always tried before program-agnostic ones.
     #[serde(default)]
     pub program: Option<String>,
+    /// Other program names the same lines are logged under. OpenSSH 9.8 split the server into a
+    /// listener and per-connection helpers, so one daemon's authentication lines arrive tagged
+    /// `sshd`, `sshd-session` or `sshd-auth` depending on the version. A decoder that knew only
+    /// the first name decoded nothing on a current distribution.
+    #[serde(default)]
+    pub program_aliases: Vec<String>,
     /// Optional cheap guard: if set and it doesn't match the message, the decoder is skipped
     /// before any (more expensive) capture regex runs.
     #[serde(default)]
@@ -46,6 +52,7 @@ pub struct DecodePattern {
 pub struct CompiledDecoder {
     pub id: String,
     pub program: Option<String>,
+    pub program_aliases: Vec<String>,
     prematch: Option<Regex>,
     patterns: Vec<CompiledPattern>,
 }
@@ -107,9 +114,8 @@ pub fn load_decoders<'a>(
     }
 
     loaded.sort_by(|a, b| {
-        a.program
-            .is_none()
-            .cmp(&b.program.is_none())
+        a.any_program()
+            .cmp(&b.any_program())
             .then_with(|| a.id.cmp(&b.id))
     });
     (loaded, errors)
@@ -132,12 +138,35 @@ fn compile(d: Decoder) -> Result<CompiledDecoder, String> {
             tags: p.tags,
         });
     }
+    if d.program.is_none() && !d.program_aliases.is_empty() {
+        return Err(format!(
+            "decoder {}: program_aliases needs a program to be an alias of",
+            d.id
+        ));
+    }
     Ok(CompiledDecoder {
         id: d.id,
         program: d.program,
+        program_aliases: d.program_aliases,
         prematch,
         patterns,
     })
+}
+
+impl CompiledDecoder {
+    /// True for a decoder that is not tied to a program (tried after every program-specific one).
+    fn any_program(&self) -> bool {
+        self.program.is_none()
+    }
+
+    /// Whether this decoder reads lines logged by `program`.
+    fn applies_to(&self, program: Option<&str>) -> bool {
+        match (&self.program, program) {
+            (None, _) => true,
+            (Some(_), None) => false,
+            (Some(own), Some(p)) => own == p || self.program_aliases.iter().any(|a| a == p),
+        }
+    }
 }
 
 /// Decodes `event` against the ordered `decoders`, returning the first successful decode. A
@@ -149,10 +178,8 @@ pub fn decode(
     event: &super::event::RawEvent,
 ) -> Option<DecodedEvent> {
     for d in decoders {
-        if let Some(prog) = &d.program {
-            if event.program.as_deref() != Some(prog.as_str()) {
-                continue;
-            }
+        if !d.applies_to(event.program.as_deref()) {
+            continue;
         }
         if let Some(pre) = &d.prematch {
             if !pre.is_match(&event.message) {
@@ -221,6 +248,7 @@ mod tests {
         let d = Decoder {
             id: "sshd".into(),
             program: Some("sshd".into()),
+            program_aliases: vec![],
             prematch: Some("^Failed|^Accepted".into()),
             patterns: vec![
                 DecodePattern {
@@ -332,6 +360,7 @@ mod tests {
         vec![compile(Decoder {
             id: "pam".into(),
             program: None,
+            program_aliases: vec![],
             prematch: Some(r"pam_\w+\(".into()),
             patterns: vec![
                 DecodePattern {
@@ -388,6 +417,7 @@ mod tests {
         let pam = compile(Decoder {
             id: "pam".into(),
             program: None,
+            program_aliases: vec![],
             prematch: Some(r"pam_unix\(".into()),
             patterns: vec![DecodePattern {
                 regex: r"authentication failure;.*rhost=(?P<srcip>\S+)".into(),

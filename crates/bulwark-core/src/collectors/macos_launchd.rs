@@ -163,9 +163,12 @@ fn fact_for(path: &Path, scope: &str) -> Fact {
     let mut f = Fact::new();
     f.insert("path".into(), path.display().to_string().into());
     f.insert("scope".into(), scope.into());
-    let permission_denied = std::fs::File::open(path)
-        .err()
-        .is_some_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied);
+    // The open does not wait and accepts only a regular file: a named pipe called `x.plist` in
+    // ~/Library/LaunchAgents would otherwise hold this open, and then `plutil`, forever.
+    let opened = super::open_regular(path).map(drop);
+    let permission_denied = opened
+        .as_ref()
+        .is_err_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied);
     if permission_denied {
         f.insert("label".into(), stem(path).into());
         f.insert("program".into(), "".into());
@@ -178,7 +181,12 @@ fn fact_for(path: &Path, scope: &str) -> Fact {
         return f;
     }
     f.insert("readable".into(), true.into());
-    match read_plist(path) {
+    let plist = match opened {
+        Ok(()) => read_plist(path),
+        // A pipe, a device, a link to nowhere: nothing a launch job should be.
+        Err(_) => Plist::Malformed,
+    };
+    match plist {
         Plist::NothingToRun(label) => {
             f.insert("label".into(), label.into());
             f.insert("program".into(), "".into());

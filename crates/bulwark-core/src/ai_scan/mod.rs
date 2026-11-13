@@ -658,7 +658,9 @@ fn path_in_agent_dir(path: &Path) -> bool {
 
 fn read_capped(path: &std::path::Path) -> anyhow::Result<Option<String>> {
     use std::io::Read;
-    let file = std::fs::File::open(path)?;
+    // Never waits, and reads only a regular file: a named pipe called `CLAUDE.md` or
+    // `settings.json` would otherwise hold the scan until someone wrote to it.
+    let file = crate::collectors::open_regular(path)?;
     let mut buf = Vec::with_capacity(MAX_SCAN_BYTES.min(64 * 1024));
     file.take(MAX_SCAN_BYTES as u64).read_to_end(&mut buf)?;
     // Lossy, not strict: a single stray non-UTF-8 byte (a Latin-1 char in a .env, a binary blob
@@ -1063,7 +1065,8 @@ fn is_git_ignored(workspace: &std::path::Path, rel: &std::path::Path) -> bool {
         workspace.join(".gitignore"),
         workspace.join(".git/info/exclude"),
     ] {
-        match std::fs::read_to_string(&src) {
+        // Capped and never waiting on a pipe, like every other file a repository supplies.
+        match crate::collectors::read_capped(&src) {
             Ok(text) => {
                 patterns.push_str(&text);
                 patterns.push('\n');
@@ -1586,5 +1589,23 @@ mod tests {
         for kind in [DotEnv, Credential] {
             assert!(!is_secret_scanned(kind, true) && !is_secret_scanned(kind, false));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_in_place_of_an_agent_file_is_an_error_not_a_wait() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("CLAUDE.md");
+        let c = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+        // SAFETY: a valid NUL-terminated path and a plain mode.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(read_capped(&path).map_err(|e| e.to_string()));
+        });
+        let read = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("reading an agent file must not wait on a pipe");
+        assert!(read.unwrap_err().contains("not a regular file"));
     }
 }
