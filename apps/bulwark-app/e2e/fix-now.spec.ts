@@ -10,6 +10,9 @@ test("Fix now reviews and cancels without applying, with busy controls", async (
   await expect(dialog.getByRole("status")).toContainText("no changes are being applied");
   await expect(dialog.getByText(/Nothing has been written yet/)).toBeVisible();
   await expect(dialog.getByText(/PasswordAuthentication and PermitRootLogin are excluded/)).toBeVisible();
+  // Like `bulwarkctl fix all`: the banner and password-age fixes are named, not applied.
+  await expect(dialog.getByText(/left out, because they change wording or policy/)).toBeVisible();
+  await expect(dialog.getByText("PASS_MAX_DAYS", { exact: true })).toHaveCount(0);
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(dialog).not.toBeVisible();
   await expect(page.getByRole("button", { name: "Scan now", exact: true })).toBeEnabled();
