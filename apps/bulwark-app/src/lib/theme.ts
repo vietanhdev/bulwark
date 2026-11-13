@@ -45,18 +45,36 @@ const CHROME_KEY = "bulwark-chrome";
 const prefersDark = () =>
   typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: dark)").matches;
 
+// Storage can be unavailable or refuse access (a locked-down webview profile). These run before
+// React mounts, so a thrown error here would leave the window blank: fall back to the defaults.
+function read(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function write(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // The choice still applies for this session; it just is not remembered.
+  }
+}
+
 export function getStoredTheme(): ThemeMode {
-  const v = localStorage.getItem(THEME_KEY);
+  const v = read(THEME_KEY);
   return v === "light" || v === "dark" || v === "system" ? v : "dark";
 }
 
 export function getStoredAccent(): Accent {
-  const v = localStorage.getItem(ACCENT_KEY) as Accent | null;
+  const v = read(ACCENT_KEY) as Accent | null;
   return v && ACCENTS.some((a) => a.id === v) ? v : DEFAULT_ACCENT;
 }
 
 export function getStoredChrome(): Chrome {
-  const v = localStorage.getItem(CHROME_KEY) as Chrome | null;
+  const v = read(CHROME_KEY) as Chrome | null;
   return v && CHROMES.some((c) => c.id === v) ? v : DEFAULT_CHROME;
 }
 
@@ -82,17 +100,17 @@ export function applyChrome(chrome: Chrome): void {
 }
 
 export function setTheme(mode: ThemeMode): void {
-  localStorage.setItem(THEME_KEY, mode);
+  write(THEME_KEY, mode);
   applyTheme(mode);
 }
 
 export function setAccent(accent: Accent): void {
-  localStorage.setItem(ACCENT_KEY, accent);
+  write(ACCENT_KEY, accent);
   applyAccent(accent);
 }
 
 export function setChrome(chrome: Chrome): void {
-  localStorage.setItem(CHROME_KEY, chrome);
+  write(CHROME_KEY, chrome);
   applyChrome(chrome);
 }
 

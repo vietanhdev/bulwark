@@ -29,6 +29,16 @@ export function RedactButton({ file, onDone }: { file: string; onDone?: () => vo
     try {
       const report = await invoke<RedactionReport>("ai_redact", { paths: [file], apply });
       if (apply) {
+        // The command also returns normally when the file was refused or could not be rewritten,
+        // with the reason in `errors` and no applied entry. Only a rewritten file counts as removed.
+        if (!report.entries.some((e) => e.applied && e.secrets_redacted > 0)) {
+          setError(
+            report.errors.length > 0
+              ? `Nothing was removed. ${report.errors.join(" ")}`
+              : "Nothing was removed: the file was not changed.",
+          );
+          return;
+        }
         setDone(true);
         setPreview(null);
         onDone?.();

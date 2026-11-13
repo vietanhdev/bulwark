@@ -751,7 +751,7 @@ export function OverviewView({ active, onNavigate }: { active: boolean; onNaviga
                 <button
                   type="button"
                   onClick={() => onNavigate("rules")}
-                  title="Review accepted risk under Rules › Suppressed"
+                  title="Review what is ignored under Rule catalog → Ignored"
                   className="font-mono text-[11px] text-muted-foreground/70 underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
                 >
                   · {suppressed.length} accepted
@@ -889,8 +889,8 @@ export function OverviewView({ active, onNavigate }: { active: boolean; onNaviga
                       items={items}
                       worst={worst}
                       streamed={streamed}
-                      collapsed={false}
-                      onToggle={() => {}}
+                      collapsed={collapsedCategories.has(`minor-${category}`)}
+                      onToggle={() => toggleCategory(`minor-${category}`)}
                       actions={{
                         onIgnoreType: ignoreType,
                         onIgnorePlace: ignorePlace,

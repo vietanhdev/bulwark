@@ -26,8 +26,10 @@ interface DashboardSnapshot {
   meta: { started_at: string } | null;
 }
 
-const scanOf = (id: string) =>
-  id.startsWith("BLWK-AI-") ? "Agent Security" : id.startsWith("BLWK-FIM-") ? "File integrity" : "Compliance";
+// Named as the pages are: Configuration, the AI assistant checks inside it, and File changes.
+const SCANNERS = ["Configuration", "AI assistants", "File changes"] as const;
+const scanOf = (id: string): (typeof SCANNERS)[number] =>
+  id.startsWith("BLWK-AI-") ? "AI assistants" : id.startsWith("BLWK-FIM-") ? "File changes" : "Configuration";
 
 function shortWhen(iso: string): string {
   const d = new Date(iso);
@@ -75,7 +77,7 @@ export function AnalyticsView() {
   const byScanner = useMemo(() => {
     const m = new Map<string, number>();
     for (const f of open) m.set(scanOf(f.rule_id), (m.get(scanOf(f.rule_id)) ?? 0) + 1);
-    return ["Compliance", "Agent Security", "File integrity"].map((k) => ({
+    return SCANNERS.map((k) => ({
       label: k,
       count: m.get(k) ?? 0,
     }));
@@ -99,8 +101,13 @@ export function AnalyticsView() {
         <div className="flex flex-col gap-8">
           {/* Headline figures. */}
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-            <StatTile label="Open now" value={open.length} tone={open.length > 0 ? "critical" : "resolved"} />
-            <StatTile label="Accepted risk" value={accepted.length} tone="info" />
+            {/* Until the saved results have loaded there is no count, and no green zero. */}
+            <StatTile
+              label="Open now"
+              value={snap ? open.length : "—"}
+              tone={!snap ? "info" : open.length > 0 ? "critical" : "resolved"}
+            />
+            <StatTile label="Accepted risk" value={snap ? accepted.length : "—"} tone="info" />
             <StatTile label="Scans recorded" value={runs?.length ?? 0} tone="info" />
             <StatTile
               label="Change since last scan"
@@ -196,7 +203,9 @@ export function AnalyticsView() {
                 {byScanner.map(({ label, count }, i) => (
                   <div
                     key={label}
-                    style={railStyle(count > 0 ? "critical" : "resolved")}
+                    // Zero open findings is drawn neutral, not green: this list cannot tell a part
+                    // that ran clean from one that never ran on this system.
+                    style={railStyle(count > 0 ? "critical" : "info")}
                     className={cn(
                       "rail flex items-center gap-2.5 py-2.5 pr-3",
                       i > 0 && "border-t border-border",

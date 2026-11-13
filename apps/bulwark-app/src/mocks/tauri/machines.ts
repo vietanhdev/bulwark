@@ -142,9 +142,31 @@ let machines = [
 ];
 
 // `?machines=empty` shows the first-run state (dev mocks only).
-if (typeof location !== "undefined" && new URLSearchParams(location.search).get("machines") === "empty") {
+const scenario =
+  typeof location !== "undefined" ? new URLSearchParams(location.search).get("machines") : null;
+if (scenario === "empty") {
   machines = [];
 }
+// `?machines=unclassified`: the last attempt on web-1 failed in a way nothing recognised, as when
+// ssh exits with an error message Bulwark has no name for. The machine may never have answered.
+if (scenario === "unclassified") {
+  const detail = "ssh to deploy@web-1.example.com failed: connect to host web-1.example.com: Host is down";
+  Object.assign(machines.find((m) => m.id === "m-web") ?? {}, {
+    last_status: { state: "failed", kind: "other" },
+    last_error: detail,
+    consecutive_failures: 1,
+    health: "needs_attention",
+    problem: {
+      kind: "other",
+      title: "The scan failed",
+      hint: "Check the connection, then scan again.",
+      detail,
+    },
+  });
+}
+
+let scheduledScans = true;
+const trustedNew = new Set<string>();
 
 const testReport = (id: string) => {
   const m = machines.find((x) => x.id === id);
@@ -270,9 +292,13 @@ let notifyStatus = {
 };
 
 export const machineHandlers: Record<string, (args: Args) => unknown> = {
-  machines_list: () => ({ enabled: true, machines, can_copy_engine: true }),
+  machines_list: () => ({ enabled: scheduledScans, machines, can_copy_engine: true }),
   machine_findings: (args) => {
     const id = args?.id as string;
+    if (scenario === "findingsError") throw new Error("Synthetic: this machine's results could not be read.");
+    // The unreachable laptop's last good scan was clean: old results, not a clean machine.
+    if (scenario === "staleClean" && id === "m-laptop")
+      return { active: [], suppressed: [], suppressions: [], last_scan_at: minutesAgo(60 * 30) };
     if (id === "m-win")
       return { active: [], suppressed: [], suppressions: [], last_scan_at: minutesAgo(120) };
     if (id === "m-nas")
@@ -298,7 +324,8 @@ export const machineHandlers: Record<string, (args: Args) => unknown> = {
   },
   machine_test: (args) => {
     const host = (args?.args as { host: string }).host;
-    return host.startsWith("m-") ? testReport(host) : newMachineReport;
+    // A machine added in this session answers "not trusted yet" until its host key is approved.
+    return host.startsWith("m-") || trustedNew.has(host) ? testReport(host) : newMachineReport;
   },
   machine_add: (args) => {
     const input = args?.input as { spec: string; name: string };
@@ -316,6 +343,8 @@ export const machineHandlers: Record<string, (args: Args) => unknown> = {
       enabled: false,
       ssh_command: `ssh ${input.spec}`,
     };
+    // Listed like any other machine, so the wizard's last step and the new card can be reached.
+    (machines as unknown[]).push(m);
     return m;
   },
   machine_update: (args) => {
@@ -328,11 +357,17 @@ export const machineHandlers: Record<string, (args: Args) => unknown> = {
   },
   machine_suppress: () => null,
   machine_unsuppress: () => null,
-  machine_trust: () => ({ trusted: { key_type: "ED25519", fingerprint: "SHA256:…" } }),
+  machine_trust: (args) => {
+    trustedNew.add(String(args?.id ?? ""));
+    return { trusted: { key_type: "ED25519", fingerprint: "SHA256:…" } };
+  },
   machine_setup_key: () => ({ ok: true }),
   machine_scan_now: () => null,
   machines_scan_all: () => machines.length,
-  machines_set_enabled: (args) => args?.enabled,
+  machines_set_enabled: (args) => {
+    scheduledScans = Boolean(args?.enabled);
+    return scheduledScans;
+  },
   ssh_suggestions: () => ({
     aliases: [
       { alias: "nas", hostname: "192.168.1.20", user: "admin", port: null, jump: null },

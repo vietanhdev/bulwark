@@ -81,6 +81,7 @@ export function AwsVaultPanel({ active }: { active: boolean }) {
         p.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()) &&
         (filter === "all" || cacheStatus(p, now) === filter),
     ) ?? [];
+  const configured = (snapshot?.profiles ?? []).filter((p) => p.configured).length;
   const counts = (snapshot?.profiles ?? []).reduce(
     (acc, p) => {
       acc[cacheStatus(p, now)] += 1;
@@ -176,7 +177,9 @@ export function AwsVaultPanel({ active }: { active: boolean }) {
           )}
 
           <p role="status" className="sr-only">
-            {snapshot ? `${snapshot.profiles.length} profiles loaded.` : ""}
+            {snapshot
+              ? `${snapshot.profiles.length} ${snapshot.profiles.length === 1 ? "profile" : "profiles"} loaded.`
+              : ""}
           </p>
 
           {snapshot && snapshot.profiles.length === 0 && (
@@ -324,7 +327,8 @@ export function AwsVaultPanel({ active }: { active: boolean }) {
                 </table>
               )}
               <p className="border-t border-border px-4 py-2 text-xs text-muted-foreground">
-                {profiles.length} of {snapshot.profiles.length} profiles
+                {profiles.length} of {snapshot.profiles.length}{" "}
+                {snapshot.profiles.length === 1 ? "profile" : "profiles"}
               </p>
             </>
           )}
@@ -370,7 +374,7 @@ export function AwsVaultPanel({ active }: { active: boolean }) {
           <dt>Configuration</dt>
           <dd>
             {snapshot
-              ? `${snapshot.profiles.filter((p) => p.configured).length} profiles reported as configured in this snapshot.`
+              ? `${configured} ${configured === 1 ? "profile" : "profiles"} reported as configured in this snapshot.`
               : "Profile configuration has not been read."}{" "}
             Configure providers and authenticate in your own terminal.
           </dd>

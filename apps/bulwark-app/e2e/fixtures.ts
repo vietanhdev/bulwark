@@ -5,7 +5,7 @@ import { type Page, expect } from "@playwright/test";
 // a test proves the *right* view is showing (all views stay mounted and are
 // CSS-hidden when inactive, so assertions must be visibility-aware).
 export const VIEWS = [
-  { label: "Secrets", title: "Secrets", signature: /stored credentials? across|reading your tools/i },
+  { label: "Secrets", title: "Secrets", signature: /(entry|entries) across|reading your tools/i },
   {
     label: "Scan",
     title: "Scan",

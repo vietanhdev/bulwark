@@ -235,7 +235,14 @@ function IssueTypeGroup({
   const [ignoring, setIgnoring] = useState<false | { place: string | null; title?: string }>(false);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
+  const [ignoreError, setIgnoreError] = useState<string | null>(null);
   const first = group.items[0];
+
+  function cancelIgnore() {
+    setIgnoring(false);
+    setReason("");
+    setIgnoreError(null);
+  }
 
   const menu =
     actions && (actions.onIgnoreType || actions.onRecheck) ? (
@@ -252,8 +259,10 @@ function IssueTypeGroup({
 
   async function confirmIgnore() {
     const r = reason.trim();
-    if (!r || !ignoring) return;
+    // Enter can arrive again while the first request is still running.
+    if (!r || !ignoring || busy) return;
     setBusy(true);
+    setIgnoreError(null);
     try {
       if (ignoring.place !== null) {
         if (!actions?.onIgnorePlace) return;
@@ -264,6 +273,9 @@ function IssueTypeGroup({
       }
       setIgnoring(false);
       setReason("");
+    } catch (e) {
+      // Keep the box open with the reason in it: nothing was ignored.
+      setIgnoreError(String(e));
     } finally {
       setBusy(false);
     }
@@ -357,7 +369,10 @@ function IssueTypeGroup({
             autoFocus
             value={reason}
             onChange={(e) => setReason(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && confirmIgnore()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void confirmIgnore();
+              else if (e.key === "Escape" && !busy) cancelIgnore();
+            }}
             placeholder={
               ignoring && ignoring.place !== null
                 ? ignorePrompt(ignoring.place, ignoring.title)
@@ -376,15 +391,17 @@ function IssueTypeGroup({
           </button>
           <button
             type="button"
-            onClick={() => {
-              setIgnoring(false);
-              setReason("");
-            }}
+            onClick={cancelIgnore}
             className="rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
           >
             Cancel
           </button>
         </div>
+      )}
+      {ignoring && ignoreError && (
+        <p role="alert" className="mx-3 mb-2 text-xs text-[var(--sev-critical-fg)] [overflow-wrap:anywhere]">
+          Not ignored: {ignoreError}
+        </p>
       )}
       {open && (
         <div className="flex flex-col gap-2.5 border-t border-border bg-muted/20 px-4 py-3 sm:pl-10">

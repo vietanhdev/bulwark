@@ -1,6 +1,6 @@
 import { useId, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertTriangle, Check, Loader2, ShieldCheck, Wrench } from "lucide-react";
+import { Check, Loader2, ShieldCheck, Wrench } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import {
@@ -220,14 +220,12 @@ export function FixIssueButton({
         error={error}
         note={FIX_BLURBS[capability.kind]}
         danger={
+          // The warning callout draws its own icon.
           capability.lockout_risk ? (
-            <span className="flex items-start gap-1.5">
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              <span>
-                This can lock you out. Only apply it once you have confirmed key-based login to this host
-                already works — if you reach this machine by password, you will not be able to log back in.
-              </span>
-            </span>
+            <>
+              This can lock you out. Only apply it once you have confirmed key-based login to this host
+              already works — if you reach this machine by password, you will not be able to log back in.
+            </>
           ) : null
         }
         onApply={() => run(true)}
@@ -315,6 +313,7 @@ export function FixNowButton({
   onFixed: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
+  const trigger = useRef<HTMLSpanElement>(null);
   const descriptionId = useId();
   const [report, setReport] = useState<CombinedFixReport | null>(null);
   const [busy, setBusy] = useState(false);
@@ -340,10 +339,13 @@ export function FixNowButton({
   function closed() {
     onReviewChange(false);
     if (applied) onFixed();
+    // The button is disabled while the review is open, so the browser cannot hand focus back to it
+    // when the dialog closes and it would drop to the page. Return it once the button is live again.
+    requestAnimationFrame(() => trigger.current?.querySelector("button")?.focus());
   }
   return (
     <>
-      <span title={reason} className="inline-flex">
+      <span ref={trigger} title={reason} className="inline-flex">
         <Button
           variant="outline"
           size="sm"

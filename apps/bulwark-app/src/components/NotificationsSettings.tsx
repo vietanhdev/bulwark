@@ -160,6 +160,8 @@ export function NotificationsSettings() {
     run("report", async () => {
       const r = await invoke<ChannelResult[]>("notify_report");
       setResults(r);
+      // Only the delivery state: reloading the whole form here would drop unsaved edits.
+      setStatus(await invoke<NotifyStatus>("notify_status"));
     });
 
   const anyEnabled = tg.enabled || em.enabled;
@@ -179,7 +181,11 @@ export function NotificationsSettings() {
             <Send className="h-4 w-4 text-primary" />
             <h3 className="text-sm font-semibold">Telegram</h3>
           </div>
-          <Switch checked={tg.enabled} onCheckedChange={(v) => update({ telegram: { ...tg, enabled: v } })} />
+          <Switch
+            checked={tg.enabled}
+            onCheckedChange={(v) => update({ telegram: { ...tg, enabled: v } })}
+            aria-label="Telegram alerts"
+          />
         </div>
         {tg.enabled && (
           <>
@@ -205,7 +211,10 @@ export function NotificationsSettings() {
                   autoComplete="off"
                   placeholder={status.telegram_token_set ? "•••••••• saved" : "123456:ABC…"}
                   value={token}
-                  onChange={(e) => setToken(e.target.value)}
+                  onChange={(e) => {
+                    setSaved(false);
+                    setToken(e.target.value);
+                  }}
                 />
               </Field>
               <Field label="Chat" htmlFor="tg-chat">
@@ -258,7 +267,11 @@ export function NotificationsSettings() {
             <Mail className="h-4 w-4 text-primary" />
             <h3 className="text-sm font-semibold">E-mail</h3>
           </div>
-          <Switch checked={em.enabled} onCheckedChange={(v) => update({ email: { ...em, enabled: v } })} />
+          <Switch
+            checked={em.enabled}
+            onCheckedChange={(v) => update({ email: { ...em, enabled: v } })}
+            aria-label="E-mail alerts"
+          />
         </div>
         {em.enabled && (
           <div className="grid gap-3 sm:grid-cols-2">
@@ -302,7 +315,10 @@ export function NotificationsSettings() {
                 autoComplete="off"
                 placeholder={status.smtp_password_set ? "•••••••• saved" : ""}
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => {
+                  setSaved(false);
+                  setPassword(e.target.value);
+                }}
               />
             </Field>
             <div className="sm:col-span-2">

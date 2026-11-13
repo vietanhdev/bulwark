@@ -13,6 +13,7 @@ import { AiScanSettings } from "@/components/AiScanSettings";
 import { AppearanceSettings } from "@/components/AppearanceSettings";
 import { NotificationsSettings } from "@/components/NotificationsSettings";
 import { useRevision } from "@/lib/revision";
+import { usePlatform } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 export interface MonitoringStatus {
@@ -77,6 +78,7 @@ function formatRelative(iso: string | null, now: number): string {
 export function SettingsView({ active = true }: { active?: boolean }) {
   const { bump } = useRevision();
   const [status, setStatus] = useState<MonitoringStatus | null>(null);
+  const [statusFailed, setStatusFailed] = useState(false);
   const [toggleBusy, setToggleBusy] = useState(false);
   const [toggleError, setToggleError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -93,7 +95,13 @@ export function SettingsView({ active = true }: { active?: boolean }) {
   }, []);
 
   useEffect(() => {
-    const refresh = () => invoke<MonitoringStatus>("monitoring_get_status").then(setStatus);
+    const refresh = () =>
+      invoke<MonitoringStatus>("monitoring_get_status")
+        .then((s) => {
+          setStatus(s);
+          setStatusFailed(false);
+        })
+        .catch(() => setStatusFailed(true));
     refresh();
     const unlistenPromise = listen("monitoring:tick", refresh);
     // Drives the live countdown to the next check.
@@ -103,6 +111,8 @@ export function SettingsView({ active = true }: { active?: boolean }) {
       unlistenPromise.then((unlisten) => unlisten());
     };
   }, []);
+
+  const windows = usePlatform() === "windows";
 
   async function toggle(enabled: boolean) {
     setToggleBusy(true);
@@ -150,6 +160,9 @@ export function SettingsView({ active = true }: { active?: boolean }) {
               to remember to look.
             </p>
 
+            {!status && statusFailed && (
+              <Callout tone="warning">The schedule could not be read, so it is not shown here.</Callout>
+            )}
             {status && (
               <div className="flex flex-col gap-4">
                 <div className="flex items-center justify-between gap-4 rounded-lg border border-border bg-card p-4">
@@ -207,9 +220,19 @@ export function SettingsView({ active = true }: { active?: boolean }) {
                 </div>
 
                 <Callout tone="info">
-                  Checks that need root — reading <code>/etc/sudoers</code>, for instance — never run
-                  unattended, because an unattended loop can't answer a password prompt. Run those from the
-                  Scan when Bulwark flags them as skipped.
+                  {windows ? (
+                    <>
+                      Checks that need administrator access never run unattended, because an unattended loop
+                      can't answer a permission prompt. Run those from Scan when Bulwark flags them as
+                      skipped.
+                    </>
+                  ) : (
+                    <>
+                      Checks that need root — reading <code>/etc/sudoers</code>, for instance — never run
+                      unattended, because an unattended loop can't answer a password prompt. Run those from
+                      Scan when Bulwark flags them as skipped.
+                    </>
+                  )}
                 </Callout>
               </div>
             )}
@@ -226,13 +249,21 @@ export function SettingsView({ active = true }: { active?: boolean }) {
 
           <section id="settings-ssh" className="scroll-mt-28">
             <SectionLabel>SSH hardening</SectionLabel>
-            <p className="mb-3 text-sm text-muted-foreground">
-              One-click fixes for the two most common SSH weaknesses on a workstation — plaintext private keys
-              and loose <code>~/.ssh</code> permissions. Both run on your own files, need no elevation, and
-              keep a backup or preview before touching anything.
-            </p>
+            {windows ? (
+              // Windows has no file modes, so the permission fixer has nothing it could change there.
+              <p className="mb-3 text-sm text-muted-foreground">
+                A one-click fix for the most common SSH weakness on a workstation: plaintext private keys. It
+                runs on your own files, needs no elevation, and backs each key up before touching it.
+              </p>
+            ) : (
+              <p className="mb-3 text-sm text-muted-foreground">
+                One-click fixes for the two most common SSH weaknesses on a workstation — plaintext private
+                keys and loose <code>~/.ssh</code> permissions. Both run on your own files, need no elevation,
+                and keep a backup or preview before touching anything.
+              </p>
+            )}
             <SshKeyProtect />
-            <SshPermFix />
+            {!windows && <SshPermFix />}
           </section>
 
           <section id="settings-about" className="scroll-mt-28">

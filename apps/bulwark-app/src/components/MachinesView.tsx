@@ -121,6 +121,7 @@ export function MachinesView({
       <MachineDetail
         machine={current}
         now={now}
+        paused={overview ? !overview.enabled : false}
         onBack={() => setSelected(null)}
         onChanged={refresh}
         onRemoved={() => {
@@ -145,7 +146,11 @@ export function MachinesView({
           <>
             <Button
               variant="outline"
-              onClick={() => invoke("machines_scan_all").then(refresh)}
+              onClick={() =>
+                invoke("machines_scan_all")
+                  .then(refresh)
+                  .catch((e) => setError(String(e)))
+              }
               disabled={machines.every((m) => m.scanning)}
             >
               <RefreshCw /> Scan all
@@ -187,7 +192,11 @@ export function MachinesView({
               Scheduled scans
               <Switch
                 checked={overview?.enabled ?? true}
-                onCheckedChange={(v) => invoke("machines_set_enabled", { enabled: v }).then(refresh)}
+                onCheckedChange={(v) =>
+                  invoke("machines_set_enabled", { enabled: v })
+                    .then(refresh)
+                    .catch((e) => setError(String(e)))
+                }
               />
             </label>
           </div>
@@ -198,7 +207,13 @@ export function MachinesView({
           )}
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {machines.map((m) => (
-              <MachineCard key={m.id} machine={m} now={now} onOpen={() => setSelected(m.id)} />
+              <MachineCard
+                key={m.id}
+                machine={m}
+                now={now}
+                paused={!overview?.enabled}
+                onOpen={() => setSelected(m.id)}
+              />
             ))}
           </div>
           <button
@@ -302,6 +317,11 @@ function railStyleFor(m: Machine): CSSProperties {
   return { "--rail-color": tone === "muted" ? "var(--border)" : `var(--sev-${tone})` } as CSSProperties;
 }
 
+/** The stored results are older than the machine's last attempt: it failed, or went unscanned. */
+function resultsOutdated(m: Machine): boolean {
+  return m.health === "stale" || m.health === "unreachable" || m.last_status?.state === "failed";
+}
+
 const DOT_COLOR: Record<Dot, string> = {
   ok: "var(--sev-resolved)",
   warn: "var(--sev-medium)",
@@ -374,7 +394,18 @@ function ScanLine({ m, now }: { m: Machine; now: number }) {
   );
 }
 
-function MachineCard({ machine: m, now, onOpen }: { machine: Machine; now: number; onOpen: () => void }) {
+function MachineCard({
+  machine: m,
+  now,
+  paused,
+  onOpen,
+}: {
+  machine: Machine;
+  now: number;
+  /** The switch that pauses scheduled scans for every machine is off. */
+  paused: boolean;
+  onOpen: () => void;
+}) {
   return (
     <button
       type="button"
@@ -410,7 +441,9 @@ function MachineCard({ machine: m, now, onOpen }: { machine: Machine; now: numbe
         </dd>
       </dl>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border pt-2.5 text-xs text-muted-foreground">
-        <span>{m.enabled ? `Next scan ${until(m.next_due_at, now)}` : "Scheduled scans paused"}</span>
+        <span>
+          {m.enabled && !paused ? `Next scan ${until(m.next_due_at, now)}` : "Scheduled scans paused"}
+        </span>
         {m.privileged && (
           <>
             <span aria-hidden>·</span>
@@ -451,26 +484,36 @@ function problemTone(kind: ErrorKind): CalloutTone {
 function MachineDetail({
   machine: m,
   now,
+  paused,
   onBack,
   onChanged,
   onRemoved,
 }: {
   machine: Machine;
   now: number;
+  /** Scheduled scans are paused for every machine. */
+  paused: boolean;
   onBack: () => void;
   onChanged: () => void;
   onRemoved: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("issues");
   const [findings, setFindings] = useState<MachineFindings | null>(null);
+  const [findingsFailed, setFindingsFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [findingsRev, setFindingsRev] = useState(0);
   useEffect(() => {
     invoke<MachineFindings>("machine_findings", { id: m.id })
-      .then(setFindings)
-      .catch((e) => setError(String(e)));
+      .then((f) => {
+        setFindings(f);
+        setFindingsFailed(false);
+      })
+      .catch((e) => {
+        setFindingsFailed(true);
+        setError(String(e));
+      });
   }, [m.id, m.last_success_at, findingsRev]);
 
   async function act(f: () => Promise<unknown>) {
@@ -607,7 +650,7 @@ function MachineDetail({
           <Row
             label="Next attempt"
             value={
-              !m.enabled
+              !m.enabled || paused
                 ? "Paused"
                 : m.health === "unsupported" && m.interval_minutes < 24 * 60
                   ? `${until(m.next_due_at, now)} · re-checked daily`
@@ -636,7 +679,9 @@ function MachineDetail({
               : m.last_success_at
                 ? openTotal(m.counts) > 0
                   ? "warn"
-                  : "ok"
+                  : resultsOutdated(m)
+                    ? "idle"
+                    : "ok"
                 : "idle"
           }
           status={
@@ -682,6 +727,7 @@ function MachineDetail({
         <IssuesTab
           machine={m}
           findings={findings}
+          failed={findingsFailed}
           onChanged={() => {
             setFindingsRev((r) => r + 1);
             onChanged();
@@ -698,7 +744,7 @@ function MachineDetail({
             // (key set up, host key approved…). Scan now so the stale problem clears immediately
             // instead of lingering until the next scheduled attempt.
             if (r.ok && m.problem && !m.scanning)
-              void invoke("machine_scan_now", { id: m.id }).then(onChanged);
+              void invoke("machine_scan_now", { id: m.id }).then(onChanged, onChanged);
             else onChanged();
           }}
         />
@@ -749,10 +795,13 @@ function Row({ label, value }: { label: string; value: string }) {
 function IssuesTab({
   machine: m,
   findings,
+  failed,
   onChanged,
 }: {
   machine: Machine;
   findings: MachineFindings | null;
+  /** The stored results could not be read; the reason is shown above the tabs. */
+  failed: boolean;
   onChanged: () => void;
 }) {
   // One dialog for both directions: ignoring a type, and restoring one. Both are recorded with a
@@ -763,7 +812,14 @@ function IssuesTab({
     title: string;
     location?: string;
   } | null>(null);
-  if (!findings) return <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />;
+  if (!findings)
+    return failed ? (
+      <p className="text-sm text-muted-foreground">
+        The stored results for {m.name} could not be read, so nothing is shown here.
+      </p>
+    ) : (
+      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+    );
   // Results are only ever written by a successful scan, so a machine without one has none to show.
   if (!m.last_success_at) {
     return (
@@ -775,9 +831,10 @@ function IssuesTab({
     );
   }
   const ignoredCount = (ruleId: string) => findings.suppressed.filter((f) => f.rule_id === ruleId).length;
+  const outdated = resultsOutdated(m);
   return (
     <div className="flex flex-col gap-4">
-      {m.health === "stale" || m.last_status?.state === "failed" ? (
+      {outdated ? (
         <Callout tone="warning">
           These results are from {ago(m.last_success_at)} — the machine hasn't been scanned since, so they may
           be out of date.
@@ -801,7 +858,12 @@ function IssuesTab({
         </Callout>
       )}
       {findings.active.length === 0 ? (
-        <Callout tone="success">No open issues on {m.name}.</Callout>
+        outdated ? (
+          // Old results prove nothing about the machine today, so this is not the green "clean".
+          <Callout tone="info">The last successful scan of {m.name} found no open issues.</Callout>
+        ) : (
+          <Callout tone="success">No open issues on {m.name}.</Callout>
+        )
       ) : (
         <GroupedIssues machine={m} findings={findings.active} onChanged={onChanged} />
       )}
@@ -946,7 +1008,8 @@ function GroupedIssues({
       onChanged();
     },
     onRecheck: () => {
-      void invoke("machine_scan_now", { id: m.id }).then(onChanged);
+      // Refresh either way: a scan that could not start is reported on the machine itself.
+      void invoke("machine_scan_now", { id: m.id }).then(onChanged, onChanged);
     },
   };
   const toggle = (c: string) =>
@@ -989,8 +1052,8 @@ function GroupedIssues({
                   category={category}
                   items={items}
                   worst={worst}
-                  collapsed={false}
-                  onToggle={() => {}}
+                  collapsed={collapsed.has(`minor-${category}`)}
+                  onToggle={() => toggle(`minor-${category}`)}
                   actions={actions}
                 />
               ))}
@@ -1108,9 +1171,18 @@ function SettingsTab({
   const [jump, setJump] = useState(m.jump_host ?? "");
   const [interval, setIntervalMinutes] = useState(m.interval_minutes);
   const [privileged, setPrivileged] = useState(m.privileged);
+  // "Turn off root checks" in the banner above changes this outside the form. Follow it, or the
+  // toggle keeps showing the old value and the next Save turns root checks back on.
+  const [seenPrivileged, setSeenPrivileged] = useState(m.privileged);
+  if (m.privileged !== seenPrivileged) {
+    setSeenPrivileged(m.privileged);
+    setPrivileged(m.privileged);
+  }
   const [enabled, setEnabled] = useState(m.enabled);
   const [busy, setBusy] = useState(false);
-  const [saved, setSaved] = useState(false);
+  // The form as it was last saved: "Saved." is shown only while the fields still match it.
+  const [savedForm, setSavedForm] = useState<string | null>(null);
+  const form = JSON.stringify([name, spec, port, identity, jump, interval, privileged, enabled]);
   const [error, setError] = useState<string | null>(null);
   const [suggest, setSuggest] = useState<SshSuggestions | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
@@ -1130,10 +1202,14 @@ function SettingsTab({
   }, [suggest, m.identity_file]);
 
   async function save() {
+    const p = port.trim() ? Number(port) : null;
+    setSavedForm(null);
+    if (p !== null && (!Number.isInteger(p) || p < 1 || p > 65535)) {
+      setError("The port must be a number between 1 and 65535.");
+      return;
+    }
     setBusy(true);
     setError(null);
-    setSaved(false);
-    const p = port.trim() ? Number(port) : null;
     try {
       await invoke("machine_update", {
         id: m.id,
@@ -1148,7 +1224,7 @@ function SettingsTab({
           enabled,
         },
       });
-      setSaved(true);
+      setSavedForm(form);
       onChanged();
     } catch (e) {
       setError(String(e));
@@ -1241,7 +1317,7 @@ function SettingsTab({
           {busy && <Loader2 className="animate-spin" />}
           Save changes
         </Button>
-        {saved && <span className="text-sm text-muted-foreground">Saved.</span>}
+        {savedForm === form && <span className="text-sm text-muted-foreground">Saved.</span>}
       </div>
 
       <section className="flex flex-col gap-3 rounded-lg border border-[var(--sev-critical)]/30 bg-card p-4">
@@ -1251,11 +1327,11 @@ function SettingsTab({
           <code className="font-mono">bulwark-monitoring@…</code>) from{" "}
           <code className="font-mono">~/.ssh/authorized_keys</code> on the machine.
         </p>
-        {!confirmRemove ? (
-          <Button variant="destructive" className="w-fit" onClick={() => setConfirmRemove(true)}>
-            Remove machine…
-          </Button>
-        ) : (
+        {/* The button stays mounted while the dialog is open, so closing it returns focus here. */}
+        <Button variant="destructive" className="w-fit" onClick={() => setConfirmRemove(true)}>
+          Remove machine…
+        </Button>
+        {confirmRemove && (
           <Modal
             title={`Remove ${m.name}?`}
             onClose={() => setConfirmRemove(false)}
@@ -1279,6 +1355,12 @@ function SettingsTab({
               />
               <span>Also delete its scan history from this computer</span>
             </label>
+            {/* Shown here as well: the page's own error line sits behind this dialog. */}
+            {error && (
+              <Callout tone="critical" className="mt-3">
+                {error}
+              </Callout>
+            )}
           </Modal>
         )}
       </section>
@@ -1309,7 +1391,7 @@ function ToggleRow({
         <div className="text-sm font-medium">{title}</div>
         <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{body}</p>
       </div>
-      <Switch checked={checked} onCheckedChange={onChange} />
+      <Switch checked={checked} onCheckedChange={onChange} aria-label={title} />
     </div>
   );
 }

@@ -125,7 +125,7 @@ export function InventoryPanel({
       </header>
       {busy && (
         <div className="p-4">
-          <TaskActivity task="sessions" />
+          <TaskActivity task="inventory" />
         </div>
       )}
       {state?.status === "unavailable" && (
