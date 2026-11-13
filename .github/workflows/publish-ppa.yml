@@ -101,7 +101,11 @@ jobs:
           printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
           gpgconf --kill gpg-agent || true
           gpgconf --launch gpg-agent || true
-          KEYID=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/{print $5; exit}')
+          # The full fingerprint, not the 16-character key ID: dpkg-buildpackage warns that
+          # "long OpenPGP key IDs are strongly discouraged" on every series it signs. The first
+          # fpr record after the sec record is the primary key's.
+          KEYID=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/{s=1} s && /^fpr:/{print $10; exit}')
+          [ -n "$KEYID" ] || { echo "::error::the imported key has no secret part gpg can list" >&2; exit 1; }
           echo "SIGN_KEY=$KEYID" >> "$GITHUB_ENV"
           # Prove signing is non-interactive before we build anything.
           echo "ci-signing-selftest" | gpg --local-user "$KEYID" --clearsign > /dev/null
@@ -133,9 +137,11 @@ jobs:
             PPA_REV=$(scripts/ppa-launchpad.py next-rev --upstream "$UPSTREAM")
           fi
           echo "upstream $UPSTREAM, PPA revision $PPA_REV"
-          echo "upstream=$UPSTREAM" >> "$GITHUB_OUTPUT"
-          echo "ppa_rev=$PPA_REV" >> "$GITHUB_OUTPUT"
-          echo "series=$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1].split()))' "$SERIES")" >> "$GITHUB_OUTPUT"
+          {
+            echo "upstream=$UPSTREAM"
+            echo "ppa_rev=$PPA_REV"
+            echo "series=$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1].split()))' "$SERIES")"
+          } >> "$GITHUB_OUTPUT"
           # A version has ONE .orig, shared by every series and revision. If Launchpad already
           # has it, build from those exact bytes (a tree rebuilt from this commit would differ
           # and be rejected). Otherwise the first series uploads a fresh one (-sa) and the rest
@@ -153,9 +159,13 @@ jobs:
             first=0
             if [ "$DRY_RUN" = "true" ]; then
               echo "DRY RUN — skipping dput. Built + signed:"
-              ls -1 "target/ppa/bulwark_"*"~${s}"*"_source.changes"
-              # Prove the signature on the .changes is valid without uploading.
-              gpg --verify "target/ppa/bulwark_"*"~${s}"*"_source.changes" 2>&1 | grep -i "good signature" || true
+              # Prove the signature on the .changes is valid without uploading. By its exact
+              # name (a glob can match an earlier revision's file as well, and gpg reads a
+              # second argument as detached data), and by gpg's exit status: this line used to
+              # end in `|| true`, so a bad or missing signature could not fail it.
+              changes="target/ppa/bulwark_${UPSTREAM}-0ppa${PPA_REV}~${s}1_source.changes"
+              ls -1 "$changes"
+              gpg --verify "$changes"
               # Install-test: the offline SOURCE build + signature are proven above
               # (that's the PPA-specific part Launchpad runs). Here we build the binary
               # .deb the project ships — via cargo-deb, the same tool release.yml uses,
@@ -175,7 +185,12 @@ jobs:
               # to a file and validate the JSON separately from the exit code.
               bulwarkctl scan --json > "$RUNNER_TEMP/scan.json" || true
               python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["rules_loaded"]>0,d;print("scan OK: rules_loaded",d["rules_loaded"],"findings",len(d.get("findings",[])))' "$RUNNER_TEMP/scan.json"
-              bulwarkctl fix list | grep -i "Available autofixes" >/dev/null && echo "fix preview OK"
+              # Not `… | grep … && echo OK`: a failure on the left of `&&` does not stop a
+              # `set -e` script, so that line could never fail the run.
+              bulwarkctl fix list > "$RUNNER_TEMP/fix-list.txt"
+              grep -qi "Available autofixes" "$RUNNER_TEMP/fix-list.txt" \
+                || { echo "::error::'bulwarkctl fix list' did not print its list of autofixes"; exit 1; }
+              echo "fix preview OK"
               echo "::endgroup::"
               continue
             fi

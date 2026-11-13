@@ -9,8 +9,12 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+# Read-only by default. The build jobs run third-party code (crates' build scripts, npm
+# packages) next to the token that actions/checkout leaves in the workspace's git config, and
+# none of them needs to write to the repository. Only the `release` job, which creates the
+# draft release, asks for more.
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -119,6 +123,12 @@ jobs:
           fi
           echo "version=${CARGO_VERSION}" >> "$GITHUB_OUTPUT"
           echo "Building version ${CARGO_VERSION}"
+          # The tag is what the other channels build from afterwards: the AUR and COPR fetch
+          # its tarball, the AUR with `--locked`, and Flathub installs the metainfo changelog
+          # from it. A tag cut from a half-bumped tree cannot be repaired, so every declaration,
+          # Cargo.lock and the changelog entry are checked before anything is built. (ci.yml
+          # runs the same check on every push; this covers a tag pushed over a red build.)
+          scripts/bump-version.sh --check
 
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
@@ -132,10 +142,14 @@ jobs:
           # the resulting link errors would read like a source bug.
           key: ${{ matrix.arch }}
 
+      # Node 22, the same major every other job uses (ci.yml, desktop-other below, the snap).
+      # Its official builds need glibc 2.28, so they run in this 22.04 image (2.35), and the
+      # Tauri CLI is a Node-API binary that does not depend on the Node major. Node 20 is past
+      # its end of life, and eslint's plugins in the lockfile ask for ^22.13.
       - uses: actions/setup-node@v7
         if: matrix.gui
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: apps/bulwark-app/package-lock.json
 
@@ -263,26 +277,36 @@ jobs:
 
           check_rules() {
             local label="$1" count="$2"
-            if [ "${count}" -lt 50 ]; then
+            # `! … -ge`, not `-lt`: an empty or non-numeric count makes the test itself fail,
+            # and that must land on the error side.
+            if ! [ "${count}" -ge 50 ]; then
               echo "::error::${label} contains only ${count} rule files — the rule pack is missing or truncated"
               exit 1
             fi
             echo "OK: ${label} ships ${count} rules"
           }
 
-          check_rules "CLI .deb" \
-            "$(dpkg-deb --contents dist/bulwarkctl_${V}_${DA}.deb | grep -c '\.yaml$')"
-          check_rules "CLI .rpm" \
-            "$(rpm -qlp dist/bulwarkctl-${V}.${A}.rpm 2>/dev/null | grep -c '\.yaml$')"
+          # Each listing is written to a file first and searched afterwards. Searching the pipe
+          # directly looks the same and is not: `grep -q` stops reading at its first match, and
+          # under `pipefail` a dpkg-deb that is still writing then dies of SIGPIPE and fails the
+          # step. That has not happened yet only because the listing is short.
+          dpkg-deb --contents "dist/bulwarkctl_${V}_${DA}.deb" > cli-deb.list
+          rpm -qlp "dist/bulwarkctl-${V}.${A}.rpm" > cli-rpm.list
+          check_rules "CLI .deb" "$(grep -c '\.yaml$' cli-deb.list || true)"
+          check_rules "CLI .rpm" "$(grep -c '\.yaml$' cli-rpm.list || true)"
           if [ "${{ matrix.gui }}" = "true" ]; then
-            check_rules "GUI .deb" \
-              "$(dpkg-deb --contents dist/bulwark-desktop_${V}_${DA}.deb | grep -c '\.yaml$')"
+            dpkg-deb --contents "dist/bulwark-desktop_${V}_${DA}.deb" > gui-deb.list
+            rpm -qlp "dist/bulwark-desktop-${V}.${A}.rpm" > gui-rpm.list
+            check_rules "GUI .deb" "$(grep -c '\.yaml$' gui-deb.list || true)"
+            check_rules "GUI .rpm" "$(grep -c '\.yaml$' gui-rpm.list || true)"
           fi
 
-          # The CLI binary must actually run — a package that installs a binary the target
-          # distro can't execute is worse than no package.
-          dpkg-deb --contents dist/bulwarkctl_${V}_${DA}.deb | grep -q 'usr/bin/bulwarkctl'
-          echo "OK: CLI .deb ships /usr/bin/bulwarkctl"
+          # Every package must carry the binary it exists to install.
+          grep -q 'usr/bin/bulwarkctl$' cli-deb.list \
+            || { echo "::error::CLI .deb does not ship /usr/bin/bulwarkctl"; exit 1; }
+          grep -qx '/usr/bin/bulwarkctl' cli-rpm.list \
+            || { echo "::error::CLI .rpm does not ship /usr/bin/bulwarkctl"; exit 1; }
+          echo "OK: CLI .deb and .rpm ship /usr/bin/bulwarkctl"
 
           # The packaged binary must be built FOR the arch the filename claims. cargo-deb infers
           # the arch from the build host, so a misconfigured runner would produce a package that
@@ -416,7 +440,10 @@ jobs:
                 # Tauri dependency auto-detection is known to be incomplete (tauri#7074), so a
                 # library can be genuinely missing while apt reports success — ldd is what actually
                 # proves the binary can start.
-                if ldd /usr/bin/bulwark-app | grep "not found"; then
+                # Written to a file first: in `ldd … | grep "not found"` an ldd that fails
+                # outright prints nothing for grep to find, and the check passes.
+                ldd /usr/bin/bulwark-app > /tmp/ldd.txt
+                if grep "not found" /tmp/ldd.txt; then
                   echo "::error::bulwark-app has unresolved shared libraries on ${{ matrix.image }}"
                   exit 1
                 fi
@@ -511,10 +538,23 @@ jobs:
             # missing IS a real bundling regression: a webkit / GTK / pango / cairo / glib dep the
             # AppImage failed to carry. webkit is deliberately never apt-installed here, so such a
             # regression cannot be masked by a host copy.
-            export LD_LIBRARY_PATH="$(find /tmp/squashfs-root -type d -name lib -o -type d -name "${MULTIARCH}" | tr "\n" ":")"
+            #
+            # The path is set for ldd alone, not exported: the bundle carries its own
+            # libsystemd, and on 26.04 ordinary tools (wc, head) fail to start with it.
+            BUNDLED_LIBS="$(find /tmp/squashfs-root -type d -name lib -o -type d -name "${MULTIARCH}" | tr "\n" ":")"
+            # ldd writes to a file and must succeed. Piped straight into the greps below, an
+            # ldd that fails ("not a dynamic executable") leaves nothing to find and the job
+            # passes having checked nothing.
+            LD_LIBRARY_PATH="${BUNDLED_LIBS}" ldd "${BIN}" > /tmp/ldd.txt \
+              || { echo "::error::ldd could not read ${BIN}, so nothing was checked"; cat /tmp/ldd.txt; exit 1; }
+
+            # WebKitGTK must come from the bundle. This is what makes the check below mean
+            # something: it shows the search path above is the right one for this architecture.
+            grep -E "libwebkit2gtk-4\.1\.so\.[0-9]+ => /tmp/squashfs-root/" /tmp/ldd.txt \
+              || { echo "::error::the AppImage does not resolve WebKitGTK from inside its own bundle"; grep -i webkit /tmp/ldd.txt || true; exit 1; }
 
             host_provided="lib(GL|GLX|GLdispatch|GLESv2|OpenGL|EGL|glapi|drm|gbm|X11|X11-xcb|xcb|xcb-[a-z0-9]+|Xext|Xrender|Xfixes|Xi|Xcursor|Xdamage|Xcomposite|Xrandr|Xinerama|Xtst|Xss|xshmfence|wayland-[a-z]+|harfbuzz|fontconfig|freetype|expat|fribidi)\.so"
-            missing=$(ldd "${BIN}" | grep "not found" | grep -vE "${host_provided}" || true)
+            missing=$(grep "not found" /tmp/ldd.txt | grep -vE "${host_provided}" || true)
             if [ -n "${missing}" ]; then
               echo "::error::AppImage is missing libraries it should bundle (its webkit/GTK stack) on a stock Ubuntu 26.04:"
               echo "${missing}"
@@ -581,12 +621,14 @@ jobs:
           - runner: macos-15
             os: macos
             arch: aarch64
+            host: aarch64-apple-darwin
             # `app` too: with `dmg` alone Tauri deletes the intermediate Bulwark.app, and the
             # artifact check below inspects the app's contents (CLI sidecar, rule pack).
             bundle: app,dmg
           - runner: windows-2022
             os: windows
             arch: x86_64
+            host: x86_64-pc-windows-msvc
             bundle: nsis
     defaults:
       run:
@@ -604,6 +646,21 @@ jobs:
       - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
           key: ${{ matrix.os }}-${{ matrix.arch }}
+
+      # The assets below are named after the matrix (…-macos-aarch64.dmg, …-windows-x86_64.zip),
+      # and a runner label says nothing binding about its hardware: GitHub has moved macOS
+      # labels between Intel and Apple silicon before. Built on the other architecture, every
+      # later step would still pass and the release would carry a mislabelled binary.
+      - name: Confirm the toolchain builds for ${{ matrix.host }}
+        run: |
+          set -euo pipefail
+          host="$(rustc -vV | tr -d '\r' | sed -n 's/^host: //p')"
+          echo "rustc host: ${host}"
+          if [ "${host}" != "${{ matrix.host }}" ]; then
+            echo "::error::this runner builds for ${host}, but its assets are named ${{ matrix.os }}-${{ matrix.arch }} (${{ matrix.host }})"
+            exit 1
+          fi
+
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -642,7 +699,9 @@ jobs:
           mkdir -p dist
           if [ "${{ matrix.os }}" = macos ]; then
             # The macOS build is named "Bulwark.app" (tauri.macos.conf.json); match whatever it is.
-            APP=$(ls -d target/release/bundle/macos/*.app | head -n1)
+            apps=(target/release/bundle/macos/*.app)
+            APP="${apps[0]}"
+            test -d "$APP" || { echo "::error::no .app bundle was built"; exit 1; }
             test -s "$APP/Contents/MacOS/bulwark" || { echo "::error::app ships no CLI sidecar"; exit 1; }
             "$APP/Contents/MacOS/bulwark" --version
             n=$(find "$APP/Contents/Resources" -name '*.yaml' | wc -l); echo "rule files: $n"
@@ -669,6 +728,9 @@ jobs:
     if: github.triggering_actor == 'vietanhdev'
     needs: [linux, desktop-other, verify-install, verify-appimage, verify-gui-launch]
     runs-on: ubuntu-24.04
+    # The one job that writes to the repository: it creates the draft release.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
 
@@ -691,25 +753,84 @@ jobs:
       # Generated here, not per build job: each of those sees only its own arch, so two partial
       # SHA256SUMS files would collide on merge and whichever landed last would silently omit
       # half the release. One file, written once, over everything that is actually shipping.
+      #
+      # First, the set itself. Every job above can succeed and the release still be short an
+      # asset: `gui: false` for an architecture, an artifact name the pattern above stops
+      # matching, a bundle target dropped from tauri.conf.json. SHA256SUMS would then be a
+      # faithful list of an incomplete release. So the names the release notes and
+      # docs/download.md promise are listed here, and anything missing or unexpected stops
+      # the release. A new asset has to be added to this list on purpose.
       - name: Checksum the merged assets
+        env:
+          V: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           cd dist
           rm -f SHA256SUMS
+          expected=(
+            "bulwarkctl_${V}_amd64.deb"                "bulwarkctl_${V}_arm64.deb"
+            "bulwarkctl-${V}.x86_64.rpm"               "bulwarkctl-${V}.aarch64.rpm"
+            "bulwarkctl-${V}-x86_64-linux.tar.gz"      "bulwarkctl-${V}-aarch64-linux.tar.gz"
+            "bulwark-desktop_${V}_amd64.deb"           "bulwark-desktop_${V}_arm64.deb"
+            "bulwark-desktop-${V}.x86_64.rpm"          "bulwark-desktop-${V}.aarch64.rpm"
+            "bulwark-desktop-${V}-x86_64.AppImage"     "bulwark-desktop-${V}-aarch64.AppImage"
+            "bulwark-desktop-${V}-macos-aarch64.dmg"   "bulwarkctl-${V}-macos-aarch64.tar.gz"
+            "bulwark-desktop-${V}-windows-x86_64-setup.exe"
+            "bulwarkctl-${V}-windows-x86_64.zip"
+          )
+          bad=0
+          for f in "${expected[@]}"; do
+            [ -s "$f" ] || { echo "::error::release asset missing or empty: $f"; bad=1; }
+          done
+          for f in *; do
+            case " ${expected[*]} " in
+              *" $f "*) ;;
+              *) echo "::error::unexpected file among the release assets: $f"; bad=1 ;;
+            esac
+          done
+          [ "$bad" -eq 0 ] || exit 1
+          echo "OK: all ${#expected[@]} release assets are present"
           sha256sum -- * > SHA256SUMS
           echo "--- release assets ---"
           ls -la
           echo "--- SHA256SUMS ---"
           cat SHA256SUMS
 
-      # Only on a real tag. A workflow_dispatch run stops at the artifact upload above, so the
+      # Only on a pushed tag. A workflow_dispatch run stops at the checksums above, so the
       # whole pipeline — including the install matrix — can be rehearsed without creating a
-      # public release.
+      # release. That holds for a dispatch started from a tag too: `ref_type` alone is `tag`
+      # there, and the run would otherwise rebuild and replace that tag's assets.
+      #
+      # A release that is already public is left alone. Re-running this workflow builds
+      # everything again, and the action below replaces assets of the same name, so a public
+      # release would end up with files that no longer match the SHA256SUMS people already
+      # downloaded. GitHub's "get a release by tag" answers only for published releases (a
+      # draft is a 404), which is exactly the question. A draft from a failed earlier attempt
+      # is fine: the action finds it and finishes it, with no duplicate assets.
+      - name: Refuse to replace a published release
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if out="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" --jq .html_url 2>&1)"; then
+            echo "::error::${GITHUB_REF_NAME} is already published (${out}). Its assets are not replaced. To redo it, set that release back to draft or delete it, then re-run this job."
+            exit 1
+          fi
+          case "${out}" in
+            *"HTTP 404"*) echo "No published release for ${GITHUB_REF_NAME} yet: creating or updating the draft." ;;
+            *) echo "::error::could not ask GitHub about ${GITHUB_REF_NAME}: ${out}"; exit 1 ;;
+          esac
+
+      # `draft: true` is what keeps this from publishing: with it the action never takes a
+      # release out of draft, whether it created the draft or found one. Publishing is a click
+      # on the release page, after the assets have been looked at.
       - name: Publish GitHub Release
-        if: github.ref_type == 'tag'
+        if: github.event_name == 'push' && github.ref_type == 'tag'
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           files: dist/*
+          fail_on_unmatched_files: true
           draft: true
           generate_release_notes: true
           name: Bulwark ${{ github.ref_name }}

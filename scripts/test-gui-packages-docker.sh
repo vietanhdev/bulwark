@@ -54,6 +54,7 @@ echo ">> testing ${ARCH} artifacts (.deb arch: ${DEB_ARCH})"
 # stop matching (and, with `set -u` off on the docker side, "test" nothing at all).
 shopt -s nullglob
 find_one() {
+  # shellcheck disable=SC2206  # $1 is a glob pattern and has to expand here
   local pat="$1" matches=("${ASSETS}"/$1)
   [[ ${#matches[@]} -eq 1 ]] || { echo "ERROR: expected exactly 1 file matching '${pat}' in ${ASSETS}, found ${#matches[@]}" >&2; exit 1; }
   basename "${matches[0]}"
@@ -85,12 +86,17 @@ TARGETS=("$@")
 # needs the legacy overrides below on older runtimes. Fedora WebKitGTK 2.54+ uses its
 # default software-rendering path instead (see RPM_GUI_ENV). These are headless CI settings;
 # they are test-harness settings, not something the app requires on a real desktop.
+#
+# GUI_ENV, RPM_GUI_ENV and VERDICT are shell text for the container, pasted into its
+# `bash -c` below. They are single-quoted so that nothing in them expands on this side.
+# shellcheck disable=SC2016
 GUI_ENV='
-  # xdotool/compare/pgrep join the guard because the checks that depend on them are hard
-  # FAILs: a missing tool would otherwise read as "no window found" or "nothing drawn" and
-  # blame the application for a broken image. tesseract is deliberately NOT here — its check
-  # degrades to a warning, so its absence must not fail the run.
-  for t in Xvfb import identify compare xdotool pgrep; do
+  # Every tool a check below depends on. A missing one stops the run as a harness error: it
+  # would otherwise read as "no window found" or "nothing drawn" and blame the application
+  # for a broken image, or, worse, skip its check and let the package pass without it.
+  # tesseract is here for that second reason. The text check is the only one that proves
+  # the frontend ran, and it used to shrink to a warning when the tool was absent.
+  for t in Xvfb import identify compare xdotool pgrep tesseract; do
     command -v "$t" >/dev/null || {
       echo "HARNESS ERROR: $t missing — test dependencies failed to install."
       echo "This is a broken test environment, NOT an application failure."
@@ -115,6 +121,7 @@ GUI_ENV='
 # alone fixes it. Use the default renderer for that runtime, still backed by Mesa
 # software rendering. Query the RPM runtime, not the distro release or the host:
 # an AppImage carries a different WebKit and must retain its own legacy settings.
+# shellcheck disable=SC2016
 RPM_GUI_ENV='
   WEBKIT_VERSION="$(rpm -q --queryformat "%{VERSION}" webkit2gtk4.1)" || exit 90
   IFS=. read -r WEBKIT_MAJOR WEBKIT_MINOR WEBKIT_PATCH <<< "${WEBKIT_VERSION}"
@@ -147,6 +154,11 @@ RPM_GUI_ENV='
 # count is blind to by construction. The checks below close that gap from three directions —
 # the WebKit process tree (did the web engine start), OCR (did JS paint real text), and a
 # baseline diff (did the screen change at all) — so a pass means the React app actually ran.
+#
+# None of these may be skipped. Where a check cannot be made (no screenshot, no baseline, a
+# number that cannot be read) the verdict is FAIL, not a warning: a warning in the middle of
+# a green release log is a check that silently stopped running.
+# shellcheck disable=SC2016
 VERDICT='
   echo "----- app output -----"; cat /tmp/app.log
   echo "----------------------"
@@ -240,26 +252,26 @@ VERDICT='
     #    ERRORS on differing dimensions rather than reporting a difference — which this case
     #    statement would read as "not zero" and quietly pass. Comparing two full-screen
     #    captures keeps the geometry identical so the metric is always meaningful.
-    if [ -f /tmp/baseline.png ]; then
-      import -window root /tmp/shot_root.png 2>/dev/null || true
-      if [ -f /tmp/shot_root.png ]; then
-        RAW="$(compare -metric AE /tmp/baseline.png /tmp/shot_root.png null: 2>&1 || true)"
-        # `compare` prints the metric as "1023970 (0.999969)" — the absolute count followed by
-        # a normalised value — and switches to scientific notation for large counts. Treating
-        # the whole string as one number made every run report "could not measure", i.e. the
-        # check silently never ran. Take the first field and compare numerically in awk, which
-        # handles both plain integers and 5.41485e+10.
-        DIFF="${RAW%% *}"
-        echo "pixels changed vs the pre-launch display: ${RAW}"
-        if echo "${DIFF}" | grep -qE "^[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$"; then
-          if awk -v d="${DIFF}" "BEGIN{exit !(d>0)}"; then
-            echo "OK: ${DIFF} pixels changed after launch"
-          else
-            echo "FAIL: display is pixel-identical to before launch — nothing was drawn"; fail=1
-          fi
+    import -window root /tmp/shot_root.png 2>/dev/null || true
+    if [ ! -s /tmp/baseline.png ] || [ ! -s /tmp/shot_root.png ]; then
+      echo "FAIL: no before/after pictures of the display, so the change could not be measured"; fail=1
+    else
+      RAW="$(compare -metric AE /tmp/baseline.png /tmp/shot_root.png null: 2>&1 || true)"
+      # `compare` prints the metric as "1023970 (0.999969)" — the absolute count followed by
+      # a normalised value — and switches to scientific notation for large counts. Treating
+      # the whole string as one number made every run report "could not measure", i.e. the
+      # check silently never ran. Take the first field and compare numerically in awk, which
+      # handles both plain integers and 5.41485e+10.
+      DIFF="${RAW%% *}"
+      echo "pixels changed vs the pre-launch display: ${RAW}"
+      if echo "${DIFF}" | grep -qE "^[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$"; then
+        if awk -v d="${DIFF}" "BEGIN{exit !(d>0)}"; then
+          echo "OK: ${DIFF} pixels changed after launch"
         else
-          echo "WARN: could not measure the pre/post difference (${RAW})"
+          echo "FAIL: display is pixel-identical to before launch — nothing was drawn"; fail=1
         fi
+      else
+        echo "FAIL: could not measure the pre/post difference (${RAW})"; fail=1
       fi
     fi
 
@@ -274,27 +286,23 @@ VERDICT='
     #    copy change a release-blocking failure. Any known nav label, or failing that a
     #    reasonable quantity of recognised characters, is enough to distinguish "text rendered"
     #    from "nothing rendered" — which is the only distinction being asked for.
-    if command -v tesseract >/dev/null 2>&1; then
-      tesseract /tmp/shot.png /tmp/ocr >/dev/null 2>&1 || true
-      OCRTXT="$(cat /tmp/ocr.txt 2>/dev/null || echo "")"
-      echo "----- OCR -----"; echo "${OCRTXT}" | head -20; echo "---------------"
-      if echo "${OCRTXT}" | grep -qiE "bulwark|home|checkups|scans|settings|activity|system|reference"; then
-        echo "OK: recognised real UI text on screen (the frontend mounted and painted)"
-      else
-        NALNUM="$(echo "${OCRTXT}" | tr -cd "[:alnum:]" | wc -c)"
-        echo "no known label matched; recognised alphanumeric characters: ${NALNUM}"
-        if [ "${NALNUM:-0}" -lt 30 ]; then
-          echo "FAIL: essentially no text on screen — the UI did not render its content"
-          fail=1
-        else
-          echo "OK: substantial text present, though no known label matched (UI copy may have changed)"
-        fi
-      fi
+    tesseract /tmp/shot.png /tmp/ocr >/dev/null 2>&1 || true
+    OCRTXT="$(cat /tmp/ocr.txt 2>/dev/null || echo "")"
+    echo "----- OCR -----"; echo "${OCRTXT}" | head -20; echo "---------------"
+    if echo "${OCRTXT}" | grep -qiE "bulwark|home|checkups|scans|settings|activity|system|reference"; then
+      echo "OK: recognised real UI text on screen (the frontend mounted and painted)"
     else
-      echo "WARN: tesseract missing — text rendering not verified"
+      NALNUM="$(echo "${OCRTXT}" | tr -cd "[:alnum:]" | wc -c)"
+      echo "no known label matched; recognised alphanumeric characters: ${NALNUM}"
+      if [ "${NALNUM:-0}" -lt 30 ]; then
+        echo "FAIL: essentially no text on screen — the UI did not render its content"
+        fail=1
+      else
+        echo "OK: substantial text present, though no known label matched (UI copy may have changed)"
+      fi
     fi
   else
-    echo "WARN: could not capture a screenshot; rendering not verified"
+    echo "FAIL: could not capture a screenshot, so rendering was not verified"; fail=1
   fi
 
   # 5. It shuts down cleanly. A crash on the teardown path is still a crash the user meets
@@ -385,8 +393,11 @@ for spec in "${TARGETS[@]}"; do
     *) echo "unknown target: ${t}"; exit 2 ;;
   esac
   rc=$?
-  [[ ${rc} -eq 0 ]] && echo ">> ${t} on ${IMAGE:-default}: PASS" \
-    || { echo ">> ${t} on ${IMAGE:-default}: FAIL (rc=${rc})"; overall=1; }
+  if [[ ${rc} -eq 0 ]]; then
+    echo ">> ${t} on ${IMAGE:-default}: PASS"
+  else
+    echo ">> ${t} on ${IMAGE:-default}: FAIL (rc=${rc})"; overall=1
+  fi
 done
 
 echo

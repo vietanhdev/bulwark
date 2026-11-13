@@ -30,6 +30,37 @@ jobs:
           # packaging/flatpak/shared-modules is a submodule carrying the libappindicator
           # build chain; without this the manifest references a file that isn't there.
           submodules: true
+          # This job holds a token that can write releases, and it runs a generator cloned
+          # from another repository plus pip and npm packages. Nothing here pushes with git,
+          # so the token is not left in the checkout for them to find; the attach step at the
+          # end is handed it directly.
+          persist-credentials: false
+
+      # Before the build, not after it. The bundle is built from THIS checkout, whatever
+      # release_tag says, so a run started from a branch that has moved on would attach a
+      # bundle of a different version to that release. And a tag with no release behind it
+      # should fail here, not after the build.
+      - name: Check the release tag matches this checkout
+        if: ${{ github.event.inputs.release_tag != '' }}
+        env:
+          TAG: ${{ github.event.inputs.release_tag }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          if [ "v${version}" != "${TAG}" ]; then
+            echo "::error::this checkout builds ${version}, but release_tag is ${TAG}. Start the run from the tag (or from a commit at that version)."
+            exit 1
+          fi
+          # Finds a draft as well as a published release; fails if there is neither.
+          gh release view "${TAG}" --json tagName,isDraft \
+            --jq '"release \(.tagName) exists (draft: \(.isDraft))"'
+          # An annotated tag lists twice, and the peeled commit (^{}) sorts last.
+          tagged="$(git ls-remote origin "refs/tags/${TAG}" "refs/tags/${TAG}^{}" | sort -k2 | tail -n1 | cut -f1 || true)"
+          if [ "${tagged}" != "$(git rev-parse HEAD)" ]; then
+            echo "::warning::this checkout ($(git rev-parse --short HEAD)) is not the commit ${TAG} points at (${tagged:0:7}); the bundle is built from this checkout."
+          fi
 
       - name: Install flatpak + builder + generator deps
         run: |
@@ -95,7 +126,13 @@ jobs:
       - name: GUI launch test (the CLI smoke test cannot catch a GUI crash)
         run: |
           set -uo pipefail
-          sudo apt-get install -y -qq xvfb imagemagick x11-apps dbus >/dev/null
+          # A tool that failed to install must stop the test: every check below that needs
+          # it would otherwise be skipped or read as a failure of the app.
+          sudo apt-get install -y -qq xvfb imagemagick x11-apps dbus >/dev/null \
+            || { echo "FAIL: could not install the test tools"; exit 1; }
+          for t in Xvfb import identify dbus-daemon; do
+            command -v "$t" >/dev/null || { echo "FAIL: test tool $t is missing"; exit 1; }
+          done
           export DISPLAY=:99
           Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 &
           sleep 3
@@ -135,12 +172,13 @@ jobs:
           # a blank window; only the pixels disprove that. A rendered UI scores hundreds of
           # distinct colours, an empty one a handful.
           import -window root "$RUNNER_TEMP/shot.png" 2>/dev/null || true
-          if [ -f "$RUNNER_TEMP/shot.png" ]; then
+          if [ -s "$RUNNER_TEMP/shot.png" ]; then
             colors=$(identify -format "%k" "$RUNNER_TEMP/shot.png" 2>/dev/null || echo 0)
             echo "distinct colours on screen: ${colors}"
             [ "${colors:-0}" -lt 50 ] && { echo "FAIL: window is blank (${colors} colours)"; fail=1; }
           else
-            echo "WARN: no screenshot captured; rendering not verified"
+            # Not a warning: without the picture this is the test that passed on a blank window.
+            echo "FAIL: no screenshot could be captured, so rendering was not verified"; fail=1
           fi
 
           # Starting it again must hand over to the running app and exit, not open a second
@@ -172,9 +210,34 @@ jobs:
           path: bulwark.flatpak
           if-no-files-found: error
 
+      # `gh release upload`, not softprops/action-gh-release. That action, run without
+      # `draft: true`, takes the release OUT of draft once the upload is done (its own
+      # description: "omit it to publish after upload"), and creates a release when the tag
+      # has none. release.yml leaves every release as a draft to be looked at first, so
+      # attaching the Flatpak before publishing would have published it. `gh release upload`
+      # only adds assets: it works on a draft or a published release, changes neither, and
+      # fails if the release does not exist.
+      #
+      # The bundle's checksum goes into the release's SHA256SUMS as well. That file is
+      # written by release.yml before this bundle exists, so without this step the Flatpak is
+      # the one asset `sha256sum -c SHA256SUMS` cannot verify.
       - name: Attach bundle to release
         if: ${{ github.event.inputs.release_tag != '' }}
-        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
-        with:
-          tag_name: ${{ github.event.inputs.release_tag }}
-          files: bulwark.flatpak
+        env:
+          TAG: ${{ github.event.inputs.release_tag }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/release-sums"
+          rm -rf "$work"; mkdir -p "$work"
+          if ! gh release download "$TAG" --pattern SHA256SUMS --dir "$work" 2>"$work/err"; then
+            # A release with no SHA256SUMS yet is fine; any other failure is not.
+            grep -q "no assets match" "$work/err" || { cat "$work/err" >&2; exit 1; }
+            : > "$work/SHA256SUMS"
+          fi
+          # Replace an earlier line for the bundle (a second run for the same release).
+          { grep -v '  bulwark\.flatpak$' "$work/SHA256SUMS" || true; sha256sum bulwark.flatpak; } > "$work/new"
+          mv "$work/new" "$work/SHA256SUMS"
+          cat "$work/SHA256SUMS"
+          gh release upload "$TAG" bulwark.flatpak "$work/SHA256SUMS" --clobber

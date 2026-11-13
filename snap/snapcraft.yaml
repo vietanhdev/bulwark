@@ -220,5 +220,5 @@ parts:
 # NOTE on polkit: the standalone .deb/.rpm install polkit/com.bulwark.policy so
 # pkexec uses auth_admin (one prompt per scan). A classic snap cannot drop a file
 # into /usr/share/polkit-1/actions on the host, so a snap install falls back to
-# the distro default polkit action for pkexec. Document this for snap users, or
-# ship install-polkit.sh alongside — same opt-in caveat as the .deb today.
+# the distro default polkit action for pkexec. install-polkit.sh in the repository
+# is the manual route for snap users.

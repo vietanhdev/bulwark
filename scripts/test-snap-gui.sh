@@ -71,7 +71,7 @@ export DBUS_SESSION_BUS_ADDRESS
 # From a folder that is not the snap's: the bundle's WebKit finds its helper processes through
 # a relative path, so a launcher that forgot to change directory fails only when started from
 # somewhere else, which is how every user starts it.
-cd "$(mktemp -d)"
+cd "$(mktemp -d)" || exit 1
 bulwark >"$LOG" 2>&1 &
 APP_PID=$!
 sleep "$SETTLE"

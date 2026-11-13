@@ -57,6 +57,8 @@ PYTHONPATH="$TOOLS_DIR/node" python3 -m flatpak_node_generator npm \
 
 echo
 echo "Wrote:"
-ls -lh "$OUT/cargo-sources.json" "$OUT/node-sources.json" 2>/dev/null | awk '{print "  " $5, $NF}'
+for f in "$OUT/cargo-sources.json" "$OUT/node-sources.json"; do
+  echo "  $(du -h "$f" | cut -f1) $f"
+done
 echo "Generated files are gitignored here. Build with:"
 echo "  scripts/flatpak-build-local.sh"

@@ -1,8 +1,8 @@
 name: Publish Snap (GUI)
 
-# Manual publish; every run also builds + install-tests the snap. Publishing only
-# happens on workflow_dispatch — a push (branch test) builds and smoke-tests but
-# never uploads to the store.
+# Manual only (workflow_dispatch). Every run builds the snap, install-tests it, launches
+# its GUI, and then uploads it to the store; there is no build-only mode here. ci.yml's
+# snap-build job is the one that builds and tests without uploading, on every push.
 #
 # Required repository secret (publish only):
 #   SNAPCRAFT_STORE_CREDENTIALS — output of `snapcraft export-login`, for an
@@ -70,6 +70,11 @@ jobs:
         run: scripts/test-snap-gui.sh
 
       # snapcraft reads the login from SNAPCRAFT_STORE_CREDENTIALS; no action needed for that.
+      # This is the command snapcore/action-publish ran (`snapcraft upload <file> --release
+      # <channel>`, with the same variable), and what snapcraft documents: `--release` takes
+      # a comma-separated list of channels, and the command waits for the store's review.
+      # It exits 1 while the store holds a classic snap for manual review, which is the state
+      # today (packaging/README.md, "What the store says today").
       - name: Publish snap
         if: github.event_name == 'workflow_dispatch'
         env:
