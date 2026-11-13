@@ -228,6 +228,13 @@ pub trait Collector: Send + Sync {
         false
     }
 
+    /// False for a collector that exists only as a placeholder on every system. Its rules are
+    /// reported as not applicable, like a rule skipped on WSL, instead of as a check that
+    /// "couldn't run here" on every scan: there is nothing the user could do to make it run.
+    fn implemented(&self) -> bool {
+        true
+    }
+
     fn collect(&self) -> anyhow::Result<Vec<Fact>>;
 }
 

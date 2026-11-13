@@ -28,6 +28,10 @@ impl Collector for WindowsRunKeysCollector {
         WINDOWS_ONLY
     }
 
+    fn implemented(&self) -> bool {
+        false
+    }
+
     fn is_applicable(&self) -> bool {
         // Never true today — see module docs. Once a real Windows dev/CI machine is
         // available, this becomes "can the registry actually be queried," matching the
