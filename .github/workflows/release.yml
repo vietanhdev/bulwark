@@ -609,8 +609,10 @@ jobs:
   # was built rather than on exit codes: the CLI must run a real scan that evaluates checks on that
   # OS, and the app bundle must carry a real (non-empty) CLI sidecar and the rule pack.
   #
-  # Both apps are new and not yet code-signed or notarized; the release notes say so, so nobody is
-  # surprised by Gatekeeper's or SmartScreen's warning on first launch.
+  # The macOS app and CLI are signed by scripts/macos-sign.sh: with a Developer ID and notarized
+  # when the Apple secrets exist, ad-hoc otherwise (a complete signature, so macOS offers "Open
+  # Anyway" instead of calling the app damaged). Windows is not code-signed. The release notes say
+  # what to expect, so nobody is surprised by Gatekeeper's or SmartScreen's prompt on first launch.
   desktop-other:
     if: github.triggering_actor == 'vietanhdev'
     runs-on: ${{ matrix.runner }}
@@ -670,6 +672,26 @@ jobs:
       - name: Build the CLI
         run: cargo build --release -p bulwarkctl
 
+      # Developer ID signing and notarization when the Apple secrets exist, ad-hoc otherwise —
+      # see scripts/macos-sign.sh. The CLI is signed before the desktop build so the copy the app
+      # bundles as its sidecar carries the same signature.
+      - name: Set up macOS signing
+        if: matrix.os == 'macos'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: scripts/macos-sign.sh setup >> "$GITHUB_ENV"
+
+      - name: Sign and notarize the macOS CLI
+        if: matrix.os == 'macos'
+        env:
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: scripts/macos-sign.sh cli target/release/bulwarkctl
+
       - name: The CLI must run a real scan on this OS
         run: |
           set -euo pipefail
@@ -693,6 +715,8 @@ jobs:
           npx tauri build --bundles ${{ matrix.bundle }}
 
       - name: Collect and check artifacts
+        env:
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           V="${{ steps.version.outputs.version }}"
@@ -706,7 +730,10 @@ jobs:
             "$APP/Contents/MacOS/bulwark" --version
             n=$(find "$APP/Contents/Resources" -name '*.yaml' | wc -l); echo "rule files: $n"
             [ "$n" -ge 50 ] || { echo "::error::app ships only $n rule files"; exit 1; }
-            cp target/release/bundle/dmg/*.dmg "dist/bulwark-desktop-${V}-macos-aarch64.dmg"
+            DMG="dist/bulwark-desktop-${V}-macos-aarch64.dmg"
+            cp target/release/bundle/dmg/*.dmg "$DMG"
+            scripts/macos-sign.sh dmg "$DMG"
+            scripts/macos-sign.sh verify "$APP" "$DMG" target/release/bulwarkctl
             tar -czf "dist/bulwarkctl-${V}-macos-aarch64.tar.gz" -C target/release bulwarkctl -C ../.. rules
           else
             SIDECAR="apps/bulwark-app/src-tauri/binaries/bulwark-x86_64-pc-windows-msvc.exe"
@@ -881,8 +908,10 @@ jobs:
 
             The macOS and Windows builds are new: their checks cover each system's core security
             settings (FileVault, Gatekeeper, SIP, firewall… / Defender, firewall, BitLocker, UAC,
-            RDP, SMBv1) plus the cross-platform credential checks, and they are **not yet
-            code-signed** — expect a Gatekeeper / SmartScreen prompt on first launch.
+            RDP, SMBv1) plus the cross-platform credential checks. The macOS app is not signed
+            with an Apple Developer ID yet: if macOS says it cannot verify the developer, allow it
+            under **System Settings → Privacy & Security → Open Anyway**. The Windows build is not
+            code-signed: in the SmartScreen prompt choose **More info → Run anyway**.
 
             Verify your download against `SHA256SUMS`:
             ```bash

@@ -15,11 +15,11 @@ app-id: com.vietanhdev.bulwark
 # 0.8.6 (a `vietanhnv` typo), which is what finally forced the rename.
 
 runtime: org.gnome.Platform
-runtime-version: '50'
+runtime-version: '51'
 sdk: org.gnome.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
-  - org.freedesktop.Sdk.Extension.node20
+  - org.freedesktop.Sdk.Extension.node22
 
 command: bulwark-app
 
@@ -127,9 +127,9 @@ modules:
   - name: bulwark
     buildsystem: simple
     build-options:
-      # rust-stable + node20 from the SDK extensions; offline caches wired per the
+      # rust-stable + node22 from the SDK extensions; offline caches wired per the
       # flatpak-builder-tools generators (module name 'bulwark' -> /run/build/bulwark).
-      append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/node20/bin
+      append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/node22/bin
       env:
         CARGO_HOME: /run/build/bulwark/cargo
         CARGO_NET_OFFLINE: 'true'
