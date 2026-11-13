@@ -877,9 +877,12 @@ pub fn render(scan: &ScanRun, ignores: &Ignores, opts: &ReportOptions) -> String
             st.bold("sudo bulwarkctl scan --privileged")
         ));
     }
+    // `rules_loaded` already leaves out the rules that do not apply here (`rules_not_applicable`),
+    // so they are not subtracted again: doing so hid that many undecided checks (on WSL, every
+    // scan under-reported by the number of WSL-skipped rules).
     let undecided = scan
         .rules_loaded
-        .saturating_sub(scan.rules_evaluated.len() + scan.rules_not_applicable.len())
+        .saturating_sub(scan.rules_evaluated.len())
         .saturating_sub(need_admin);
     if undecided > 0 {
         gaps.push(format!(
@@ -1234,7 +1237,7 @@ mod tests {
         let evaluated: Vec<String> = (0..7).map(|i| format!("R{i}")).collect();
         let mut s: ScanRun = serde_json::from_value(json!({
             "id": NIL, "started_at": NOW, "finished_at": NOW, "host_fingerprint": "host/6.8",
-            "rules_loaded": 10, "rule_load_errors": [], "collector_errors": [],
+            "rules_loaded": 9, "rule_load_errors": [], "collector_errors": [],
             "privileged_collectors_skipped": ["sudoers"], "rules_evaluated": evaluated,
             "rules_not_applicable": ["NA"], "findings": [],
         }))
@@ -1293,7 +1296,7 @@ mod tests {
         assert!(r.find("SSH private key").unwrap() < r.find("A dev service").unwrap());
         assert!(!r.contains("No banner"));
         assert!(r.contains("and 1 low-priority suggestion — run with --all"));
-        // Honest footer: admin-only areas, and checks that couldn't run (10 - 7 - 1 = 2).
+        // Honest footer: admin-only areas, and checks that couldn't run (9 loaded, which leaves out the one that does not apply, minus 7 that ran = 2).
         assert!(r.contains("1 check area needs admin rights"), "{r}");
         assert!(r.contains("2 checks couldn't run here"), "{r}");
         assert!(!r.contains('\x1b'), "no colour when not asked");
@@ -1337,8 +1340,18 @@ mod tests {
     }
 
     #[test]
+    fn rules_that_do_not_apply_are_not_subtracted_twice() {
+        // On WSL, rules skipped there are already left out of `rules_loaded`. Subtracting them
+        // again hid that many checks that really could not run.
+        let mut s = scan(vec![]);
+        s.rules_not_applicable = (0..5).map(|i| format!("WSL{i}")).collect();
+        let r = render(&s, &Ignores::default(), &opts(false));
+        assert!(r.contains("2 checks couldn't run here"), "{r}");
+    }
+
+    #[test]
     fn checks_that_need_admin_rights_are_counted_once() {
-        // 10 loaded, 7 ran, 1 not applicable; the 2 left are both admin-only. The footer used to
+        // 9 loaded (the one not applicable is not among them), 7 ran; the 2 left are both admin-only. The footer used to
         // say "1 check area needs admin rights" and then "2 checks couldn't run here" as well.
         let mut s = scan(vec![]);
         s.rules_needing_admin = vec!["P1".into(), "P2".into()];

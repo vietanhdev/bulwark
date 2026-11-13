@@ -400,10 +400,21 @@ pub fn run_scan_with_custom<'a>(
     let mut cancelled = false;
 
     let (all_rules, rule_load_errors) = load_rule_packs(rules_dir, custom_rules_dir);
+    // A rule whose collector is only a placeholder (`Collector::implemented`) is set aside the same
+    // way as a rule that does not apply to this host: it can never run, so it is neither counted
+    // as a check nor reported as one that "couldn't run here".
+    let placeholders: Vec<&str> = collectors
+        .iter()
+        .filter(|c| !c.implemented())
+        .map(|c| c.name())
+        .collect();
     let (rules, skipped): (Vec<LoadedRule>, Vec<LoadedRule>) = all_rules
         .into_iter()
         .filter(|r| rule_matches_profile(&r.rule, profile))
-        .partition(|r| !skipped_on_this_host(&r.rule, profile));
+        .partition(|r| {
+            !skipped_on_this_host(&r.rule, profile)
+                && !placeholders.contains(&r.rule.collector.as_str())
+        });
     let rules_not_applicable: Vec<String> = skipped.into_iter().map(|r| r.rule.id).collect();
 
     let mut needed: HashMap<&str, ()> = HashMap::new();
@@ -793,6 +804,37 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_placeholder_collectors_rules_are_not_applicable_not_undecided() {
+        struct Placeholder;
+        impl Collector for Placeholder {
+            fn name(&self) -> &'static str {
+                "placeholder"
+            }
+            fn implemented(&self) -> bool {
+                false
+            }
+            fn is_applicable(&self) -> bool {
+                false
+            }
+            fn collect(&self) -> anyhow::Result<Vec<crate::models::Fact>> {
+                anyhow::bail!("not implemented")
+            }
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("p.yaml"),
+            "id: BLWK-TEST-900\ntitle: t\ncategory: c\nseverity: low\ncollector: placeholder\n\
+             condition: a == 1\nexplain: e\nfix: f\n",
+        )
+        .unwrap();
+        let collectors: Vec<Box<dyn Collector>> = vec![Box::new(Placeholder)];
+        let scan = run_scan(tmp.path(), &collectors, false, &linux_profile());
+        assert_eq!(scan.rules_loaded, 0, "never counted as a check");
+        assert_eq!(scan.rules_not_applicable, vec!["BLWK-TEST-900".to_string()]);
+        assert!(scan.rules_evaluated.is_empty() && scan.collector_errors.is_empty());
+    }
     use std::io::Write;
 
     #[test]
