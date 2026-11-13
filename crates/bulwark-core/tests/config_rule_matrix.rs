@@ -102,6 +102,74 @@ fn ssh_root_login_002_and_empty_passwords_003() {
     );
 }
 
+/// SSH-005/007/009 read directives that take more than yes/no. Each used to match the literal
+/// "yes" only, so `AllowTcpForwarding all` (which `sshd -T` itself prints as `yes`) was silent.
+#[test]
+fn ssh_forwarding_rules_005_007_009_cover_every_enabling_value() {
+    let s = |v: &str| Value::String(v.into());
+    for (rule_id, field, fire, quiet) in [
+        (
+            "BLWK-SSH-005",
+            "allow_tcp_forwarding",
+            &["yes", "all", "local", "remote"][..],
+            &["no"][..],
+        ),
+        (
+            "BLWK-SSH-007",
+            "permit_tunnel",
+            &["yes", "point-to-point", "ethernet"][..],
+            &["no"][..],
+        ),
+        (
+            "BLWK-SSH-009",
+            "gateway_ports",
+            &["yes", "clientspecified"][..],
+            &["no"][..],
+        ),
+    ] {
+        for value in fire {
+            assert!(
+                fires("sshd_config", vec![fact(&[(field, s(value))])], rule_id),
+                "{rule_id} should FIRE on {field} = {value}"
+            );
+        }
+        for value in quiet {
+            assert!(
+                !fires("sshd_config", vec![fact(&[(field, s(value))])], rule_id),
+                "{rule_id} should stay QUIET on {field} = {value}"
+            );
+        }
+    }
+}
+
+/// The benign side of the same change: the multi-valued directives the other SSH rules read keep
+/// their narrow meaning. Root login by key only is not "root login permitted", and an
+/// environment allowlist is not the blanket `yes`.
+#[test]
+fn ssh_rules_stay_quiet_on_the_restricted_values() {
+    let s = |v: &str| Value::String(v.into());
+    for value in [
+        "prohibit-password",
+        "without-password",
+        "forced-commands-only",
+        "no",
+    ] {
+        assert!(
+            !fires(
+                "sshd_config",
+                vec![fact(&[("permit_root_login", s(value))])],
+                "BLWK-SSH-002"
+            ),
+            "BLWK-SSH-002 should stay QUIET on PermitRootLogin {value}"
+        );
+    }
+    assert!(!fires(
+        "sshd_config",
+        vec![fact(&[("permit_user_environment", s("lang,lc_*"))])],
+        "BLWK-SSH-006"
+    ));
+}
+
 #[test]
 fn ssh_private_key_012_and_013_three_state() {
     let key = |enc: Value, known: bool| {

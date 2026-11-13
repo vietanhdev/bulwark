@@ -112,6 +112,93 @@ fn sshd_hardening_via_config_flag_is_idempotent() {
     assert_eq!(after2.matches("# BEGIN bulwark-hardening").count(), 1);
 }
 
+/// The tester's sequence: copy the config, apply twice, compare the backup with the copy. The
+/// second run used to overwrite the one backup with the already-changed file, add a blank line,
+/// and keep announcing the same "would set … (was yes)" lines for ever.
+#[test]
+fn sshd_hardening_applied_twice_keeps_the_original_backup_and_then_has_nothing_to_do() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg = home.path().join("sshd_config");
+    let original = "\n# site config\nX11Forwarding yes\nAllowTcpForwarding yes\nPort 22\n";
+    fs::write(&cfg, original).unwrap();
+    let args = ["sshd", "--apply", "--config", cfg.to_str().unwrap()];
+
+    let (out, ok) = run_fix(home.path(), &args);
+    assert!(ok && out.contains("Applied."), "first apply:\n{out}");
+    let after_first = fs::read_to_string(&cfg).unwrap();
+
+    for _ in 0..3 {
+        let (out, ok) = run_fix(home.path(), &args);
+        assert!(ok, "{out}");
+        assert!(!out.contains("Applied."), "nothing left to apply:\n{out}");
+        assert!(
+            !out.contains("X11Forwarding") && !out.contains("AllowTcpForwarding"),
+            "still planning a fix that is done:\n{out}"
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(&cfg).unwrap(),
+        after_first,
+        "a run with nothing to do must not rewrite the file"
+    );
+
+    let backups: Vec<PathBuf> =
+        fs::read_dir(home.path().join(".local/share/bulwark/sshd-config-backups"))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+    assert_eq!(
+        backups.len(),
+        1,
+        "one applied change, one backup: {backups:?}"
+    );
+    assert_eq!(fs::read_to_string(&backups[0]).unwrap(), original);
+
+    // The preview and `fix sshd` agree that the safe set is done.
+    let (out, _) = run_fix(home.path(), &["sshd", "--config", cfg.to_str().unwrap()]);
+    assert!(!out.contains("would set: X11Forwarding"), "preview:\n{out}");
+    assert!(
+        !out.contains("would set: AllowTcpForwarding"),
+        "preview:\n{out}"
+    );
+}
+
+/// `fix sshd --apply --include-auth`, then a plain `fix sshd --apply` (what `fix all --apply` runs):
+/// the second must not take `PasswordAuthentication no` back out of the managed block.
+#[test]
+fn a_plain_sshd_fix_after_include_auth_keeps_password_logins_off() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg = home.path().join("sshd_config");
+    fs::write(&cfg, "PasswordAuthentication yes\nPermitRootLogin yes\n").unwrap();
+    let path = cfg.to_str().unwrap();
+
+    let (out, ok) = run_fix(
+        home.path(),
+        &["sshd", "--apply", "--include-auth", "--config", path],
+    );
+    assert!(ok, "{out}");
+    // A new insecure line appears below afterwards, so the plain run has something to write.
+    let mut text = fs::read_to_string(&cfg).unwrap();
+    text.push_str("X11Forwarding yes\n");
+    fs::write(&cfg, text).unwrap();
+
+    let (out, ok) = run_fix(home.path(), &["sshd", "--apply", "--config", path]);
+    assert!(ok && out.contains("set: X11Forwarding no"), "{out}");
+    let text = fs::read_to_string(&cfg).unwrap();
+    let block = text.split("# END bulwark-hardening").next().unwrap();
+    for kept in [
+        "PasswordAuthentication no",
+        "PermitRootLogin no",
+        "X11Forwarding no",
+    ] {
+        assert!(
+            block.contains(kept),
+            "`{kept}` must be in the block:\n{block}"
+        );
+    }
+    assert_eq!(text.matches("# BEGIN bulwark-hardening").count(), 1);
+}
+
 #[test]
 fn sshd_lockout_directives_are_opt_in() {
     let home = tempfile::tempdir().unwrap();

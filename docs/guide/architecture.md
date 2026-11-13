@@ -189,7 +189,7 @@ flowchart LR
 
 **Alerts** (`bulwarkctl notify …`, GUI Settings → Alerts) are the one other place Bulwark sends anything off the machine, and only once the user configures a channel. `fleet::alerts_for_attempt` decides *when* (new issues above a severity, unreachable after three failures — not every blip — back online, and identity/host-key changes immediately), the CLI delivers through the system `curl` (Telegram Bot API over HTTPS; SMTP with TLS required except to a localhost relay), and a round of scans produces one message per channel. Settings are in the database; the bot token and SMTP password are in a separate `0600` `notify-secrets.json` and reach curl over stdin, never argv. A delivery failure never fails a scan; it is recorded and shown in the app.
 
-**Autofixes** (`bulwarkctl fix …`, plus `ssh protect` and `ai redact`) turn the safe, mechanical subset of each finding's one-line `fix` into a one-command remediation. The logic is in `bulwark-core::remediation` (filesystem-only, still no network): `permissions.rs` tightens over-permissive modes for `~/.ssh` (user-scoped) and sensitive `/etc` files (root), and `sshd.rs` hardens `sshd_config`. Every fixer follows the same discipline the existing `ssh_keys` passphrase fix and `ai_scan` redaction already do — **dry-run by default**, reversible (permission changes record the prior mode; the sshd rewrite keeps a backup and validates with `sshd -t` before keeping it, rolling back on failure), never widens access, never follows a symlink, and fails loud. The sshd rewrite inserts an idempotent `# BEGIN/END bulwark-hardening` block at the **top** of the file so that under OpenSSH's first-value-wins semantics it beats any `Include` drop-in without editing them, and only writes a directive when the effective config is actually insecure per the matching `BLWK-SSH-*` rule. The two directives that can lock an operator out of a password-only box (`PasswordAuthentication no`, `PermitRootLogin no`) are gated behind an explicit `--include-auth` and excluded from `fix all`.
+**Autofixes** (`bulwarkctl fix …`, plus `ssh protect` and `ai redact`) turn the safe, mechanical subset of each finding's one-line `fix` into a one-command remediation. The logic is in `bulwark-core::remediation` (filesystem-only, still no network): `permissions.rs` tightens over-permissive modes for `~/.ssh` (user-scoped) and sensitive `/etc` files (root), and `sshd.rs` hardens `sshd_config`. Every fixer follows the same discipline the existing `ssh_keys` passphrase fix and `ai_scan` redaction already do — **dry-run by default**, reversible (permission changes record the prior mode; the sshd rewrite keeps a backup and validates with `sshd -t` before keeping it, rolling back on failure), never widens access, never follows a symlink, and fails loud. The sshd rewrite inserts an idempotent `# BEGIN/END bulwark-hardening` block at the **top** of the file so that under OpenSSH's first-value-wins semantics it beats any `Include` drop-in without editing them, and only writes a directive when the effective config is actually insecure per the matching `BLWK-SSH-*` rule. It plans against the config as sshd reads it now, managed block included, so a second run writes nothing; when it does rewrite the block it keeps every line already there, and each rewrite is backed up under a new timestamped name. A directive set in a `Match all` block is out of its reach (sshd copies those values over the global ones) and is reported, not written. The two directives that can lock an operator out of a password-only box (`PasswordAuthentication no`, `PermitRootLogin no`) are gated behind an explicit `--include-auth` and excluded from `fix all`.
 
 ---
 
@@ -412,6 +412,7 @@ The CLI path is identical minus the Tauri/React layer: `bulwarkctl` calls `bulwa
 | A collector hangs (e.g. a spawned process never returns) | Low | Whole scan stalls | Per-collector timeout (5s default) | Collector reported as timed-out; scan continues without it |
 | Host has an unusual layout (non-systemd init, non-Debian distro) | Medium (v1 targets Debian/Ubuntu) | Irrelevant checks or false negatives | Each collector declares its own applicability precondition (e.g. "requires systemd") | Collector skips gracefully, excluded from coverage stats — never reported as false "clean" |
 | A collector's fact shape changes (new fields added) | Realized once, fixed | Would silently duplicate existing findings on the next scan | Reconciliation tests (`reconcile_tolerates_a_collector_gaining_new_context_fields`) | Subset-match reconciliation (§5), not exact-string context equality |
+| An sshd drop-in the scan may not read (`sshd_config.d/50-cloud-init.conf` is mode `600` on cloud images) | Realized, fixed | The unreadable file was skipped, so an ordinary scan reported the SSH settings of the *other* files as the whole truth and closed the findings a root scan had opened | A matched `Include` file that cannot be read fails the collector; a permission error on an unprivileged scan is listed under `privileged_collectors_skipped` ("needs admin rights"), any other read error is a collector error | The SSH rules are not evaluated for that scan, so nothing is reported and nothing is resolved |
 | **The rule pack can't be found** — mistyped `--rules-dir`, emptied directory, mispackaged build | Realized, fixed | A scan of *nothing* reported as a clean host: exit 0, empty findings, no error — and persisting it resolved every open finding, wiping the dashboard | `rules_loaded == 0` is now a hard error in both front-doors (`rules_dir_guard.rs`) | An explicit `--rules-dir`/`BULWARK_RULES_DIR` that isn't a directory fails outright rather than falling back to the auto-detected pack |
 
 That last row is the invariant of §8 in its purest form. "0 findings" from a scan that evaluated
@@ -420,6 +421,36 @@ indistinguishable from a genuinely healthy host, which makes it the most dangero
 can say. The log pipeline had guarded against it since it shipped; the config scan did not, and a
 rules directory that simply wasn't there produced a confident, silent, green result. Both front-doors
 now refuse.
+
+### How `sshd_config` is read
+
+The SSH rules judge the value sshd uses, not the text of one file, so the collector applies sshd's
+own rules. Each was taken from `sshd_config(5)` and OpenSSH's `servconf.c` and checked against
+`sshd -T` on a real server (the two `ssh-includes-*` end-to-end fixtures keep a sample of them).
+
+```mermaid
+flowchart TD
+  L["Next line"] --> T["Split it like sshd: quotes removed,<br/>trailing comment dropped, Key Value or Key=Value,<br/>keyword in any case"]
+  T --> M{"Match line?"}
+  M -->|"Match all"| GA["Lines below apply to every connection<br/>and override the global value"]
+  M -->|"any other Match"| C["Lines below are conditional:<br/>skipped until the next Match"]
+  M -->|"no"| I{"Include?"}
+  I -->|"yes"| G["Expand every pattern on the line:<br/>glob wildcards, relative to /etc/ssh,<br/>files in name order"]
+  G -->|"a matched file cannot be read"| U["Result undetermined:<br/>SSH rules are not evaluated"]
+  G -->|"read"| L
+  I -->|"no"| V["Keep the first value seen<br/>for the keyword"]
+```
+
+- A directive that is absent has OpenSSH's compiled-in default, so `PasswordAuthentication` is
+  `yes` on a file that never mentions it.
+- A conditional `Match` block (one user, group or address) never changes the host-wide value. A
+  `Match` inside an included file ends with that file.
+- `Match all` matches every connection. sshd copies what such a block sets over the global values,
+  so `PasswordAuthentication no` followed by `Match all` and `PasswordAuthentication yes` accepts
+  passwords. Keywords that are not allowed in a `Match` block (`StrictModes`,
+  `PermitUserEnvironment`) are the exception: there the first line wins as usual.
+- Bytes that are not UTF-8 are replaced, not refused: one Latin-1 character in a comment must not
+  hide the lines around it.
 
 ---
 
@@ -660,7 +691,7 @@ Uninstalling via the package manager removes the binary only. The local SQLite f
   3. **HIPAA's `standard` / `required` / `addressable` distinction is preserved.** Under 45 CFR §164.306(c)–(d) an *addressable* implementation specification may be satisfied by a documented equivalent alternative, so a failing addressable control is a prompt to produce that documentation rather than automatically a violation — and the UI must not present it identically to a failing required one.
 
   **CIS is mapping only.** CIS control IDs appear as coverage annotations on rules and are never given a compliance percentage or level, which CIS's non-member terms forbid representing. MITRE ATT&CK likewise carries no ratio: it is a technique taxonomy, not a compliance standard.
-- [ ] An `sshd -T` (effective-config, defaults-resolved) collector path — the current `sshd_config` collector only sees directives explicitly written to the file, so a directive relying on its OpenSSH-compiled-in default is invisible to every SSH rule. Needs a real `sshd` binary to dogfood against; not yet done.
+- [ ] An `sshd -T` (effective-config, defaults-resolved) collector path. The `sshd_config` collector reads the files itself and applies sshd's own rules (see "How `sshd_config` is read" in §8): compiled-in defaults, first value wins, `Include` patterns, `Match all`. It was compared with `sshd -T` on OpenSSH 9.6 case by case, but it still cannot see a default a distribution patched into its sshd binary, or a keyword a newer OpenSSH adds. Asking the installed `sshd` would close that; not yet done.
 - [x] ~~Real macOS/Windows collectors~~ — **implemented**, each verified on a real machine of that OS; see §17. One Windows collector (registry Run keys) is still a skeleton.
 - [ ] Persisting the GUI's active profile ("needs") selection across restarts, and threading it through to the background monitoring loop (which currently always scans with the default profile — see §17 and `monitoring.rs`'s `run_tick`).
 

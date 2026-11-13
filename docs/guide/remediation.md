@@ -48,10 +48,22 @@ Each fixer is reversible and never widens access:
 - **`fix etc-perms`** pins sensitive `/etc` files (`shadow` `640`, `sudoers` `440`, `sshd_config`
   `600`) when they're world- or group-writable. Needs root.
 - **`fix sshd`** hardens `/etc/ssh/sshd_config` to clear the SSH findings (X11/TCP forwarding off,
-  `MaxAuthTries`, …) by inserting one managed block at the top of the file, backing up the original
+  `MaxAuthTries`, …) by inserting one managed block at the top of the file, backing up the file
   and validating with `sshd -t` before keeping it. The two directives that can lock you out —
   `PasswordAuthentication no` and `PermitRootLogin no` — are opt-in behind `--include-auth` and
   excluded from `fix all`.
+
+  Running it again is safe. It plans against the settings sshd obeys now (drop-ins and the managed
+  block included), so once a run has applied, the next one finds nothing to do and writes nothing.
+  When there is something new to set, the block keeps every line it already has: a plain
+  `fix sshd` or `fix all` never removes what an earlier `--include-auth` run set. Each run that
+  changes the file first saves a copy under a new timestamped name in
+  `~/.local/share/bulwark/sshd-config-backups/`, so the oldest file there is your original.
+  Deleting the block (and the blank line after it) also restores it.
+
+  One case it cannot fix: a directive set inside a `Match all` block. sshd applies that block
+  after everything else, so a line at the top of the file does not win. `fix sshd` names the
+  directive and leaves it for you to change in that block.
 - **`ssh protect`** adds one passphrase to every unencrypted key in `~/.ssh` at once, backing each up
   first — far better than leaving plaintext keys on disk.
 

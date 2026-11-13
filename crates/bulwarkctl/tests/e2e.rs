@@ -199,6 +199,16 @@ macro_rules! e2e_scenario {
 
 e2e_scenario!(ssh_weak_config_is_detected, "ssh-weak");
 e2e_scenario!(ssh_hardened_config_produces_no_findings, "ssh-hardened");
+// Weak values that reach sshd through drop-ins, quoting, comments and `Match all` — and the same
+// syntax on a hardened server, where none of it may be read as a weak value.
+e2e_scenario!(
+    ssh_weak_values_in_includes_and_match_all_are_detected,
+    "ssh-includes-weak"
+);
+e2e_scenario!(
+    ssh_hardened_config_with_misleading_syntax_produces_no_findings,
+    "ssh-includes-hardened"
+);
 e2e_scenario!(
     cron_downloader_pipe_to_shell_is_detected,
     "cron-curl-pipe-sh"
