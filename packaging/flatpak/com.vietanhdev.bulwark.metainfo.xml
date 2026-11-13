@@ -108,6 +108,23 @@
   </branding>
 
   <releases>
+    <release version="0.16.0" date="2026-11-14">
+      <description>
+        <p>Fewer false alarms, checks that find what they missed, and a safer scan of untrusted folders.</p>
+        <ul>
+          <li>Scanning a folder never runs anything from it. A downloaded repository could make the AI scan run a command through its own git settings; Bulwark no longer starts git at all</li>
+          <li>A finding never shows a credential. A token in an MCP server address or an agent's allow list used to appear in the explanation</li>
+          <li>Keys followed by a full stop, a comma or a bracket are found, and so are keys late in a long chat transcript</li>
+          <li>The SSH checks read sshd_config the way sshd does: comments, quotes, several drop-in folders, Match all, and files only an administrator may read</li>
+          <li>Passwordless sudo, cron jobs that download and run a script, and tunnels started from systemd are found in the forms they were missed in, on Fedora and openSUSE as well as Debian and Ubuntu</li>
+          <li>SSH attacks logged by OpenSSH 9.8 and later are recognised</li>
+          <li>Fewer findings on a stock server: settings that are the system's default and are not a way in by themselves are now low priority, and a file only an administrator may read is not reported as a failed check</li>
+          <li>Fix all applies only changes that cannot surprise you, a fix never adds a permission, and fixing one SSH setting no longer reports the others as new</li>
+          <li>Redacting a key never rewrites a file outside the agent's folder or loses lines from a session that is still running</li>
+          <li>The app no longer shows a green result for a check that never ran</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.15.0" date="2026-11-10">
       <description>
         <p>A simpler app in three tabs, a Secrets page that shows where your credentials live, and new checks for developer machines.</p>
