@@ -144,17 +144,87 @@ fn local_host(h: &str) -> bool {
 
 // ---- Git ----------------------------------------------------------------------------------------
 
+/// `text` without a leading byte-order mark. A Windows editor writes one, the tool that owns the
+/// file reads past it, and a parser that does not sees a first line that is not what it says: a
+/// `.npmrc` starting `<BOM>strict-ssl=false` used to be read as setting nothing.
+fn without_bom(text: &str) -> &str {
+    text.strip_prefix('\u{feff}').unwrap_or(text)
+}
+
+/// A Git config value as Git reads it (git-config(1), "Syntax"): leading white space dropped, a
+/// `#` or `;` outside double quotes starts a comment, trailing white space outside quotes is
+/// dropped, the quotes themselves go, and `\"`, `\\`, `\n`, `\t` are escapes.
+///
+/// The comment characters need no space before them. `sslVerify = false ; note` and
+/// `sslVerify = false<TAB># note` both set `false`; reading only ` #` as a comment turned the
+/// first into the value `false ; note`, which is not `false`, and the setting went unreported.
+fn git_config_value(raw: &str) -> String {
+    let mut out = String::new();
+    // Length of `out` up to the last character that must be kept (anything quoted, or not a
+    // space).
+    let mut keep = 0;
+    let mut quoted = false;
+    let mut chars = raw.trim_start().chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                quoted = !quoted;
+                keep = out.len();
+            }
+            '\\' => {
+                match chars.next() {
+                    Some('n') => out.push('\n'),
+                    Some('t') => out.push('\t'),
+                    Some(other) => out.push(other),
+                    None => {}
+                }
+                keep = out.len();
+            }
+            '#' | ';' if !quoted => break,
+            c => {
+                out.push(c);
+                if quoted || !c.is_whitespace() {
+                    keep = out.len();
+                }
+            }
+        }
+    }
+    out.truncate(keep);
+    out
+}
+
 /// Parses a Git config file (INI with `[section]` / `[section "sub"]` headers, case-insensitive
-/// section and key names).
+/// section and key names), following git-config(1): a variable may follow its section header on
+/// the same line, a line ending in a backslash continues on the next, and a `#` or `;` outside
+/// quotes starts a comment anywhere on a line.
 pub(crate) fn parse_git_config(text: &str) -> Flags {
     let mut f = Flags::default();
     let (mut section, mut sub) = (String::new(), None::<String>);
-    for raw in text.lines() {
-        let line = raw.trim();
+    let mut continued = String::new();
+    for raw in without_bom(text).lines() {
+        // A value can run on over several lines.
+        if let Some(head) = raw.strip_suffix('\\') {
+            continued.push_str(head);
+            continue;
+        }
+        let logical = std::mem::take(&mut continued) + raw;
+        let mut line = logical.trim();
         if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
             continue;
         }
-        if let Some(h) = line.strip_prefix('[').and_then(|l| l.split(']').next()) {
+        if let Some(after_bracket) = line.strip_prefix('[') {
+            // The header ends at the first `]` outside quotes: a subsection name is quoted and may
+            // contain one.
+            let mut quoted = false;
+            let Some(close) = after_bracket.char_indices().find_map(|(i, c)| {
+                if c == '"' {
+                    quoted = !quoted;
+                }
+                (c == ']' && !quoted).then_some(i)
+            }) else {
+                continue;
+            };
+            let h = &after_bracket[..close];
             let mut parts = h.splitn(2, char::is_whitespace);
             section = parts.next().unwrap_or("").to_ascii_lowercase();
             sub = parts
@@ -166,20 +236,34 @@ pub(crate) fn parse_git_config(text: &str) -> Flags {
                 section = s.to_string();
                 sub = Some(rest.to_string());
             }
-            continue;
+            // What follows the header on the same line is a variable like any other.
+            line = after_bracket[close + 1..].trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+                continue;
+            }
         }
-        let (key, value) = match line.split_once('=') {
-            Some((k, v)) => (k.trim().to_ascii_lowercase(), v.trim().to_string()),
-            // A bare key is boolean true.
-            None => (line.to_ascii_lowercase(), "true".to_string()),
+        // A name is letters, digits and `-`; then `= value`, or nothing at all (boolean true).
+        let name_end = line
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+            .unwrap_or(line.len());
+        let key = line[..name_end].to_ascii_lowercase();
+        let rest = line[name_end..].trim_start();
+        let value = match rest.strip_prefix('=') {
+            Some(v) => Some(git_config_value(v)),
+            None if rest.is_empty() || rest.starts_with(['#', ';']) => None,
+            None => continue,
         };
-        let value = value.split(" #").next().unwrap_or("").trim().to_string();
+        // No `=` at all is true; `=` with nothing after it is false, as Git reads it.
+        let off = value
+            .as_deref()
+            .is_some_and(|v| v.is_empty() || is_false(v));
+        let value = value.unwrap_or_else(|| "true".to_string());
         match (section.as_str(), sub.as_deref(), key.as_str()) {
-            ("http", None, "sslverify") if is_false(&value) => {
+            ("http", None, "sslverify") if off => {
                 f.ssl_verify_off = true;
                 f.detail = "http.sslVerify = false".into();
             }
-            ("safe", None, "directory") if value.trim_matches('"') == "*" => {
+            ("safe", None, "directory") if value == "*" => {
                 f.safe_directory_any = true;
             }
             ("protocol", None, "allow") if value.eq_ignore_ascii_case("always") => {
@@ -203,7 +287,7 @@ pub(crate) fn parse_git_config(text: &str) -> Flags {
 pub(crate) fn parse_ssh_client_config(text: &str) -> Flags {
     let mut f = Flags::default();
     let mut global = true;
-    for raw in text.lines() {
+    for raw in without_bom(text).lines() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
@@ -252,7 +336,7 @@ pub(crate) fn parse_ssh_client_config(text: &str) -> Flags {
 /// `.npmrc` (`key=value`) and yarn v1 `.yarnrc` (`key value`).
 pub(crate) fn parse_npmrc(text: &str) -> Flags {
     let mut f = Flags::default();
-    for raw in text.lines() {
+    for raw in without_bom(text).lines() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
             continue;
@@ -283,7 +367,7 @@ pub(crate) fn parse_npmrc(text: &str) -> Flags {
 pub(crate) fn parse_npm_user_practices(text: &str) -> Flags {
     let mut scripts_off = false;
     let mut cooldown = false;
-    for raw in text.lines() {
+    for raw in without_bom(text).lines() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
             continue;
@@ -309,7 +393,7 @@ pub(crate) fn parse_npm_user_practices(text: &str) -> Flags {
 /// bun's user-level waiting period: `[install] minimumReleaseAge`, in seconds, default off (bun's
 /// bunfig reference). `None` when the file is not valid TOML.
 pub(crate) fn parse_bun_user_practices(text: &str) -> Option<Flags> {
-    let table: toml::Table = text.parse().ok()?;
+    let table: toml::Table = without_bom(text).parse().ok()?;
     let set = table
         .get("install")
         .and_then(|i| i.get("minimumReleaseAge"))
@@ -325,7 +409,7 @@ pub(crate) fn parse_bun_user_practices(text: &str) -> Option<Flags> {
 /// uv's user-level waiting period: top-level `exclude-newer`, a timestamp or a duration such as
 /// "1 week"; `false` or absent means off (uv's settings reference). `None` for invalid TOML.
 pub(crate) fn parse_uv_user_practices(text: &str) -> Option<Flags> {
-    let table: toml::Table = text.parse().ok()?;
+    let table: toml::Table = without_bom(text).parse().ok()?;
     let set = table
         .get("exclude-newer")
         .and_then(|v| v.as_str())
@@ -401,7 +485,7 @@ fn uses_npm(home: &Path) -> bool {
 /// Yarn Berry `.yarnrc.yml`: `enableStrictSsl: false`, `npmRegistryServer: "http://…"`.
 pub(crate) fn parse_yarnrc_yml(text: &str) -> Flags {
     let mut f = Flags::default();
-    for raw in text.lines() {
+    for raw in without_bom(text).lines() {
         let line = raw.trim();
         let Some((k, v)) = line.split_once(':') else {
             continue;
@@ -425,7 +509,7 @@ pub(crate) fn parse_yarnrc_yml(text: &str) -> Flags {
 pub(crate) fn parse_pip_conf(text: &str) -> Flags {
     let mut f = Flags::default();
     let mut current: Option<String> = None;
-    for raw in text.lines() {
+    for raw in without_bom(text).lines() {
         if raw.trim().is_empty() || raw.trim_start().starts_with('#') {
             continue;
         }
@@ -476,7 +560,7 @@ pub(crate) fn parse_pip_conf(text: &str) -> Flags {
 /// reporting it from the config as well would show one problem twice. A loopback binding is
 /// invisible to those rules, yet still lets any program or user on this computer become root.
 pub(crate) fn parse_docker_daemon_json(text: &str) -> Option<Flags> {
-    let v: Value = serde_json::from_str(text).ok()?;
+    let v: Value = serde_json::from_str(without_bom(text)).ok()?;
     let mut f = Flags::default();
     let tls_verify = v.get("tlsverify").and_then(Value::as_bool).unwrap_or(false);
     let local: Vec<String> = v
@@ -503,7 +587,7 @@ pub(crate) fn parse_docker_daemon_json(text: &str) -> Option<Flags> {
 
 /// Docker Desktop's settings: "Expose daemon on tcp://localhost:2375 without TLS".
 pub(crate) fn parse_docker_desktop_settings(text: &str) -> Option<Flags> {
-    let v: Value = serde_json::from_str(text).ok()?;
+    let v: Value = serde_json::from_str(without_bom(text)).ok()?;
     let mut f = Flags::default();
     let on = v.as_object().is_some_and(|o| {
         o.iter().any(|(k, val)| {
@@ -865,6 +949,82 @@ mod tests {
         let ordinary = "[user]\n\tname = A\n\temail = a@example.com\n[core]\n\teditor = vim\n\
                         [http]\n\tpostBuffer = 524288000\n\tsslVerify = true\n[init]\n\tdefaultBranch = main\n";
         assert_eq!(parse_git_config(ordinary), Flags::default());
+    }
+
+    #[test]
+    fn git_comments_start_at_a_hash_or_a_semicolon_with_or_without_a_space() {
+        // Missed before: only " #" was read as the start of a comment.
+        for off in [
+            "[http]\n\tsslVerify = false ; temp workaround\n",
+            "[http]\n\tsslVerify = false\t# temp\n",
+            "[http]\n\tsslVerify = false;note\n",
+            "[http]\n\tsslVerify = false#note\n",
+            "[http]\n\tsslVerify = \"false\" ; quoted\n",
+            "[http]\r\n\tsslVerify = false ; crlf\r\n",
+            "[HTTP]\nsslverify=no\n",
+            // A variable may follow its section header on the same line.
+            "[http] sslVerify = false\n",
+            "[http] sslVerify = false ; note\n",
+            // An empty value is false to Git; a continued line is one line.
+            "[http]\n\tsslVerify =\n",
+            "[http]\n\tsslVerify = \\\n\t\tfalse\n",
+            // Behind a byte-order mark.
+            "\u{feff}[http]\n\tsslVerify = false\n",
+        ] {
+            assert!(parse_git_config(off).ssl_verify_off, "{off:?}");
+        }
+        for on in [
+            // Commented out, or not `false` at all.
+            "[http]\n\t# sslVerify = false\n",
+            "[http]\n\t; sslVerify = false\n",
+            "[http]\n\tsslVerify = true ; was false\n",
+            "[http]\n\tsslVerify = true # false\n",
+            "[http]\n\tsslVerify\n",
+            // A `;` or `#` inside quotes is part of the value, so this is not `false`.
+            "[http]\n\tsslVerify = \"false ; not a comment\"\n",
+            // Scoped to one host: a deliberate, narrow choice.
+            "[http \"https://git.corp.invalid\"] sslVerify = false\n",
+            "[http \"https://h.invalid/a]b\"]\n\tsslVerify = false\n",
+            "[core] editor = vim\n",
+        ] {
+            assert!(!parse_git_config(on).ssl_verify_off, "{on:?}");
+        }
+        assert_eq!(git_config_value(" a b  # c"), "a b");
+        assert_eq!(git_config_value(" \"a ; b\"  ; c"), "a ; b");
+        assert_eq!(git_config_value("x \" y \" "), "x  y ");
+        assert_eq!(git_config_value("a\\\"b"), "a\"b");
+        assert!(parse_git_config("[safe]\n\tdirectory = \"*\" ; everything\n").safe_directory_any);
+        assert!(!parse_git_config("[safe]\n\tdirectory = /srv/repo ; *\n").safe_directory_any);
+        assert!(
+            parse_git_config("[protocol \"ext\"]\n\tallow = always# why\n").ext_protocol_allowed
+        );
+    }
+
+    #[test]
+    fn a_byte_order_mark_does_not_hide_the_first_setting() {
+        assert!(parse_npmrc("\u{feff}strict-ssl=false\nignore-scripts=true\n").strict_ssl_off);
+        assert!(parse_npmrc("\u{feff}registry=http://registry.corp.invalid/\n").http_registry);
+        assert!(
+            !parse_npm_user_practices("\u{feff}ignore-scripts=true\nmin-release-age=7\n")
+                .install_scripts_auto
+        );
+        assert!(parse_yarnrc_yml("\u{feff}enableStrictSsl: false\n").strict_ssl_off);
+        assert!(parse_ssh_client_config("\u{feff}StrictHostKeyChecking no\n").host_key_checks_off);
+        assert!(
+            parse_pip_conf("\u{feff}[global]\ntrusted-host = pypi.corp.invalid\n").trusted_host
+        );
+        assert!(
+            parse_docker_desktop_settings("\u{feff}{\"exposeDockerAPIOnTCP2375\": true}")
+                .unwrap()
+                .docker_api_unprotected
+        );
+        assert!(
+            !parse_bun_user_practices("\u{feff}[install]\nminimumReleaseAge = 604800\n")
+                .unwrap()
+                .no_release_cooldown
+        );
+        // And nothing is invented for a file that sets nothing.
+        assert_eq!(parse_npmrc("\u{feff}"), Flags::default());
     }
 
     #[test]

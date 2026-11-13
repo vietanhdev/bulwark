@@ -145,17 +145,143 @@ pub fn docker_config_summary(text: &str) -> Option<(usize, bool)> {
     Some((inline, creds_store))
 }
 
-fn shell_assignment_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        // `export NAME=value`, `NAME=value`, fish `set -gx NAME value`, csh `setenv NAME value`.
-        Regex::new(
-            // `NAME=value` (optionally after `export`) needs the `=`; only fish/csh forms take a
-            // space, so an ordinary command such as `load_api_key prod-key-2024` never matches.
-            r#"^\s*(?:(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=|(?:set\s+-[a-zA-Z]*x[a-zA-Z]*|setenv)\s+([A-Za-z_][A-Za-z0-9_]*)\s+)(['"]?)([^'"\s]*)['"]?\s*(?:#.*)?$"#,
-        )
-        .expect("valid regex")
-    })
+/// One shell line as its commands, each a list of words: quotes group and are removed, a
+/// backslash escapes, `;`, `|` and `&` end a command, an unquoted `#` at the start of a word ends
+/// the line. A `$(…)` or a backquoted command stays in its word as written, so a value that is
+/// computed still shows the `$` or backquote that says so.
+fn shell_commands(line: &str) -> Vec<Vec<String>> {
+    let mut commands = vec![Vec::new()];
+    let mut word = String::new();
+    let mut started = false;
+    let mut chars = line.chars().peekable();
+    let end_word = |word: &mut String, started: &mut bool, commands: &mut Vec<Vec<String>>| {
+        if std::mem::take(started) {
+            if let Some(last) = commands.last_mut() {
+                last.push(std::mem::take(word));
+            }
+        }
+    };
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => {
+                started = true;
+                word.extend(chars.by_ref().take_while(|n| *n != '\''));
+            }
+            '"' => {
+                started = true;
+                while let Some(n) = chars.next() {
+                    match n {
+                        '"' => break,
+                        '\\' => word.extend(chars.next()),
+                        _ => word.push(n),
+                    }
+                }
+            }
+            '\\' => {
+                started = true;
+                word.extend(chars.next());
+            }
+            '$' if chars.peek() == Some(&'(') => {
+                started = true;
+                word.push('$');
+                let mut depth = 0;
+                for n in chars.by_ref() {
+                    word.push(n);
+                    match n {
+                        '(' => depth += 1,
+                        ')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            '`' => {
+                started = true;
+                word.push('`');
+                for n in chars.by_ref() {
+                    word.push(n);
+                    if n == '`' {
+                        break;
+                    }
+                }
+            }
+            '#' if !started => break,
+            ';' | '|' | '&' => {
+                end_word(&mut word, &mut started, &mut commands);
+                commands.push(Vec::new());
+            }
+            c if c.is_whitespace() => end_word(&mut word, &mut started, &mut commands),
+            c => {
+                started = true;
+                word.push(c);
+            }
+        }
+    }
+    end_word(&mut word, &mut started, &mut commands);
+    commands.retain(|c| !c.is_empty());
+    commands
+}
+
+/// `NAME=value` as (name, value), when `word` is a shell assignment.
+fn as_assignment(word: &str) -> Option<(&str, &str)> {
+    let (name, value) = word.split_once('=')?;
+    let mut chars = name.chars();
+    let first = chars.next()?;
+    ((first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_'))
+    .then_some((name, value))
+}
+
+/// Every variable a shell line sets, as (name, value): `NAME=value`, `export A=1 B=2`,
+/// `declare -x NAME=value` (and `typeset`, `local`, `readonly`), several commands on one line
+/// (`export A=1; export B=2`), assignments in front of a command (`A=1 B=2 make`), fish's
+/// `set -gx NAME value` and csh's `setenv NAME value`.
+///
+/// One anchored pattern per line used to stand in for this, and it saw only the first assignment
+/// of a line, and only after `export` or nothing.
+fn shell_assignments(line: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for words in shell_commands(line) {
+        let mut rest = words.as_slice();
+        match rest.first().map(String::as_str) {
+            Some("export" | "declare" | "typeset" | "local" | "readonly") => {
+                rest = &rest[1..];
+                while rest.first().is_some_and(|w| w.starts_with(['-', '+'])) {
+                    rest = &rest[1..];
+                }
+            }
+            // fish: only an exported variable (`-x` among the options) reaches other programs.
+            Some("set") => {
+                let options = rest[1..].iter().take_while(|w| w.starts_with('-')).count();
+                let exported = rest[1..1 + options]
+                    .iter()
+                    .any(|w| w == "--export" || (!w.starts_with("--") && w.contains('x')));
+                if let (true, [name, value, ..]) = (exported, &rest[1 + options..]) {
+                    out.push((name.clone(), value.clone()));
+                }
+                continue;
+            }
+            Some("setenv") => {
+                if let [_, name, value, ..] = rest {
+                    out.push((name.clone(), value.clone()));
+                }
+                continue;
+            }
+            _ => {}
+        }
+        // Assignments come first; the first word that is not one is the command, and what
+        // follows it are its arguments (`echo TOKEN=x` sets nothing).
+        out.extend(
+            rest.iter()
+                .map_while(|w| as_assignment(w))
+                .map(|(name, value)| (name.to_string(), value.to_string())),
+        );
+    }
+    out
 }
 
 fn powershell_assignment_re() -> &'static Regex {
@@ -167,6 +293,29 @@ fn powershell_assignment_re() -> &'static Regex {
         )
         .expect("valid regex")
     })
+}
+
+/// Name endings that say the value is not itself a secret: where one is kept, what kind it is,
+/// an identifier that goes with it.
+const NOT_A_VALUE: &[&str] = &[
+    "_FILE",
+    "_PATH",
+    "_DIR",
+    "_URL",
+    "_HELPER",
+    "_CMD",
+    "_COMMAND",
+    "_TYPE",
+    "_REGION",
+    "_NAME",
+    "_ENDPOINT",
+    "_HOST",
+    "_ID",
+];
+
+fn names_a_non_secret(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    NOT_A_VALUE.iter().any(|s| upper.ends_with(s))
 }
 
 /// Whether an environment variable name says it holds a secret.
@@ -182,22 +331,7 @@ fn secret_like_name(name: &str) -> bool {
         "ACCESS_KEY",
         "PRIVATE_KEY",
     ];
-    const NOT_A_VALUE: &[&str] = &[
-        "_FILE",
-        "_PATH",
-        "_DIR",
-        "_URL",
-        "_HELPER",
-        "_CMD",
-        "_COMMAND",
-        "_TYPE",
-        "_REGION",
-        "_NAME",
-        "_ENDPOINT",
-        "_HOST",
-        "_ID",
-    ];
-    MARKERS.iter().any(|m| upper.contains(m)) && !NOT_A_VALUE.iter().any(|s| upper.ends_with(s))
+    MARKERS.iter().any(|m| upper.contains(m)) && !names_a_non_secret(name)
 }
 
 /// Whether a literal looks like a real credential rather than a flag, path, reference or
@@ -230,24 +364,46 @@ fn credential_like_value(value: &str) -> bool {
         .any(|p| lower.contains(p))
 }
 
+/// Whether `value` is a key in a provider's own format — the same high-confidence patterns that
+/// find keys in shell history (CRED-010). This is what catches a key whose variable name says
+/// nothing (`ANTHROPIC_KEY`), and one made of letters only (a Hugging Face token), neither of
+/// which the name-and-shape test above can see. The name goes in with the value because some
+/// provider patterns need it beside the key.
+fn provider_key(name: &str, value: &str) -> bool {
+    // No provider's key is shorter, and most settings in a startup file are.
+    value.len() >= 16
+        && !crate::ai_scan::secrets::scan_text_high_confidence(&format!("{name}={value}\n"))
+            .is_empty()
+}
+
+/// Whether setting `name` to `value` writes a secret into the file: the value is a literal (not
+/// empty, not computed, not another variable), the name does not say it is something else (a
+/// path, an ID), and either the name and the value's shape say "secret" or the value is a key in
+/// a provider's format.
+fn is_exported_secret(name: &str, value: &str) -> bool {
+    let literal = !value.is_empty() && !value.contains('$') && !value.contains('`');
+    literal
+        && !names_a_non_secret(name)
+        && ((secret_like_name(name) && credential_like_value(value)) || provider_key(name, value))
+}
+
 /// Names (never values) of secret-like variables a shell startup file sets to a literal.
 pub fn exported_secret_names(text: &str) -> Vec<String> {
-    let lines = || text.lines().filter(|l| !l.trim_start().starts_with('#'));
-    let mut names: Vec<String> = lines()
-        .filter_map(|l| shell_assignment_re().captures(l))
-        .filter_map(|c| {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let mut names = Vec::new();
+    for line in text.lines().filter(|l| !l.trim_start().starts_with('#')) {
+        let powershell = powershell_assignment_re().captures(line).and_then(|c| {
             let name = c.get(1).or_else(|| c.get(2))?.as_str();
-            (secret_like_name(name) && credential_like_value(&c[4])).then(|| name.to_string())
-        })
-        .collect();
-    names.extend(
-        lines()
-            .filter_map(|l| powershell_assignment_re().captures(l))
-            .filter_map(|c| {
-                let name = c.get(1).or_else(|| c.get(2))?.as_str();
-                (secret_like_name(name) && credential_like_value(&c[4])).then(|| name.to_string())
-            }),
-    );
+            Some((name.to_string(), c[4].to_string()))
+        });
+        names.extend(
+            shell_assignments(line)
+                .into_iter()
+                .chain(powershell)
+                .filter(|(name, value)| is_exported_secret(name, value))
+                .map(|(name, _)| name),
+        );
+    }
     names.sort();
     names.dedup();
     names
@@ -855,6 +1011,129 @@ alias token='op read op://dev/token123456789/credential'
             "{:?}",
             exported_secret_names(benign)
         );
+    }
+
+    /// Random letters and digits of a given length, from a seed (no key-shaped literal in source).
+    fn random(seed: u64, len: usize, alphabet: &str) -> String {
+        let chars: Vec<char> = alphabet.chars().collect();
+        let mut x = seed | 1;
+        (0..len)
+            .map(|_| {
+                x ^= x >> 12;
+                x ^= x << 25;
+                x ^= x >> 27;
+                chars[(x.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 33) as usize % chars.len()]
+            })
+            .collect()
+    }
+
+    const LETTERS: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+    #[test]
+    fn shell_startup_finds_a_provider_key_whatever_the_variable_is_called_or_how_it_is_set() {
+        let alnum = format!("{LETTERS}0123456789");
+        let anthropic = format!("sk-ant-api03-{}AA", random(1, 93, &alnum));
+        // A Hugging Face token is letters only: no digit for the shape test to see.
+        let hugging_face = format!("hf_{}", random(2, 34, LETTERS));
+        let gitlab = format!("glpat-{}", random(3, 20, &alnum));
+        for (line, expected) in [
+            // A name with no marker in it.
+            (format!("export ANTHROPIC_KEY={anthropic}"), "ANTHROPIC_KEY"),
+            (format!("export CLAUDE={anthropic}"), "CLAUDE"),
+            (format!("export HF_TOKEN={hugging_face}"), "HF_TOKEN"),
+            // Not the first assignment on the line.
+            (
+                format!("export FOO=1 GITLAB_TOKEN={gitlab}"),
+                "GITLAB_TOKEN",
+            ),
+            (format!("export X_TOKEN={gitlab}; export Y=1"), "X_TOKEN"),
+            (
+                format!("export Y=1 && export X_TOKEN=\"{gitlab}\""),
+                "X_TOKEN",
+            ),
+            // Other ways to set and export a variable.
+            (format!("declare -x GITLAB_TOKEN={gitlab}"), "GITLAB_TOKEN"),
+            (
+                format!("typeset -x GITLAB_TOKEN='{gitlab}'"),
+                "GITLAB_TOKEN",
+            ),
+            (format!("readonly GITLAB_TOKEN={gitlab}"), "GITLAB_TOKEN"),
+            (
+                format!("  export GITLAB_TOKEN={gitlab}  # gl"),
+                "GITLAB_TOKEN",
+            ),
+            (
+                format!("FOO=1 GITLAB_TOKEN={gitlab} some-command --flag"),
+                "GITLAB_TOKEN",
+            ),
+            (format!("set -gx GITLAB_TOKEN {gitlab}"), "GITLAB_TOKEN"),
+            (
+                format!("set --export --global GITLAB_TOKEN {gitlab}"),
+                "GITLAB_TOKEN",
+            ),
+            (format!("setenv GITLAB_TOKEN {gitlab}"), "GITLAB_TOKEN"),
+            (format!("$env:CLAUDE = '{anthropic}'"), "CLAUDE"),
+            // Behind a byte-order mark.
+            (
+                format!("\u{feff}export GITLAB_TOKEN={gitlab}"),
+                "GITLAB_TOKEN",
+            ),
+        ] {
+            let found = exported_secret_names(&format!("{line}\n"));
+            assert_eq!(found, [expected], "{}", line.split('=').next().unwrap());
+            for key in [&anthropic, &hugging_face, &gitlab] {
+                assert!(!found.join(",").contains(key.as_str()));
+            }
+        }
+    }
+
+    #[test]
+    fn shell_startup_stays_silent_on_values_that_are_not_stored_secrets() {
+        let alnum = format!("{LETTERS}0123456789");
+        let gitlab = format!("glpat-{}", random(3, 20, &alnum));
+        let benign = format!(
+            "\
+export PATH=$HOME/bin:/usr/local/bin:$PATH
+export GITHUB_TOKEN=$(gh auth token)
+export X=\"$(pass show dev/token)\"
+export ANTHROPIC_KEY=`security find-generic-password -s anthropic -w`
+export HF_TOKEN=$HF_TOKEN_FROM_KEYCHAIN
+export GITLAB_TOKEN=${{GITLAB_TOKEN}}
+export X_TOKEN=
+export Y_TOKEN=\"\"
+# export GITLAB_TOKEN={gitlab}
+   # GITLAB_TOKEN={gitlab}
+export EDITOR=vim LANG=en_US.UTF-8 PAGER=less
+export FOO=1; export BAR=2
+declare -x TERM=xterm-256color
+set -gx fish_greeting
+set -g GITLAB_TOKEN_LOCAL_NOTE unset
+echo GITLAB_TOKEN={gitlab}
+alias gl='GITLAB_TOKEN={gitlab} glab'
+export GITLAB_TOKEN_FILE=/run/secrets/gitlab-token-0123456789abcdef
+export AWS_ACCESS_KEY_ID={}
+",
+            fake_akia()
+        );
+        assert!(
+            exported_secret_names(&benign).is_empty(),
+            "{:?}",
+            exported_secret_names(&benign)
+        );
+        // The splitting itself.
+        assert_eq!(
+            shell_assignments("export A=1 B='x y' C=\"p;q\"; D=2 cmd E=3 # F=4"),
+            [("A", "1"), ("B", "x y"), ("C", "p;q"), ("D", "2")]
+                .map(|(n, v)| (n.to_string(), v.to_string()))
+        );
+        assert_eq!(
+            shell_assignments("export T=$(op read 'op://v/i/f' | tr -d ' ')"),
+            [(
+                "T".to_string(),
+                "$(op read 'op://v/i/f' | tr -d ' ')".to_string()
+            )]
+        );
+        assert!(shell_assignments("if [ -z \"$X\" ]; then").is_empty());
     }
 
     #[test]

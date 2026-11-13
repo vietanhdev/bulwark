@@ -612,9 +612,15 @@ fn scan_artifact(artifact: &Artifact, ctx: &ScanContext) -> Checked {
     let mut key_seen: HashSet<(usize, String, String)> = HashSet::new();
     let mut detections: Vec<detectors::Detection> = Vec::new();
     let mut too_large_to_parse = false;
+    let mut capped_windows = 0usize;
+    let mut unparsed: Option<String> = None;
 
     let coverage = chunks::for_each_window(&mut file, meta.len(), MAX_FILE_SCAN_BYTES, |window| {
-        for mut key in secrets::scan_text_high_confidence_in(Some(&path_text), &window.text) {
+        let scan = secrets::scan_high_confidence(Some(&path_text), &window.text);
+        if scan.more {
+            capped_windows += 1;
+        }
+        for mut key in scan.matches {
             key.line += window.first_line - 1;
             // Windows overlap, so a key near a boundary is seen twice: once is enough.
             if key_seen.insert((key.line, key.rule_id.clone(), key.redacted.clone())) {
@@ -625,6 +631,14 @@ fn scan_artifact(artifact: &Artifact, ctx: &ScanContext) -> Checked {
             // A settings file is one document: it is parsed only when all of it is here.
             if window.index == 0 && window.last && window.text.len() <= MAX_DOCUMENT_BYTES {
                 detections.extend(document_detections(artifact, &window.text));
+                // A settings file that does not parse yields no settings findings; say so rather
+                // than let it read as checked and clean.
+                unparsed = agent_settings::unparsed_config(
+                    artifact.tool,
+                    artifact.kind,
+                    &artifact.path,
+                    &window.text,
+                );
             } else {
                 too_large_to_parse = true;
             }
@@ -665,6 +679,17 @@ fn scan_artifact(artifact: &Artifact, ctx: &ScanContext) -> Checked {
              leaked keys were looked for in it",
             meta.len().div_ceil(1024 * 1024),
             MAX_DOCUMENT_BYTES / (1024 * 1024),
+        ));
+    }
+    if let Some(why) = unparsed {
+        out.gaps.push(format!("{shown}: {why}"));
+    }
+    if capped_windows > 0 {
+        out.gaps.push(format!(
+            "{shown}: holds more than {} keys in one stretch of the file; only the first {} of \
+             each such stretch are listed",
+            secrets::MAX_SECRETS_PER_TEXT,
+            secrets::MAX_SECRETS_PER_TEXT,
         ));
     }
     keys.sort_by_key(|k| k.line);
@@ -1674,6 +1699,32 @@ mod tests {
             .findings
             .iter()
             .all(|f| f.file.contains(&target.path().display().to_string())));
+    }
+
+    #[test]
+    fn a_settings_file_that_does_not_parse_is_reported_not_passed() {
+        // Cut off half-way through its hooks block: none of its settings can be checked, and the
+        // scan has to say so instead of reading as clean.
+        let home = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        write(
+            &target.path().join(".claude/settings.json"),
+            "{\n  \"hooks\": {\"SessionStart\": [\n",
+        );
+        let opts = AiScanOptions {
+            explicit_targets: vec![target.path().to_path_buf()],
+            ..AiScanOptions::for_home(home.path().to_path_buf())
+        };
+        let report = scan(&opts, |_| {});
+        assert!(report.findings.is_empty(), "{:?}", report.findings);
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("settings.json") && e.contains("not valid JSON")),
+            "{:?}",
+            report.errors
+        );
     }
 
     #[test]

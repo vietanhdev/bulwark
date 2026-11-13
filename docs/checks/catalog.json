@@ -1846,7 +1846,7 @@
    "title": "An MCP server runs an unpinned package from a registry",
    "category": "ai-agents",
    "severity": "high",
-   "explain": "An MCP server launched via an unpinned `npx`/`uvx` package.",
+   "explain": "An MCP server launched from a registry package with no exact version (`npx`, `npm exec`, `pnpm dlx`, `yarn dlx`, `bunx`, `uvx`, `uv tool run`, `pipx run`). A range (`@^1`) or a tag (`@latest`) is not a pin.",
    "fix": "Pin the MCP server to an exact version so it can't change without you knowing.\n1. Replace the \"@latest\" or unversioned package with an exact version, for example @scope/pkg@1.2.3.\n2. Check that the publisher is one you trust.\n3. Update it deliberately, the way you update other dependencies.",
    "references": [
     "ATTACK-T1195.001"
@@ -1861,7 +1861,7 @@
    "title": "An MCP server uses mcp-remote (critical command-injection ≤ 0.1.15)",
    "category": "ai-agents",
    "severity": "high",
-   "explain": "An MCP server using `mcp-remote` (command-injection ≤ 0.1.15).",
+   "explain": "An MCP server using `mcp-remote` (command-injection ≤ 0.1.15), unless it is pinned to 0.1.16 or later.",
    "fix": "Upgrade mcp-remote to ≥ 0.1.16 and pin it. A malicious MCP endpoint could otherwise inject OS commands via the OAuth metadata (CVE-2025-6514).",
    "references": [
     "CVE-2025-6514"
@@ -1876,7 +1876,7 @@
    "title": "An MCP server launches via a shell interpreter",
    "category": "ai-agents",
    "severity": "high",
-   "explain": "An MCP server wrapped in a shell interpreter (`bash -c …`).",
+   "explain": "An MCP server wrapped in a shell interpreter (`bash -c …`, `sh -lc …`, `pwsh -Command …`).",
    "fix": "Replace a `bash -c`/`sh -c` MCP command with a direct executable + args. Wrapping a server in a shell turns any string in its config into an execution surface.",
    "references": [
     "ATTACK-T1059.004"
@@ -1891,7 +1891,7 @@
    "title": "An agent permission allowlist permits arbitrary command execution",
    "category": "ai-agents",
    "severity": "high",
-   "explain": "A permission allowlist that permits arbitrary execution (`Bash(*)`, `Shell(*)`, `run_shell_command`, a blanket `bash: allow`).",
+   "explain": "A permission allowlist that permits arbitrary execution: everything (`Bash(*)`, `Shell(*)`, `run_shell_command`, a blanket `bash: allow`), or a shell, interpreter, downloader, package runner or `rm` with nothing fixed about what it is given (`Bash(curl *)`, `Bash(sh -c:*)`). One program doing its own job (`Bash(git log:*)`, `Bash(npx prettier:*)`) is not reported.",
    "fix": "Scope the allowlist: replace Bash(*) / Shell(*) / Bash(curl:*) / a bare \"*\" / a blanket \"bash\": \"allow\" with the specific, read-only commands the agent actually needs. A wildcard exec permission is a prompt-injection's path straight to your shell.",
    "references": [
     "ATTACK-T1059"
@@ -1981,7 +1981,7 @@
    "title": "An instruction file contains hidden Unicode characters",
    "category": "ai-agents",
    "severity": "high",
-   "explain": "Hidden Unicode in an instruction file: bidi controls that reorder what you see, invisible Tag characters that spell text only the model reads (shown decoded), or a long run of zero-width characters (the Rules File Backdoor, ASCII smuggling, GlassWorm).",
+   "explain": "Hidden Unicode in an instruction file: bidi controls that reorder what you see, invisible Tag characters that spell text only the model reads (shown decoded), a long run of zero-width characters, or zero-width characters threaded between the letters of ordinary text (the Rules File Backdoor, ASCII smuggling, GlassWorm).",
    "fix": "Open the file in an editor that shows invisible characters (in VS Code, turn on 'Render Control Characters' and 'Unicode Highlight'), delete the hidden characters, and check where the file came from. Three kinds are flagged: bidirectional controls (U+202A–202E, U+2066–2069) that reorder what you see, invisible Unicode Tag characters (U+E0000–E007F) that spell out text only the model reads, and long runs of zero-width characters or variation selectors that encode hidden data. All are known ways to smuggle instructions into an agent (Trojan Source, the Rules File Backdoor, GlassWorm).",
    "references": [
     "ATTACK-T1027"
@@ -2026,7 +2026,7 @@
    "title": "An AI credential file is readable by other users",
    "category": "ai-agents",
    "severity": "medium",
-   "explain": "A plaintext credential file readable by group/other.",
+   "explain": "A plaintext credential file readable by group/other; a `.env` or home config file holding a key that other accounts can actually read (the file and every folder above it are open to them).",
    "fix": "Make the file private so only you can read it.\n1. Run chmod 600 on this file.\n2. If the tool supports it, let it keep the token in your computer's keychain instead (macOS Keychain, GNOME Keyring or KWallet, Windows Credential Manager).",
    "references": [
     "ATTACK-T1552.001"
@@ -2041,7 +2041,7 @@
    "title": "A secret-bearing AI file is not covered by .gitignore",
    "category": "ai-agents",
    "severity": "high",
-   "explain": "A secret-bearing file in a git repo with no `.gitignore` rule covering it.",
+   "explain": "A secret-bearing file in a git repo that git already tracks, or that no `.gitignore` rule covers.",
    "fix": "Add this file to .gitignore (and, if it was already committed, git rm --cached it and rotate the credential). Sitting in a git repo without an ignore rule, a secret is one `git add .` away from being pushed — and stays in history forever.",
    "references": [
     "ATTACK-T1552.001"
@@ -2071,7 +2071,7 @@
    "title": "An MCP server connects to a remote endpoint with a plaintext token",
    "category": "ai-agents",
    "severity": "high",
-   "explain": "An MCP server connecting to a remote endpoint with a plaintext token in its config.",
+   "explain": "An MCP server connecting to a remote endpoint with a plaintext token in its config: in a header, or in the address itself (`?token=…`, `user:password@`). A reference such as `${API_TOKEN}` is not a stored token.",
    "fix": "Take the token out of the config file and give it to the tool when it runs.\n1. Replace the token with a reference to an environment variable, for example '${API_TOKEN}' in Claude Code's .mcp.json.\n2. Keep the token in a password manager and supply it at launch, for example with 'op run' or 'bws run'.\n3. Rotate the token that was in the file, since anyone who cloned the repository could have it.\n4. Make sure you trust this remote server: it sees every request your AI agent sends to it.",
    "references": [
     "ATTACK-T1552.001",
@@ -2087,7 +2087,7 @@
    "title": "An MCP server runs a privileged or host-mounting container",
    "category": "ai-agents",
    "severity": "critical",
-   "explain": "An MCP server running a privileged or host-mounting container (`--privileged`, `-v /var/run/docker.sock`, `-v /:…`).",
+   "explain": "An MCP server running a privileged or host-mounting container (`--privileged`, the Docker socket or `/` mounted with `-v`, `--volume` or `--mount`).",
    "fix": "Remove --privileged, the Docker socket mount (-v /var/run/docker.sock), and any root-filesystem bind mount (-v /:…) from this MCP server's docker command. Each one hands the container — and thus anything the agent can drive through it — full control of the host.",
    "references": [
     "ATTACK-T1610",
@@ -2103,7 +2103,7 @@
    "title": "A filesystem MCP server is granted an over-broad root",
    "category": "ai-agents",
    "severity": "high",
-   "explain": "A filesystem MCP server granted an over-broad root (`/` or your whole home directory).",
+   "explain": "A filesystem MCP server granted an over-broad root: `/`, or a whole home directory by any name (`~`, `$HOME`, `/home/you`, `/Users/you`, `/root`, `C:\\Users\\you`).",
    "fix": "Scope the filesystem MCP server to the specific project directory it needs instead of / or your whole home directory. A broad root lets a prompt-injected agent read or write anything under it — including SSH keys, browser profiles, and other projects' secrets.",
    "references": [
     "ATTACK-T1083"

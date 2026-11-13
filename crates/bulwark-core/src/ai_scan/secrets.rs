@@ -259,11 +259,33 @@ struct Rule {
     path_re: OnceLock<Option<Regex>>,
     /// The rule's keywords, lowercased. See [`keyword_near`].
     keywords: Vec<String>,
+    /// A structure the regex alone cannot check. See [`Shape`].
+    shape: Shape,
+}
+
+/// What a match must look like beyond what its pattern says, for the two rules whose pattern
+/// accepts text that is plainly not a credential.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    /// The pattern is the whole test.
+    Any,
+    /// A PEM block: a header, a base64 body, a footer. See [`private_key_block`].
+    PrivateKey,
+    /// Three segments, the first two decoding to JSON objects. See [`plausible_jwt`].
+    Jwt,
 }
 
 impl Rule {
+    /// The pattern the scanner runs: the vendored one after both pack-build rewrites. Worked out
+    /// on first use, like the compile, so a scan pays only for the rules its text can match.
+    fn final_pattern(&self) -> String {
+        relax_terminator(&self.pattern)
+    }
+
     fn regex(&self) -> Option<&Regex> {
-        self.re.get_or_init(|| compile(&self.pattern).ok()).as_ref()
+        self.re
+            .get_or_init(|| compile(&self.final_pattern()).ok())
+            .as_ref()
     }
 
     /// Whether this rule applies to the file being scanned.
@@ -379,58 +401,135 @@ const PLACEHOLDER_VALUES: &[&str] = &[
     "null",
 ];
 
-/// Words that make an id read correctly once humanized: `aws-access-token` should render as
-/// "AWS access token", not "Aws access token".
-const ACRONYMS: &[(&str, &str)] = &[
+/// How the parts of a rule id are written for people. A rule id is lower-case words joined by
+/// hyphens (`npm-access-token`); a provider's name has its own spelling (`npm`, `xAI`,
+/// `OpenRouter`), which no capitalisation rule can guess. A key is one word of the id or several
+/// in a row (`new-relic`); the longest key that fits is used.
+const NAMES: &[(&str, &str)] = &[
+    // Terms.
     ("api", "API"),
-    ("aws", "AWS"),
-    ("gcp", "GCP"),
     ("jwt", "JWT"),
-    ("ssh", "SSH"),
-    ("pgp", "PGP"),
-    ("gpg", "GPG"),
     ("url", "URL"),
     ("id", "ID"),
     ("pat", "PAT"),
-    ("sso", "SSO"),
-    ("npm", "npm"),
-    ("pypi", "PyPI"),
+    ("ca", "CA"),
+    ("ai", "AI"),
+    ("scim", "SCIM"),
+    ("yaml", "YAML"),
     ("oauth", "OAuth"),
-    // Brand names whose capitalisation a first-letter rule gets wrong ("Github PAT").
+    ("cicd", "CI/CD"),
+    ("fine-grained", "fine-grained"),
+    ("long-lived", "long-lived"),
+    ("short-lived", "short-lived"),
+    // A misspelling in the vendored id, which has to stay as it is there.
+    ("personnal", "personal"),
+    // GitLab's own abbreviations.
+    ("ptt", "pipeline trigger token"),
+    ("rrt", "runner registration token"),
+    // Providers and tools.
+    ("1password", "1Password"),
+    ("age", "age"),
+    ("assemblyai", "AssemblyAI"),
+    ("aws", "AWS"),
+    ("aws-amazon-bedrock", "Amazon Bedrock"),
+    ("azure-ad", "Azure AD"),
+    ("cisco-meraki", "Cisco Meraki"),
+    ("clickhouse-cloud", "ClickHouse Cloud"),
+    ("cloudflare", "Cloudflare"),
+    ("curl", "curl"),
+    ("deepseek", "DeepSeek"),
+    ("defined-networking", "Defined Networking"),
+    ("digitalocean", "DigitalOcean"),
+    ("droneci", "Drone CI"),
+    ("easypost", "EasyPost"),
+    ("elevenlabs", "ElevenLabs"),
+    ("endorlabs", "Endor Labs"),
+    ("flyio", "Fly.io"),
+    ("frameio", "Frame.io"),
+    ("freshbooks", "FreshBooks"),
+    ("gcp", "GCP"),
     ("github", "GitHub"),
     ("gitlab", "GitLab"),
-    ("openai", "OpenAI"),
-    ("huggingface", "Hugging Face"),
-    ("digitalocean", "DigitalOcean"),
-    ("sendgrid", "SendGrid"),
-    ("mailchimp", "Mailchimp"),
+    ("gocardless", "GoCardless"),
+    ("grafana-cloud", "Grafana Cloud"),
     ("hashicorp", "HashiCorp"),
-    ("planetscale", "PlanetScale"),
+    ("hashicorp-tf", "HashiCorp Terraform"),
+    ("hubspot", "HubSpot"),
+    ("huggingface", "Hugging Face"),
     ("jfrog", "JFrog"),
+    ("kubernetes", "Kubernetes"),
+    ("kucoin", "KuCoin"),
+    ("launchdarkly", "LaunchDarkly"),
     ("linkedin", "LinkedIn"),
-    ("dockerhub", "Docker Hub"),
-    ("pagerduty", "PagerDuty"),
-    ("cloudflare", "Cloudflare"),
+    ("mailchimp", "Mailchimp"),
+    ("maxmind", "MaxMind"),
+    ("messagebird", "MessageBird"),
+    ("microsoft-teams", "Microsoft Teams"),
+    ("new-relic", "New Relic"),
+    ("npm", "npm"),
+    ("nuget", "NuGet"),
+    ("nvidia", "NVIDIA"),
+    ("nytimes", "New York Times"),
+    ("octopus-deploy", "Octopus Deploy"),
+    ("openai", "OpenAI"),
+    ("openrouter", "OpenRouter"),
+    ("openshift", "OpenShift"),
+    ("planetscale", "PlanetScale"),
+    ("posthog", "PostHog"),
+    ("privateai", "Private AI"),
+    ("pypi", "PyPI"),
+    ("rapidapi", "RapidAPI"),
+    ("readme", "ReadMe"),
+    ("rubygems", "RubyGems"),
+    ("sendgrid", "SendGrid"),
+    ("settlemint", "SettleMint"),
+    ("stability-ai", "Stability AI"),
+    ("sumologic", "Sumo Logic"),
+    ("togetherai", "Together AI"),
+    ("travisci", "Travis CI"),
+    ("vercel-ai-gateway", "Vercel AI Gateway"),
+    ("weights-and-biases", "Weights & Biases"),
+    ("xai", "xAI"),
 ];
 
+/// The most words of an id one [`NAMES`] key spans.
+const NAME_KEY_WORDS: usize = 3;
+
+/// A rule id as a name for people: `anthropic-api-key` → "Anthropic API key", `npm-access-token` →
+/// "npm access token". Only an ordinary first word gets a capital; a name from [`NAMES`] is
+/// already spelled the way its owner spells it.
 fn humanize(id: &str) -> String {
-    let words: Vec<String> = id
-        .split('-')
-        .map(|w| {
-            ACRONYMS
-                .iter()
-                .find(|(k, _)| *k == w)
-                .map(|(_, v)| (*v).to_string())
-                .unwrap_or_else(|| w.to_string())
-        })
-        .collect();
-    let mut s = words.join(" ");
-    if let Some(first) = s.chars().next() {
-        if first.is_lowercase() {
-            s = first.to_uppercase().collect::<String>() + &s[first.len_utf8()..];
+    let words: Vec<&str> = id.split('-').collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < words.len() {
+        let named = (1..=NAME_KEY_WORDS.min(words.len() - i))
+            .rev()
+            .find_map(|n| {
+                let key = words[i..i + n].join("-");
+                NAMES
+                    .iter()
+                    .find(|(k, _)| *k == key)
+                    .map(|(_, shown)| (n, *shown))
+            });
+        match named {
+            Some((n, shown)) => {
+                out.push(shown.to_string());
+                i += n;
+            }
+            None => {
+                let word = words[i];
+                // The first word of the name, when it is an ordinary word, starts the phrase.
+                let mut chars = word.chars();
+                out.push(match chars.next() {
+                    Some(first) if i == 0 => first.to_uppercase().chain(chars).collect(),
+                    _ => word.to_string(),
+                });
+                i += 1;
+            }
         }
     }
-    s
+    out.join(" ")
 }
 
 /// The rule pack, compiled once.
@@ -470,7 +569,13 @@ static PACK: LazyLock<Pack> = LazyLock::new(|| {
         }
 
         let high_conf = !r.id.starts_with("generic-");
+        let shape = match r.id.as_str() {
+            "private-key" => Shape::PrivateKey,
+            "jwt" => Shape::Jwt,
+            _ => Shape::Any,
+        };
         rules.push(Rule {
+            shape,
             provider: humanize(&r.id),
             id: r.id,
             pattern: drop_leading_wildcard(&pattern),
@@ -688,6 +793,239 @@ fn has_capture_group(pattern: &str) -> bool {
     false
 }
 
+/// The terminator 188 of the vendored patterns end with: after the key comes a quote (possibly
+/// escaped), whitespace, a `;`, a literal `\n` / `\r`, or the end of the line.
+const VENDORED_TERMINATOR: &str = r#"(?:\\?['"\x60]|[\s;]|\\[nr]|$)"#;
+
+/// How many fixed leading characters make a key "identified by its prefix". `hf_` and `r8_` are
+/// the shortest real ones; two (`ey` for a JWT, the `s.` branch of an old Vault token) is too
+/// little to tell a key from a word.
+const MIN_KEY_PREFIX: usize = 3;
+
+/// A character class with this many members or fewer is one fixed character written loosely
+/// (`[MC]`, or `s` under `(?i)`, which Unicode folds to three code points), not part of a key's
+/// body alphabet.
+const FIXED_CHAR_CLASS: u32 = 3;
+
+/// Lets a key that is identified by its own prefix end at ordinary punctuation.
+///
+/// The vendored terminator ([`VENDORED_TERMINATOR`]) accepts a key only when a quote, whitespace,
+/// `;` or the end of the line follows it. In a source file that is how a key ends. In a chat
+/// transcript or a shell history it is not: `my key is sk-ant-….`, `(the key sk-ant-…)`,
+/// `**sk-ant-…**`, `?key=AIza…&x=1` and `echo sk-ant-… | pbcopy` were all walked past, for every
+/// provider whose pattern carries the terminator — Anthropic, OpenAI, Google, Stripe, Groq,
+/// Hugging Face, npm, SendGrid, OpenRouter and some seventy more.
+///
+/// For a rule whose key starts with a fixed prefix (`sk-ant-api03-`, `hf_`, `AIza`) the terminator
+/// is not what identifies the key; the prefix is. All the terminator has to do there is make sure
+/// the key has *ended*: that `sk_live_` plus ten characters is not the front of a longer word, a
+/// file name or a function call. So for those rules, and only those, two more endings count:
+///
+/// 1. **One character that cannot continue a key, a word, a path or a call.** That is any
+///    character except:
+///    - the rule's own body alphabet (every character class inside its key group);
+///    - ASCII letters, digits, `_` and `-`, so a key never ends in the middle of a word;
+///    - `+`, `/` and `=`, so a prefix that happens to occur inside a base64 blob or a path does
+///      not become a key the moment the text reaches one of them;
+///    - an opening `(`, `[` or `{`: `GLC_CreateLightmapTextures(void)` is a function, and one of
+///      the non-secrets gitleaks records for the Grafana rule;
+///    - `.`, which gets the stricter rule below.
+/// 2. **A full stop that ends a sentence**: one to three dots followed by a character from (1),
+///    or by the end of the text. `…AA.` and `…AA...` end a key; `ico-7a38….png` (another recorded
+///    non-secret) and `key.method()` do not.
+///
+/// The vendored alternatives are kept and the new ones are added after them, so every match the
+/// original pattern finds, the rewritten one finds too
+/// (`relaxing_a_terminator_only_ever_adds_matches`).
+///
+/// Left exactly as vendored:
+///
+/// - **keyword-and-value rules** whose value has no prefix (`adafruit … = ([a-z0-9_-]{32})`, about
+///   a hundred of them) and the few whose key has no fixed start (a bare 40-hex Sourcegraph token,
+///   a Facebook token that starts with digits). Their value is any run of common characters of
+///   the right length; the terminator is what stops them matching inside a path, a hash or a
+///   longer identifier;
+/// - **a JWT** and the short `s.` Vault form, whose two fixed characters identify nothing;
+/// - anything this function cannot read with certainty. A rule that stays strict misses a key
+///   followed by a full stop; a rule relaxed by mistake reports things that are not keys.
+fn relax_terminator(pattern: &str) -> String {
+    use regex_syntax::hir::ClassUnicodeRange;
+    let Some(body) = pattern.strip_suffix(VENDORED_TERMINATOR) else {
+        return pattern.to_string();
+    };
+    let Some(mut not_an_ending) = prefixed_key_alphabet(body) else {
+        return pattern.to_string();
+    };
+    for c in ['.', '(', '[', '{'] {
+        not_an_ending.push(ClassUnicodeRange::new(c, c));
+    }
+    // What the vendored terminator accepts ends a key whatever the body's classes say: Fly.io's
+    // pattern has a `\s` inside the key, and a space after `…AA.` must still end the sentence.
+    if let Some(vendored_endings) = class_of(r#"[\s'"\x60;]"#) {
+        not_an_ending.difference(&vendored_endings);
+    }
+    let ending = negated_class(&not_an_ending);
+    let mut out = String::with_capacity(pattern.len() + 2 * ending.len() + 24);
+    out.push_str(body);
+    // The vendored alternatives first, unchanged, then the two new ones.
+    out.push_str(&VENDORED_TERMINATOR[..VENDORED_TERMINATOR.len() - 1]);
+    out.push('|');
+    out.push_str(&ending);
+    out.push_str(r"|\.{1,3}(?:");
+    out.push_str(&ending);
+    out.push_str("|$))");
+    out
+}
+
+/// For a pattern that ends with its key, and whose key starts with at least [`MIN_KEY_PREFIX`]
+/// fixed characters: every character that can occur in the key's body, plus the letters, digits
+/// and base64 characters a key may never end against (see [`relax_terminator`]). `None` for every
+/// other pattern.
+fn prefixed_key_alphabet(body: &str) -> Option<regex_syntax::hir::ClassUnicode> {
+    use regex_syntax::hir::{ClassUnicode, ClassUnicodeRange};
+    let hir = regex_syntax::parse(body).ok()?;
+    let key = trailing_capture(&hir)?;
+    if fixed_prefix(key).0 < MIN_KEY_PREFIX {
+        return None;
+    }
+    let mut alphabet = ClassUnicode::new(
+        [
+            ('A', 'Z'),
+            ('a', 'z'),
+            ('0', '9'),
+            ('_', '_'),
+            ('-', '-'),
+            ('+', '+'),
+            ('/', '/'),
+            ('=', '='),
+        ]
+        .map(|(a, b)| ClassUnicodeRange::new(a, b)),
+    );
+    body_classes(key, &mut alphabet)?;
+    Some(alphabet)
+}
+
+/// The capture group a pattern ends with — the key, sitting right before the terminator. `None`
+/// when the pattern ends with anything else. Deliberately not "capture group 1": a few vendored
+/// patterns capture part of their keyword first (`sonar[_.-]?(login|token)`), and that group says
+/// nothing about how the key is written.
+fn trailing_capture(hir: &regex_syntax::hir::Hir) -> Option<&regex_syntax::hir::Hir> {
+    use regex_syntax::hir::HirKind;
+    match hir.kind() {
+        HirKind::Capture(c) => Some(&c.sub),
+        HirKind::Concat(parts) => parts
+            .iter()
+            .rev()
+            .find(|part| !matches!(part.kind(), HirKind::Look(_)))
+            .and_then(|last| match last.kind() {
+                HirKind::Capture(c) => Some(&*c.sub),
+                _ => None,
+            }),
+        _ => None,
+    }
+}
+
+fn class_size(class: &regex_syntax::hir::ClassUnicode) -> u32 {
+    class
+        .ranges()
+        .iter()
+        .map(|r| r.end() as u32 - r.start() as u32 + 1)
+        .sum()
+}
+
+/// How many fixed characters `hir` is certain to start with, and whether it is fixed all the way
+/// through (so that whatever follows it still counts as part of the prefix). An alternation is as
+/// fixed as its least fixed branch: `(?:sk|rk)_(?:test|live|prod)_` is eleven characters at the
+/// least, `(?:hvs\.|s\.)` only two.
+fn fixed_prefix(hir: &regex_syntax::hir::Hir) -> (usize, bool) {
+    use regex_syntax::hir::{Class, HirKind};
+    match hir.kind() {
+        HirKind::Empty | HirKind::Look(_) => (0, true),
+        HirKind::Literal(lit) => (String::from_utf8_lossy(&lit.0).chars().count(), true),
+        HirKind::Class(Class::Unicode(c)) if class_size(c) <= FIXED_CHAR_CLASS => (1, true),
+        HirKind::Class(_) => (0, false),
+        HirKind::Capture(c) => fixed_prefix(&c.sub),
+        HirKind::Repetition(r) => {
+            let (len, whole) = fixed_prefix(&r.sub);
+            let min = r.min as usize;
+            if whole && r.max == Some(r.min) {
+                (len * min, true)
+            } else if whole {
+                (len * min, false)
+            } else {
+                (if min >= 1 { len } else { 0 }, false)
+            }
+        }
+        HirKind::Concat(parts) => {
+            let mut total = 0;
+            for part in parts {
+                let (len, whole) = fixed_prefix(part);
+                total += len;
+                if !whole {
+                    return (total, false);
+                }
+            }
+            (total, true)
+        }
+        HirKind::Alternation(branches) => {
+            let each: Vec<(usize, bool)> = branches.iter().map(fixed_prefix).collect();
+            let shortest = each.iter().map(|(len, _)| *len).min().unwrap_or(0);
+            // Branches of different lengths still leave what follows part of the prefix: every
+            // way through has at least `shortest` fixed characters before it.
+            (shortest, each.iter().all(|(_, whole)| *whole))
+        }
+    }
+}
+
+/// Adds every body character class under `hir` to `alphabet`. `None` if the pattern uses a
+/// byte-oriented class, which no vendored rule does and this code has not been reasoned about.
+fn body_classes(
+    hir: &regex_syntax::hir::Hir,
+    alphabet: &mut regex_syntax::hir::ClassUnicode,
+) -> Option<()> {
+    use regex_syntax::hir::{Class, HirKind};
+    match hir.kind() {
+        HirKind::Class(Class::Unicode(c)) => {
+            if class_size(c) > FIXED_CHAR_CLASS {
+                alphabet.union(c);
+            }
+        }
+        HirKind::Class(Class::Bytes(_)) => return None,
+        HirKind::Capture(c) => body_classes(&c.sub, alphabet)?,
+        HirKind::Repetition(r) => body_classes(&r.sub, alphabet)?,
+        HirKind::Concat(parts) | HirKind::Alternation(parts) => {
+            for part in parts {
+                body_classes(part, alphabet)?;
+            }
+        }
+        HirKind::Empty | HirKind::Literal(_) | HirKind::Look(_) => {}
+    }
+    Some(())
+}
+
+/// The members of a bracketed class written as a pattern.
+fn class_of(pattern: &str) -> Option<regex_syntax::hir::ClassUnicode> {
+    use regex_syntax::hir::{Class, HirKind};
+    match regex_syntax::parse(pattern).ok()?.into_kind() {
+        HirKind::Class(Class::Unicode(class)) => Some(class),
+        _ => None,
+    }
+}
+
+/// `[^…]` for a class, written with code-point escapes so no member needs quoting.
+fn negated_class(class: &regex_syntax::hir::ClassUnicode) -> String {
+    use std::fmt::Write;
+    let mut out = String::from("[^");
+    for r in class.ranges() {
+        let _ = write!(out, "\\x{{{:X}}}", r.start() as u32);
+        if r.end() != r.start() {
+            let _ = write!(out, "-\\x{{{:X}}}", r.end() as u32);
+        }
+    }
+    out.push(']');
+    out
+}
+
 /// Compiles one rule pattern.
 ///
 /// The size limit is raised well above the `regex` crate's 10 MB default. Three of the vendored
@@ -803,13 +1141,49 @@ fn matches_for<'t>(pack: &Pack, rule: &Rule, text: &'t str) -> Vec<RawMatch<'t>>
         // down — and `every_bundled_rule_compiles` is what stops that becoming silent lost cover.
         return Vec::new();
     };
+    matches_with(pack, rule, re, text)
+}
 
+/// [`matches_for`] with the regex named by the caller: the rule's own in a scan, and in the tests
+/// the vendored pattern too, so both go through exactly the same filters.
+fn matches_with<'t>(pack: &Pack, rule: &Rule, re: &Regex, text: &'t str) -> Vec<RawMatch<'t>> {
     let mut out = Vec::new();
-    for caps in re.captures_iter(text) {
-        let Some(whole) = caps.get(0) else { continue };
+    // `captures_at` in a loop, not `captures_iter`: a rejected private-key block has to be able to
+    // hand the search back to a header inside it (see `private_key_block`).
+    let mut at = 0;
+    while at <= text.len() {
+        let Some(caps) = re.captures_at(text, at) else {
+            break;
+        };
+        let Some(whole) = caps.get(0) else { break };
+        at = if whole.end() > whole.start() {
+            whole.end()
+        } else {
+            // An empty match (no vendored pattern has one): step over one character.
+            text[whole.end()..]
+                .chars()
+                .next()
+                .map_or(text.len() + 1, |c| whole.end() + c.len_utf8())
+        };
         // Group 1 is the secret where the pattern isolates one; otherwise the match itself is.
         let secret = caps.get(1).unwrap_or(whole);
 
+        match rule.shape {
+            Shape::Any => {}
+            Shape::PrivateKey => match private_key_block(whole.as_str()) {
+                KeyBlock::Plausible => {}
+                KeyBlock::Not => continue,
+                KeyBlock::NotButHeaderAt(inner) => {
+                    at = whole.start() + inner;
+                    continue;
+                }
+            },
+            Shape::Jwt => {
+                if !plausible_jwt(secret.as_str()) {
+                    continue;
+                }
+            }
+        }
         if let Some(min) = rule.entropy {
             if shannon_entropy(secret.as_str()) < min {
                 continue;
@@ -847,6 +1221,160 @@ fn matches_for<'t>(pack: &Pack, rule: &Rule, text: &'t str) -> Vec<RawMatch<'t>>
         });
     }
     out
+}
+
+/// What a `private-key` match turned out to be.
+#[derive(Debug, PartialEq, Eq)]
+enum KeyBlock {
+    /// A header, a base64 body and a footer.
+    Plausible,
+    /// Not a key block.
+    Not,
+    /// Not a key block, but another `-----BEGIN` starts at this offset inside it: the search
+    /// resumes there, because that header may open a real block.
+    NotButHeaderAt(usize),
+}
+
+/// The fewest base64 characters a private key's body can have. The smallest real one, an Ed25519
+/// key in PKCS#8, is 64; an example cut short after its first few characters is not a key.
+const MIN_KEY_BODY: usize = 48;
+
+/// The least variety a key body has, in bits per character. Real key material is close to six.
+/// This only has to tell it from a placeholder made of one or two repeated characters (`AAAA…`,
+/// `xxxx…`, `ABAB…`); the structure checks do the rest.
+const MIN_KEY_BODY_ENTROPY: f64 = 1.5;
+
+/// Whether a `private-key` match is a key block or only looks like the start of one.
+///
+/// The vendored pattern is `-----BEGIN … PRIVATE KEY-----`, at least 64 characters of anything,
+/// then the next `KEY-----`. Nothing says the block must close or hold a key, so a header quoted
+/// in prose pairs with the next header in the file: a transcript that printed
+/// `-----BEGIN RSA PRIVATE KEY-----` forty thousand times was reported as a thousand private keys,
+/// each offered for redaction. A block counts only when it has an `-----END` footer, no second
+/// header inside it, and a body that is base64 with the variety real key material has.
+fn private_key_block(block: &str) -> KeyBlock {
+    const DASHES: &str = "-----";
+    // The header is `-----BEGIN…-----`: it ends at the first run of dashes after its own.
+    let Some(header_end) = block
+        .get(DASHES.len()..)
+        .and_then(|rest| rest.find(DASHES))
+        .map(|i| i + 2 * DASHES.len())
+    else {
+        return KeyBlock::Not;
+    };
+    let rest = &block[header_end..];
+    // ASCII upper-casing keeps every byte offset.
+    let upper = rest.to_ascii_uppercase();
+    if let Some(inner) = upper.find("-----BEGIN") {
+        return KeyBlock::NotButHeaderAt(header_end + inner);
+    }
+    let Some(footer) = upper.rfind("-----END") else {
+        return KeyBlock::Not;
+    };
+    if plausible_key_body(&rest[..footer]) {
+        KeyBlock::Plausible
+    } else {
+        KeyBlock::Not
+    }
+}
+
+/// Whether the text between a PEM header and footer is key material: whole lines of base64,
+/// enough of them, and not one or two characters repeated. Line breaks may be real or written as `\n` (a
+/// key pasted into a JSON transcript); `Name: value` armor lines and a PGP checksum line are
+/// skipped.
+fn plausible_key_body(body: &str) -> bool {
+    // Turn escaped line breaks (`\n`, `\r`, however many backslashes) into real ones.
+    let mut lines = String::with_capacity(body.len());
+    let mut chars = body.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            lines.push(c);
+            continue;
+        }
+        while chars.peek() == Some(&'\\') {
+            chars.next();
+        }
+        if matches!(chars.peek(), Some('n' | 'r' | 't')) {
+            chars.next();
+            lines.push('\n');
+        }
+    }
+    // Key material comes as lines of base64 and nothing else. A line with a space or any other
+    // character in it is prose, and prose is mostly letters too, so lines are judged whole.
+    let mut key_material = String::new();
+    let mut other = 0;
+    for line in lines.lines() {
+        // A quoted or indented block (`> `, `| `) still holds whole base64 lines.
+        let line = line.trim_start_matches(['>', '|', ' ', '\t']).trim_end();
+        if line.is_empty() || line.contains(':') || line.starts_with('=') {
+            continue;
+        }
+        if line
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '='))
+        {
+            key_material.push_str(line);
+        } else {
+            other += line.chars().count();
+        }
+    }
+    key_material.len() >= MIN_KEY_BODY
+        && key_material.len() >= other * 9
+        && shannon_entropy(&key_material) >= MIN_KEY_BODY_ENTROPY
+}
+
+/// Decodes base64 in either alphabet (standard or URL-safe), with or without padding.
+fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(text.len() * 3 / 4);
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for b in text.bytes() {
+        let v = match b {
+            b'A'..=b'Z' => b - b'A',
+            b'a'..=b'z' => b - b'a' + 26,
+            b'0'..=b'9' => b - b'0' + 52,
+            b'+' | b'-' => 62,
+            b'/' | b'_' => 63,
+            b'=' => continue,
+            _ => return None,
+        };
+        acc = (acc << 6) | u32::from(v);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
+}
+
+/// Whether a `jwt` match is a signed token: three segments, of which the first decodes to a JSON
+/// object naming its algorithm (`alg` is required by RFC 7515) and the second to a JSON object.
+///
+/// The vendored pattern makes the signature optional and checks nothing about the other two, so
+/// `eyJ….eyJ….` — two base64 words and a dot, which is how a truncated token, a doc example and a
+/// repeated header all look — was a finding, and a redactable one. Without a signature there is
+/// nothing a server would accept; without a header that decodes there is no token at all.
+fn plausible_jwt(token: &str) -> bool {
+    // A token quoted inside JSON can carry escaped slashes.
+    let token = token.replace('\\', "");
+    let mut segments = token.split('.');
+    let (Some(header), Some(payload), Some(signature), None) = (
+        segments.next(),
+        segments.next(),
+        segments.next(),
+        segments.next(),
+    ) else {
+        return false;
+    };
+    let object = |segment: &str| {
+        base64_decode(segment)
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+            .filter(serde_json::Value::is_object)
+    };
+    !signature.trim_end_matches('=').is_empty()
+        && object(header).is_some_and(|h| h.get("alg").is_some_and(|a| a.is_string()))
+        && object(payload).is_some()
 }
 
 /// How far before a match, on the same line, a rule's keyword may sit and still vouch for it.
@@ -896,11 +1424,12 @@ impl SpanSet {
     }
 }
 
-/// Upper bound on distinct secret hits recorded for a single file. Real artifacts hold a handful;
-/// this only caps a pathological/crafted file whose whole point is to amplify one 4 MB input into
-/// a memory-blowing pile of findings. Far above any legitimate file, so it never truncates real
-/// results silently.
-const MAX_SECRETS_PER_TEXT: usize = 1000;
+/// The most secrets one text is *reported* to hold. Real files hold a handful; this caps a crafted
+/// file whose point is to turn one 4 MB input into a memory-filling pile of findings. A scan that
+/// stops here says so ([`SecretScan::more`]), so a report never reads "1,000 keys" for a file that
+/// holds 2,500. Redaction has no such limit: a span is two numbers, and a redaction that stopped
+/// part-way would leave keys in a file it then calls clean.
+pub const MAX_SECRETS_PER_TEXT: usize = 1000;
 
 /// One deduplicated secret hit in `text`: the byte span **of the credential itself** (not of the
 /// wider [`RawMatch`], whose context bytes belong to the surrounding file and must survive), the
@@ -923,12 +1452,21 @@ struct Hit<'t> {
 /// heuristic regexes entirely — so redaction does strictly *less* work than a scan, never a second
 /// full one. Runs the candidate prefilter directly on `text` (the automaton is case-insensitive),
 /// so no lowercased copy of a multi-MB file is ever allocated.
-fn find_hits<'t>(path: Option<&str>, text: &'t str, passes: &[bool]) -> Vec<Hit<'t>> {
+///
+/// Stops after `limit` hits. The second value is true when it stopped there with at least one more
+/// hit still to record.
+fn find_hits<'t>(
+    path: Option<&str>,
+    text: &'t str,
+    passes: &[bool],
+    limit: usize,
+) -> (Vec<Hit<'t>>, bool) {
     let pack = &*PACK;
     let candidates = pack.candidates(text);
 
     let mut spans = SpanSet::default();
     let mut hits: Vec<Hit<'t>> = Vec::new();
+    let mut more = false;
 
     'passes: for &high_conf_pass in passes {
         for &ri in &candidates {
@@ -940,6 +1478,10 @@ fn find_hits<'t>(path: Option<&str>, text: &'t str, passes: &[bool]) -> Vec<Hit<
                 if spans.overlaps(m.start, m.end) {
                     continue;
                 }
+                if hits.len() >= limit {
+                    more = true;
+                    break 'passes;
+                }
                 spans.insert(m.start, m.end);
                 hits.push(Hit {
                     secret_start: m.secret_start,
@@ -947,13 +1489,10 @@ fn find_hits<'t>(path: Option<&str>, text: &'t str, passes: &[bool]) -> Vec<Hit<
                     rule: ri,
                     secret: m.secret,
                 });
-                if hits.len() >= MAX_SECRETS_PER_TEXT {
-                    break 'passes;
-                }
             }
         }
     }
-    hits
+    (hits, more)
 }
 
 /// Scans `text`, returning one [`SecretMatch`] per distinct hit. Where a broad `generic-*` rule
@@ -968,7 +1507,8 @@ pub fn scan_text_in(path: Option<&str>, text: &str) -> Vec<SecretMatch> {
     let pack = &*PACK;
     // Precise rules first (the `[true, false]` order), so they claim their spans before the
     // heuristic ones run.
-    let mut out: Vec<SecretMatch> = find_hits(path, text, &[true, false])
+    let mut out: Vec<SecretMatch> = find_hits(path, text, &[true, false], MAX_SECRETS_PER_TEXT)
+        .0
         .into_iter()
         .map(|h| {
             let rule = &pack.rules[h.rule];
@@ -995,9 +1535,30 @@ pub fn scan_text_high_confidence(text: &str) -> Vec<SecretMatch> {
 }
 
 /// [`scan_text_high_confidence`] for a known file. Path-scoped rules only apply here.
+///
+/// Returns at most [`MAX_SECRETS_PER_TEXT`] matches and does not say whether there were more; a
+/// caller that reports the count to a person should use [`scan_high_confidence`].
 pub fn scan_text_high_confidence_in(path: Option<&str>, text: &str) -> Vec<SecretMatch> {
+    scan_high_confidence(path, text).matches
+}
+
+/// What a scan of one text found.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SecretScan {
+    /// The secrets found, in line order: at most [`MAX_SECRETS_PER_TEXT`] of them.
+    pub matches: Vec<SecretMatch>,
+    /// True when the text holds more secrets than `matches` lists. The scan stopped at the limit,
+    /// so the real number is "more than [`MAX_SECRETS_PER_TEXT`]", not `matches.len()`.
+    pub more: bool,
+}
+
+/// The high-confidence provider keys in `text` (see [`scan_text_high_confidence`]), together with
+/// whether the scan stopped at [`MAX_SECRETS_PER_TEXT`]. `path` is the file the text came from,
+/// for the few rules that apply to one kind of file only.
+pub fn scan_high_confidence(path: Option<&str>, text: &str) -> SecretScan {
     let pack = &*PACK;
-    let mut out: Vec<SecretMatch> = find_hits(path, text, &[true])
+    let (hits, more) = find_hits(path, text, &[true], MAX_SECRETS_PER_TEXT);
+    let mut matches: Vec<SecretMatch> = hits
         .into_iter()
         .map(|h| {
             let rule = &pack.rules[h.rule];
@@ -1011,8 +1572,8 @@ pub fn scan_text_high_confidence_in(path: Option<&str>, text: &str) -> Vec<Secre
         })
         .collect();
 
-    out.sort_by_key(|m| m.line);
-    out
+    matches.sort_by_key(|m| m.line);
+    SecretScan { matches, more }
 }
 
 /// Severity for a secret hit: a structurally-identifiable provider key is High (a real credential
@@ -1050,7 +1611,10 @@ pub fn redact_text_in(path: Option<&str>, text: &str) -> (String, usize) {
     // own newline (`[\s;]`). Replacing the wide span deleted all of it, so redacting `KEY=secret\n`
     // yielded `[bulwark:redacted-secret]` with the next line welded onto it — a corrupted `.env`
     // whose variable name was gone too. Only the secret's bytes may be rewritten.
-    let mut hits: Vec<(usize, usize)> = find_hits(path, text, &[true])
+    // No limit here, unlike a scan: stopping part-way would leave keys in a file that the caller
+    // then reports as redacted.
+    let mut hits: Vec<(usize, usize)> = find_hits(path, text, &[true], usize::MAX)
+        .0
         .into_iter()
         .map(|h| (h.secret_start, h.secret_end))
         .collect();
@@ -1448,7 +2012,11 @@ mod tests {
             let mut sampled = false;
             let mut caught = false;
             for seed in 0..40 {
-                let Some(sample) = gen.as_ref().and_then(|g| g.sample(seed)) else {
+                // A private key and a JWT have structure a random string does not (a body, a
+                // footer, segments that decode), so their samples are built, not drawn.
+                let Some(sample) = structured_sample(&id, seed)
+                    .or_else(|| gen.as_ref().and_then(|g| g.sample(seed)))
+                else {
                     continue;
                 };
                 sampled = true;
@@ -1693,6 +2261,842 @@ mod tests {
         assert!(!has_capture_group(r#"(?:a)(?i:b)"#));
         assert!(!has_capture_group(r#"\(literal\)"#));
         assert!(!has_capture_group(r#"[(](?:a)"#)); // `(` inside a class is a literal
+    }
+
+    /// Every vendored rule whose terminator [`relax_terminator`] changes: (id, vendored pattern
+    /// without its terminator, keywords).
+    fn relaxed_rules() -> Vec<(String, String, Vec<String>)> {
+        raw_rules()
+            .into_iter()
+            .filter(|(_, pattern, _)| relax_terminator(pattern) != *pattern)
+            .map(|(id, pattern, keywords)| {
+                let body = pattern
+                    .strip_suffix(VENDORED_TERMINATOR)
+                    .expect("only a pattern with the vendored terminator is relaxed")
+                    .to_string();
+                (id, body, keywords)
+            })
+            .collect()
+    }
+
+    fn base64url(bytes: &[u8]) -> String {
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+        let mut out = String::new();
+        for chunk in bytes.chunks(3) {
+            let n = chunk
+                .iter()
+                .chain([0u8, 0].iter())
+                .take(3)
+                .fold(0u32, |acc, b| (acc << 8) | u32::from(*b));
+            for i in 0..=chunk.len() {
+                out.push(ALPHABET[(n >> (18 - 6 * i)) as usize & 63] as char);
+            }
+        }
+        out
+    }
+
+    /// A signed-looking token built at run time: a real header, a claims object, random bytes for
+    /// the signature.
+    fn sample_jwt(seed: u64) -> String {
+        let claims = format!(
+            r#"{{"sub":"{}","iat":1700000000}}"#,
+            synthetic_token(seed + 1, 12, ALNUM)
+        );
+        format!(
+            "{}.{}.{}",
+            base64url(br#"{"alg":"HS256","typ":"JWT"}"#),
+            base64url(claims.as_bytes()),
+            synthetic_token(seed + 2, 43, ALNUM)
+        )
+    }
+
+    /// A PEM block with a random body, built at run time. `newline` is what separates its lines:
+    /// a real line break, or the two characters `\n` as a key pasted into a JSON transcript has.
+    fn sample_private_key(seed: u64, newline: &str) -> String {
+        let base64 = format!("{ALNUM}+/");
+        let body: Vec<String> = (0..12)
+            .map(|i| synthetic_token(seed * 100 + i + 1, 64, &base64))
+            .collect();
+        format!(
+            "-----BEGIN RSA PRIVATE KEY-----{newline}{}{newline}-----END RSA PRIVATE KEY-----",
+            body.join(newline)
+        )
+    }
+
+    fn structured_sample(id: &str, seed: u64) -> Option<String> {
+        match id {
+            "jwt" => Some(sample_jwt(seed)),
+            "private-key" => Some(sample_private_key(seed, "\n")),
+            _ => None,
+        }
+    }
+
+    /// The rules whose terminator [`relax_terminator`] changes, pinned. A re-sync with upstream
+    /// that adds a prefixed rule, or changes the shape of one, shows up here as a difference to
+    /// look at instead of as a silent change in what is reported.
+    const RELAXED: &[&str] = &[
+        "adobe-client-secret",
+        "alibaba-access-key-id",
+        "anthropic-admin-api-key",
+        "anthropic-api-key",
+        "authress-service-client-access-key",
+        "aws-amazon-bedrock-api-key-long-lived",
+        "cerebras-api-key",
+        "cloudflare-origin-ca-key",
+        "cursor-api-key",
+        "databricks-api-token",
+        "deepseek-api-key",
+        "defined-networking-api-token",
+        "digitalocean-access-token",
+        "digitalocean-pat",
+        "digitalocean-refresh-token",
+        "dropbox-short-lived-api-token",
+        "elevenlabs-api-key",
+        "endorlabs-api-key",
+        "endorlabs-api-secret",
+        "facebook-page-access-token",
+        "figma-personal-access-token",
+        "flyio-access-token",
+        "gcp-api-key",
+        "gocardless-api-token",
+        "grafana-api-key",
+        "grafana-cloud-api-token",
+        "grafana-service-account-token",
+        "groq-api-key",
+        "heroku-api-key-v2",
+        "huggingface-access-token",
+        "huggingface-organization-api-token",
+        "infracost-api-token",
+        "intra42-client-secret",
+        "lob-api-key",
+        "lob-pub-api-key",
+        "mailgun-private-api-token",
+        "mailgun-pub-key",
+        "mapbox-api-token",
+        "new-relic-browser-api-token",
+        "new-relic-insert-key",
+        "new-relic-user-api-key",
+        "notion-api-token",
+        "npm-access-token",
+        "nvidia-api-key",
+        "octopus-deploy-api-key",
+        "openai-api-key",
+        "openrouter-api-key",
+        "plaid-api-token",
+        "planetscale-api-token",
+        "planetscale-oauth-token",
+        "planetscale-password",
+        "posthog-personal-api-key",
+        "posthog-project-api-key",
+        "postman-api-token",
+        "prefect-api-token",
+        "pulumi-api-token",
+        "readme-api-token",
+        "replicate-api-token",
+        "rubygems-api-token",
+        "scalingo-api-token",
+        "sendgrid-api-token",
+        "sendinblue-api-token",
+        "sentry-user-token",
+        "settlemint-application-access-token",
+        "settlemint-personal-access-token",
+        "settlemint-service-access-token",
+        "shippo-api-token",
+        "square-access-token",
+        "stability-ai-api-key",
+        "stripe-access-token",
+        "togetherai-api-key",
+        "twitter-bearer-token",
+        "typeform-api-token",
+        "vault-batch-token",
+        "vercel-ai-gateway-key",
+        "vercel-app-access-token",
+        "vercel-app-refresh-token",
+        "vercel-integration-token",
+        "vercel-personal-access-token",
+        "weights-and-biases-api-key-v1",
+        "xai-api-key",
+        "yandex-access-token",
+        "yandex-api-key",
+    ];
+
+    #[test]
+    fn the_terminator_is_relaxed_for_prefixed_keys_and_nothing_else() {
+        let relaxed: Vec<String> = relaxed_rules().into_iter().map(|(id, _, _)| id).collect();
+        assert_eq!(
+            relaxed, RELAXED,
+            "the set of rules with a relaxed terminator changed: check each difference, then \
+             update RELAXED"
+        );
+
+        // Shapes that must come back byte for byte.
+        let t = VENDORED_TERMINATOR;
+        for untouched in [
+            // A keyword and a value: the value has no prefix of its own.
+            format!(
+                r#"(?i)(?:adafruit)[\s'"]{{0,3}}(?:=|:)[\x60'"\s=]{{0,5}}([a-z0-9_-]{{32}}){t}"#
+            ),
+            // Two fixed characters identify nothing (a JWT, the short Vault form).
+            format!(r"\b(ey[a-zA-Z0-9]{{17,}}\.ey[a-zA-Z0-9_-]{{17,}}){t}"),
+            format!(r"\b((?:hvs\.[\w-]{{90,120}}|s\.(?i:[a-z0-9]{{24}}))){t}"),
+            // One branch with no prefix at all (a bare 40-hex Sourcegraph token).
+            format!(r"\b(sgp_[a-f0-9]{{40}}|[a-f0-9]{{40}}){t}"),
+            // An optional prefix is no prefix.
+            format!(r"((?:squ_|sqp_)?[a-z0-9=_\-]{{40}}){t}"),
+            // The group before the terminator is the key, not whichever group comes first.
+            format!(r"(?:sonar[_.-]?(login|token))=([a-z0-9]{{40}}){t}"),
+            // No capture group, and no terminator.
+            format!(r"\bAKIA[A-Z2-7]{{16}}{t}"),
+            r"\b(ghp_[0-9a-zA-Z]{36})\b".to_string(),
+        ] {
+            assert_eq!(relax_terminator(&untouched), untouched);
+        }
+
+        // A relaxed pattern keeps every vendored alternative and adds to them.
+        let vendored = format!(r"\b(abc_[a-f0-9]{{20}}){t}");
+        let relaxed = relax_terminator(&vendored);
+        assert!(
+            relaxed.starts_with(&vendored[..vendored.len() - 1]),
+            "{relaxed}"
+        );
+        let re = compile(&relaxed).unwrap();
+        let key = format!("abc_{}", synthetic_token(3, 20, HEX));
+        for (after, expected) in [
+            (".", true),
+            (". Then", true),
+            ("...", true),
+            (")", true),
+            (",x", true),
+            (":", true),
+            ("@host", true),
+            ("&x=1", true),
+            ("|pbcopy", true),
+            ("。", true),
+            // Still part of a longer word, a base64 run or a path: not this key.
+            ("g", false),
+            ("0", false),
+            ("_x", false),
+            ("-x", false),
+            ("/x", false),
+            ("+x", false),
+            ("=", false),
+            // A function call, an index, a file name, a method: an identifier, not a key.
+            ("(void);", false),
+            ("[0]", false),
+            ("{x}", false),
+            (".png", false),
+            (".method()", false),
+        ] {
+            assert_eq!(re.is_match(&format!("{key}{after}")), expected, "{after:?}");
+        }
+
+        // A body that itself allows `.`: sentence punctuation after the key ends it, a dot inside
+        // a longer token does not.
+        let dotted = compile(&relax_terminator(&format!(r"\b(SG\.[a-z0-9.]{{20}}){t}"))).unwrap();
+        let key = format!("SG.{}", synthetic_token(5, 20, LOWER));
+        assert!(dotted.is_match(&format!("{key}. Then")));
+        assert!(dotted.is_match(&format!("{key}.")));
+        assert!(dotted.is_match(&format!("{key}...\n")));
+        assert!(!dotted.is_match(&format!("{key}.more")));
+        assert!(!dotted.is_match(&format!("{key}x")));
+    }
+
+    /// What follows a key in chat, in prose and on a command line.
+    const TAILS: &[&str] = &[
+        ".",
+        ",",
+        ")",
+        "]",
+        "}",
+        "*",
+        "&",
+        "|",
+        "\"",
+        "'",
+        "`",
+        ">",
+        "<",
+        "\n",
+        " ",
+        ":",
+        "!",
+        "?",
+        "**",
+        "&x=1",
+        "|pbcopy",
+        "\\n",
+        "\\\"",
+        "\\u0026x=1",
+        ". Next",
+        ", then",
+        ").",
+        "</key>",
+        "。",
+    ];
+
+    /// The key in a string generated from a relaxed rule's pattern: the outermost group that the
+    /// match ends with.
+    fn trailing_key<'a>(body: &Regex, sample: &'a str) -> Option<&'a str> {
+        let caps = body.captures(sample)?;
+        let end = caps.get(0)?.end();
+        caps.iter()
+            .skip(1)
+            .flatten()
+            .find(|g| g.end() == end)
+            .map(|g| g.as_str())
+    }
+
+    /// The defect this rewrite fixes, as a property of the whole pack: a key generated from each
+    /// relaxed rule's own pattern is reported, and redacted, whatever comes after it — a full
+    /// stop, a closing bracket, markdown emphasis, the rest of a URL, a pipe. Before, only
+    /// whitespace, a quote, `;` or the end of the line would do, and a key in an ordinary sentence
+    /// was missed.
+    #[test]
+    fn a_prefixed_key_is_found_whatever_follows_it() {
+        let mut unsampled = Vec::new();
+        let mut missed = Vec::new();
+        let mut wrong_span = Vec::new();
+        for (id, body, keywords) in relaxed_rules() {
+            let gen = SampleGen::new(&body).expect("a relaxed rule's pattern compiles");
+            let body_re = compile(&body).unwrap();
+            let alphabet = prefixed_key_alphabet(&body).unwrap();
+            let path = matching_path(&id);
+            let hint = if keywords.is_empty() {
+                id.replace('-', "_")
+            } else {
+                keywords.join(" ")
+            };
+            // A sample the pack reports in the form that always worked (a space after it), so a
+            // miss below is about the character that follows and nothing else.
+            let found = (0..40).find_map(|seed| {
+                let sample = gen.sample(seed)?;
+                let key = trailing_key(&body_re, &sample)?.to_string();
+                let text = format!("{hint}: {sample} ok\n");
+                (!scan_text_high_confidence_in(path.as_deref(), &text).is_empty())
+                    .then_some((sample, key))
+            });
+            let Some((sample, key)) = found else {
+                unsampled.push(id);
+                continue;
+            };
+            for tail in TAILS {
+                let text = format!("{hint}: {sample}{tail}\n");
+                let hits = scan_text_high_confidence_in(path.as_deref(), &text);
+                let (redacted, count) = redact_text_in(path.as_deref(), &text);
+                if hits.is_empty() || count == 0 || redacted.contains(&key) {
+                    missed.push(format!("{id} followed by {tail:?}"));
+                    continue;
+                }
+                // Where the next character cannot belong to the key, the key ends exactly there:
+                // what followed it is still in the file after redaction.
+                let next = tail.chars().next().unwrap();
+                if !alphabet
+                    .ranges()
+                    .iter()
+                    .any(|r| r.start() <= next && next <= r.end())
+                    && !redacted.contains(&format!("{REDACTION_PLACEHOLDER}{tail}"))
+                {
+                    wrong_span.push(format!("{id} followed by {tail:?}"));
+                }
+            }
+        }
+        assert!(
+            unsampled.is_empty(),
+            "no usable sample, so nothing was tested for: {unsampled:?}"
+        );
+        assert!(
+            missed.is_empty(),
+            "{} key(s) not found: {missed:?}",
+            missed.len()
+        );
+        assert!(
+            wrong_span.is_empty(),
+            "redaction took more than the key: {wrong_span:?}"
+        );
+    }
+
+    /// The safety net for the relaxation, in the style of the one for [`drop_leading_wildcard`]:
+    /// rule by rule, everything the vendored pattern captures the rewritten one captures too, at
+    /// the same offset. The rewrite may only add.
+    #[test]
+    fn relaxing_a_terminator_only_ever_adds_matches() {
+        let mut widened = 0;
+        for (id, body, keywords) in relaxed_rules() {
+            let vendored = drop_leading_wildcard(&format!("{body}{VENDORED_TERMINATOR}"));
+            let before = compile(&vendored).unwrap();
+            let after = compile(&relax_terminator(&vendored)).unwrap();
+
+            let hint = if keywords.is_empty() {
+                id.replace('-', "_")
+            } else {
+                keywords.join(" ")
+            };
+            let mut corpus = positive_corpus(&id, &keywords);
+            let gen = SampleGen::new(&body);
+            for seed in 0..8 {
+                let Some(sample) = gen.as_ref().and_then(|g| g.sample(seed)) else {
+                    continue;
+                };
+                corpus.push_str(&sample_in_context(&id, &keywords, &sample));
+                for tail in TAILS {
+                    corpus.push_str(&format!("{hint}: {sample}{tail}\n"));
+                }
+                // Run on into a longer word, and into a base64 run.
+                corpus.push_str(&format!(
+                    "{hint}: {sample}Zz9Zz9Zz9\n{hint}: {sample}/Zz9+Zz9=\n"
+                ));
+            }
+
+            let secrets = |re: &Regex| -> BTreeSet<(usize, String)> {
+                re.captures_iter(&corpus)
+                    .filter_map(|c| {
+                        let whole = c.get(0)?;
+                        let s = c.get(1).unwrap_or(whole);
+                        Some((s.start(), s.as_str().to_string()))
+                    })
+                    .collect()
+            };
+            let (old, new) = (secrets(&before), secrets(&after));
+            let lost: Vec<_> = old.difference(&new).map(|(at, _)| *at).collect();
+            assert!(
+                lost.is_empty(),
+                "relaxing `{id}` lost matches at offsets {lost:?}"
+            );
+            if new.len() > old.len() {
+                widened += 1;
+            }
+        }
+        assert!(
+            widened >= 75,
+            "only {widened} of {} relaxed rules matched anything new: the corpus is too weak to \
+             prove the comparison",
+            RELAXED.len()
+        );
+    }
+
+    /// The other side of the relaxation: a key-shaped string that *runs on* — into a call, an
+    /// index, a file extension, a path, a longer word, a base64 run — is an identifier or a file
+    /// name, and the relaxed rule reports exactly what the vendored one did there (for most rules,
+    /// nothing). Two of these shapes are non-secrets gitleaks records for the pack
+    /// (`GLC_CreateLightmapTextures(void)`, `ico-<hash>.png`).
+    #[test]
+    fn a_key_shape_that_runs_on_is_not_newly_reported() {
+        const RUNS_ON: &[&str] = &[
+            "(void);",
+            "[0]",
+            "{x}",
+            ".png",
+            ".method()",
+            ".example.com",
+            "/extra",
+            "-suffix",
+            "_suffix",
+            "Zz9",
+            "=",
+            "==",
+            "+Zz9",
+        ];
+        let pack = &*PACK;
+        let mut extra = Vec::new();
+        let mut checked = 0;
+        for (id, body, keywords) in relaxed_rules() {
+            let rule = pack.rules.iter().find(|r| r.id == id).unwrap();
+            let vendored = compile(&rule.pattern).unwrap();
+            let gen = SampleGen::new(&body).unwrap();
+            let hint = if keywords.is_empty() {
+                id.replace('-', "_")
+            } else {
+                keywords.join(" ")
+            };
+            let Some(sample) = (0..40).find_map(|seed| {
+                let sample = gen.sample(seed)?;
+                (!matches_for(pack, rule, &format!("{hint}: {sample} ok\n")).is_empty())
+                    .then_some(sample)
+            }) else {
+                continue;
+            };
+            for cont in RUNS_ON {
+                let text = format!("{hint}: {sample}{cont}\n");
+                let spans = |re: &Regex| -> Vec<(usize, usize)> {
+                    matches_with(pack, rule, re, &text)
+                        .iter()
+                        .map(|m| (m.secret_start, m.secret_end))
+                        .collect()
+                };
+                checked += 1;
+                if spans(&vendored) != spans(rule.regex().unwrap()) {
+                    extra.push(format!("{id} followed by {cont:?}"));
+                }
+            }
+        }
+        assert!(checked > 900, "{checked}");
+        assert!(
+            extra.is_empty(),
+            "reported although the key shape runs on: {extra:?}"
+        );
+    }
+
+    /// Whether the vendored terminator would have accepted what follows `at`.
+    fn vendored_terminator_follows(text: &str, at: usize) -> bool {
+        let rest = &text[at..];
+        let rest = rest.strip_prefix('\\').map_or(rest, |unescaped| {
+            if unescaped.starts_with(['\'', '"', '`', 'n', 'r']) {
+                // `\"` and the literal `\n` are both accepted; reduce them to the quote case.
+                "\""
+            } else {
+                rest
+            }
+        });
+        rest.is_empty()
+            || rest.starts_with(['\'', '"', '`', ';'])
+            || rest.starts_with(char::is_whitespace)
+    }
+
+    /// The text files of this repository: its guides, rules, scripts and source. Full of
+    /// key-shaped things that are not keys — placeholders, patterns, prefixes in prose, hashes,
+    /// lock files — which makes it a fair corpus of plausible non-secret text.
+    fn repository_text() -> Vec<(String, String)> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        const SKIP: &[&str] = &["target", "node_modules", ".git", "dist", "cache", "vendor"];
+        const TEXT: &[&str] = &[
+            "md", "rs", "ts", "tsx", "js", "mjs", "cjs", "json", "yaml", "yml", "toml", "sh", "py",
+            "txt", "html", "css", "xml", "lock", "spec", "desktop", "conf",
+        ];
+        walkdir::WalkDir::new(&root)
+            .into_iter()
+            .filter_entry(|e| {
+                !e.file_name()
+                    .to_str()
+                    .is_some_and(|name| SKIP.contains(&name))
+            })
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_file())
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .and_then(|x| x.to_str())
+                    .is_some_and(|x| TEXT.contains(&x))
+            })
+            .filter(|e| e.metadata().is_ok_and(|m| m.len() <= 1024 * 1024))
+            .filter_map(|e| {
+                let text = std::fs::read_to_string(e.path()).ok()?;
+                let name = e
+                    .path()
+                    .strip_prefix(&root)
+                    .unwrap_or(e.path())
+                    .display()
+                    .to_string();
+                Some((name, text))
+            })
+            .collect()
+    }
+
+    /// **Zero new false positives on real text.** Every match a relaxed rule makes in this
+    /// repository that the vendored terminator would have refused — a key-shaped string followed
+    /// by punctuation, in several megabytes of documentation, rule files, scripts and source that
+    /// contain no real key. There are none, and a change that makes one appear has to explain it.
+    #[test]
+    fn relaxed_terminators_report_nothing_new_in_this_repository() {
+        let files = repository_text();
+        if files.len() < 200 {
+            // A source package that carries only this crate has no repository around it.
+            eprintln!(
+                "skipped: only {} text files found around this crate",
+                files.len()
+            );
+            return;
+        }
+        let pack = &*PACK;
+        let relaxed: Vec<&Rule> = pack
+            .rules
+            .iter()
+            .filter(|r| r.final_pattern() != r.pattern)
+            .collect();
+        assert_eq!(relaxed.len(), RELAXED.len());
+
+        let (mut bytes, mut ran, mut old_style) = (0usize, 0usize, 0usize);
+        let mut new_matches = Vec::new();
+        for (name, text) in &files {
+            bytes += text.len();
+            let lower = text.to_ascii_lowercase();
+            for rule in &relaxed {
+                if !rule.keywords.iter().any(|k| lower.contains(k.as_str())) {
+                    continue;
+                }
+                ran += 1;
+                for m in matches_for(pack, rule, text) {
+                    if vendored_terminator_follows(text, m.secret_end) {
+                        old_style += 1;
+                        continue;
+                    }
+                    let next: String = text[m.secret_end..].chars().take(1).collect();
+                    new_matches.push(format!(
+                        "{} in {name}:{} — {} followed by {next:?}",
+                        rule.id,
+                        line_of(text, m.secret_start),
+                        mask(m.secret)
+                    ));
+                }
+            }
+        }
+        println!(
+            "{} files, {bytes} bytes, {ran} rule runs, {old_style} match(es) the vendored \
+             terminator also accepts, {} new",
+            files.len(),
+            new_matches.len()
+        );
+        assert!(
+            bytes > 2_000_000 && ran > 100,
+            "the corpus is too small to mean anything: {bytes} bytes, {ran} rule runs"
+        );
+        assert!(
+            new_matches.is_empty(),
+            "a relaxed terminator reports text the vendored one refused:\n  {}",
+            new_matches.join("\n  ")
+        );
+    }
+
+    /// A transcript-shaped text of about `size` bytes: JSON lines of prose, paths, hashes, base64
+    /// and command lines, dense with the words and prefixes the pack's keywords look for, and with
+    /// a key followed by punctuation every few hundred lines.
+    fn transcript_like(size: usize) -> String {
+        let prefixes = [
+            "sk-", "sk_live_", "key-", "api-", "hf_", "npm_", "AIza", "SG.", "gsk_", "xai-", "pk.",
+            "sl.", "live_", "test_", "dapi", "EAAA", "t1.", "glc_", "r8_", "pul-",
+        ];
+        let mut out = String::with_capacity(size + 4096);
+        let mut i = 0u64;
+        while out.len() < size {
+            i += 1;
+            let word = synthetic_token(i, 9, LOWER);
+            let hash = synthetic_token(i * 7, 40, HEX);
+            let blob = synthetic_token(i * 13, 120, &format!("{ALNUM}+/"));
+            let prefix = prefixes[i as usize % prefixes.len()];
+            out.push_str(&format!(
+                "{{\"type\":\"assistant\",\"message\":{{\"role\":\"assistant\",\"content\":\"I ran `git log` in /home/dev/src/{word}/lib.rs and commit {hash} changed the {prefix}{word} handling; the api key and token docs mention {prefix}... (see https://example.invalid/{word}?id={i}&ref={hash}). Output: {blob}==\\n\"}}}}\n"
+            ));
+            if i.is_multiple_of(300) {
+                let key = format!("sk-ant-api03-{}AA", synthetic_token(i, 93, ALNUM));
+                let tail = TAILS[i as usize / 300 % TAILS.len()];
+                out.push_str(&format!(
+                    "{{\"type\":\"user\",\"message\":\"my key is {key}{tail}\"}}\n"
+                ));
+            }
+        }
+        out
+    }
+
+    /// The cost of the relaxation, measured: every relaxed rule the keyword index selects for a
+    /// 4 MB transcript-shaped file, run with the vendored terminator and with the relaxed one.
+    /// The leading-wildcard story (a 1.5 s scan that used to take minutes) is the reason to
+    /// measure a regex change and not assume. Ignored by default: it is a measurement, and only a
+    /// release build's numbers mean anything.
+    ///
+    /// `cargo test -p bulwark-core --release --lib -- --ignored --nocapture relaxed_terminators_cost`
+    #[test]
+    #[ignore = "a benchmark: run it in a release build"]
+    fn relaxed_terminators_cost_about_the_same_on_a_4mb_transcript() {
+        let text = transcript_like(4 * 1024 * 1024);
+        let pack = &*PACK;
+        let candidates = pack.candidates(&text);
+        let relaxed: Vec<&Rule> = candidates
+            .iter()
+            .map(|&i| &pack.rules[i])
+            .filter(|r| r.high_conf && r.final_pattern() != r.pattern)
+            .collect();
+        let compiled: Vec<(&Rule, Regex, Regex)> = relaxed
+            .iter()
+            .map(|r| {
+                (
+                    *r,
+                    compile(&r.pattern).unwrap(),
+                    compile(&r.final_pattern()).unwrap(),
+                )
+            })
+            .collect();
+        let time = |relaxed: bool| {
+            let mut best = std::time::Duration::MAX;
+            let mut found = 0;
+            for _ in 0..3 {
+                let start = std::time::Instant::now();
+                found = compiled
+                    .iter()
+                    .map(|(rule, vendored, rewritten)| {
+                        let re = if relaxed { rewritten } else { vendored };
+                        matches_with(pack, rule, re, &text).len()
+                    })
+                    .sum::<usize>();
+                best = best.min(start.elapsed());
+            }
+            (best, found)
+        };
+        let (before, found_before) = time(false);
+        let (after, found_after) = time(true);
+        let start = std::time::Instant::now();
+        let whole = scan_high_confidence(None, &text);
+        let whole_time = start.elapsed();
+        println!(
+            "{} bytes, {} candidate rules of which {} relaxed\n\
+             relaxed rules, vendored terminator: {before:?} ({found_before} matches)\n\
+             relaxed rules, relaxed terminator:  {after:?} ({found_after} matches)\n\
+             whole high-confidence scan as shipped: {whole_time:?} ({} findings)",
+            text.len(),
+            candidates.len(),
+            compiled.len(),
+            whole.matches.len()
+        );
+        assert!(
+            found_after > found_before,
+            "the corpus has keys before punctuation"
+        );
+        assert!(
+            after < before * 3 + std::time::Duration::from_millis(50),
+            "the relaxed terminator made these rules much slower: {before:?} -> {after:?}"
+        );
+    }
+
+    #[test]
+    fn two_markers_and_no_key_are_not_a_private_key() {
+        // A header that is never closed, repeated: each one used to pair with the next.
+        let unclosed = format!("-----BEGIN RSA PRIVATE KEY-----\n{}\n", "A".repeat(70)).repeat(50);
+        assert!(scan_text_high_confidence(&unclosed).is_empty());
+        assert_eq!(redact_text(&unclosed).1, 0);
+        // Closed, but the "body" is one repeated character, prose, or cut short. (Assembled from
+        // parts, so that no marker pair with text between them sits in this file for a scanner.)
+        let block = |body: &str| {
+            format!(
+                "{0}BEGIN PRIVATE KEY{0}\n{body}\n{0}END PRIVATE KEY{0}\n",
+                "-----"
+            )
+        };
+        for not_a_key in [
+            block(&"A".repeat(200)),
+            block("Paste the contents of your key file here, between the two marker lines, then save."),
+            block(&format!(
+                "{}...\n(rest of the key left out of this example on purpose)",
+                synthetic_token(4, 30, ALNUM)
+            )),
+        ] {
+            assert!(
+                scan_text_high_confidence(&not_a_key).is_empty(),
+                "{:?}",
+                &not_a_key[..60]
+            );
+        }
+    }
+
+    #[test]
+    fn a_real_private_key_block_is_still_found() {
+        for (label, text) in [
+            ("plain", sample_private_key(1, "\n")),
+            // Pasted into a JSON transcript: its line breaks are the two characters `\n`.
+            (
+                "json",
+                format!("{{\"message\":\"{}\"}}\n", sample_private_key(2, "\\n")),
+            ),
+            ("crlf", sample_private_key(3, "\r\n")),
+            // An encrypted key carries `Name: value` lines before its body.
+            (
+                "armor",
+                sample_private_key(4, "\n").replacen(
+                    "-----\n",
+                    "-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,0123456789ABCDEF\n\n",
+                    1,
+                ),
+            ),
+            // After a header that was only quoted in prose. The quoted header used to swallow the
+            // real one; now the search resumes at the real one.
+            (
+                "after a quoted header",
+                format!(
+                    "The file starts with -----BEGIN RSA PRIVATE KEY----- and is long.\n\n{}\n",
+                    sample_private_key(5, "\n")
+                ),
+            ),
+        ] {
+            let hits = scan_text_high_confidence(&text);
+            assert_eq!(hits.len(), 1, "{label}: {hits:?}");
+            assert_eq!(hits[0].rule_id, "private-key", "{label}");
+            let (redacted, count) = redact_text(&text);
+            assert_eq!(count, 1, "{label}");
+            assert!(!redacted.contains("-----END"), "{label}: {redacted}");
+        }
+        // The smallest real key, an Ed25519 one in PKCS#8, has a 64-character body.
+        let small = format!(
+            "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+            synthetic_token(9, 64, ALNUM)
+        );
+        assert_eq!(scan_text_high_confidence(&small).len(), 1);
+    }
+
+    #[test]
+    fn a_jwt_needs_three_segments_and_a_header_that_decodes() {
+        let real = sample_jwt(1);
+        let hits = scan_text_high_confidence(&format!("Authorization: Bearer {real}\n"));
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].rule_id, "jwt");
+
+        let header = base64url(br#"{"alg":"HS256","typ":"JWT"}"#);
+        let claims = base64url(br#"{"sub":"1234567890","name":"A"}"#);
+        for not_a_token in [
+            // No signature: nothing a server would accept.
+            format!("{header}.{claims}."),
+            // The same header ten times over, with dots between.
+            format!("{header}.").repeat(10),
+            // Two base64 words that decode to nothing in particular.
+            format!(
+                "ey{}.ey{}.{}",
+                synthetic_token(1, 30, ALNUM),
+                synthetic_token(2, 30, ALNUM),
+                synthetic_token(3, 43, ALNUM)
+            ),
+            // A header with no algorithm.
+            format!(
+                "{}.{claims}.{}",
+                base64url(br#"{"typ":"JWT","kid":"abcdef"}"#),
+                synthetic_token(3, 43, ALNUM)
+            ),
+        ] {
+            let text = format!("token {not_a_token}\n");
+            assert!(
+                scan_text_high_confidence(&text).is_empty(),
+                "{:?}",
+                scan_text_high_confidence(&text)
+            );
+            assert_eq!(redact_text(&text).1, 0);
+        }
+        assert!(plausible_jwt(&real));
+        // Escaped slashes, as a token quoted inside JSON can have, do not hide it.
+        assert!(plausible_jwt(&real.replacen('.', "\\.", 0)));
+    }
+
+    #[test]
+    fn a_scan_says_when_it_stopped_at_the_limit_and_redaction_has_none() {
+        let key = |i: u64| format!("ghp_{}", synthetic_token(i + 1, 36, ALNUM));
+        let lines = |n: u64| {
+            (0..n)
+                .map(|i| format!("k{i} {}\n", key(i)))
+                .collect::<String>()
+        };
+
+        let over = lines(2500);
+        let scan = scan_high_confidence(None, &over);
+        assert_eq!(scan.matches.len(), MAX_SECRETS_PER_TEXT);
+        assert!(scan.more, "2,500 keys are more than the limit");
+        // The older entry point returns the same matches, without the flag.
+        assert_eq!(scan_text_high_confidence(&over).len(), MAX_SECRETS_PER_TEXT);
+        // Redaction takes all of them: none may be left in a file reported as redacted.
+        let (redacted, count) = redact_text(&over);
+        assert_eq!(count, 2500);
+        assert!(scan_text_high_confidence(&redacted).is_empty());
+
+        let exact = lines(MAX_SECRETS_PER_TEXT as u64);
+        let scan = scan_high_confidence(None, &exact);
+        assert_eq!(scan.matches.len(), MAX_SECRETS_PER_TEXT);
+        assert!(!scan.more, "exactly the limit is not more than the limit");
+
+        let few = scan_high_confidence(None, &lines(3));
+        assert_eq!((few.matches.len(), few.more), (3, false));
     }
 
     fn anthropic_key() -> String {
@@ -1990,6 +3394,63 @@ mod tests {
         assert_eq!(humanize("anthropic-api-key"), "Anthropic API key");
         assert_eq!(humanize("aws-access-token"), "AWS access token");
         assert_eq!(humanize("private-key"), "Private key");
+    }
+
+    #[test]
+    fn providers_are_spelled_the_way_they_spell_themselves() {
+        for (id, shown) in [
+            // The three that were reported: "Npm", "Openrouter", "Xai".
+            ("npm-access-token", "npm access token"),
+            ("openrouter-api-key", "OpenRouter API key"),
+            ("xai-api-key", "xAI API key"),
+            ("github-fine-grained-pat", "GitHub fine-grained PAT"),
+            ("huggingface-access-token", "Hugging Face access token"),
+            ("new-relic-user-api-key", "New Relic user API key"),
+            ("weights-and-biases-api-key", "Weights & Biases API key"),
+            ("hashicorp-tf-api-token", "HashiCorp Terraform API token"),
+            (
+                "aws-amazon-bedrock-api-key-long-lived",
+                "Amazon Bedrock API key long-lived",
+            ),
+            ("gitlab-cicd-job-token", "GitLab CI/CD job token"),
+            ("gitlab-ptt", "GitLab pipeline trigger token"),
+            ("1password-secret-key", "1Password secret key"),
+            (
+                "airtable-personnal-access-token",
+                "Airtable personal access token",
+            ),
+            ("stability-ai-api-key", "Stability AI API key"),
+            ("jwt", "JWT"),
+            ("curl-auth-header", "curl auth header"),
+        ] {
+            assert_eq!(humanize(id), shown);
+        }
+        // No name in the pack is left with a lower-case start by accident: the only ones that
+        // begin lower-case are the names that are written that way.
+        let lower: Vec<String> = raw_rules()
+            .into_iter()
+            .map(|(id, _, _)| humanize(&id))
+            .filter(|name| name.starts_with(|c: char| c.is_lowercase()))
+            .collect();
+        for name in &lower {
+            assert!(
+                ["npm ", "xAI ", "curl ", "age "]
+                    .iter()
+                    .any(|p| name.starts_with(p)),
+                "{name}"
+            );
+        }
+        // Every key in the table is used by some rule, so the table cannot collect dead entries.
+        let ids: Vec<String> = raw_rules().into_iter().map(|(id, _, _)| id).collect();
+        for (key, _) in NAMES {
+            let used = ids.iter().any(|id| {
+                id == key
+                    || id.starts_with(&format!("{key}-"))
+                    || id.ends_with(&format!("-{key}"))
+                    || id.contains(&format!("-{key}-"))
+            });
+            assert!(used, "unused: {key}");
+        }
     }
 
     #[test]

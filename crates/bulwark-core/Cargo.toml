@@ -29,6 +29,10 @@ rayon.workspace = true
 walkdir.workspace = true
 ignore.workspace = true
 libc.workspace = true
+# Reads a secret rule's pattern as a syntax tree, so the pack loader can tell a key with a fixed
+# prefix (`ghp_…`, `sk-ant-…`) from a keyword-and-value pattern and work out which characters can
+# follow it (see `ai_scan::secrets::relax_terminator`). Already in the tree: `regex` is built on it.
+regex-syntax = "0.8.11"
 
 [dev-dependencies]
 tempfile = "3"
@@ -37,4 +41,3 @@ tempfile = "3"
 # with the rule pack and no secret-shaped literal is ever committed. Test-only, never shipped.
 rand = "0.10"
 rand_regex = "0.19"
-regex-syntax = "0.8.11"
