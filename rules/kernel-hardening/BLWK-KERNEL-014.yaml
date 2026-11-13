@@ -1,7 +1,10 @@
 id: BLWK-KERNEL-014
 title: ICMP redirects are accepted
 category: kernel-hardening
-severity: medium
+# Low: 1 is the kernel's own default for a machine that is not a router, and by default
+# (secure_redirects) it only takes redirects from a gateway it already uses. Source routing and
+# reverse-path filtering, where the default is already the safe value, stay medium.
+severity: low
 collector: sysctl_kernel
 condition: accept_redirects == 1
 explain: >

@@ -1,7 +1,10 @@
 id: BLWK-PRIV-002
 title: No GRUB boot loader password is set
 category: privilege-escalation
-severity: medium
+# Low: no distribution sets a boot loader password by default, the attack needs someone at the
+# console, and the fix can stop an unattended machine from booting. Worth knowing, not a problem
+# to fix on every machine.
+severity: low
 collector: grub_password
 condition: password_set == false
 explain: >

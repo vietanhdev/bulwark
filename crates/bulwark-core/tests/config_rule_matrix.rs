@@ -153,6 +153,7 @@ fn fim_uncovered_003_readable_vs_unreadable() {
             ("in_baseline", Value::Bool(false)),
             ("currently_present", Value::Bool(true)),
             ("unreadable", Value::Bool(false)),
+            ("needs_admin", Value::Bool(false)),
             ("changed", Value::Bool(false)),
             ("baseline_exists", Value::Bool(true)),
         ])],
@@ -166,11 +167,37 @@ fn fim_uncovered_003_readable_vs_unreadable() {
         ("in_baseline", Value::Bool(false)),
         ("currently_present", Value::Bool(true)),
         ("unreadable", Value::Bool(true)),
+        ("needs_admin", Value::Bool(false)),
         ("changed", Value::Bool(false)),
         ("baseline_exists", Value::Bool(true)),
     ])];
     assert!(!fires("file_integrity", unreadable.clone(), "BLWK-FIM-003"));
     assert!(fires("file_integrity", unreadable, "BLWK-FIM-007"));
+}
+
+#[test]
+fn a_file_only_an_administrator_may_read_is_not_a_failed_check() {
+    // Some systems ship /etc/ssh/sshd_config as 600 root. An ordinary scan may not read it, and
+    // that used to raise "could not verify" (medium) on every scan, for a file better protected
+    // than the default. It is "not covered" (info), unless it was readable when the baseline was
+    // recorded: then losing access is worth reporting.
+    let row = |in_baseline: bool| {
+        vec![fact(&[
+            ("path", Value::String("/etc/ssh/sshd_config".into())),
+            ("kind", Value::String("file".into())),
+            ("in_baseline", Value::Bool(in_baseline)),
+            ("currently_present", Value::Bool(true)),
+            ("unreadable", Value::Bool(true)),
+            ("needs_admin", Value::Bool(true)),
+            ("changed", Value::Bool(false)),
+            ("baseline_exists", Value::Bool(true)),
+        ])]
+    };
+    assert!(!fires("file_integrity", row(false), "BLWK-FIM-007"));
+    assert!(fires("file_integrity", row(false), "BLWK-FIM-003"));
+    assert!(!fires("file_integrity", row(false), "BLWK-FIM-001"));
+    assert!(fires("file_integrity", row(true), "BLWK-FIM-007"));
+    assert!(!fires("file_integrity", row(true), "BLWK-FIM-003"));
 }
 
 #[test]
@@ -182,6 +209,7 @@ fn fim_modified_001_and_deleted_002() {
             ("currently_present", Value::Bool(present)),
             ("changed", Value::Bool(changed)),
             ("unreadable", Value::Bool(false)),
+            ("needs_admin", Value::Bool(false)),
             ("baseline_exists", Value::Bool(true)),
         ])]
     };
@@ -637,6 +665,7 @@ fn fim_no_baseline_is_reported_once_009() {
         ("currently_present", Value::Bool(false)),
         ("changed", Value::Bool(false)),
         ("unreadable", Value::Bool(false)),
+        ("needs_admin", Value::Bool(false)),
     ]);
     let file_row = |p: &str| {
         fact(&[
@@ -647,6 +676,7 @@ fn fim_no_baseline_is_reported_once_009() {
             ("currently_present", Value::Bool(true)),
             ("changed", Value::Bool(false)),
             ("unreadable", Value::Bool(false)),
+            ("needs_admin", Value::Bool(false)),
         ])
     };
     let rows = vec![summary, file_row("/etc/passwd"), file_row("/usr/bin/sudo")];

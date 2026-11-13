@@ -87,6 +87,18 @@ fn compute_hashes(paths: &[PathBuf]) -> HashMap<String, String> {
     parse_hash_lines(&String::from_utf8_lossy(&output.stdout))
 }
 
+/// True when this process is not root and the system refuses to let it open `path` for reading.
+/// Root is never "denied": if root could not hash a file, something else is wrong with it.
+fn denied_to_this_user(path: &Path) -> bool {
+    if crate::platform::is_root() {
+        return false;
+    }
+    matches!(
+        std::fs::File::open(path),
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied
+    )
+}
+
 /// Shared by both collectors: for every path in `watched` that either currently exists or
 /// has a recorded baseline entry (so a since-deleted-but-previously-baselined file still
 /// gets reported, not silently dropped), produce one fact row describing whether it's
@@ -140,6 +152,14 @@ fn collect_for(watched: &[&str], baseline_file: &Path, with_summary: bool) -> Ve
             // false alarm of exactly the kind this project keeps finding — absence of evidence
             // dressed up as evidence. It is surfaced as its own state instead.
             let unreadable = present && current_hash.is_none();
+            // A file only an administrator may read is a different case from one that could not
+            // be hashed: nothing is wrong with it, this scan simply is not allowed to look. On a
+            // system that ships `/etc/ssh/sshd_config` as `600 root`, reporting that as "could not
+            // verify" raised the same medium finding on every ordinary scan, for a file that is
+            // better protected than the default. The rules use this flag to say "needs an
+            // administrator scan" instead, unless the file was readable when the baseline was
+            // recorded, in which case losing access to it is itself worth reporting.
+            let needs_admin = unreadable && denied_to_this_user(Path::new(&path));
             let changed = match (in_baseline, present) {
                 (true, false) => true, // baselined then deleted — a real, knowable change
                 // Only a hash we actually computed and that actually differs counts as changed.
@@ -153,6 +173,7 @@ fn collect_for(watched: &[&str], baseline_file: &Path, with_summary: bool) -> Ve
             fact.insert("currently_present".to_string(), Value::Bool(present));
             fact.insert("changed".to_string(), Value::Bool(changed));
             fact.insert("unreadable".to_string(), Value::Bool(unreadable));
+            fact.insert("needs_admin".to_string(), Value::Bool(needs_admin));
             fact.insert("kind".to_string(), Value::String("file".into()));
             fact
         })
@@ -165,6 +186,7 @@ fn collect_for(watched: &[&str], baseline_file: &Path, with_summary: bool) -> Ve
         summary.insert("currently_present".to_string(), Value::Bool(false));
         summary.insert("changed".to_string(), Value::Bool(false));
         summary.insert("unreadable".to_string(), Value::Bool(false));
+        summary.insert("needs_admin".to_string(), Value::Bool(false));
         summary.insert("kind".to_string(), Value::String("summary".into()));
         summary.insert("watched".to_string(), Value::from(rows.len()));
         rows.push(summary);
@@ -479,6 +501,11 @@ mod tests {
         );
         if unreadable {
             assert!(!changed, "unreadable file is not a modification");
+            // Mode 000 on a file we own: the system refuses us, so this is the "needs an
+            // administrator" case and the rules treat it as such (root never gets here).
+            assert_eq!(row.get("needs_admin"), Some(&Value::Bool(true)));
+        } else {
+            assert_eq!(row.get("needs_admin"), Some(&Value::Bool(false)));
         }
         // Restore perms so tempdir cleanup works.
         #[cfg(unix)]
@@ -513,6 +540,7 @@ mod tests {
             "currently_present",
             "changed",
             "unreadable",
+            "needs_admin",
         ] {
             assert!(summaries[0].contains_key(k), "{k}");
         }

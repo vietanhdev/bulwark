@@ -1,7 +1,11 @@
 id: BLWK-SSH-005
 title: SSH TCP forwarding/tunneling is enabled
 category: ssh-remote-access
-severity: medium
+# Low, not medium: "yes" is what OpenSSH ships with, so this fires on every stock server. It
+# widens what a logged-in user can do; it does not let anyone in. Rated with the other
+# forwarding defaults (X11, agent). GatewayPorts and tun devices, which are off by default and
+# expose more, stay medium.
+severity: low
 collector: sshd_config
 condition: allow_tcp_forwarding == "yes"
 explain: >

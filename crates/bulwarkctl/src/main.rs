@@ -50,10 +50,10 @@ struct Cli {
 enum Commands {
     /// Run a scan and print findings
     Scan {
-        /// Machine-readable JSON output instead of a table
         /// Show low-priority items too, and every place each problem was found
         #[arg(long)]
         all: bool,
+        /// Machine-readable JSON output instead of the report
         #[arg(long)]
         json: bool,
         /// Skip persisting this run to the local findings database

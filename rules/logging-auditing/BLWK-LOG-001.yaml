@@ -1,7 +1,9 @@
 id: BLWK-LOG-001
 title: auditd is not installed
 category: logging-auditing
-severity: medium
+# Low: no mainstream distribution installs auditd by default, and its absence is a missing
+# record, not a way in. A stock server should not open with this as a problem to fix.
+severity: low
 collector: logging
 # The Windows host owns this inside WSL (its kernel, network stack and console), so it is not
 # something the distro can act on: reported as not applicable there, never as passing.

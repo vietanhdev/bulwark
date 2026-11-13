@@ -230,10 +230,52 @@ impl Problem<'_> {
         }
         let trimmed = common.trim_end_matches([' ', ',', '-', '—']).trim_end();
         if trimmed.chars().count() >= 12 {
-            trimmed.to_string()
-        } else {
-            first.to_string()
+            return trimmed.to_string();
         }
+        // Titles that differ at the start and agree at the end ("Anthropic API key exposed in AI
+        // context", "Curl auth user exposed in AI context"): showing the first one for all of them
+        // names a kind of key that most of the places may not hold. Name the most common kind and
+        // count the others.
+        self.title_by_shared_ending()
+            .unwrap_or_else(|| first.to_string())
+    }
+
+    fn title_by_shared_ending(&self) -> Option<String> {
+        let first = self.items[0].title;
+        let mut ending: Vec<char> = first.chars().rev().collect();
+        for f in &self.items[1..] {
+            let n = ending
+                .iter()
+                .zip(f.title.chars().rev())
+                .take_while(|(a, b)| **a == *b)
+                .count();
+            ending.truncate(n);
+        }
+        let ending: String = ending.into_iter().rev().collect();
+        // Start at a whole word.
+        let ending = &ending[ending.find(' ')?..];
+        if ending.trim().chars().count() < 12 {
+            return None;
+        }
+        let mut kinds: Vec<(&str, usize)> = Vec::new();
+        for f in &self.items {
+            let kind = f.title.strip_suffix(ending)?.trim();
+            if kind.is_empty() {
+                return None;
+            }
+            match kinds.iter_mut().find(|(k, _)| *k == kind) {
+                Some((_, n)) => *n += 1,
+                None => kinds.push((kind, 1)),
+            }
+        }
+        // Most common first; a stable sort keeps first-seen order among equals.
+        kinds.sort_by(|a, b| b.1.cmp(&a.1));
+        let others = kinds.len() - 1;
+        Some(format!(
+            "{} and {others} other {}{ending}",
+            kinds[0].0,
+            plural(others, "kind", "kinds")
+        ))
     }
 }
 
@@ -582,8 +624,23 @@ pub fn render(scan: &ScanRun, ignores: &Ignores, opts: &ReportOptions) -> String
         .collect();
 
     let mut gaps: Vec<String> = Vec::new();
+    // Checks whose collector needs admin rights are counted once, as checks. They used to be
+    // counted twice: as "N check areas need admin rights" and again inside "M checks couldn't run
+    // here", which read as M further checks being broken.
+    let need_admin = scan
+        .rules_needing_admin
+        .iter()
+        .filter(|id| !scan.rules_evaluated.contains(id) && !scan.rules_not_applicable.contains(id))
+        .count();
     let n = scan.privileged_collectors_skipped.len();
-    if n > 0 {
+    if need_admin > 0 {
+        gaps.push(format!(
+            "{need_admin} {} admin rights — run {}",
+            plural(need_admin, "check needs", "checks need"),
+            st.bold("sudo bulwarkctl scan --privileged")
+        ));
+    } else if n > 0 {
+        // A scan result from an older engine names the areas but not the checks.
         gaps.push(format!(
             "{n} {} admin rights — run {}",
             plural(n, "check area needs", "check areas need"),
@@ -592,7 +649,8 @@ pub fn render(scan: &ScanRun, ignores: &Ignores, opts: &ReportOptions) -> String
     }
     let undecided = scan
         .rules_loaded
-        .saturating_sub(scan.rules_evaluated.len() + scan.rules_not_applicable.len());
+        .saturating_sub(scan.rules_evaluated.len() + scan.rules_not_applicable.len())
+        .saturating_sub(need_admin);
     if undecided > 0 {
         gaps.push(format!(
             // No reason is guessed: a missing tool, an unreadable setting and a check this build
@@ -968,6 +1026,57 @@ mod tests {
         let all = render(&s, &Ignores::default(), &opts(true));
         assert!(all.contains("No banner") && all.contains("· /k/a") && all.contains("· /k/b"));
         assert!(r.contains("in: /k/a, /k/b"), "{r}");
+    }
+
+    #[test]
+    fn titles_that_agree_only_at_the_end_name_the_commonest_kind_and_count_the_rest() {
+        let key = |kind: &str, file: &str| {
+            finding(
+                "BLWK-AI-001",
+                Severity::High,
+                &format!("{kind} exposed in AI context"),
+                file,
+            )
+        };
+        let s = scan(vec![
+            key("Curl auth user", "/t/a"),
+            key("Anthropic API key", "/t/b"),
+            key("Anthropic API key", "/t/c"),
+            key("OpenAI API key", "/t/d"),
+        ]);
+        let r = render(&s, &Ignores::default(), &opts(false));
+        assert!(
+            r.contains("Anthropic API key and 2 other kinds exposed in AI context  ×4"),
+            "{r}"
+        );
+        // One other kind reads as one.
+        let s = scan(vec![
+            key("Curl auth user", "/t/a"),
+            key("OpenAI API key", "/t/b"),
+        ]);
+        let r = render(&s, &Ignores::default(), &opts(false));
+        assert!(
+            r.contains("Curl auth user and 1 other kind exposed in AI context"),
+            "{r}"
+        );
+    }
+
+    #[test]
+    fn checks_that_need_admin_rights_are_counted_once() {
+        // 10 loaded, 7 ran, 1 not applicable; the 2 left are both admin-only. The footer used to
+        // say "1 check area needs admin rights" and then "2 checks couldn't run here" as well.
+        let mut s = scan(vec![]);
+        s.rules_needing_admin = vec!["P1".into(), "P2".into()];
+        let r = render(&s, &Ignores::default(), &opts(false));
+        assert!(r.contains("2 checks need admin rights — run"), "{r}");
+        assert!(!r.contains("couldn't run here"), "{r}");
+        assert!(!r.contains("check area"), "{r}");
+
+        // One admin-only, one that failed for another reason: both lines, each counted once.
+        s.rules_needing_admin = vec!["P1".into()];
+        let r = render(&s, &Ignores::default(), &opts(false));
+        assert!(r.contains("1 check needs admin rights"), "{r}");
+        assert!(r.contains("1 check couldn't run here"), "{r}");
     }
 
     #[test]

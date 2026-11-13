@@ -67,6 +67,19 @@ fn build_fact(text: &str, umask_via_pam: bool) -> Fact {
             _ => {}
         }
     }
+    // A missing or negative PASS_MAX_DAYS / PASS_MIN_DAYS means "no limit": login.defs(5) says
+    // -1 is assumed when the line is absent, and that it disables the restriction. Arch ships
+    // neither line, and a rule comparing a number that was not there reported a condition error
+    // on every scan instead of the plain answer. Store what the system does: passwords never
+    // expire (the 99999 other distributions write for the same thing), no minimum age.
+    let unlimited =
+        |fact: &Fact, key: &str| fact.get(key).and_then(Value::as_i64).is_none_or(|n| n < 0);
+    if unlimited(&fact, "pass_max_days") {
+        fact.insert("pass_max_days".to_string(), Value::from(99_999));
+    }
+    if unlimited(&fact, "pass_min_days") {
+        fact.insert("pass_min_days".to_string(), Value::from(0));
+    }
     // SHA_CRYPT_MIN_ROUNDS is actionable only when the hashing scheme actually consults it.
     let sha_crypt_applies = matches!(encrypt_method.as_str(), "sha256" | "sha512");
     fact.insert("encrypt_method".to_string(), Value::from(encrypt_method));
@@ -125,6 +138,23 @@ mod tests {
         let fact = parse_login_defs(text);
         assert_eq!(fact.get("pass_max_days").unwrap(), &Value::from(99999));
         assert_eq!(fact.get("pass_min_len").unwrap(), &Value::from(8));
+    }
+
+    #[test]
+    fn absent_password_ages_mean_no_limit_not_a_missing_value() {
+        // Arch's stock login.defs has neither line. login.defs(5): -1 is assumed, which disables
+        // the restriction. The rules compare numbers, so the fact must carry what the system does.
+        let arch = parse_login_defs("PASS_MIN_LEN\t5\nENCRYPT_METHOD YESCRYPT\n");
+        assert_eq!(arch.get("pass_max_days").unwrap(), &Value::from(99_999));
+        assert_eq!(arch.get("pass_min_days").unwrap(), &Value::from(0));
+        // Written out as -1, the same thing.
+        let explicit = parse_login_defs("PASS_MAX_DAYS -1\nPASS_MIN_DAYS -1\n");
+        assert_eq!(explicit.get("pass_max_days").unwrap(), &Value::from(99_999));
+        assert_eq!(explicit.get("pass_min_days").unwrap(), &Value::from(0));
+        // A real limit is kept as written.
+        let set = parse_login_defs("PASS_MAX_DAYS 90\nPASS_MIN_DAYS 1\n");
+        assert_eq!(set.get("pass_max_days").unwrap(), &Value::from(90));
+        assert_eq!(set.get("pass_min_days").unwrap(), &Value::from(1));
     }
 
     #[test]
