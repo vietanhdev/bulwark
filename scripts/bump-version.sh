@@ -39,6 +39,13 @@ SNAP="snap/snapcraft.yaml"
 AUR_PKGBUILD="packaging/aur/PKGBUILD"
 AUR_SRCINFO="packaging/aur/.SRCINFO"
 COPR_SPEC="packaging/copr/bulwarkctl.spec"
+# Synced by `cargo update --workspace` below, and checked, because the AUR builds the tagged
+# tree with the lock file enforced: its PKGBUILD runs `cargo fetch --locked` and
+# `cargo build --frozen`. A tag whose Cargo.lock still records the previous version for the
+# workspace's own crates fails there ("the lock file needs to be updated but --locked was
+# passed"), and a tag cannot be fixed afterwards. Nothing in CI builds with --locked, so
+# without this check the first to find out is an Arch user.
+CARGO_LOCK="Cargo.lock"
 
 # Pull the current version out of each file with a pattern specific enough that it can't match
 # a dependency's version or an unrelated field.
@@ -54,6 +61,18 @@ read_snap()        { sed -n "s/^version: '\(.*\)'.*/\1/p" "$SNAP" | head -1; }
 read_aur_pkgbuild(){ sed -n 's/^pkgver=\(.*\)/\1/p' "$AUR_PKGBUILD" | head -1; }
 read_aur_srcinfo() { sed -n 's/^\tpkgver = \(.*\)/\1/p' "$AUR_SRCINFO" | head -1; }
 read_copr()        { sed -n 's/^Version: *\(.*\)/\1/p' "$COPR_SPEC" | head -1; }
+# The workspace's own crates as Cargo.lock records them, one "name version" per line: the
+# [[package]] entries with no `source` (every crate from a registry or git has one).
+read_lock_members() {
+  awk '
+    function flush() { if (name != "" && !src) print name, ver; name = ""; ver = ""; src = 0 }
+    /^\[\[package\]\]/ { flush(); next }
+    /^name = /    { gsub(/"/, "", $3); name = $3 }
+    /^version = / { gsub(/"/, "", $3); ver = $3 }
+    /^source = /  { src = 1 }
+    END { flush() }
+  ' "$CARGO_LOCK"
+}
 
 report() {
   printf '  %-48s %s\n' "$1" "$2"
@@ -104,7 +123,22 @@ check() {
     echo "       block (newest first) describing what changed, then re-run --check." >&2
     exit 1
   fi
-  echo "OK: all ten declarations agree at $ct, and the metainfo changelog matches"
+  # Cargo.lock: every workspace crate must be recorded at the same version.
+  local members stale
+  members=$(read_lock_members)
+  if [ -z "$members" ]; then
+    echo "ERROR: could not read the workspace crates from $CARGO_LOCK." >&2
+    exit 1
+  fi
+  stale=$(printf '%s\n' "$members" | awk -v v="$ct" '$2 != v { printf "%s (%s) ", $1, $2 }')
+  report "$CARGO_LOCK (workspace crates)" "${stale:-$ct}"
+  if [ -n "$stale" ]; then
+    echo "ERROR: $CARGO_LOCK still records another version for: $stale" >&2
+    echo "       The AUR package builds the tagged tree with --locked and fails on this." >&2
+    echo "       Run: cargo update --workspace   (then commit Cargo.lock)" >&2
+    exit 1
+  fi
+  echo "OK: all ten declarations agree at $ct, Cargo.lock matches, and the metainfo changelog matches"
   # The AUR checksum can only be right after the tag exists, so it is reported rather than
   # verified: fetching it would put a network call in the middle of a version bump.
   local sha
@@ -161,7 +195,8 @@ edit "$AUR_SRCINFO" "s/$OLD/$NEW/g"                                             
 edit "$COPR_SPEC"   "s/^(Version: +)$OLD$/\1$NEW/"                                                                           "COPR Version"
 
 # Sync Cargo.lock so the workspace crates' recorded versions match. Offline + minimal so this
-# neither hits the network nor upgrades unrelated dependencies.
+# neither hits the network nor upgrades unrelated dependencies. If neither attempt works (no
+# cargo on this machine), the check below reports the stale lock file instead of passing.
 echo "Syncing Cargo.lock..."
 cargo update --workspace --offline >/dev/null 2>&1 || cargo update --workspace >/dev/null 2>&1 || true
 

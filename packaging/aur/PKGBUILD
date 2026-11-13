@@ -29,7 +29,8 @@ options=('!lto')
 # Bulwark prints a distro-aware install hint when it is absent.
 optdepends=('clamav: antivirus scanning support'
             'openssh: monitoring other machines over SSH (bulwarkctl hosts)'
-            'curl: Telegram and e-mail alerts (bulwarkctl notify)')
+            'curl: Telegram and e-mail alerts (bulwarkctl notify)'
+            'git: skipping gitignored files in the AI-assistant scan (bulwarkctl ai scan)')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('765d15a0052f9177697dc55d61ed96c4ba45b8143dd3437bf4cff12476138bb2')
 

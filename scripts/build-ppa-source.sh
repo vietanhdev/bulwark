@@ -82,8 +82,12 @@ tar -xJf "$ORIG_IN" -C "$SRC_DIR" --strip-components=1
 [[ "$(realpath "$ORIG_IN")" == "$(realpath -m "$ORIG")" ]] || cp "$ORIG_IN" "$ORIG"
 else
 echo ">> exporting clean tree (git archive HEAD)"
+# Cargo.lock comes out of the archive with everything else (it is tracked). It used to be
+# copied over from the working tree afterwards, which on a clean checkout changes nothing and
+# on a tree with an uncommitted dependency change builds an orig from HEAD's sources and
+# somebody's unfinished lock file. An orig cannot be replaced once Launchpad has it.
 git archive --format=tar HEAD | tar -x -C "$SRC_DIR"
-cp Cargo.lock "$SRC_DIR/"
+[[ -f "$SRC_DIR/Cargo.lock" ]] || { echo "ERROR: Cargo.lock is not in HEAD" >&2; exit 1; }
 
 echo ">> trimming workspace to bulwark-core + bulwarkctl (drops the Tauri/agent members)"
 python3 - "$SRC_DIR/Cargo.toml" <<'PY'
@@ -97,8 +101,15 @@ open(p, "w").write(s)
 PY
 
 echo ">> vendoring dependencies (needs network; runs on THIS machine, not the builder)"
-( cd "$SRC_DIR" && cargo vendor --versioned-dirs --locked vendor >/dev/null 2>&1 \
-    || cargo vendor --versioned-dirs vendor >/dev/null )
+# --locked is expected to fail here: trimming the workspace drops the GUI's packages from the
+# lock file, which counts as a change. The second attempt rewrites it, keeping every version
+# the lock file already pinned. (`cd` on its own line: joined with `&&`, a failed cd would
+# fall through to the `||` and vendor into the repository root.)
+(
+  cd "$SRC_DIR"
+  cargo vendor --versioned-dirs --locked vendor >/dev/null 2>&1 \
+    || cargo vendor --versioned-dirs vendor >/dev/null
+)
 mkdir -p "$SRC_DIR/.cargo"
 cat > "$SRC_DIR/.cargo/config.toml" <<'EOF'
 # Written by scripts/build-ppa-source.sh. Redirects all crates-io lookups to the

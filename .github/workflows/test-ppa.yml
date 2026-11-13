@@ -124,5 +124,10 @@ jobs:
           test -s /tmp/scan.json
           grep -q '"rules_loaded"' /tmp/scan.json
           grep -q '"rules_loaded": *0' /tmp/scan.json && { echo "::error::scan loaded 0 rules"; exit 1; } || true
-          bulwarkctl fix list | grep -i "Available autofixes" >/dev/null && echo "fix preview OK"
+          # Not `… | grep … && echo OK`: a failure on the left of `&&` does not stop a
+          # `set -e` script, so that line could never fail the job.
+          bulwarkctl fix list > /tmp/fix-list.txt
+          grep -qi "Available autofixes" /tmp/fix-list.txt \
+            || { echo "::error::'bulwarkctl fix list' did not print its list of autofixes"; exit 1; }
+          echo "fix preview OK"
           echo "PPA package installs and runs on ${{ matrix.series }} (${{ matrix.arch }}) ✅"

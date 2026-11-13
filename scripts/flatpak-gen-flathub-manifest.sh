@@ -125,7 +125,7 @@ JSON
 
 echo
 echo ">> staged in ${OUT_DIR}:"
-ls -1 "${OUT_DIR}" | sed 's/^/     /'
+for f in "${OUT_DIR}"/*; do echo "     ${f##*/}"; done
 echo
 echo ">> next:"
 echo "     1. lint:  flatpak run --command=flatpak-builder-lint org.flatpak.Builder \\"

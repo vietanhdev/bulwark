@@ -33,8 +33,16 @@ EOF
   exit 1
 }
 
-VERSION="${1:-$(sed -n 's/^Version: *//p' "${SPEC}")}"
+SPEC_VERSION="$(sed -n 's/^Version: *//p' "${SPEC}")"
+VERSION="${1:-${SPEC_VERSION}}"
 [[ -n "${VERSION}" ]] || { echo "ERROR: could not determine version" >&2; exit 1; }
+# The SRPM is built from the spec, so the spec's Version is what gets published whatever is
+# passed here. An argument that disagrees used to check one tag and then build another.
+[[ "${VERSION}" == "${SPEC_VERSION}" ]] || {
+  echo "ERROR: asked for ${VERSION}, but ${SPEC} says ${SPEC_VERSION}." >&2
+  echo "       Run scripts/bump-version.sh ${VERSION} (or check out the tag) first." >&2
+  exit 1
+}
 
 # The spec fetches Source0 from the tag, so the tag must exist on the remote or
 # the COPR builder gets a 404 partway through a build that already queued.
@@ -54,7 +62,10 @@ docker run --rm -v "${SPEC}:/spec/bulwarkctl.spec:ro" -v "${OUT}:/out" fedora:la
   cp ~/rpmbuild/SRPMS/*.src.rpm /out/
 '
 
-SRPM="$(ls -1 "${OUT}"/*.src.rpm | head -n1)"
+srpms=("${OUT}"/*.src.rpm)
+[[ ${#srpms[@]} -eq 1 && -f "${srpms[0]}" ]] \
+  || { echo "ERROR: expected exactly one .src.rpm in ${OUT}, found: ${srpms[*]}" >&2; exit 1; }
+SRPM="${srpms[0]}"
 echo ">> built ${SRPM##*/}"
 
 command -v copr-cli >/dev/null || { echo "ERROR: copr-cli not installed (pip install --user copr-cli)" >&2; exit 1; }

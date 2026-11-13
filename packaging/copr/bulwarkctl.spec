@@ -34,6 +34,7 @@ BuildRequires:  gcc
 Recommends:     clamav
 Recommends:     openssh-clients
 Recommends:     curl
+Recommends:     git
 
 # Both architectures build from this spec unchanged: no arch-specific code, and the only
 # native dependency (libsqlite3-sys) compiles vendored SQLite C. Widening this alone is not

@@ -11,6 +11,7 @@ pkgbase = bulwarkctl
 	optdepends = clamav: antivirus scanning support
 	optdepends = openssh: monitoring other machines over SSH (bulwarkctl hosts)
 	optdepends = curl: Telegram and e-mail alerts (bulwarkctl notify)
+	optdepends = git: skipping gitignored files in the AI-assistant scan (bulwarkctl ai scan)
 	options = !lto
 	source = bulwarkctl-0.15.0.tar.gz::https://github.com/vietanhdev/bulwark/archive/refs/tags/v0.15.0.tar.gz
 	sha256sums = 765d15a0052f9177697dc55d61ed96c4ba45b8143dd3437bf4cff12476138bb2

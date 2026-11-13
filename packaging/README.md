@@ -349,8 +349,9 @@ its code; that is how the broken snap stayed green.
 Still open: **the polkit policy.** A classic snap can't install
 `polkit/com.bulwark.policy` into the host's `/usr/share/polkit-1/actions`, so `pkexec`
 falls back to the distro-default polkit action (usually `auth_admin_keep`) instead of
-Bulwark's `auth_admin`. Same opt-in caveat that the plain `.deb`/`.rpm` already have (see
-the root `AGENTS.md` "Open question — the polkit policy is not packaged").
+Bulwark's `auth_admin`. The GUI `.deb` and `.rpm` do install it; the snap, the AppImage and
+the Flatpak cannot, and `install-polkit.sh` is the manual route for them (see the root
+`AGENTS.md`, "The polkit policy ships in the GUI `.deb` and `.rpm`, and nowhere else").
 
 ---
 
@@ -393,8 +394,9 @@ are now closed — (a) `cargo build -p bulwark-app` links cleanly against the GN
 runtime's **WebKitGTK** (ABI compatible), and (b) the **rule pack resolves in the
 sandbox**: the bundled CLI lists all 65 rules from `/app/bin/rules` with no
 `--rules-dir`, and the GUI's in-process scans use the same next-to-exe resolver.
-(One thing still needs a graphical session to eyeball: the GUI window actually
-rendering — `flatpak run` it on a desktop.)
+The GUI window itself is checked by `publish-flatpak.yml`, which starts the installed
+Flatpak on a virtual display with a session bus, requires a painted window and a second
+launch that hands over to the first, and fails if it cannot take the screenshot.
 
 ### The privileged-scan limitation (read this before promising features)
 
@@ -403,23 +405,24 @@ consequences:
 
 1. **Unprivileged scans** work: the manifest grants `--filesystem=host:ro`, so
    config/SSH/log collectors can read host state read-only.
-2. **Privileged scans need real work.** The only route out of the sandbox is
+2. **Privileged scans leave the sandbox.** The only route out is
    `flatpak-spawn --host pkexec bulwarkctl scan --privileged …`, which requires
-   **both** the `--talk-name=org.freedesktop.Flatpak` permission (already in the
-   manifest) **and** `bulwarkctl` installed on the host (i.e. from the PPA above),
-   **and** an app-code change: `resolve_cli_binary`/`scan_privileged` must detect
-   the sandbox (`/.flatpak-info` present) and rewrite the invocation to go through
-   `flatpak-spawn --host`. That code doesn't exist yet — until it does, the
-   Flatpak is unprivileged-only. Don't implement it without a live flatpak to test
-   against; the sandbox-detection + host-CLI-resolution is exactly the kind of
-   path logic that silently misbehaves when guessed.
+   **both** the `--talk-name=org.freedesktop.Flatpak` permission (in the manifest)
+   **and** `bulwarkctl` installed on the host (for example from the PPA above).
+   The app does this itself: `bulwark_core::sandbox` detects `/.flatpak-info` and
+   wraps host commands in `flatpak-spawn --host`, and `scan_privileged` explains
+   what is missing when the host cannot be reached or has no `bulwarkctl`. Changes
+   to that path want testing against a live Flatpak, not reasoning: sandbox
+   detection and host-CLI resolution are exactly the kind of path logic that
+   silently misbehaves when guessed.
 
 ### App-id note for Flathub
 
-The manifest uses `com.vietanhdev.bulwark`. Note this differs from the **Tauri app
-identifier** still set in `tauri.conf.json` (`com.vietanhnv.bulwark`); for the
-cleanest desktop integration those should match, but changing the Tauri one moves
-the app's config/data dirs, so it's left as a separate decision.
+The manifest uses `com.vietanhdev.bulwark`, and since 0.8.6 so does the **Tauri app
+identifier** in `tauri.conf.json` (it read `com.vietanhnv.bulwark` before, a typo). They
+must stay equal: the app's single-instance bus name is `<identifier>.SingleInstance`, and
+Flatpak grants an app only the names under its own app-id.
+`scripts/check-packaging-consistency.sh` fails if they drift apart.
 
 Flathub requires the app-id prefix to be a domain you control. `com.vietanhdev.bulwark`
 satisfies this — the maintainer owns `vietanhdev.com`, so this app-id is Flathub-ready
@@ -445,8 +448,9 @@ scripts/flatpak-gen-flathub-manifest.sh v0.8.1   # or pin one
 
 It inherits everything from the dev manifest and rewrites *only* the source block to
 `type: git` + `tag` + `commit`, then stages `build/flathub-submission/` with the
-manifest, the two generated `*-sources.json`, the `.desktop`, the `.metainfo.xml` and
-a `flathub.json` pinning `x86_64`/`aarch64`.
+manifest, the two generated `*-sources.json` and a `flathub.json` pinning
+`x86_64`/`aarch64`. The `.desktop` and `.metainfo.xml` are not copied: the manifest
+installs them from the git source it fetches, so they travel with this repository's tag.
 
 **Tag first, then generate.** The build installs the metainfo *from the fetched
 source tree*, so a fix that is only in your working copy is invisible to Flathub —
@@ -457,9 +461,10 @@ stale. Cut a fresh tag whenever anything under `packaging/flatpak/` changes.
 Then lint both artifacts (this is what Flathub runs, and it must be clean):
 
 ```bash
-cd build/flathub-submission
-flatpak run --command=flatpak-builder-lint org.flatpak.Builder appstream com.vietanhdev.bulwark.metainfo.xml
-flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest com.vietanhdev.bulwark.yaml
+flatpak run --command=flatpak-builder-lint org.flatpak.Builder appstream \
+  packaging/flatpak/com.vietanhdev.bulwark.metainfo.xml
+flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest \
+  build/flathub-submission/com.vietanhdev.bulwark.yaml
 ```
 
 Finally: fork `flathub/flathub` (**uncheck** "copy the master branch only"), branch
@@ -593,7 +598,7 @@ is always a deliberate click.
 |---|---|---|
 | `publish-ppa.yml` | Builds the signed source package(s), `dput`s them to `ppa:vietanhng/bulwark`, waits until Launchpad has accepted, built and published every series on every enabled architecture, then runs `test-ppa.yml` against the live PPA. The wait is a job of its own: when Launchpad's queue outlasts it (0.15.0 waited about seven hours for an x86_64 builder) the run ends red with nothing wrong, and **Re-run failed jobs** waits again without uploading. **Re-run all jobs** is refused once a revision has reached Launchpad for every series, because it would upload the same source again as the next revision. Inputs: `series`, `ppa_rev` (`auto` picks the next free revision), `dry_run`. A re-upload of a version reuses its published `.orig`, so it can run from any commit. | `LAUNCHPAD_GPG_PRIVATE_KEY`, `LAUNCHPAD_GPG_PASSPHRASE` |
 | `publish-snap.yml` | Builds the snap and releases to a channel. Input: `channel` (default `edge`). | `SNAPCRAFT_STORE_CREDENTIALS` |
-| `publish-flatpak.yml` | Builds `bulwark.flatpak`, uploads it as an artifact; attaches to a release if `release_tag` is given. | none |
+| `publish-flatpak.yml` | Builds `bulwark.flatpak`, launch-tests it and uploads it as an artifact. With `release_tag` it also adds the bundle, and its line in `SHA256SUMS`, to that release. It checks first that the checkout is at that version and that the release exists, and it uses `gh release upload`, which works on a draft or a published release and changes neither. (The release action it used before publishes a draft release unless told `draft: true`, so attaching the Flatpak before publishing would have published the release.) Start the run from the tag. | none |
 
 `test-ppa.yml` (manual, weekly, and called by `publish-ppa.yml`) installs from the live PPA on
 every series and both architectures, and fails unless the installed package is the newest
@@ -676,6 +681,11 @@ is granted classic. Two one-time steps, in order:
 `scripts/bump-version.sh` sets **ten** in-tree version declarations, and the packaging
 files here are among them — `snap/snapcraft.yaml`, the AUR `PKGBUILD` and `.SRCINFO`,
 and the COPR spec all get written by the script. Do not hand-edit them; run the script.
+
+It also syncs `Cargo.lock`, and `--check` fails if the lock file still records another
+version for one of the workspace's own crates. That matters for the AUR: its `PKGBUILD`
+runs `cargo fetch --locked` and `cargo build --frozen` on the tagged tree, which stop on a
+stale lock file, and a tag cannot be corrected afterwards.
 
 Two things it deliberately does not do:
 

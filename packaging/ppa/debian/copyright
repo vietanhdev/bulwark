@@ -7,6 +7,13 @@ Files: *
 Copyright: 2026 Viet Anh Nguyen
 License: Apache-2.0
 
+Files: packaging/flatpak/com.vietanhdev.bulwark.metainfo.xml
+Copyright: 2026 Viet Anh Nguyen
+License: CC0-1.0
+Comment:
+ The AppStream metadata declares CC0-1.0 as its metadata_license, as Flathub
+ requires; lintian compares that declaration with this file.
+
 Files: vendor/*
 Copyright: The respective crate authors
 License: Apache-2.0 or MIT
@@ -38,3 +45,11 @@ License: MIT
  of the Software, and to permit persons to whom the Software is furnished to do
  so, subject to the inclusion of the above copyright notice and this permission
  notice in all copies or substantial portions of the Software.
+
+License: CC0-1.0
+ To the extent possible under law, the author(s) have dedicated all copyright
+ and related and neighboring rights to this work to the public domain
+ worldwide. This work is distributed without any warranty.
+ .
+ On Debian systems, the complete text of the CC0 1.0 Universal license can be
+ found in /usr/share/common-licenses/CC0-1.0.
