@@ -226,7 +226,7 @@ cargo run -p bulwarkctl -- notify telegram       # optional: alerts to your own 
 # Apply safe, reversible autofixes for what a scan finds (dry-run by default; --apply to change).
 cargo run -p bulwarkctl -- fix list            # preview every available fix
 cargo run -p bulwarkctl -- fix ssh-perms --apply    # tighten ~/.ssh permissions
-sudo   bulwarkctl               fix all --apply     # ~/.ssh + /etc perms + sshd hardening
+sudo   bulwarkctl               fix all --apply     # /etc perms + sshd + kernel network settings
 cargo run -p bulwarkctl -- ssh protect         # one passphrase for every unencrypted key
 
 # GUI (from apps/bulwark-app/)

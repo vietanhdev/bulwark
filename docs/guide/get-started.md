@@ -80,6 +80,10 @@ bulwarkctl fix all           # preview
 bulwarkctl fix all --apply   # do it
 ```
 
+`fix all` applies the changes that cannot surprise you: file permissions, SSH settings that
+cannot lock you out, and kernel network settings. The login banner and password-ageing fixes
+change wording and policy, so it lists them and you run them by name.
+
 More in [Fixing findings](/guide/remediation).
 
 ## 5. See where your secrets live

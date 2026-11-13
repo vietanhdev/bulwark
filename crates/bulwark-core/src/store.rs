@@ -56,6 +56,49 @@ fn restrict_to_owner(path: &Path) {
 #[cfg(not(unix))]
 fn restrict_to_owner(_path: &Path) {}
 
+/// Whether `dir` is a folder Bulwark keeps its own state in: the folder of the default database,
+/// or anything inside it (`remotes/`, `keys/`). Those are Bulwark's to lock down. Any other folder
+/// a database is put in with `--db-path` — `/tmp`, a project checkout, a shared drive — belongs to
+/// whoever made it, and its permissions are not ours to change.
+fn is_own_data_dir(dir: &Path, own: Option<&Path>) -> bool {
+    let Some(own) = own.filter(|p| !p.as_os_str().is_empty()) else {
+        return false;
+    };
+    let resolve = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    resolve(dir).starts_with(resolve(own))
+}
+
+/// Creates the database file owner-only *before* SQLite opens it. SQLite gives each side file
+/// (`-journal`, `-wal`, `-shm`) the mode the database has at the moment the side file is made, so
+/// a private database means private side files. Creating it under the usual umask and tightening
+/// it afterwards left the database and its first journal readable by others while the schema was
+/// being set up; this way there is no such moment. An existing file is not touched here — it is
+/// tightened after opening, and its side files follow from then on.
+#[cfg(unix)]
+fn create_private(path: &Path) {
+    use std::os::unix::fs::OpenOptionsExt;
+    let _ = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path);
+}
+
+#[cfg(not(unix))]
+fn create_private(_path: &Path) {}
+
+/// The files SQLite keeps beside a database.
+fn side_files(path: &Path) -> Vec<std::path::PathBuf> {
+    ["-journal", "-wal", "-shm"]
+        .iter()
+        .map(|suffix| {
+            let mut name = path.as_os_str().to_os_string();
+            name.push(suffix);
+            std::path::PathBuf::from(name)
+        })
+        .collect()
+}
+
 // ---- row types -----------------------------------------------------------------------------
 //
 // Diesel maps a table row to a struct. These are the *storage* shapes, kept separate from the
@@ -82,6 +125,9 @@ struct ScanRunRow {
     /// [`Store::latest_rules_evaluated`] so compliance scoring can be computed from stored state
     /// without inventing the set — see the migration that added it.
     rules_evaluated: String,
+    /// JSON [`SeverityCounts`] of the findings this run left open; `None` on rows from before the
+    /// column existed.
+    severity_counts: Option<String>,
 }
 
 impl ScanRunRow {
@@ -104,6 +150,11 @@ impl ScanRunRow {
             // like", which is what the History view needs.
             total_findings: scan.findings.len() as i64,
             rules_evaluated: serde_json::to_string(&scan.rules_evaluated)?,
+            // Like `total_findings`: what this scan produced. `persist_and_reconcile` replaces
+            // both with what the run left open once ignores and carried-forward rows are known.
+            severity_counts: Some(serde_json::to_string(&SeverityCounts::of(
+                scan.findings.iter().map(|f| f.severity),
+            ))?),
         })
     }
 }
@@ -464,17 +515,29 @@ impl Store {
     /// `<name>.pre-orm.bak` rather than deleted — it is the user's data, even if we no longer read
     /// it — and the fact is logged rather than done silently.
     pub fn open(path: &Path) -> anyhow::Result<Self> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-            // The database is a catalogue of this host's security weaknesses (open findings, fix
-            // hints) plus masked-secret evidence and secret file paths — an attacker's prioritized
-            // target list if another local user can read it. Lock down the directory and (below)
-            // the file to owner-only, rather than inheriting a world-readable default umask.
-            restrict_to_owner(parent);
+        // The database is a catalogue of this host's security weaknesses (open findings, fix
+        // hints) plus masked-secret evidence and secret file paths — an attacker's prioritized
+        // target list if another local user can read it. The file (below) is always owner-only.
+        // The folder is locked down too, but only when it is Bulwark's: one this call created, or
+        // the default data folder. `--db-path /tmp/scan.db` used to turn `/tmp` into `0700`, and
+        // `--db-path ./scan.db` did the same to the project folder it was run in.
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            let existed = parent.exists();
+            std::fs::create_dir_all(parent)
+                .map_err(|e| anyhow::anyhow!("cannot create {}: {e}", parent.display()))?;
+            let own = crate::paths::default_data_dir();
+            if !existed || is_own_data_dir(parent, own.as_deref()) {
+                restrict_to_owner(parent);
+            }
         }
-        if is_pre_orm_database(path)? {
+        // SQLite's own words for a failure name no file ("unable to open database file", "file
+        // is not a database"), which leaves the user guessing which database is meant. Say which.
+        let named = |e: &dyn std::fmt::Display| {
+            anyhow::anyhow!("cannot use the database {}: {e}", path.display())
+        };
+        if is_pre_orm_database(path).map_err(|e| named(&e))? {
             let backup = path.with_extension("db.pre-orm.bak");
-            std::fs::rename(path, &backup)?;
+            std::fs::rename(path, &backup).map_err(|e| named(&e))?;
             eprintln!(
                 "[bulwark] the findings database predates the current schema; it has been kept at \
                  {} and a fresh one created. Findings are rebuilt by the next scan.",
@@ -485,12 +548,17 @@ impl Store {
         let url = path
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("database path is not valid UTF-8"))?;
-        let mut conn = SqliteConnection::establish(url)?;
-        prepare(&mut conn)?;
-        // `establish` creates the file under the process umask (typically 0644, world-readable);
-        // tighten it to owner-only now that it exists. Best-effort: a failure here (e.g. a
-        // filesystem without Unix modes) must not stop the tool from working.
+        create_private(path);
+        let mut conn = SqliteConnection::establish(url).map_err(|e| named(&e))?;
+        prepare(&mut conn).map_err(|e| named(&e))?;
+        // A database made by an earlier version (or by anything else) may be wider than
+        // owner-only, and so may side files left by a run that was killed: tighten whatever is
+        // there. Best-effort: a failure here (e.g. a filesystem without Unix modes) must not stop
+        // the tool from working.
         restrict_to_owner(path);
+        for side in side_files(path) {
+            restrict_to_owner(&side);
+        }
         Ok(Self { conn })
     }
 
@@ -677,13 +745,19 @@ impl Store {
                 .select(FindingRow::as_select())
                 .load(conn)?;
             let mut open_count: i64 = 0;
+            let mut by_severity = SeverityCounts::default();
             for row in open_rows {
-                if !ignores.covers(&row.try_into_finding()?) {
+                let finding = row.try_into_finding()?;
+                if !ignores.covers(&finding) {
                     open_count += 1;
+                    by_severity.add(finding.severity);
                 }
             }
             diesel::update(scan_runs::table.find(scan.id.to_string()))
-                .set(scan_runs::total_findings.eq(open_count))
+                .set((
+                    scan_runs::total_findings.eq(open_count),
+                    scan_runs::severity_counts.eq(Some(serde_json::to_string(&by_severity)?)),
+                ))
                 .execute(conn)?;
 
             Ok::<_, anyhow::Error>(newly_appeared)
@@ -1487,6 +1561,13 @@ impl Store {
                 privileged_collectors_skipped: serde_json::from_str(&r.privileged_skipped)
                     .unwrap_or_default(),
                 total_findings: r.total_findings,
+                rules_evaluated: serde_json::from_str::<Vec<String>>(&r.rules_evaluated)
+                    .map(|ids| ids.len())
+                    .unwrap_or_default(),
+                severity_counts: r
+                    .severity_counts
+                    .as_deref()
+                    .and_then(|json| serde_json::from_str(json).ok()),
             })
             .collect())
     }
@@ -1563,6 +1644,43 @@ pub struct ScanRunSummary {
     pub collectors_failed: i64,
     pub privileged_collectors_skipped: Vec<String>,
     pub total_findings: i64,
+    /// How many checks demonstrably ran. Zero for a run recorded before that was kept.
+    pub rules_evaluated: usize,
+    /// The findings this run left open, by severity. `None` for a run recorded before the split
+    /// was kept: the total is known, how it divided is not.
+    pub severity_counts: Option<SeverityCounts>,
+}
+
+/// Findings per severity. See [`ScanRunSummary::severity_counts`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SeverityCounts {
+    pub critical: u32,
+    pub high: u32,
+    pub medium: u32,
+    pub low: u32,
+    pub info: u32,
+}
+
+impl SeverityCounts {
+    pub fn of(severities: impl Iterator<Item = Severity>) -> Self {
+        let mut counts = Self::default();
+        severities.for_each(|s| counts.add(s));
+        counts
+    }
+
+    pub fn add(&mut self, severity: Severity) {
+        match severity {
+            Severity::Critical => self.critical += 1,
+            Severity::High => self.high += 1,
+            Severity::Medium => self.medium += 1,
+            Severity::Low => self.low += 1,
+            Severity::Info => self.info += 1,
+        }
+    }
+
+    pub fn total(&self) -> u32 {
+        self.critical + self.high + self.medium + self.low + self.info
+    }
 }
 
 /// Open findings split by whether the user has accepted their risk. `suppressed` is not "hidden" —
@@ -2363,6 +2481,7 @@ mod tests {
                 privileged_skipped: "[]".into(),
                 total_findings: 0,
                 rules_evaluated: "[]".into(),
+                severity_counts: None,
             })
             .execute(&mut store.conn)
             .unwrap();
@@ -3180,5 +3299,148 @@ mod tests {
             store.list_remote_hosts().unwrap()[0].os_kind.as_deref(),
             Some("ubuntu")
         );
+    }
+
+    #[cfg(unix)]
+    fn mode_of(p: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(p).unwrap().permissions().mode() & 0o7777
+    }
+
+    /// `--db-path /tmp/scan.db` turned `/tmp` into `0700` (and `--db-path ./scan.db` did the same
+    /// to a project folder): the store locked down whatever folder the database was in. A folder
+    /// that was already there is somebody else's; only the file is ours to restrict.
+    #[cfg(unix)]
+    #[test]
+    fn opening_a_database_leaves_a_folder_it_did_not_create_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        for folder_mode in [0o1777, 0o755] {
+            let shared = tmp.path().join(format!("shared-{folder_mode:o}"));
+            std::fs::create_dir(&shared).unwrap();
+            std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(folder_mode))
+                .unwrap();
+            let db = shared.join("scan.db");
+
+            let mut store = Store::open(&db).unwrap();
+            assert_eq!(mode_of(&shared), folder_mode, "the folder must not change");
+            assert_eq!(mode_of(&db), 0o600, "the database is always owner-only");
+
+            // The file SQLite keeps beside the database while it writes is owner-only too (it
+            // takes the database's mode) — it holds the same findings, and this folder is one
+            // other accounts can list.
+            diesel::sql_query("BEGIN IMMEDIATE")
+                .execute(&mut store.conn)
+                .unwrap();
+            diesel::sql_query("CREATE TABLE probe (x)")
+                .execute(&mut store.conn)
+                .unwrap();
+            let journal = &side_files(&db)[0];
+            assert!(journal.exists(), "expected a rollback journal mid-write");
+            assert_eq!(mode_of(journal), 0o600, "side file must be owner-only");
+            diesel::sql_query("ROLLBACK")
+                .execute(&mut store.conn)
+                .unwrap();
+            drop(store);
+
+            // Opening it again changes nothing either.
+            Store::open(&db).unwrap();
+            assert_eq!(mode_of(&shared), folder_mode);
+            assert_eq!(mode_of(&db), 0o600);
+        }
+    }
+
+    /// The other half: a folder this call creates, and Bulwark's own data folder, are locked down
+    /// as before, and a database someone left world-readable is tightened when it is opened.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_bulwark_creates_and_its_own_data_folder_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let fresh = tmp.path().join("made/by/bulwark");
+        let db = fresh.join("bulwark.db");
+        Store::open(&db).unwrap();
+        assert_eq!(mode_of(&fresh), 0o700);
+        assert_eq!(mode_of(&db), 0o600);
+
+        std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o644)).unwrap();
+        Store::open(&db).unwrap();
+        assert_eq!(mode_of(&db), 0o600);
+
+        // "Bulwark's own" is the default data folder and what is inside it, nothing else.
+        let own = tmp.path().join("data/bulwark");
+        std::fs::create_dir_all(own.join("remotes")).unwrap();
+        assert!(is_own_data_dir(&own, Some(&own)));
+        assert!(is_own_data_dir(&own.join("remotes"), Some(&own)));
+        assert!(!is_own_data_dir(tmp.path(), Some(&own)));
+        assert!(!is_own_data_dir(&tmp.path().join("data"), Some(&own)));
+        assert!(!is_own_data_dir(&own, None));
+        assert!(!is_own_data_dir(&own, Some(Path::new(""))));
+    }
+
+    /// SQLite's errors name no file. The store's do.
+    #[test]
+    fn a_database_that_cannot_be_used_is_named_in_the_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bad = tmp.path().join("bad.db");
+        std::fs::write(&bad, "garbage, not a database\n".repeat(200)).unwrap();
+        let err = Store::open(&bad).err().expect("garbage is not a database");
+        assert!(
+            err.to_string().contains(&bad.display().to_string()),
+            "{err}"
+        );
+
+        let dir = tmp.path().join("dir.db");
+        std::fs::create_dir(&dir).unwrap();
+        let err = Store::open(&dir).err().expect("a folder is not a database");
+        assert!(
+            err.to_string().contains(&dir.display().to_string()),
+            "{err}"
+        );
+    }
+
+    /// Append-only, exercised: a run recorded before the severity split was kept survives the
+    /// upgrade and reads as "split not recorded" — never as zero findings of every severity.
+    #[test]
+    fn adding_severity_counts_preserves_existing_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&tmp.path().join("u.db")).unwrap();
+        store.persist_and_reconcile(&sample_scan()).unwrap();
+
+        revert_through(&mut store.conn, "2026-11-14-000000");
+        assert!(!store.is_schema_current().unwrap());
+        assert!(
+            diesel::sql_query("SELECT severity_counts FROM scan_runs")
+                .execute(&mut store.conn)
+                .is_err(),
+            "the column must genuinely be absent in the pre-migration state"
+        );
+        store.conn.run_pending_migrations(MIGRATIONS).unwrap();
+        assert!(store.is_schema_current().unwrap());
+
+        let runs = store.list_scan_runs(10).unwrap();
+        assert_eq!(runs.len(), 1, "the earlier run must survive the upgrade");
+        assert_eq!(store.open_findings().unwrap().len(), 1);
+        assert_eq!(runs[0].total_findings, 1, "its total is still known");
+        assert_eq!(
+            runs[0].severity_counts, None,
+            "a run from before the column has no split; zeros would invent one"
+        );
+    }
+
+    /// A run's history line: the split adds up to the total, and counts what the total counts.
+    #[test]
+    fn a_scan_run_records_its_findings_by_severity_and_how_many_checks_ran() {
+        let mut store = Store::open_in_memory().unwrap();
+        let scan = sample_scan();
+        store.persist_and_reconcile(&scan).unwrap();
+        let run = &store.list_scan_runs(10).unwrap()[0];
+        let counts = run.severity_counts.expect("a new run records its split");
+        assert_eq!(i64::from(counts.total()), run.total_findings);
+        assert_eq!(
+            counts,
+            SeverityCounts::of(scan.findings.iter().map(|f| f.severity))
+        );
+        assert_eq!(run.rules_evaluated, scan.rules_evaluated.len());
     }
 }

@@ -40,8 +40,18 @@ pub fn default_db_path() -> anyhow::Result<PathBuf> {
     if let Some(p) = std::env::var_os("BULWARK_DB_PATH").filter(|v| !v.is_empty()) {
         return Ok(PathBuf::from(p));
     }
+    default_data_dir()
+        .map(|dir| dir.join("bulwark.db"))
+        .ok_or_else(|| anyhow::anyhow!("no home directory (HOME is not set)"))
+}
+
+/// Bulwark's own data folder, where the database lives unless one is named with `--db-path` or
+/// `BULWARK_DB_PATH`: `$XDG_DATA_HOME/bulwark`, `%LOCALAPPDATA%\com.vietanhdev.bulwark` on
+/// Windows, else `~/.local/share/bulwark`. This is the one folder (with what is inside it) whose
+/// permissions Bulwark tightens; a folder a database was merely pointed at is somebody else's.
+pub fn default_data_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()) {
-        return Ok(PathBuf::from(dir).join("bulwark").join("bulwark.db"));
+        return Some(PathBuf::from(dir).join("bulwark"));
     }
     // Windows keeps per-user application state in %LOCALAPPDATA%, not under a dot-directory — and
     // in the app identifier's folder, not `bulwark`: a per-user install puts the program itself in
@@ -49,18 +59,15 @@ pub fn default_db_path() -> anyhow::Result<PathBuf> {
     // uninstaller's "delete application data" option removes (and where WebView2 keeps its state).
     if cfg!(windows) {
         if let Some(dir) = std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()) {
-            return Ok(PathBuf::from(dir)
-                .join("com.vietanhdev.bulwark")
-                .join("bulwark.db"));
+            return Some(PathBuf::from(dir).join("com.vietanhdev.bulwark"));
         }
     }
-    let home =
-        home_var_os().ok_or_else(|| anyhow::anyhow!("no home directory (HOME is not set)"))?;
-    Ok(PathBuf::from(home)
-        .join(".local")
-        .join("share")
-        .join("bulwark")
-        .join("bulwark.db"))
+    home_var_os().map(|home| {
+        PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join("bulwark")
+    })
 }
 
 /// The user's own rules folder: checks they wrote themselves, in the same YAML format as the shipped

@@ -32,6 +32,7 @@ use std::path::{Path, PathBuf};
 pub enum HostsAction {
     /// List registered machines with their status and open issues
     List {
+        /// Machine-readable JSON output instead of text
         #[arg(long)]
         json: bool,
     },
@@ -43,6 +44,7 @@ pub enum HostsAction {
         /// Display name (defaults to the host part of the target)
         #[arg(long)]
         name: Option<String>,
+        /// SSH port, when it is not the default (22) or the one in ~/.ssh/config
         #[arg(long)]
         port: Option<u16>,
         /// Private key to sign in with (default: whatever ssh would use)
@@ -57,6 +59,7 @@ pub enum HostsAction {
         /// Minutes between scheduled scans (default 60)
         #[arg(long, value_name = "MINUTES")]
         interval: Option<u32>,
+        /// Machine-readable JSON output instead of text
         #[arg(long)]
         json: bool,
     },
@@ -64,21 +67,25 @@ pub enum HostsAction {
     Set {
         /// Machine name, id, or address
         host: String,
+        /// New display name
         #[arg(long)]
         name: Option<String>,
         /// New address
         #[arg(long)]
         target: Option<String>,
+        /// SSH port, when it is not the default (22) or the one in ~/.ssh/config
         #[arg(long, conflicts_with = "no_port")]
         port: Option<u16>,
         /// Go back to ssh's default port
         #[arg(long)]
         no_port: bool,
+        /// Private key to sign in with
         #[arg(long, value_name = "KEYFILE", conflicts_with = "no_identity")]
         identity: Option<String>,
         /// Go back to ssh's default key selection
         #[arg(long)]
         no_identity: bool,
+        /// Reach the machine through a jump host (ProxyJump), e.g. `me@bastion`
         #[arg(long, value_name = "[USER@]HOST[:PORT]", conflicts_with = "no_jump")]
         jump: Option<String>,
         /// Connect directly, without a jump host
@@ -90,20 +97,24 @@ pub enum HostsAction {
         /// Include in scheduled scans (true/false); a paused machine can still be scanned on demand
         #[arg(long)]
         enabled: Option<bool>,
+        /// Minutes between scheduled scans
         #[arg(long, value_name = "MINUTES")]
         interval: Option<u32>,
         /// The machine was renamed or rebuilt on purpose: forget its pinned hostname
         #[arg(long)]
         accept_identity: bool,
+        /// Machine-readable JSON output instead of text
         #[arg(long)]
         json: bool,
     },
     /// Unregister a machine and delete its scan history
     Remove {
+        /// Machine name, id, or address
         host: String,
         /// Keep the machine's findings database on disk
         #[arg(long)]
         keep_history: bool,
+        /// Machine-readable JSON output instead of text
         #[arg(long)]
         json: bool,
     },
@@ -112,22 +123,28 @@ pub enum HostsAction {
     Test {
         /// Machine name/id, or any `user@host` / alias
         host: String,
+        /// SSH port, when it is not the default (22) or the one in ~/.ssh/config
         #[arg(long)]
         port: Option<u16>,
+        /// Private key to sign in with
         #[arg(long, value_name = "KEYFILE")]
         identity: Option<String>,
+        /// Reach the machine through a jump host (ProxyJump), e.g. `me@bastion`
         #[arg(long, value_name = "[USER@]HOST[:PORT]")]
         jump: Option<String>,
         /// Also check that root checks would work (`sudo -n`)
         #[arg(long)]
         privileged: bool,
+        /// Machine-readable JSON output instead of text
         #[arg(long)]
         json: bool,
     },
     /// Show a machine's SSH host key fingerprints, or trust one in Bulwark's own known_hosts
     /// (your ~/.ssh/known_hosts is never modified)
     Trust {
+        /// Machine name, id, or address
         host: String,
+        /// SSH port, when it is not the default (22) or the one in ~/.ssh/config
         #[arg(long)]
         port: Option<u16>,
         /// Trust the key with exactly this fingerprint (SHA256:…), after comparing it on the machine
@@ -136,6 +153,7 @@ pub enum HostsAction {
         /// Replace the key Bulwark stored earlier — only after confirming the machine was reinstalled
         #[arg(long, requires = "fingerprint")]
         replace: bool,
+        /// Machine-readable JSON output instead of text
         #[arg(long)]
         json: bool,
     },
@@ -143,10 +161,12 @@ pub enum HostsAction {
     /// install it on a machine, signing in once with your usual SSH access or a password. The
     /// password is used for that one sign-in and never stored.
     SetupKey {
+        /// Machine name, id, or address
         host: String,
         /// Read a one-time password from stdin (for servers that only accept passwords today)
         #[arg(long)]
         password_stdin: bool,
+        /// Machine-readable JSON output instead of text
         #[arg(long)]
         json: bool,
     },
@@ -166,15 +186,18 @@ pub enum HostsAction {
         /// Don't send Telegram/e-mail alerts (see `bulwarkctl notify`)
         #[arg(long)]
         no_notify: bool,
+        /// Machine-readable JSON output instead of text
         #[arg(long)]
         json: bool,
     },
     /// Ignore an issue type on one machine (it keeps being checked; it's counted, not alerted).
     /// A reason is required and recorded in that machine's audit log.
     Ignore {
+        /// Machine name, id, or address
         host: String,
         /// Rule ID, e.g. BLWK-NET-005
         rule: String,
+        /// Why. Required, and recorded in that machine's audit log
         #[arg(long)]
         reason: String,
         /// Only this one finding (its file, `port N on ADDR`, or title), not the whole type
@@ -183,16 +206,22 @@ pub enum HostsAction {
     },
     /// Stop ignoring an issue type (or, with --place, one finding) on one machine
     Unignore {
+        /// Machine name, id, or address
         host: String,
+        /// Rule ID, e.g. BLWK-NET-005
         rule: String,
+        /// Why. Required, and recorded in that machine's audit log
         #[arg(long)]
         reason: String,
+        /// Only the single finding at this place, as `bulwarkctl hosts show <machine> --all` lists it
         #[arg(long)]
         place: Option<String>,
     },
     /// Show a machine's open issues from its last scans
     Show {
+        /// Machine name, id, or address
         host: String,
+        /// Machine-readable JSON output instead of text
         #[arg(long)]
         json: bool,
         /// Show low-priority items too, and every place each problem was found
@@ -357,6 +386,7 @@ pub fn run(action: HostsAction, db: &Path, rules_dir: Option<PathBuf>) -> Result
             let mut store = Store::open(&paths::remote_host_db_path(db, &h.id))?;
             match place {
                 Some(p) => {
+                    let p = crate::place_to_ignore(&mut store, &rule, &p)?;
                     store.ignore_finding(&rule, &p, &reason, &crate::current_actor())?;
                     println!("Ignoring {rule} at {p} on {}.", h.name);
                 }
@@ -377,6 +407,7 @@ pub fn run(action: HostsAction, db: &Path, rules_dir: Option<PathBuf>) -> Result
             let mut store = Store::open(&paths::remote_host_db_path(db, &h.id))?;
             match place {
                 Some(p) => {
+                    let p = crate::place_to_unignore(&mut store, &rule, &p)?;
                     store.unignore_finding(&rule, &p, &reason, &crate::current_actor())?;
                     println!("No longer ignoring {rule} at {p} on {}.", h.name);
                 }
@@ -551,17 +582,14 @@ fn show(db: &Path, key: &str, json: bool, all: bool) -> Result<i32> {
     }
     // A connection problem comes first: it is why the findings below may be out of date.
     if let Some(p) = &view.problem {
+        // The hint is Bulwark's own text and may run over several lines.
         println!(
             "{}. {}\n",
             crate::term_safe(&p.title),
-            crate::term_safe(&p.hint)
+            crate::term_safe_lines(&p.hint)
         );
     }
-    let opts = crate::report::ReportOptions {
-        all,
-        color: crate::report::ReportOptions::color_for_stdout(),
-        target: view.host.name.clone(),
-    };
+    let opts = crate::report::ReportOptions::for_stdout(all, view.host.name.clone());
     let subtitle = format!(
         "{} · {} · last scan {}",
         view.host.name,
@@ -1569,8 +1597,11 @@ fn scan(db: &Path, rules_dir: Option<PathBuf>, sel: ScanSelection) -> Result<i32
             } else if let Some(p) = &m.problem {
                 println!("{}: {}.", m.host.name, p.title);
                 if let Some(d) = &p.detail {
-                    // ssh's own error output, partly written by the far side.
-                    println!("    {}", crate::term_safe(d));
+                    // ssh's own error output, partly written by the far side: line by line, so
+                    // every line of it keeps the indent that marks it as quoted.
+                    for line in d.lines().filter(|l| !l.trim().is_empty()) {
+                        println!("    {}", crate::term_safe(line));
+                    }
                 }
                 println!("    {}", p.hint);
             }

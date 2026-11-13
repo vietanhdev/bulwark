@@ -971,7 +971,7 @@
    "category": "kernel-hardening",
    "severity": "low",
    "explain": "The '{{ module_blacklist.module }}' kernel module isn't blacklisted in /etc/modprobe.d/, meaning it can still be auto-loaded on demand — simply by an unprivileged process opening a socket of that family. All four of these network protocol modules (dccp, sctp, rds, tipc) have a documented history of local-privilege-escalation vulnerabilities reachable exactly that way, and essentially no host actually uses them. usb-storage is deliberately NOT covered here — it's a different threat (physical-media exfiltration/BadUSB, not remote exploitation) and the remediation is destructive on a workstation, so it lives in BLWK-KERNEL-021 behind the server profile.",
-   "fix": "If '{{ module_blacklist.module }}' isn't actually needed on this host, add 'install {{ module_blacklist.module }} /bin/true' to a file under /etc/modprobe.d/ (e.g. /etc/modprobe.d/blacklist-rare.conf) and run 'update-initramfs -u'.",
+   "fix": "If '{{ module_blacklist.module }}' isn't actually needed on this host, add 'install {{ module_blacklist.module }} /bin/true' to a file under /etc/modprobe.d/ (e.g. /etc/modprobe.d/blacklist-rare.conf), then rebuild the boot image so it applies early too ('update-initramfs -u' on Debian and Ubuntu, 'dracut -f' on Fedora and RHEL, 'mkinitcpio -P' on Arch).",
    "references": [
     "CIS-1.1.1"
    ],
@@ -987,7 +987,7 @@
    "category": "kernel-hardening",
    "severity": "low",
    "explain": "The 'usb-storage' module isn't blacklisted, so plugging in a USB mass-storage device on this host will auto-mount it. On a server — especially one in a rack you don't physically control, like a colo or a branch office — that's a data-exfiltration and BadUSB path that needs no credentials and leaves little trace: someone with thirty seconds of physical access walks away with the disk contents. This rule is scoped to the server profile on purpose. The same advice on a laptop or desktop is actively harmful — it breaks every USB stick, external drive, and SD reader the user owns, to defend against an attacker who by definition already has their hands on the machine. Split out of BLWK-KERNEL-020 for exactly that reason.",
-   "fix": "On a server with no legitimate need for USB storage, add 'install usb-storage /bin/true' to a file under /etc/modprobe.d/ (e.g. /etc/modprobe.d/blacklist-usb-storage.conf) and run 'update-initramfs -u'. Do NOT apply this to a workstation — you will break all removable media on it.",
+   "fix": "On a server with no legitimate need for USB storage, add 'install usb-storage /bin/true' to a file under /etc/modprobe.d/ (e.g. /etc/modprobe.d/blacklist-usb-storage.conf), then rebuild the boot image so it applies early too ('update-initramfs -u' on Debian and Ubuntu, 'dracut -f' on Fedora and RHEL, 'mkinitcpio -P' on Arch). Do NOT apply this to a workstation — you will break all removable media on it.",
    "references": [
     "CIS-1.1.1"
    ],
@@ -1002,13 +1002,13 @@
    "title": "No custom legal warning banner is set (/etc/{{ banners.file }})",
    "category": "logging-auditing",
    "severity": "info",
-   "explain": "/etc/{{ banners.file }} still contains the distro's default auto-generated content (OS name and getty templating codes), not a deliberate legal warning. In some jurisdictions, a clear \"unauthorized access is prohibited\" banner is what establishes that someone connecting without authorization was actually warned — the default OS-identification banner doesn't do that, and also unnecessarily advertises the exact OS version to anyone who connects. Scoped to the server profile: a login banner's function is legal, not technical — it establishes that access was unauthorized, which matters for a multi-user remote system. On a personal desktop it protects nothing, and /etc/issue.net is read only by sshd, so on a host that doesn't run sshd it is inert text in a file nobody opens.",
-   "fix": "Replace the contents of /etc/issue (local login) and /etc/issue.net (remote login) with a warning banner, not OS version info.",
+   "explain": "/etc/{{ banners.file }} {{ banners.found }}, so it does not warn that access is restricted. In some jurisdictions, a clear \"unauthorized access is prohibited\" banner is what establishes that someone connecting without authorization was actually warned. The distribution's default banner does not do that, and it also tells anyone who connects the exact OS version. Scoped to the server profile: a login banner's function is legal, not technical — it establishes that access was unauthorized, which matters for a multi-user remote system. On a personal desktop it protects nothing, and /etc/issue.net is read only by sshd, so on a host that doesn't run sshd it is inert text in a file nobody opens.",
+   "fix": "Replace the contents of /etc/issue (local login) and /etc/issue.net (remote login) with a warning banner, not OS version info. 'sudo bulwarkctl fix banner --apply' does this for a file that still holds the distribution's default text; a banner you wrote yourself, or an emptied file, is never overwritten, so edit that one by hand.",
    "references": [
     "CIS-1.7.1"
    ],
    "collector": "banners",
-   "condition": "is_default == true",
+   "condition": "has_warning == false",
    "source": "rules/logging-auditing/BLWK-BANN-001.yaml",
    "group": "hardening",
    "slug": "blwk-bann-001"
@@ -1019,7 +1019,7 @@
    "category": "logging-auditing",
    "severity": "low",
    "explain": "No auditd binary was found. Without it, there's no kernel-level record of privileged syscalls (file access, exec, permission changes) — the trail that makes a break-in reviewable after the fact instead of just a guess.",
-   "fix": "Install auditd (e.g. 'apt install auditd') and enable it with 'systemctl enable --now auditd'.",
+   "fix": "Install the audit daemon with your package manager (the package is 'auditd' on Debian and Ubuntu, 'audit' on Fedora, RHEL, Arch and Alpine), then start it and have it start at boot (with systemd: 'systemctl enable --now auditd').",
    "references": [
     "CIS-4.1"
    ],
@@ -1049,7 +1049,7 @@
    "category": "logging-auditing",
    "severity": "low",
    "explain": "Neither 'accton' nor 'lastcomm' is present, so there's no kernel-level record of every process that ran on this host, who ran it, and how long it took — a different, harder- to-tamper-with data source than shell history or application logs, since it's written by the kernel itself rather than by the process being recorded.",
-   "fix": "Install process accounting (e.g. 'apt install acct') and enable it with 'systemctl enable --now acct'.",
+   "fix": "Install process accounting with your package manager (the package is 'acct' on Debian, Ubuntu and Alpine, 'psacct' on Fedora and RHEL), then start it and have it start at boot (with systemd: 'systemctl enable --now acct', or 'psacct' where the package has that name).",
    "references": [
     "CIS-4.6"
    ],
@@ -1361,7 +1361,7 @@
    "category": "rootkit-malware",
    "severity": "low",
    "explain": "No clamscan binary was found. Bulwark deliberately doesn't reimplement signature-based malware detection (see the project's own non-goals) — it expects ClamAV to cover that ground, so without it this whole category goes unchecked.",
-   "fix": "Install ClamAV (e.g. 'apt install clamav') and run 'freshclam' to fetch signatures.",
+   "fix": "Install ClamAV with your package manager (the package is 'clamav'; Fedora and RHEL also need 'clamav-update' for freshclam), then run 'freshclam' to fetch signatures.",
    "references": [],
    "collector": "clamav_status",
    "condition": "installed == false",

@@ -9,7 +9,13 @@
 //!     `apply` flag.
 //!   * **Reversible.** Permission changes record the prior mode; the sshd rewrite keeps a backup and
 //!     validates with `sshd -t` before keeping the change.
-//!   * **Never widens access, never guesses, never follows a symlink.**
+//!   * **Never widens access, never guesses, never follows a symlink.** A permission fix only
+//!     removes bits; a file rewrite goes through [`replace_file`], which swaps a new regular file
+//!     into place and so replaces a link instead of writing through it.
+//!   * **Never leaves its own edit looking like tampering.** A fixer that rewrites a file on the
+//!     file-integrity watch list brings that file's baseline entry up to date — unless the file
+//!     had already drifted from the baseline, in which case the baseline is left alone and the
+//!     output says so ([`update_baseline_after_fix`]).
 //!   * **Fails loud.** A fix that can't be applied is reported as failed, never silently skipped.
 //!
 //! It stays inside `bulwark-core`'s no-network / no-UI contract: pure filesystem operations on the
@@ -22,6 +28,12 @@ pub mod permissions;
 pub mod sshd;
 pub mod sysctl;
 
+/// For fixers that rewrite a watched file: take [`hash_before_fix`] before the rewrite, then hand
+/// it to [`update_baseline_after_fix`] afterwards and show the returned [`BaselineUpdate`]'s
+/// `message()`.
+pub use crate::collectors::file_integrity::{
+    hash_before_fix, update_baseline_after_fix, BaselineUpdate,
+};
 pub use banner::{write_banners, BannerOutcome, BannerReport, BannerResult, DEFAULT_BANNER};
 pub use login_defs::{harden_login_defs, LoginDefsChange, LoginDefsChangeStatus, LoginDefsReport};
 pub use permissions::{
@@ -33,7 +45,100 @@ pub use sysctl::{harden_sysctl, SysctlChange, SysctlChangeStatus, SysctlHardenin
 
 use serde::{Deserialize, Serialize};
 
-/// Which fixer can address a finding. Deliberately a closed set: these are the only three
+/// Replace `path` with a regular file holding `content`: written to a sibling temporary file,
+/// synced, then renamed over `path`. The file is therefore only ever the complete old one or the
+/// complete new one, and a symbolic link at `path` is *replaced* — its target is never opened or
+/// written. An existing regular file keeps its mode and owner; anything else gets `mode`.
+#[cfg(unix)]
+pub fn replace_file(path: &std::path::Path, content: &[u8], mode: u32) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+
+    let dir = match path.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d,
+        _ => std::path::Path::new("."),
+    };
+    let name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("not a file path"))?
+        .to_string_lossy();
+    let keep = std::fs::symlink_metadata(path)
+        .ok()
+        .filter(|m| m.file_type().is_file());
+    let mode = keep.as_ref().map_or(mode, |m| m.mode() & 0o7777);
+
+    let tmp = dir.join(format!(".{name}.bulwark-fix.tmp"));
+    let _ = std::fs::remove_file(&tmp);
+    let result = (|| {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true) // O_EXCL: a planted or raced temp file is an error, never followed
+            .custom_flags(libc::O_NOFOLLOW)
+            .mode(0o600)
+            .open(&tmp)?;
+        f.write_all(content)?;
+        if let Some(m) = &keep {
+            // Only root can give a file away; for anyone else the new file is already theirs.
+            let _ = std::os::unix::fs::fchown(&f, Some(m.uid()), Some(m.gid()));
+        }
+        // Set after the content and the owner, and explicitly: `open` applies the umask.
+        f.set_permissions(std::fs::Permissions::from_mode(mode))?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
+#[cfg(not(unix))]
+pub fn replace_file(path: &std::path::Path, content: &[u8], _mode: u32) -> std::io::Result<()> {
+    std::fs::write(path, content)
+}
+
+/// Save `content` as a new, timestamped backup in `backup_dir` and return where it went. The
+/// file is created exclusively (never over an existing file or through a link) and readable only
+/// by its owner: a backup of `/etc/login.defs` or a sysctl drop-in is nobody else's business.
+pub(crate) fn write_backup(
+    backup_dir: &std::path::Path,
+    name: &str,
+    content: &[u8],
+) -> std::io::Result<std::path::PathBuf> {
+    use std::io::Write;
+    std::fs::create_dir_all(backup_dir)?;
+    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
+    // Two runs inside one second get distinct names instead of the second one failing.
+    for attempt in 0..100 {
+        let suffix = if attempt == 0 {
+            String::new()
+        } else {
+            format!("-{attempt}")
+        };
+        let backup = backup_dir.join(format!("{name}.{stamp}{suffix}.bak"));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&backup) {
+            Ok(mut f) => {
+                f.write_all(content)?;
+                return Ok(backup);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::other(format!(
+        "could not create a backup file in {}",
+        backup_dir.display()
+    )))
+}
+
+/// Which fixer can address a finding. Deliberately a closed set: these are the only
 /// remediations that exist, and nothing may claim a rule is fixable without one of them behind it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -63,6 +168,12 @@ pub struct FixCapability {
     pub lockout_risk: bool,
     /// Whether applying needs root (and therefore, in the GUI, a `pkexec` prompt).
     pub needs_root: bool,
+    /// Whether `fix all` applies it. The bulk set holds only changes that cannot surprise:
+    /// permissions, the non-lockout sshd directives and the kernel network knobs. The banner and
+    /// password-aging fixers change wording and policy, so they are run by name
+    /// (`fix banner`, `fix login-defs`) and only listed by `fix all`. Never true together with
+    /// `lockout_risk`.
+    pub in_fix_all: bool,
 }
 
 /// The complete rule → fixer map. This is the single source of truth for "does a Fix button exist
@@ -84,12 +195,14 @@ pub const FIX_CAPABILITIES: &[FixCapability] = &[
         kind: FixKind::EtcPerms,
         lockout_risk: false,
         needs_root: true,
+        in_fix_all: true,
     },
     FixCapability {
         rule_id: "BLWK-FS-002",
         kind: FixKind::EtcPerms,
         lockout_risk: false,
         needs_root: true,
+        in_fix_all: true,
     },
     // sshd_config directives.
     FixCapability {
@@ -97,66 +210,77 @@ pub const FIX_CAPABILITIES: &[FixCapability] = &[
         kind: FixKind::Sshd,
         lockout_risk: true,
         needs_root: true,
+        in_fix_all: false,
     },
     FixCapability {
         rule_id: "BLWK-SSH-002",
         kind: FixKind::Sshd,
         lockout_risk: true,
         needs_root: true,
+        in_fix_all: false,
     },
     FixCapability {
         rule_id: "BLWK-SSH-003",
         kind: FixKind::Sshd,
         lockout_risk: false,
         needs_root: true,
+        in_fix_all: true,
     },
     FixCapability {
         rule_id: "BLWK-SSH-004",
         kind: FixKind::Sshd,
         lockout_risk: false,
         needs_root: true,
+        in_fix_all: true,
     },
     FixCapability {
         rule_id: "BLWK-SSH-005",
         kind: FixKind::Sshd,
         lockout_risk: false,
         needs_root: true,
+        in_fix_all: true,
     },
     FixCapability {
         rule_id: "BLWK-SSH-006",
         kind: FixKind::Sshd,
         lockout_risk: false,
         needs_root: true,
+        in_fix_all: true,
     },
     FixCapability {
         rule_id: "BLWK-SSH-007",
         kind: FixKind::Sshd,
         lockout_risk: false,
         needs_root: true,
+        in_fix_all: true,
     },
     FixCapability {
         rule_id: "BLWK-SSH-008",
         kind: FixKind::Sshd,
         lockout_risk: false,
         needs_root: true,
+        in_fix_all: true,
     },
     FixCapability {
         rule_id: "BLWK-SSH-009",
         kind: FixKind::Sshd,
         lockout_risk: false,
         needs_root: true,
+        in_fix_all: true,
     },
     FixCapability {
         rule_id: "BLWK-SSH-010",
         kind: FixKind::Sshd,
         lockout_risk: false,
         needs_root: true,
+        in_fix_all: true,
     },
     FixCapability {
         rule_id: "BLWK-SSH-011",
         kind: FixKind::Sshd,
         lockout_risk: false,
         needs_root: true,
+        in_fix_all: true,
     },
     // Kernel network knobs. Not lockout-risky: neither knob can cut an existing session.
     // `send_redirects=0` only stops this host *emitting* ICMP redirects, which a non-router has no
@@ -169,36 +293,44 @@ pub const FIX_CAPABILITIES: &[FixCapability] = &[
         kind: FixKind::Sysctl,
         lockout_risk: false,
         needs_root: true,
+        in_fix_all: true,
     },
     FixCapability {
         rule_id: "BLWK-KERNEL-017",
         kind: FixKind::Sysctl,
         lockout_risk: false,
         needs_root: true,
+        in_fix_all: true,
     },
-    // Login banners. Text in two files that nothing parses for behaviour — the safest change in
-    // the whole set, and it refuses to overwrite a banner a human already wrote. In the bulk set.
+    // Login banners. Text in two files that nothing parses for behaviour, and it refuses to
+    // overwrite a banner a human already wrote. Not in the bulk set: it changes the words people
+    // see when they sign in, which is the owner's wording to choose — `fix all` lists it instead.
     FixCapability {
         rule_id: "BLWK-BANN-001",
         kind: FixKind::Banner,
         lockout_risk: false,
         needs_root: true,
+        in_fix_all: false,
     },
-    // Password-aging policy. In the bulk set: neither directive can lock anyone out of a current
-    // session or invalidate an existing password. PASS_MAX_DAYS/PASS_MIN_DAYS apply to accounts
-    // created or whose aging is next recalculated — `login.defs` is read at account-management
-    // time, not at login, so no one is denied access by this edit.
+    // Password-aging policy. Neither directive can lock anyone out of a current session or
+    // invalidate an existing password: PASS_MAX_DAYS/PASS_MIN_DAYS apply to accounts created or
+    // whose aging is next recalculated — `login.defs` is read at account-management time, not at
+    // login. Not in the bulk set all the same: how often passwords expire is a policy decision
+    // (and one current guidance argues against), so `fix all` lists it and leaves it to be run
+    // by name.
     FixCapability {
         rule_id: "BLWK-ACCT-002",
         kind: FixKind::LoginDefs,
         lockout_risk: false,
         needs_root: true,
+        in_fix_all: false,
     },
     FixCapability {
         rule_id: "BLWK-ACCT-003",
         kind: FixKind::LoginDefs,
         lockout_risk: false,
         needs_root: true,
+        in_fix_all: false,
     },
 ];
 
@@ -217,12 +349,16 @@ pub fn fix_capability(rule_id: &str) -> Option<&'static FixCapability> {
     FIX_CAPABILITIES.iter().find(|c| c.rule_id == rule_id)
 }
 
-/// The capabilities a bulk "fix everything safe" action is allowed to touch: everything except the
-/// lockout-risky sshd auth directives. Locking an operator out of a host they reach only by
-/// password is the one failure mode a one-click bulk fix must never be able to cause, so those two
-/// stay per-issue and opt-in — mirroring the CLI's `fix all` vs `fix sshd --include-auth` split.
+/// The capabilities a bulk "fix everything safe" action touches — exactly what `fix all` applies:
+/// permissions, the non-lockout sshd directives and the kernel network knobs. Locking an operator
+/// out of a host they reach only by password is the one failure mode a one-click bulk fix must
+/// never be able to cause, so the two sshd auth directives stay per-issue and opt-in (`fix sshd
+/// --include-auth`); the banner and password-aging fixers change wording and policy, so they too
+/// are run by name.
 pub fn safe_fix_capabilities() -> impl Iterator<Item = &'static FixCapability> {
-    FIX_CAPABILITIES.iter().filter(|c| !c.lockout_risk)
+    FIX_CAPABILITIES
+        .iter()
+        .filter(|c| c.in_fix_all && !c.lockout_risk)
 }
 
 /// The result of running more than one fixer in a single pass — what `bulwarkctl fix all --json`
@@ -241,6 +377,10 @@ pub struct CombinedFixReport {
     /// Reasons a fixer was skipped, one per fixer that couldn't run. Never a silent drop.
     #[serde(default)]
     pub errors: Vec<String>,
+    /// Fixes `fix all` found something to do for and did **not** apply, because they are run by
+    /// name: one plain line each, naming the command. Empty when there is nothing of the kind.
+    #[serde(default)]
+    pub not_included: Vec<String>,
     /// False for a preview (dry run), true when the changes were actually written.
     pub applied: bool,
 }
@@ -282,6 +422,73 @@ mod tests {
         // …and the safe set is not vacuously empty, which would satisfy the above trivially.
         assert!(safe.contains(&"BLWK-SSH-004"));
         assert!(safe.contains(&"BLWK-FS-002"));
+        assert!(safe.contains(&"BLWK-KERNEL-016"));
+    }
+
+    /// `fix all` applies only what cannot surprise. The banner and password-aging fixers change
+    /// wording and policy: available by name, never part of the bulk set. And no capability may
+    /// be both a lockout risk and in the bulk set, whoever edits the table next.
+    #[test]
+    fn the_bulk_set_leaves_out_wording_and_policy_changes() {
+        let safe: Vec<&str> = safe_fix_capabilities().map(|c| c.rule_id).collect();
+        for id in ["BLWK-BANN-001", "BLWK-ACCT-002", "BLWK-ACCT-003"] {
+            assert!(
+                !safe.contains(&id),
+                "{id} must be run by name, not by fix all"
+            );
+            assert!(
+                fix_capability(id).is_some(),
+                "{id} is still fixable by name"
+            );
+        }
+        for c in FIX_CAPABILITIES {
+            assert!(
+                !(c.lockout_risk && c.in_fix_all),
+                "{} is a lockout risk and cannot be in the bulk set",
+                c.rule_id
+            );
+            let expected = !c.lockout_risk
+                && matches!(
+                    c.kind,
+                    FixKind::SshPerms | FixKind::EtcPerms | FixKind::Sshd | FixKind::Sysctl
+                );
+            assert_eq!(c.in_fix_all, expected, "{}", c.rule_id);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replace_file_swaps_a_link_for_a_file_and_keeps_an_existing_files_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        std::fs::write(&target, "package file").unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        replace_file(&link, b"new", 0o644).unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "package file");
+        let meta = std::fs::symlink_metadata(&link).unwrap();
+        assert!(meta.file_type().is_file());
+        assert_eq!(meta.permissions().mode() & 0o777, 0o644);
+
+        // An existing regular file keeps its own mode, whatever default the caller passed.
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640)).unwrap();
+        replace_file(&target, b"edited", 0o644).unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "edited");
+        let mode = std::fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o640);
+        // Nothing temporary is left behind.
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn a_backup_never_overwrites_an_earlier_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = write_backup(dir.path(), "issue", b"first").unwrap();
+        let b = write_backup(dir.path(), "issue", b"second").unwrap();
+        assert_ne!(a, b);
+        assert_eq!(std::fs::read(&a).unwrap(), b"first");
+        assert_eq!(std::fs::read(&b).unwrap(), b"second");
     }
 
     /// Every advertised capability must name a rule that exists in the shipped pack, and every

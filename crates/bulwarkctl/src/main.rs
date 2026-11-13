@@ -12,11 +12,16 @@ use std::path::{Path, PathBuf};
 mod agent;
 #[cfg(unix)]
 mod db_guard;
+mod fix;
 mod hosts;
 mod notify;
+mod place;
 mod proc;
 mod remote;
 mod report;
+mod term;
+
+pub(crate) use term::{term_safe, term_safe_lines};
 
 #[derive(Parser)]
 #[command(
@@ -94,8 +99,12 @@ enum Commands {
         #[command(subcommand)]
         action: ConfigRulesAction,
     },
-    /// List past scan runs
-    History,
+    /// List past scan runs: when, how many checks were loaded, and what they found
+    History {
+        /// How many of the most recent runs to list
+        #[arg(long, default_value_t = 20, value_name = "N")]
+        limit: u32,
+    },
     /// File-integrity baseline management
     Fim {
         #[command(subcommand)]
@@ -134,9 +143,9 @@ enum Commands {
         #[command(subcommand)]
         action: SshAction,
     },
-    /// Apply safe, reversible autofixes for issues a scan reports (file permissions, sshd
-    /// hardening). Dry-run by default — every subcommand previews and touches nothing without
-    /// `--apply`.
+    /// Apply safe, reversible autofixes for issues a scan reports (file permissions, sshd and
+    /// kernel network settings, login banners, password aging). Dry-run by default — every
+    /// subcommand previews and touches nothing without `--apply`.
     Fix {
         #[command(subcommand)]
         action: FixAction,
@@ -148,15 +157,18 @@ enum FixAction {
     /// Preview every available autofix for this host without changing anything.
     List,
     /// Tighten permissions in ~/.ssh (dir 700, private keys / config / authorized_keys 600).
-    /// User-scoped; needs no privilege. Only ever tightens, never loosens.
+    /// User-scoped; needs no privilege. Only ever removes access, never adds any. Works on the
+    /// ~/.ssh of the account it runs as, so run it without sudo to fix your own.
     SshPerms {
         /// Actually apply the changes. Without this, only previews.
         #[arg(long)]
         apply: bool,
     },
-    /// Tighten permissions on sensitive /etc files (shadow 640, sudoers 440, sshd_config 600, ...).
-    /// Needs root when applying — re-run under sudo.
+    /// Tighten permissions on sensitive /etc files (shadow 640, sudoers 440, sshd_config 600, ...):
+    /// any access beyond those modes is removed, none is ever added. Needs root when applying —
+    /// re-run under sudo. With sshd_config at 600, scans without sudo can no longer read it.
     EtcPerms {
+        /// Actually apply the changes. Without this, only previews.
         #[arg(long)]
         apply: bool,
         /// Emit the machine-readable report instead of the human one. This is what the GUI's
@@ -167,6 +179,7 @@ enum FixAction {
     /// Harden /etc/ssh/sshd_config to clear the SSH rule findings (X11/TCP forwarding off,
     /// MaxAuthTries, ...). Needs root when applying; keeps a backup and validates with `sshd -t`.
     Sshd {
+        /// Actually apply the changes. Without this, only previews.
         #[arg(long)]
         apply: bool,
         /// Emit the machine-readable report instead of the human one.
@@ -183,35 +196,49 @@ enum FixAction {
         config: Option<PathBuf>,
     },
     /// Persist kernel network hardening to /etc/sysctl.d/ (ICMP redirects off, martian logging
-    /// on) and reload. Needs root when applying. Writes a durable drop-in, not just /proc/sys.
+    /// on) and apply them to the running system. Needs root when applying. Writes a durable
+    /// drop-in, not just /proc/sys. Exits non-zero if a setting could not be applied (in a
+    /// container, kernel settings belong to the host).
     Sysctl {
+        /// Actually apply the changes. Without this, only previews.
         #[arg(long)]
         apply: bool,
+        /// Emit the machine-readable report instead of the human one.
         #[arg(long)]
         json: bool,
     },
-    /// Replace the distro-default /etc/issue and /etc/issue.net with a legal warning banner.
-    /// Needs root when applying; never overwrites a banner someone already customised.
+    /// Replace the distribution's default /etc/issue and /etc/issue.net with a legal warning
+    /// banner. Needs root when applying. A banner someone wrote, or a file someone emptied, is
+    /// reported and left exactly as it is; a link is replaced by a file, never written through.
     Banner {
+        /// Actually apply the changes. Without this, only previews.
         #[arg(long)]
         apply: bool,
+        /// Emit the machine-readable report instead of the human one.
         #[arg(long)]
         json: bool,
     },
-    /// Set password-aging policy in /etc/login.defs (PASS_MAX_DAYS, PASS_MIN_DAYS). Needs root
-    /// when applying; backs the file up and replaces directives in place rather than appending.
+    /// Set password-aging policy in /etc/login.defs (PASS_MAX_DAYS 90, PASS_MIN_DAYS 1). Needs
+    /// root when applying; backs the file up and replaces directives in place rather than appending.
     LoginDefs {
+        /// Actually apply the changes. Without this, only previews.
         #[arg(long)]
         apply: bool,
+        /// Emit the machine-readable report instead of the human one.
         #[arg(long)]
         json: bool,
         /// Operate on this file instead of /etc/login.defs (for testing).
         #[arg(long, value_name = "PATH")]
         config: Option<PathBuf>,
     },
-    /// Apply the safe subset in one pass: ~/.ssh perms, /etc perms (if root), and non-lockout sshd
-    /// hardening (if root). Never touches the lockout-risky auth directives or key passphrases.
+    /// Apply the changes that cannot surprise, in one pass: ~/.ssh permissions, /etc permissions,
+    /// the sshd settings that cannot lock you out, and the kernel network settings (the last
+    /// three need root). Fixes that change wording or policy — `fix banner`, `fix login-defs` —
+    /// are listed, not applied: run those by name. Never touches the lockout-risky sshd auth
+    /// settings or key passphrases. Under sudo, ~/.ssh is root's: run `fix ssh-perms` without
+    /// sudo for your own.
     All {
+        /// Actually apply the changes. Without this, only previews.
         #[arg(long)]
         apply: bool,
         /// Emit the machine-readable report instead of the human one.
@@ -344,7 +371,10 @@ enum RulesAction {
     /// List loaded rules, including any that failed to load
     List,
     /// Validate a rule file or directory without running a scan
-    Validate { path: PathBuf },
+    Validate {
+        /// The YAML file, or the folder of YAML files, to check
+        path: PathBuf,
+    },
 }
 
 /// Config-scan rule actions. A superset of [`RulesAction`] — suppression is meaningful for config
@@ -354,8 +384,13 @@ enum RulesAction {
 enum ConfigRulesAction {
     /// List loaded rules, including any that failed to load
     List,
-    /// Validate a rule file or directory without running a scan
-    Validate { path: PathBuf },
+    /// Validate a rule file or a folder of rules without running a scan: the same checks loading
+    /// applies. In your own rules folder that includes the id rules (no `BLWK-` prefix, no id a
+    /// built-in check already uses). A missing or empty folder is an error, not "0 valid".
+    Validate {
+        /// The YAML file, or the folder of YAML files, to check
+        path: PathBuf,
+    },
     /// Accept the risk a rule reports, so its findings stop counting against you.
     ///
     /// The rule keeps running on every scan — this only changes how its findings are
@@ -368,8 +403,10 @@ enum ConfigRulesAction {
         /// unauditable, and the person who will need this is future you.
         #[arg(long)]
         reason: String,
-        /// Only this one finding: the file path, `port N on ADDR`, or (for a finding about the
-        /// machine as a whole) its title — as `bulwarkctl rules suppressions` and the app show it.
+        /// Only this one finding, by its place. `bulwarkctl scan --all` lists each place on a line
+        /// starting with `·` under the problem: a file path, `port N on ADDR`, a name such as
+        /// `module=dccp`, or (for a finding about the machine as a whole) its title. You are told,
+        /// with the places that exist, if nothing is found at the place you give.
         #[arg(long)]
         place: Option<String>,
     },
@@ -555,8 +592,41 @@ fn db_refusal(path: &Path) -> Option<String> {
     None
 }
 
+/// Says, once per run, that a database named with `--db-path` sits in a folder every account can
+/// write to (`/tmp`). Bulwark no longer changes such a folder's permissions — it used to turn
+/// `/tmp` into `0700` — so the folder stays as open as its owner made it. The database and the
+/// files SQLite keeps beside it are private either way; the note is there because other accounts
+/// can still see that it exists and could have put a file of that name there first.
+fn note_shared_folder(db: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        let dir = match db.parent() {
+            Some(d) if !d.as_os_str().is_empty() => d,
+            _ => Path::new("."),
+        };
+        if std::fs::metadata(dir).is_ok_and(|m| m.mode() & 0o002 != 0) {
+            ONCE.call_once(|| {
+                eprintln!(
+                    "note: every account on this computer can write to {}. The database is \
+                     readable only by you, but a folder only you can write to is a safer place \
+                     for it.",
+                    dir.display()
+                );
+            });
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = db;
+}
+
 fn resolve_db_path(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
+    let named = explicit.is_some();
     let path = db_path_as_named(explicit)?;
+    if named {
+        note_shared_folder(&path);
+    }
     if let Some(refusal) = db_refusal(&path) {
         anyhow::bail!(
             "{refusal}, so it could feed a root process whatever it likes. Use --no-persist to \
@@ -601,7 +671,19 @@ fn scan_profile(needs: Vec<String>) -> Profile {
     Profile::with_needs(needs)
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() {
+    // `bulwarkctl … | head -1` must end quietly, not with a panic and exit code 101.
+    term::exit_quietly_when_the_reader_goes_away();
+    if let Err(e) = run() {
+        // An error can quote a file's contents or another machine's answer, so it goes through
+        // the same filter as a report. The shape is the one `main` returning an error prints.
+        let text = term_safe_lines(&format!("{e:?}"));
+        eprintln!("Error: {}", term::for_locale(&text));
+        std::process::exit(1);
+    }
+}
+
+fn run() -> anyhow::Result<()> {
     // SSH_ASKPASS mode, used only by `hosts setup-key --password-stdin`: ssh runs this binary to
     // ask for the one-time password. Both variables are set by `remote::install_key` on that one
     // ssh process; `sudo` and `pkexec` strip unknown variables, so this can't be reached from a
@@ -805,43 +887,16 @@ fn main() -> anyhow::Result<()> {
                 }
             }
             ConfigRulesAction::Validate { path } => {
-                let (rules, mut errors) = engine::load_rules(&path);
-                // Schema/condition validity alone isn't enough: a `collector:` field that
-                // doesn't match any registered collector name loads without error but then
-                // never matches a fact row at scan time, so the rule silently never fires —
-                // forever, with nothing in `collector_errors` or `rule_load_errors` to catch
-                // it. Cross-checking against the real collector registry here is what turns
-                // that into a validate-time failure instead.
-                let known_collectors: std::collections::HashSet<&str> = all_collectors()
-                    .iter()
-                    .map(|c| c.name())
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .collect();
-                let mut valid_count = rules.len();
-                for r in &rules {
-                    if !known_collectors.contains(r.rule.collector.as_str()) {
-                        valid_count -= 1;
-                        errors.push(bulwark_core::models::RuleLoadError {
-                            path: r.rule.id.clone(),
-                            message: format!(
-                                "unknown collector '{}' — not one of: {}",
-                                r.rule.collector,
-                                {
-                                    let mut names: Vec<&str> =
-                                        known_collectors.iter().copied().collect();
-                                    names.sort_unstable();
-                                    names.join(", ")
-                                }
-                            ),
-                        });
-                    }
-                }
-                println!("{valid_count} rule(s) valid");
-                if !errors.is_empty() {
-                    eprintln!("{} rule(s) invalid:", errors.len());
-                    for e in &errors {
-                        eprintln!("  {}: {}", e.path, e.message);
+                let custom_dir = cli
+                    .custom_rules_dir
+                    .clone()
+                    .or_else(bulwark_core::paths::custom_rules_dir);
+                let outcome = validate_rules(&path, custom_dir.as_deref())?;
+                println!("{} rule(s) valid", outcome.valid);
+                if !outcome.errors.is_empty() {
+                    eprintln!("{} problem(s) found:", outcome.errors.len());
+                    for e in &outcome.errors {
+                        eprintln!("  {}: {}", term_safe(&e.path), term_safe(&e.message));
                     }
                     std::process::exit(1);
                 }
@@ -865,9 +920,10 @@ fn main() -> anyhow::Result<()> {
                 let db_path = resolve_db_path(cli.db_path)?;
                 let mut store = Store::open(&db_path)?;
                 if let Some(place) = place {
-                    let i = store.ignore_finding(&rule_id, &place, &reason, &current_actor())?;
+                    let location = place_to_ignore(&mut store, &rule_id, &place)?;
+                    let i = store.ignore_finding(&rule_id, &location, &reason, &current_actor())?;
                     println!("ignoring {} at {} — {}", i.rule_id, i.location, i.reason);
-                    println!("(the rule still reports every other place; lift it with: bulwarkctl rules unsuppress {rule_id} --place ... --reason ...)");
+                    println!("(the rule still reports every other place; lift it with: bulwarkctl rules unsuppress {rule_id} --place '{}' --reason ...)", i.location);
                     return Ok(());
                 }
                 let s = store.suppress_rule(&rule_id, &reason, &current_actor())?;
@@ -882,6 +938,7 @@ fn main() -> anyhow::Result<()> {
                 let db_path = resolve_db_path(cli.db_path)?;
                 let mut store = Store::open(&db_path)?;
                 if let Some(place) = place {
+                    let place = place_to_unignore(&mut store, &rule_id, &place)?;
                     store.unignore_finding(&rule_id, &place, &reason, &current_actor())?;
                     println!("no longer ignoring {rule_id} at {place}");
                     return Ok(());
@@ -943,14 +1000,16 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         },
-        Commands::History => {
+        Commands::History { limit } => {
             let db_path = resolve_db_path(cli.db_path)?;
             if !db_path.exists() {
                 println!("no scans recorded yet at {}", db_path.display());
                 return Ok(());
             }
             let mut store = Store::open(&db_path)?;
-            println!("{} scan run(s) recorded", store.count_scan_runs()?);
+            let total = store.count_scan_runs()?;
+            let runs = store.list_scan_runs(i64::from(limit))?;
+            print!("{}", term::for_locale(&history_table(&runs, total)));
         }
         Commands::Fim { action } => match action {
             FimAction::Baseline { privileged } => {
@@ -999,7 +1058,12 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Commands::Ssh { action } => run_ssh(action)?,
-        Commands::Fix { action } => run_fix(action)?,
+        Commands::Fix { action } => {
+            let code = fix::run(action)?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }
     }
 
     Ok(())
@@ -1086,9 +1150,7 @@ fn run_ssh_scan(
                 h.name
             );
         } else {
-            if let Some(parent) = db_path.parent() {
-                std::fs::create_dir_all(parent).ok();
-            }
+            // `Store::open` creates the folder, and locks down one it creates.
             let mut store = Store::open(&db_path)?;
             store.persist_and_reconcile(&scan)?;
             ignores = store.ignores()?;
@@ -1171,618 +1233,6 @@ fn remote_db_path(
         bulwark_core::paths::adhoc_remote_db_path(main_db, spec),
         None,
     ))
-}
-
-fn run_fix(action: FixAction) -> anyhow::Result<()> {
-    use bulwark_core::{
-        etc_permission_targets, harden_login_defs, harden_sshd_config, harden_sysctl,
-        ssh_permission_targets, tighten_permissions, write_banners, CombinedFixReport,
-    };
-
-    let home = bulwark_core::paths::home_var().context("HOME not set")?;
-    let ssh_dir = PathBuf::from(&home).join(".ssh");
-    let backup_dir = PathBuf::from(&home).join(".local/share/bulwark/sshd-config-backups");
-
-    match action {
-        FixAction::List => {
-            // A pure preview of everything, so a user can see the whole surface at a glance before
-            // choosing what to apply. Nothing here writes.
-            println!("Available autofixes (preview — nothing changed):\n");
-
-            let ssh_targets = ssh_permission_targets(&ssh_dir);
-            let ssh_report = tighten_permissions(&ssh_targets, false);
-            println!(
-                "• fix ssh-perms   ~/.ssh permissions — {} to tighten",
-                ssh_report.changes()
-            );
-            print_perm_report(&ssh_report, false, "    ");
-
-            let etc_report = tighten_permissions(&etc_permission_targets(), false);
-            println!(
-                "\n• fix etc-perms   /etc sensitive files — {} to tighten (needs root to apply)",
-                etc_report.changes()
-            );
-            print_perm_report(&etc_report, false, "    ");
-
-            match harden_sshd_config(None, &backup_dir, false, true) {
-                Ok(sshd_report) => {
-                    println!(
-                        "\n• fix sshd        sshd_config hardening — {} directive(s) to set (needs root to apply)",
-                        sshd_report.changes.len()
-                    );
-                    print_sshd_changes(&sshd_report, "    ");
-                }
-                Err(e) => {
-                    println!("\n• fix sshd        sshd_config hardening — unavailable: {e}");
-                }
-            }
-
-            match harden_sysctl(
-                &bulwark_core::rules_for_kind(bulwark_core::FixKind::Sysctl),
-                &sysctl_backup_dir(&home),
-                false,
-            ) {
-                Ok(r) => {
-                    println!(
-                        "\n• fix sysctl      kernel network knobs — {} setting(s) to persist (needs root to apply)",
-                        r.pending_count()
-                    );
-                    print_sysctl_changes(&r, "    ");
-                }
-                Err(e) => println!("\n• fix sysctl      unavailable: {e}"),
-            }
-
-            let banner_report = write_banners(&banner_backup_dir(&home), false);
-            println!(
-                "\n• fix banner      login warning banners — {} file(s) to write (needs root to apply)",
-                banner_report.pending_count()
-            );
-            print_banner_changes(&banner_report, "    ");
-
-            match harden_login_defs(
-                &bulwark_core::rules_for_kind(bulwark_core::FixKind::LoginDefs),
-                None,
-                &login_defs_backup_dir(&home),
-                false,
-            ) {
-                Ok(r) => {
-                    println!(
-                        "\n• fix login-defs  password aging policy — {} directive(s) to set (needs root to apply)",
-                        r.pending_count()
-                    );
-                    print_login_defs_changes(&r, "    ");
-                }
-                Err(e) => println!("\n• fix login-defs  unavailable: {e}"),
-            }
-
-            println!("\nOther fixes (their own commands, need interactive input):");
-            println!("    ssh protect     add one passphrase to every unencrypted ~/.ssh key");
-            println!("    ai redact       remove leaked secrets from AI-assistant context files");
-            println!("\nApply with e.g.:  bulwarkctl fix ssh-perms --apply");
-            println!("Or the safe set:  sudo bulwarkctl fix all --apply");
-        }
-
-        FixAction::SshPerms { apply } => {
-            let targets = ssh_permission_targets(&ssh_dir);
-            if targets.is_empty() {
-                println!("No ~/.ssh directory found — nothing to fix.");
-                return Ok(());
-            }
-            let report = tighten_permissions(&targets, apply);
-            print_perm_report(&report, apply, "");
-            report_perm_summary(&report, apply);
-        }
-
-        FixAction::EtcPerms { apply, json } => {
-            if apply && !engine::is_running_as_root() {
-                anyhow::bail!(
-                    "fix etc-perms --apply changes root-owned files — re-run as: \
-                     sudo bulwarkctl fix etc-perms --apply"
-                );
-            }
-            let report = tighten_permissions(&etc_permission_targets(), apply);
-            if json {
-                print_fix_json(&CombinedFixReport {
-                    etc_perms: Some(report),
-                    applied: apply,
-                    ..Default::default()
-                })?;
-            } else {
-                print_perm_report(&report, apply, "");
-                report_perm_summary(&report, apply);
-            }
-        }
-
-        FixAction::Sshd {
-            apply,
-            json,
-            include_auth,
-            config,
-        } => {
-            // Root is only required to write the real system config; an explicit --config path (used
-            // for testing or a user-owned copy) the caller can already write is exempt.
-            if apply && config.is_none() && !engine::is_running_as_root() {
-                anyhow::bail!(
-                    "fix sshd --apply edits /etc/ssh/sshd_config — re-run as: \
-                     sudo bulwarkctl fix sshd --apply"
-                );
-            }
-            if include_auth {
-                eprintln!(
-                    "⚠  --include-auth will set PasswordAuthentication no and PermitRootLogin no.\n\
-                     ⚠  Make sure key-based login already works, or you can be locked out.\n"
-                );
-            }
-            let report = harden_sshd_config(config.as_deref(), &backup_dir, apply, include_auth)?;
-            if json {
-                print_fix_json(&CombinedFixReport {
-                    sshd: Some(report),
-                    applied: apply,
-                    ..Default::default()
-                })?;
-            } else {
-                print_sshd_report(&report, apply);
-            }
-        }
-
-        FixAction::Sysctl { apply, json } => {
-            if apply && !engine::is_running_as_root() {
-                anyhow::bail!(
-                    "fix sysctl --apply writes /etc/sysctl.d — re-run as: \
-                     sudo bulwarkctl fix sysctl --apply"
-                );
-            }
-            let report = bulwark_core::harden_sysctl(
-                &bulwark_core::rules_for_kind(bulwark_core::FixKind::Sysctl),
-                &sysctl_backup_dir(&home),
-                apply,
-            )?;
-            if json {
-                print_fix_json(&CombinedFixReport {
-                    sysctl: Some(report),
-                    applied: apply,
-                    ..Default::default()
-                })?;
-            } else {
-                print_sysctl_report(&report, apply);
-            }
-        }
-
-        FixAction::Banner { apply, json } => {
-            if apply && !engine::is_running_as_root() {
-                anyhow::bail!(
-                    "fix banner --apply writes /etc/issue — re-run as: \
-                     sudo bulwarkctl fix banner --apply"
-                );
-            }
-            let report = bulwark_core::write_banners(&banner_backup_dir(&home), apply);
-            if json {
-                print_fix_json(&CombinedFixReport {
-                    banner: Some(report),
-                    applied: apply,
-                    ..Default::default()
-                })?;
-            } else {
-                print_banner_report(&report, apply);
-            }
-        }
-
-        FixAction::LoginDefs {
-            apply,
-            json,
-            config,
-        } => {
-            if apply && config.is_none() && !engine::is_running_as_root() {
-                anyhow::bail!(
-                    "fix login-defs --apply edits /etc/login.defs — re-run as: \
-                     sudo bulwarkctl fix login-defs --apply"
-                );
-            }
-            let report = bulwark_core::harden_login_defs(
-                &bulwark_core::rules_for_kind(bulwark_core::FixKind::LoginDefs),
-                config.as_deref(),
-                &login_defs_backup_dir(&home),
-                apply,
-            )?;
-            if json {
-                print_fix_json(&CombinedFixReport {
-                    login_defs: Some(report),
-                    applied: apply,
-                    ..Default::default()
-                })?;
-            } else {
-                print_login_defs_report(&report, apply);
-            }
-        }
-
-        FixAction::All {
-            apply,
-            json,
-            root_only,
-        } => {
-            let is_root = engine::is_running_as_root();
-            if json {
-                return run_fix_all_json(&ssh_dir, &backup_dir, apply, root_only, is_root);
-            }
-            println!(
-                "Running the safe autofix set{}:\n",
-                if apply { " (applying)" } else { " (preview)" }
-            );
-
-            // 1. ~/.ssh perms — always available (user-scoped), unless the caller asked for only
-            // the root-scoped fixes (see --root-only on why the GUI needs that).
-            let ssh_targets = if root_only {
-                Vec::new()
-            } else {
-                ssh_permission_targets(&ssh_dir)
-            };
-            if ssh_targets.is_empty() {
-                println!(
-                    "[ssh-perms] {}",
-                    if root_only {
-                        "skipped (--root-only)"
-                    } else {
-                        "no ~/.ssh directory — skipped"
-                    }
-                );
-            } else {
-                let r = tighten_permissions(&ssh_targets, apply);
-                println!("[ssh-perms] {} change(s)", r.changes());
-                print_perm_report(&r, apply, "    ");
-            }
-
-            // 2. /etc perms — only if root when applying.
-            if apply && !is_root {
-                println!("\n[etc-perms] needs root — skipped (re-run with sudo to include)");
-            } else {
-                let r = tighten_permissions(&etc_permission_targets(), apply);
-                println!("\n[etc-perms] {} change(s)", r.changes());
-                print_perm_report(&r, apply, "    ");
-            }
-
-            // 3. sshd hardening — non-lockout directives only, root when applying.
-            if apply && !is_root {
-                println!("\n[sshd] needs root — skipped (re-run with sudo to include)");
-            } else {
-                match harden_sshd_config(None, &backup_dir, apply, false) {
-                    Ok(r) => {
-                        println!(
-                            "\n[sshd] {} directive(s){}",
-                            r.pending_count(),
-                            if r.applied { " set" } else { " to set" }
-                        );
-                        print_sshd_changes(&r, "    ");
-                        if let Some(note) = &r.note {
-                            println!("    note: {note}");
-                        }
-                    }
-                    Err(e) => println!("\n[sshd] skipped: {e}"),
-                }
-            }
-
-            // 4. The remaining root-scoped, non-lockout fixers.
-            if apply && !is_root {
-                println!("\n[sysctl/banner/login.defs] need root — skipped (re-run with sudo)");
-            } else {
-                match bulwark_core::harden_sysctl(
-                    &bulwark_core::rules_for_kind(bulwark_core::FixKind::Sysctl),
-                    &sysctl_backup_dir(&home),
-                    apply,
-                ) {
-                    Ok(r) => {
-                        println!("\n[sysctl] {} setting(s)", r.pending_count());
-                        print_sysctl_changes(&r, "    ");
-                    }
-                    Err(e) => println!("\n[sysctl] skipped: {e}"),
-                }
-
-                let b = bulwark_core::write_banners(&banner_backup_dir(&home), apply);
-                println!("\n[banner] {} file(s)", b.pending_count());
-                print_banner_changes(&b, "    ");
-
-                match bulwark_core::harden_login_defs(
-                    &bulwark_core::rules_for_kind(bulwark_core::FixKind::LoginDefs),
-                    None,
-                    &login_defs_backup_dir(&home),
-                    apply,
-                ) {
-                    Ok(r) => {
-                        println!("\n[login.defs] {} directive(s)", r.pending_count());
-                        print_login_defs_changes(&r, "    ");
-                    }
-                    Err(e) => println!("\n[login.defs] skipped: {e}"),
-                }
-            }
-
-            if !apply {
-                println!(
-                    "\nPreview only. Re-run with --apply (and sudo for the root-owned fixes)."
-                );
-            }
-            println!(
-                "\nNot included (need a decision or a secret): the lockout-risky sshd auth \
-                 directives (fix sshd --include-auth), key passphrases (ssh protect), secret \
-                 redaction (ai redact)."
-            );
-        }
-    }
-    Ok(())
-}
-
-/// Backup directories for the file-rewriting fixers. All under the user's own data dir, next to
-/// the sshd-config backups the sshd fixer already writes there.
-fn sysctl_backup_dir(home: &str) -> PathBuf {
-    PathBuf::from(home).join(".local/share/bulwark/sysctl-backups")
-}
-fn banner_backup_dir(home: &str) -> PathBuf {
-    PathBuf::from(home).join(".local/share/bulwark/banner-backups")
-}
-fn login_defs_backup_dir(home: &str) -> PathBuf {
-    PathBuf::from(home).join(".local/share/bulwark/login-defs-backups")
-}
-
-fn print_sysctl_changes(report: &bulwark_core::SysctlHardeningReport, indent: &str) {
-    for c in &report.changes {
-        // Say plainly which rows outlive a reboot and which are this-boot-only. A persisted key
-        // and a live-only interface write are genuinely different promises to the user.
-        let scope = if c.persisted {
-            "saved + applied now"
-        } else {
-            "applied now (new interfaces inherit from conf.default)"
-        };
-        println!(
-            "{indent}{} = {} (currently {}) — {scope}",
-            c.key, c.desired, c.current
-        );
-        if !c.interfaces.is_empty() {
-            println!(
-                "{indent}    {} interface(s): {}",
-                c.interfaces.len(),
-                c.interfaces.join(", ")
-            );
-        }
-    }
-    for k in &report.stale_persisted_keys {
-        println!("{indent}stale entry to remove: {k}");
-    }
-}
-
-fn print_sysctl_report(report: &bulwark_core::SysctlHardeningReport, apply: bool) {
-    if report.changes.is_empty() {
-        println!("Kernel network settings are already hardened. Nothing to do.");
-        return;
-    }
-    println!(
-        "{} setting(s) {} in {}:",
-        report.changes.len(),
-        if apply {
-            "written to"
-        } else {
-            "would be written to"
-        },
-        report.conf_path
-    );
-    print_sysctl_changes(report, "    ");
-    if let Some(b) = &report.backup_path {
-        println!("Previous file backed up to {b}");
-    }
-    if let Some(n) = &report.note {
-        println!("note: {n}");
-    }
-    if !apply {
-        println!("\nPreview only. Re-run with --apply (as root) to write them.");
-    }
-}
-
-fn print_banner_changes(report: &bulwark_core::BannerReport, indent: &str) {
-    use bulwark_core::BannerOutcome;
-    for r in &report.results {
-        match &r.outcome {
-            BannerOutcome::WouldWrite => println!("{indent}would write {} ({})", r.path, r.label),
-            BannerOutcome::Written => println!("{indent}wrote {} ({})", r.path, r.label),
-            BannerOutcome::Failed { reason } => println!("{indent}FAILED {}: {reason}", r.path),
-            _ => {}
-        }
-    }
-}
-
-fn print_banner_report(report: &bulwark_core::BannerReport, apply: bool) {
-    if report.pending_count() == 0 {
-        println!("Both login banners are already custom warnings. Nothing to do.");
-        return;
-    }
-    print_banner_changes(report, "");
-    if !apply {
-        println!("\nPreview only. Re-run with --apply (as root) to write them.");
-    }
-}
-
-fn print_login_defs_changes(report: &bulwark_core::LoginDefsReport, indent: &str) {
-    for c in &report.changes {
-        println!("{indent}{} {} (currently {})", c.key, c.desired, c.current);
-    }
-}
-
-fn print_login_defs_report(report: &bulwark_core::LoginDefsReport, apply: bool) {
-    if report.changes.is_empty() {
-        println!("Password-aging policy is already within the rule thresholds. Nothing to do.");
-        return;
-    }
-    println!(
-        "{} directive(s) {} in {}:",
-        report.changes.len(),
-        if apply { "set" } else { "to set" },
-        report.config_path
-    );
-    print_login_defs_changes(report, "    ");
-    if let Some(b) = &report.backup_path {
-        println!("Original backed up to {b}");
-    }
-    if let Some(n) = &report.note {
-        println!("note: {n}");
-    }
-    if !apply {
-        println!("\nPreview only. Re-run with --apply (as root) to set them.");
-    }
-}
-
-/// The machine-readable form of `fix all`. Kept separate from the human path so the printed report
-/// and the JSON one can never half-agree: this runs the same fixers and emits exactly one JSON
-/// document on stdout, which is what the GUI deserializes back out of `pkexec`.
-///
-/// `root_only` drops the user-scoped `~/.ssh` pass — mandatory when invoked under `pkexec`, whose
-/// `HOME` is root's, not the invoking user's. The lockout-risky sshd auth directives are **never**
-/// included here; they stay behind `fix sshd --include-auth`, an explicit per-issue decision.
-fn run_fix_all_json(
-    ssh_dir: &Path,
-    backup_dir: &Path,
-    apply: bool,
-    root_only: bool,
-    is_root: bool,
-) -> anyhow::Result<()> {
-    use bulwark_core::{
-        etc_permission_targets, harden_sshd_config, ssh_permission_targets, tighten_permissions,
-        CombinedFixReport,
-    };
-
-    let mut report = CombinedFixReport {
-        applied: apply,
-        ..Default::default()
-    };
-
-    if !root_only {
-        let targets = ssh_permission_targets(ssh_dir);
-        if !targets.is_empty() {
-            report.ssh_perms = Some(tighten_permissions(&targets, apply));
-        }
-    }
-
-    // Applying either root-scoped fixer without root would fail per-file; refuse up front so the
-    // caller gets one clear reason rather than a report full of permission-denied rows.
-    if apply && !is_root {
-        anyhow::bail!(
-            "fix all --apply changes root-owned files — re-run as: sudo bulwarkctl fix all --apply"
-        );
-    }
-    report.etc_perms = Some(tighten_permissions(&etc_permission_targets(), apply));
-    match harden_sshd_config(None, backup_dir, apply, false) {
-        Ok(r) => report.sshd = Some(r),
-        // A missing sshd_config is not an error — but it must be *reported*, never dropped.
-        Err(e) => report.sshd_error = Some(e.to_string()),
-    }
-
-    let home = bulwark_core::paths::home_var().unwrap_or_default();
-    // Every one of these is in the safe (non-lockout) set — see the reasoning per capability in
-    // `bulwark_core::FIX_CAPABILITIES`.
-    match bulwark_core::harden_sysctl(
-        &bulwark_core::rules_for_kind(bulwark_core::FixKind::Sysctl),
-        &sysctl_backup_dir(&home),
-        apply,
-    ) {
-        Ok(r) => report.sysctl = Some(r),
-        Err(e) => report.errors.push(format!("sysctl: {e}")),
-    }
-    report.banner = Some(bulwark_core::write_banners(
-        &banner_backup_dir(&home),
-        apply,
-    ));
-    match bulwark_core::harden_login_defs(
-        &bulwark_core::rules_for_kind(bulwark_core::FixKind::LoginDefs),
-        None,
-        &login_defs_backup_dir(&home),
-        apply,
-    ) {
-        Ok(r) => report.login_defs = Some(r),
-        Err(e) => report.errors.push(format!("login.defs: {e}")),
-    }
-
-    print_fix_json(&report)
-}
-
-/// Emit a fix report as one JSON document on stdout.
-fn print_fix_json(report: &bulwark_core::CombinedFixReport) -> anyhow::Result<()> {
-    println!("{}", serde_json::to_string(report)?);
-    Ok(())
-}
-
-/// Print a permission report's per-file lines. `indent` prefixes each line so `fix list`/`fix all`
-/// can nest them under a heading.
-fn print_perm_report(report: &bulwark_core::PermReport, apply: bool, indent: &str) {
-    use bulwark_core::PermOutcome;
-    for r in &report.results {
-        let line = match &r.outcome {
-            PermOutcome::WouldTighten { from, to } => {
-                format!("would chmod {from} → {to}  {} ({})", r.path, r.label)
-            }
-            PermOutcome::Tightened { from, to } => {
-                format!("chmod {from} → {to}  {} ({})", r.path, r.label)
-            }
-            // In a preview or summary we don't spell out every already-ok/missing row unless it's
-            // the only content — keep the signal high.
-            _ => continue,
-        };
-        println!("{indent}{line}");
-    }
-    let _ = apply;
-}
-
-fn report_perm_summary(report: &bulwark_core::PermReport, apply: bool) {
-    if report.changes() == 0 {
-        println!("All checked permissions are already correct. Nothing to do.");
-        return;
-    }
-    if apply {
-        println!(
-            "\n{} tightened, {} already ok, {} missing, {} failed.",
-            report.tightened, report.already_ok, report.missing, report.failed
-        );
-        if report.failed > 0 {
-            println!("Some changes failed — see the lines above (often: needs root).");
-        }
-    } else {
-        println!(
-            "\n{} file(s) would be tightened. Re-run with --apply to make the change.",
-            report.would_tighten
-        );
-    }
-}
-
-fn print_sshd_changes(report: &bulwark_core::SshdHardeningReport, indent: &str) {
-    use bulwark_core::SshdChangeStatus;
-    for c in &report.changes {
-        let verb = match c.status {
-            SshdChangeStatus::WouldSet => "would set",
-            SshdChangeStatus::Set => "set",
-            SshdChangeStatus::SkippedLockout => "skipped (lockout risk — use --include-auth)",
-        };
-        println!(
-            "{indent}{verb}: {} {} (was {}) — {}",
-            c.keyword, c.desired, c.current, c.why
-        );
-    }
-}
-
-fn print_sshd_report(report: &bulwark_core::SshdHardeningReport, apply: bool) {
-    if report.changes.is_empty() {
-        println!("sshd_config is already hardened against the SSH rules. Nothing to do.");
-        return;
-    }
-    println!("sshd_config: {}", report.config_path);
-    print_sshd_changes(report, "  ");
-    if let Some(note) = &report.note {
-        println!("note: {note}");
-    }
-    if report.applied {
-        println!("\nApplied. Validate and reload with:  sudo sshd -t && sudo systemctl reload ssh");
-        if let Some(b) = &report.backup_path {
-            println!("Backup of the original: {b}");
-        }
-        println!("Undo: restore the backup, or delete the '# BEGIN bulwark-hardening' block.");
-    } else if apply {
-        println!("\nNothing was applied (only lockout-risky directives were pending — add --include-auth).");
-    } else {
-        println!("\nPreview only. Re-run with --apply (as root) to make the change.");
-    }
 }
 
 /// Handles the `ssh` subcommand group. Calls the linked `bulwark-core` remediation directly —
@@ -1883,11 +1333,7 @@ fn run_ai(action: AiAction, db_path: Option<PathBuf>) -> anyhow::Result<()> {
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
-                let opts = report::ReportOptions {
-                    all,
-                    color: report::ReportOptions::color_for_stdout(),
-                    target: String::new(),
-                };
+                let opts = report::ReportOptions::for_stdout(all, "");
                 print!("{}", report::render_ai(&report, home.to_str(), &opts));
             }
             std::process::exit(exit_code_for(report.worst_severity()));
@@ -2014,11 +1460,7 @@ fn run_logs(action: LogsAction, db_path: Option<PathBuf>) -> anyhow::Result<()> 
             if json {
                 println!("{}", serde_json::to_string_pretty(&scan)?);
             } else {
-                let opts = report::ReportOptions {
-                    all,
-                    color: report::ReportOptions::color_for_stdout(),
-                    target: String::new(),
-                };
+                let opts = report::ReportOptions::for_stdout(all, "");
                 print!("{}", report::render_logs(&scan, &opts));
             }
             // A scan that loaded no decoders or no rules never actually analyzed anything — exit
@@ -2028,8 +1470,13 @@ fn run_logs(action: LogsAction, db_path: Option<PathBuf>) -> anyhow::Result<()> 
                 eprintln!("error: log scan could not run — no decoders and/or rules were loaded");
                 std::process::exit(2);
             }
-            // Same for input that held nothing usable: "no findings" from it is not a clean log.
-            if report::nothing_analyzed(&scan) {
+            // Same for input that held nothing usable — nothing read at all, or nothing of a kind
+            // Bulwark understands: "no findings" from it is not a clean log. With `--json` the
+            // reason goes to stderr, where a script that only checks the exit code still finds it.
+            if let Some(why) = report::nothing_analyzed_reason(&scan) {
+                if json {
+                    eprintln!("error: {why}");
+                }
                 std::process::exit(2);
             }
             std::process::exit(exit_code_for(scan.worst_severity()));
@@ -2061,6 +1508,7 @@ fn run_logs(action: LogsAction, db_path: Option<PathBuf>) -> anyhow::Result<()> 
             }
             RulesAction::Validate { path } => {
                 let (rules, mut errors) = load_log_rules(&path);
+                nothing_to_validate(&path, rules.is_empty() && errors.is_empty())?;
                 // Cross-check that every rule's `decoder:` names a real decoder — the log analog
                 // of the config path's "unknown collector" validate-time guard. A typo there
                 // would load cleanly but then silently never match an event.
@@ -2110,6 +1558,7 @@ fn run_logs(action: LogsAction, db_path: Option<PathBuf>) -> anyhow::Result<()> 
             }
             RulesAction::Validate { path } => {
                 let (decoders, errors) = load_decoders(&path);
+                nothing_to_validate(&path, decoders.is_empty() && errors.is_empty())?;
                 println!("{} decoder(s) valid", decoders.len());
                 report_load_errors(&errors)?;
             }
@@ -2129,19 +1578,243 @@ fn report_load_errors(errors: &[bulwark_core::models::RuleLoadError]) -> anyhow:
     Ok(())
 }
 
-/// Text that came from another machine (finding titles and explanations, error output), made safe
-/// to print: control characters other than newline and tab become U+FFFD, so a hostile machine
-/// can't embed escape sequences that rewrite the terminal, its title or the clipboard.
-pub(crate) fn term_safe(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if c.is_control() && c != '\n' && c != '\t' {
-                '\u{FFFD}'
+/// The location to store for `--place <given>`: the place a finding is really at when the text
+/// means exactly one, else the text as typed — with a warning naming the places that exist,
+/// because an ignore nothing matches is otherwise indistinguishable from one that works.
+pub(crate) fn place_to_ignore(
+    store: &mut Store,
+    rule_id: &str,
+    given: &str,
+) -> anyhow::Result<String> {
+    if store.count_scan_runs()? == 0 {
+        eprintln!(
+            "note: no scan has been saved here yet, so '{}' could not be checked against a real \
+             finding. After a scan, `bulwarkctl scan --all` lists each place on a line starting \
+             with `·`.",
+            term_safe(given)
+        );
+        return Ok(given.to_string());
+    }
+    let open = store.open_findings()?;
+    let of_rule: Vec<&bulwark_core::Finding> =
+        open.iter().filter(|f| f.rule_id == rule_id).collect();
+    let home = bulwark_core::paths::home_var().ok();
+    Ok(match place::match_place(given, &of_rule, home.as_deref()) {
+        place::PlaceMatch::Exact(location) => location,
+        place::PlaceMatch::Understood(location) => {
+            println!(
+                "(no finding is at '{}'; taking it to mean the place '{}')",
+                term_safe(given),
+                term_safe(&location)
+            );
+            location
+        }
+        place::PlaceMatch::NotFound { existing } => {
+            eprintln!("{}", place::not_found_warning(rule_id, given, &existing));
+            given.to_string()
+        }
+    })
+}
+
+/// The stored location to lift for `--place <given>`: the ignore itself, or the one ignore the
+/// text clearly means. Refuses, listing what is ignored, when it means none.
+pub(crate) fn place_to_unignore(
+    store: &mut Store,
+    rule_id: &str,
+    given: &str,
+) -> anyhow::Result<String> {
+    let ignored: Vec<String> = store
+        .list_finding_ignores()?
+        .into_iter()
+        .filter(|i| i.rule_id == rule_id)
+        .map(|i| i.location)
+        .collect();
+    let home = bulwark_core::paths::home_var().ok();
+    match place::match_ignored(given, &ignored, home.as_deref()) {
+        Some(location) => Ok(location),
+        None if ignored.is_empty() => {
+            anyhow::bail!("{rule_id} has no single place ignored, so there is nothing to lift")
+        }
+        None => anyhow::bail!(
+            "{rule_id} is not ignored at '{}'. It is ignored at: {}",
+            term_safe(given),
+            ignored
+                .iter()
+                .map(|l| format!("'{}'", term_safe(l)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+/// The error for a `validate` that had nothing to look at: a path that isn't there, or one with
+/// no YAML file in it. "0 valid" with exit code 0 is what a typo in the path used to produce.
+fn nothing_to_validate(path: &Path, loaded_nothing: bool) -> anyhow::Result<()> {
+    if !path.exists() {
+        anyhow::bail!(
+            "{} does not exist, so nothing was validated",
+            path.display()
+        );
+    }
+    if loaded_nothing {
+        anyhow::bail!(
+            "no rule files (.yaml or .yml) found in {}, so nothing was validated",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+/// What `rules validate` found.
+struct Validation {
+    valid: usize,
+    errors: Vec<bulwark_core::models::RuleLoadError>,
+}
+
+/// Checks a rule file or folder the way loading would, plus what only shows at scan time.
+///
+/// Three things used to pass that are not valid. A path that isn't there, or a folder without a
+/// single rule file, printed "0 rule(s) valid" and exited 0 — a typo read as a clean result. And
+/// a custom rule with a reserved id was reported valid, although a scan refuses to load it.
+fn validate_rules(path: &Path, custom_dir: Option<&Path>) -> anyhow::Result<Validation> {
+    let (rules, mut errors) = engine::load_rules(path);
+    nothing_to_validate(path, rules.is_empty() && errors.is_empty())?;
+    let mut invalid: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // Schema/condition validity alone isn't enough: a `collector:` field that doesn't match any
+    // registered collector name loads without error but then never matches a fact row at scan
+    // time, so the rule silently never fires — forever, with nothing in `collector_errors` or
+    // `rule_load_errors` to catch it. Cross-checking against the real collector registry here is
+    // what turns that into a validate-time failure instead.
+    let collectors = all_collectors();
+    let mut known: Vec<&str> = collectors.iter().map(|c| c.name()).collect();
+    known.sort_unstable();
+    for r in &rules {
+        if !known.contains(&r.rule.collector.as_str()) {
+            invalid.insert(r.rule.id.clone());
+            errors.push(bulwark_core::models::RuleLoadError {
+                path: r.rule.id.clone(),
+                message: format!(
+                    "unknown collector '{}' — not one of: {}",
+                    r.rule.collector,
+                    known.join(", ")
+                ),
+            });
+        }
+    }
+
+    // The id rules for your own checks, exactly as `engine::load_rule_packs` applies them: the
+    // BLWK- prefix is reserved, and so is every id a built-in check uses. They apply to your own
+    // rules folder, and to any other folder that is mostly rules of your own — but not to a copy
+    // of the built-in pack itself, which is all BLWK- ids and is what CI validates.
+    let reserved = |id: &str| id.to_ascii_uppercase().starts_with("BLWK-");
+    let own_rules = rules.iter().filter(|r| !reserved(&r.rule.id)).count();
+    let in_custom_dir = custom_dir.is_some_and(|dir| {
+        let resolve = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        resolve(path).starts_with(resolve(dir))
+    });
+    if in_custom_dir || own_rules * 2 >= rules.len().max(1) {
+        let builtin: std::collections::HashSet<String> =
+            engine::load_rules(bulwark_core::PackSource::Embedded(embedded::EMBEDDED_RULES))
+                .0
+                .into_iter()
+                .map(|r| r.rule.id)
+                .collect();
+        for r in &rules {
+            let message = if reserved(&r.rule.id) {
+                "custom rule ids can't start with BLWK- (reserved for Bulwark's own checks), so a \
+                 scan would refuse this rule — use your own prefix, e.g. MY-001"
+                    .to_string()
+            } else if builtin.contains(&r.rule.id) {
+                format!(
+                    "'{}' is already a built-in check's id, so a scan would refuse this rule",
+                    r.rule.id
+                )
             } else {
-                c
+                continue;
+            };
+            invalid.insert(r.rule.id.clone());
+            errors.push(bulwark_core::models::RuleLoadError {
+                path: r.rule.id.clone(),
+                message,
+            });
+        }
+    }
+
+    let valid = rules
+        .iter()
+        .filter(|r| !invalid.contains(&r.rule.id))
+        .count();
+    Ok(Validation { valid, errors })
+}
+
+/// `bulwarkctl history`: the count, then the newest runs, one per line.
+fn history_table(runs: &[bulwark_core::ScanRunSummary], total: i64) -> String {
+    use std::fmt::Write as _;
+    let mut out = format!("{total} scan run(s) recorded\n");
+    if runs.is_empty() {
+        return out;
+    }
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "  {:<17} {:<12} {:<6} FINDINGS LEFT OPEN",
+        "WHEN", "CHECKS RAN", "ADMIN"
+    );
+    for r in runs {
+        let when = r
+            .started_at
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M");
+        // A run saved before the set of checks that ran was kept has no number to show; "0 of 99"
+        // would say nothing ran.
+        let checks = if r.rules_evaluated == 0 {
+            format!("? of {}", r.rules_loaded)
+        } else {
+            format!("{} of {}", r.rules_evaluated, r.rules_loaded)
+        };
+        let admin = if r.privileged_collectors_skipped.is_empty() {
+            "yes"
+        } else {
+            "no"
+        };
+        let findings = match &r.severity_counts {
+            Some(c) if c.total() == 0 => "none".to_string(),
+            Some(c) => {
+                let parts: Vec<String> = [
+                    (c.critical, "critical"),
+                    (c.high, "high"),
+                    (c.medium, "medium"),
+                    (c.low, "low"),
+                    (c.info, "info"),
+                ]
+                .iter()
+                .filter(|(n, _)| *n > 0)
+                .map(|(n, word)| format!("{n} {word}"))
+                .collect();
+                format!("{:<4} {}", c.total(), parts.join(" · "))
             }
-        })
-        .collect()
+            // Saved before the split by severity was kept: the total is known, the split is not.
+            None => format!(
+                "{:<4} (severity not recorded for this run)",
+                r.total_findings
+            ),
+        };
+        let _ = writeln!(out, "  {when:<17} {checks:<12} {admin:<6} {findings}");
+    }
+    if (runs.len() as i64) < total {
+        let _ = writeln!(
+            out,
+            "\nShowing the newest {} of {total}. `bulwarkctl history --limit N` shows more.",
+            runs.len()
+        );
+    }
+    let _ = writeln!(
+        out,
+        "\nADMIN is whether the run included the checks that need root (sudo bulwarkctl scan \
+         --privileged). `bulwarkctl scan` shows the findings themselves."
+    );
+    out
 }
 
 fn print_scan_table(
@@ -2150,25 +1823,13 @@ fn print_scan_table(
     all: bool,
     target: &str,
 ) {
-    let opts = report::ReportOptions {
-        all,
-        color: report::ReportOptions::color_for_stdout(),
-        target: target.to_string(),
-    };
+    let opts = report::ReportOptions::for_stdout(all, target);
     print!("{}", report::render(scan, ignores, &opts));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn remote_text_cannot_drive_the_terminal() {
-        let hostile = "Title\x1b]0;pwned\x07 \x1b[2Jtext\nnext\tline";
-        let safe = term_safe(hostile);
-        assert!(!safe.contains('\x1b') && !safe.contains('\x07'));
-        assert!(safe.contains("\nnext\tline"), "newlines and tabs survive");
-    }
 
     #[test]
     fn no_needs_flag_keeps_the_detected_roles() {

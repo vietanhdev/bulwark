@@ -10,5 +10,5 @@ explain: >
   process that ran on this host, who ran it, and how long it took — a different, harder-
   to-tamper-with data source than shell history or application logs, since it's written by
   the kernel itself rather than by the process being recorded.
-fix: "Install process accounting (e.g. 'apt install acct') and enable it with 'systemctl enable --now acct'."
+fix: "Install process accounting with your package manager (the package is 'acct' on Debian, Ubuntu and Alpine, 'psacct' on Fedora and RHEL), then start it and have it start at boot (with systemd: 'systemctl enable --now acct', or 'psacct' where the package has that name)."
 references: [CIS-4.6]

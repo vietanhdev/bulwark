@@ -459,6 +459,7 @@ dependencies = [
  "bulwark-core",
  "chrono",
  "clap",
+ "libc",
  "rpassword",
  "serde",
  "serde_json",

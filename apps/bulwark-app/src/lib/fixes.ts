@@ -16,6 +16,8 @@ export interface FixCapability {
   lockout_risk: boolean;
   /** Applying needs root, so the GUI raises a polkit prompt. */
   needs_root: boolean;
+  /** "Fix all safe issues" applies it. Banner and password-ageing fixes are applied one at a time. */
+  in_fix_all: boolean;
 }
 
 export interface PermResult {

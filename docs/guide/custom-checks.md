@@ -33,9 +33,32 @@ files and one of them points at an internal mirror — ignore just that place:
 - **From a terminal:** `bulwarkctl rules suppress BLWK-DEV-007 --place /home/me/.npmrc --reason "internal mirror"`
   (or `bulwarkctl hosts ignore <machine> BLWK-DEV-007 --place … --reason …` for a monitored machine).
 
-A place is the file, the listening port (`port 5432 on 0.0.0.0`), or — for a finding about the
-machine as a whole — its title. Line numbers are left out on purpose, so an ignore survives the file
-being edited.
+**Finding a place.** Run `bulwarkctl scan --all` (or `bulwarkctl hosts show <machine> --all`): under
+each problem, every line that starts with `·` is one place, written exactly as `--place` takes it.
+
+| The finding is about | Its place looks like | Example |
+|---|---|---|
+| A file | The file's path | `/home/me/.npmrc` |
+| A listening port | `port N on ADDRESS` | `port 5432 on 0.0.0.0` |
+| One item of a list (a kernel module, a systemd unit, a cron line) | `name=value`, joined by ` · ` when it takes more than one | `module=dccp` |
+| A file the check names by a short label | That label | `issue` for `/etc/issue` |
+| The machine as a whole (no `·` line is shown) | The finding's title | `auditd is not installed` |
+
+You don't have to match it to the letter. When what you type can only mean one place — `/etc/issue`
+for `issue`, `dccp` for `module=dccp`, `~/.npmrc` for the full path, `6379` for `port 6379 on
+0.0.0.0` — Bulwark takes it and tells you which place it stored. When it matches nothing, the ignore
+is still saved (you may be ignoring something that is not there yet) and you get a warning that
+lists the places the check is currently found at, so you can pick the right one:
+
+```text
+warning: no open finding of BLWK-BANN-001 is at '/etc/motd', so this ignores nothing right now.
+  BLWK-BANN-001 is currently found at:
+    issue
+    issue.net
+  Use one of those with --place, exactly as written.
+```
+
+Line numbers are left out of a place on purpose, so an ignore survives the file being edited.
 
 ## Ignore a type of issue, or turn a check off
 
@@ -81,7 +104,9 @@ references: []
 The easiest start is an existing check: every [check page](/checks/) shows its rule, and
 `bulwarkctl rules list` names them all. Conditions support `==` `!=` `in` `contains` `matches` (regex)
 `<` `>` `<=` `>=` with `and`/`or`/`not`, one collector per check. Validate a folder with
-`bulwarkctl rules validate ~/.config/bulwark/rules`.
+`bulwarkctl rules validate ~/.config/bulwark/rules`. It applies the checks loading applies,
+including the id rules below, and exits non-zero when a rule would be refused, when the folder is
+missing, or when it holds no rule file at all.
 
 Two things about the YAML itself that the validator will point at, with the line:
 
