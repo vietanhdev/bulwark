@@ -7,11 +7,19 @@ category: ssh-remote-access
 # expose more, stay medium.
 severity: low
 collector: sshd_config
-condition: allow_tcp_forwarding == "yes"
+# Every value sshd accepts except "no" (sshd_config(5), AllowTcpForwarding). Matching only "yes"
+# missed the rest:
+#   all    - the same as yes; `sshd -T` prints it as yes.
+#   local  - a client can still open tunnels from this host into whatever it can reach (ssh -L),
+#            which is the pivot the rule is about.
+#   remote - a client can still open listening ports on this host that lead back to it (ssh -R).
+# The last two are narrower than yes, so the text names the value instead of saying "on".
+condition: allow_tcp_forwarding in ["yes", "all", "local", "remote"]
 explain: >
-  AllowTcpForwarding is set to "{{ sshd.allow_tcp_forwarding }}" in sshd_config. TCP
-  forwarding lets any SSH user open arbitrary local or remote port tunnels through this
-  host — the exact mechanism used to pivot into internal networks or to reach services
-  (like VNC) that are only supposed to be reachable from localhost.
+  AllowTcpForwarding is set to "{{ sshd.allow_tcp_forwarding }}" in sshd_config ("yes" and
+  "all" allow both directions, "local" and "remote" one each). TCP forwarding lets any SSH
+  user open port tunnels through this host — the exact mechanism used to pivot into internal
+  networks or to reach services (like VNC) that are only supposed to be reachable from
+  localhost.
 fix: "Set 'AllowTcpForwarding no' in /etc/ssh/sshd_config, or restrict it per-user with a Match block, unless tunneling is a deliberate requirement."
 references: [CIS-5.2.5, ATTACK-T1572]

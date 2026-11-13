@@ -15,22 +15,32 @@
 //! the first value it obtains for a keyword, and `Include` directives are expanded inline where they
 //! appear. Putting our block above everything — including the `Include /etc/ssh/sshd_config.d/*.conf`
 //! line Ubuntu/Debian ship at the top — guarantees our value is the one that takes effect, without
-//! having to hunt through drop-in files. The block is idempotent: a prior block is stripped and
-//! rebuilt, never stacked.
+//! having to hunt through drop-in files. The one thing it does not beat is a `Match all` block,
+//! whose values sshd copies over the global ones; a directive set there is reported, not "fixed".
+//!
+//! Running it again is safe:
+//!   * The plan is made against what sshd obeys **now**, managed block included. Once a run has
+//!     applied, the next one finds nothing to do and writes nothing — no rewrite, no new backup.
+//!   * There is only ever one block. When a later run does have something to add, the block is
+//!     rebuilt with **everything it already held** plus the new lines, so a plain run never removes
+//!     what an earlier `--include-auth` run set.
 //!
 //! Safety rails:
 //!   * **Dry-run by default** — nothing is written unless `apply` is true.
-//!   * **Backup first** — the original is copied (0600) before any rewrite, and restored if a
+//!   * **Backup first** — the file is copied (0600) under a new timestamped name before every
+//!     rewrite, so the copy from before the first run is never overwritten, and it is restored if a
 //!     post-write `sshd -t` validation fails, so a syntactically broken config is never left behind.
 //!   * **Lockout directives are opt-in.** `PasswordAuthentication` and `PermitRootLogin` can lock an
 //!     operator out of a box reached only by password; they are flagged `lockout_risk` and excluded
 //!     unless the caller explicitly asks to include them.
 
-use crate::collectors::sshd::{parse_sshd_config_with, resolve_include_glob};
+use crate::collectors::sshd::{
+    parse_sshd_config_with, resolve_include_glob, split_keyword, IncludeResolver,
+};
 use crate::models::Fact;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const MAIN_CONFIG: &str = "/etc/ssh/sshd_config";
 const BEGIN_MARKER: &str = "# BEGIN bulwark-hardening";
@@ -158,13 +168,20 @@ pub(crate) fn directive_lockout_risk(rule_id: &str) -> Option<bool> {
 }
 
 /// Whether the current effective value of `field` is insecure — kept in lockstep with the
-/// `BLWK-SSH-*` rule conditions so a fix only fires where the scanner would flag.
+/// `BLWK-SSH-*` rule conditions so a fix only fires where the scanner would flag
+/// (`is_insecure_agrees_with_the_shipped_rules` compares the two against the real rule files).
 fn is_insecure(field: &str, value: &Value) -> bool {
+    let text = value.as_str();
     match field {
         "max_auth_tries" => value.as_i64().map(|n| n > 6).unwrap_or(false),
-        "strict_modes" => value.as_str() == Some("no"),
+        "strict_modes" => text == Some("no"),
+        // These three take more than yes/no, and every value but `no` leaves some of the feature
+        // on. See the comments in the rule files for what each value allows.
+        "allow_tcp_forwarding" => matches!(text, Some("yes" | "all" | "local" | "remote")),
+        "permit_tunnel" => matches!(text, Some("yes" | "point-to-point" | "ethernet")),
+        "gateway_ports" => matches!(text, Some("yes" | "clientspecified")),
         // Every other managed directive is insecure exactly when it is "yes".
-        _ => value.as_str() == Some("yes"),
+        _ => text == Some("yes"),
     }
 }
 
@@ -194,6 +211,7 @@ pub struct SshdHardeningReport {
     pub config_path: String,
     pub changes: Vec<SshdChange>,
     pub applied: bool,
+    /// The copy of the file as it was before this run changed it. `None` when nothing was written.
     pub backup_path: Option<String>,
     /// Set when `sshd -t` was available and run; `Some(true)` means the new config validated.
     pub validated: Option<bool>,
@@ -210,13 +228,31 @@ impl SshdHardeningReport {
     }
 }
 
-/// Remove any previously-inserted bulwark block from the config text, returning the cleaned text.
-/// Idempotency depends on this: each run rebuilds the block from scratch rather than stacking.
-fn strip_managed_block(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
+/// A config file split into the managed block a previous run wrote and everything else.
+struct SplitConfig {
+    /// The lines between the markers, without the markers. Empty when there is no block.
+    block_lines: Vec<String>,
+    /// The file without the block, byte for byte: deleting the block by hand gives this back.
+    rest: Vec<u8>,
+}
+
+/// Takes any previously-inserted bulwark block out of the config. The block is rebuilt on every
+/// write, never stacked, and what it already holds is carried into the new one.
+///
+/// Works on bytes, and line by line with the line endings kept, so a file with CRLF endings, no
+/// final newline, or a Latin-1 character in a comment is written back exactly as it was.
+fn split_managed_block(original: &[u8]) -> anyhow::Result<SplitConfig> {
+    let mut split = SplitConfig {
+        block_lines: Vec::new(),
+        rest: Vec::with_capacity(original.len()),
+    };
     let mut in_block = false;
-    for line in text.lines() {
-        let trimmed = line.trim_start();
+    // The blank line this fixer puts after the block belongs to the block, or each run would add
+    // one more.
+    let mut after_block = false;
+    for line in original.split_inclusive(|b| *b == b'\n') {
+        let text = String::from_utf8_lossy(line);
+        let trimmed = text.trim();
         if trimmed.starts_with(BEGIN_MARKER) {
             in_block = true;
             continue;
@@ -224,13 +260,26 @@ fn strip_managed_block(text: &str) -> String {
         if in_block {
             if trimmed.starts_with(END_MARKER) {
                 in_block = false;
+                after_block = true;
+            } else {
+                split.block_lines.push(trimmed.to_string());
             }
             continue;
         }
-        out.push_str(line);
-        out.push('\n');
+        if std::mem::take(&mut after_block) && trimmed.is_empty() {
+            continue;
+        }
+        split.rest.extend_from_slice(line);
     }
-    out
+    if in_block {
+        // Taking "the rest of the file" for the block would delete it on the next write.
+        anyhow::bail!(
+            "found '{BEGIN_MARKER}' with no '{END_MARKER}' line after it — the managed block was \
+             edited by hand. Restore the END line (or delete the BEGIN line) and run again; nothing \
+             was changed"
+        );
+    }
+    Ok(split)
 }
 
 /// Decide which directives need changing, given the effective (parsed) config and whether the caller
@@ -264,19 +313,111 @@ fn plan(effective: &Fact, include_lockout: bool) -> Vec<SshdChange> {
     changes
 }
 
-/// Render the sentinel-delimited block for the directives that will actually be written.
-fn render_block(changes: &[SshdChange]) -> String {
-    let mut block = String::new();
-    block.push_str(BEGIN_MARKER);
-    block.push_str(" (managed) — remove this block and restore the backup to undo\n");
-    for c in changes {
-        if matches!(c.status, SshdChangeStatus::WouldSet | SshdChangeStatus::Set) {
-            block.push_str(&format!("{} {}\n", c.keyword, c.desired));
+/// The body of the new managed block: every line the old block held, with the values this run
+/// sets replaced in place, then the directives that are new.
+///
+/// Carrying the old lines forward is what makes a later run safe. The block is the only place this
+/// fixer writes, so a directive an earlier run put there (`PasswordAuthentication no` from
+/// `--include-auth`, say) is by now the secure effective value and no longer in the plan. Building
+/// the block from the plan alone dropped it, and a plain `fix all --apply` quietly turned password
+/// logins back on.
+fn block_body(old_lines: &[String], set: &[&SshdChange]) -> Vec<String> {
+    let keyword_of = |line: &str| split_keyword(line).map(|(k, _)| k.to_ascii_lowercase());
+    let mut written = std::collections::HashSet::new();
+    let mut body = Vec::new();
+    for line in old_lines {
+        let Some(keyword) = keyword_of(line) else {
+            if !line.is_empty() {
+                body.push(line.clone()); // a comment someone added: keep it
+            }
+            continue;
+        };
+        match set
+            .iter()
+            .find(|c| c.keyword.to_ascii_lowercase() == keyword)
+        {
+            // sshd takes the first value, so only the first line for a keyword counts.
+            Some(c) if written.insert(keyword) => body.push(format!("{} {}", c.keyword, c.desired)),
+            Some(_) => {}
+            None => body.push(line.clone()),
         }
     }
-    block.push_str(END_MARKER);
-    block.push('\n');
-    block
+    for c in set {
+        if written.insert(c.keyword.to_ascii_lowercase()) {
+            body.push(format!("{} {}", c.keyword, c.desired));
+        }
+    }
+    body
+}
+
+/// The whole new file: the managed block on top, one blank line, then the rest untouched.
+fn render_config(body: &[String], rest: &[u8]) -> Vec<u8> {
+    let mut out = String::new();
+    out.push_str(BEGIN_MARKER);
+    out.push_str(" (managed) — remove this block and restore the backup to undo\n");
+    for line in body {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push_str(END_MARKER);
+    out.push_str("\n\n");
+    let mut bytes = out.into_bytes();
+    bytes.extend_from_slice(rest);
+    bytes
+}
+
+/// Copies the file as it is now into `backup_dir` under a name no earlier backup has, so the copy
+/// of the file from before the first run is never replaced by a copy of an already-changed one.
+fn write_backup(backup_dir: &Path, path: &Path, original: &[u8]) -> anyhow::Result<PathBuf> {
+    use std::io::Write;
+    std::fs::create_dir_all(backup_dir)?;
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "sshd_config".to_string());
+    for _ in 0..100 {
+        // To the millisecond, so that two runs in one second get different names and the names
+        // still sort oldest first.
+        let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%3fZ");
+        let backup_path = backup_dir.join(format!("{name}.{stamp}.bak"));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&backup_path)
+        {
+            Ok(mut file) => {
+                // The config may hold nothing secret, but its backup need not be world-readable.
+                crate::platform::set_file_mode(&backup_path, 0o600)?;
+                file.write_all(original)?;
+                return Ok(backup_path);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    anyhow::bail!(
+        "could not find a free backup name in {}",
+        backup_dir.display()
+    )
+}
+
+/// Adds the way out to an error caused by a config file this run may not read: the preview
+/// commands run as an ordinary user, and a cloud image's drop-in is mode 600.
+fn with_sudo_hint(e: anyhow::Error) -> anyhow::Error {
+    let denied = e.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::PermissionDenied)
+    });
+    if denied {
+        anyhow::anyhow!(
+            "{e} — the sshd settings in force cannot be worked out without it; run this with sudo"
+        )
+    } else {
+        e
+    }
 }
 
 /// Public entry point. `config_path` defaults to `/etc/ssh/sshd_config` when `None`. `backup_dir` is
@@ -313,7 +454,7 @@ fn harden_with(
     apply: bool,
     include_lockout: bool,
     validate: bool,
-    resolve: &dyn Fn(&str) -> Vec<String>,
+    resolve: &IncludeResolver,
 ) -> anyhow::Result<SshdHardeningReport> {
     let mut report = SshdHardeningReport {
         config_path: path.display().to_string(),
@@ -322,37 +463,72 @@ fn harden_with(
     if !path.exists() {
         anyhow::bail!("{} does not exist — is OpenSSH installed?", path.display());
     }
-    let original = std::fs::read_to_string(path)?;
-    let cleaned = strip_managed_block(&original);
-    // Parse the effective config *without* our old block, so re-running sees the real underlying
-    // values, not the ones a previous run wrote.
-    let effective = parse_sshd_config_with(&cleaned, resolve);
-
+    let original = std::fs::read(path).map_err(|e| {
+        let message = format!("could not read {}: {e}", path.display());
+        with_sudo_hint(anyhow::Error::new(e).context(message))
+    })?;
+    // What sshd obeys right now, the managed block included. Planning against the file with the
+    // block taken out reported "would set … (was yes)" for ever after a successful run.
+    //
+    // A drop-in that cannot be read stops the fix: the plan would be made against a guess.
+    let effective = parse_sshd_config_with(&String::from_utf8_lossy(&original), resolve)
+        .map_err(with_sudo_hint)?;
     let mut changes = plan(&effective, include_lockout);
-    let to_write = changes
-        .iter()
-        .filter(|c| matches!(c.status, SshdChangeStatus::WouldSet))
-        .count();
 
-    if !apply || to_write == 0 {
+    let split = split_managed_block(&original)?;
+    let wanted = |changes: &[SshdChange]| -> Vec<SshdChange> {
+        changes
+            .iter()
+            .filter(|c| c.status == SshdChangeStatus::WouldSet)
+            .cloned()
+            .collect()
+    };
+    let render = |changes: &[SshdChange]| {
+        let set = wanted(changes);
+        let body = block_body(&split.block_lines, &set.iter().collect::<Vec<_>>());
+        render_config(&body, &split.rest)
+    };
+
+    // Check the result before promising it. The block wins over everything below it except a
+    // `Match all` block, whose values sshd copies over the global ones; a directive set there is
+    // not something a line at the top of the file can change.
+    let mut new_content = render(&changes);
+    let after = parse_sshd_config_with(&String::from_utf8_lossy(&new_content), resolve)?;
+    let out_of_reach: Vec<String> = DIRECTIVES
+        .iter()
+        .filter(|d| {
+            after.get(d.field).is_some_and(|v| is_insecure(d.field, v))
+                && changes
+                    .iter()
+                    .any(|c| c.keyword == d.keyword && c.status == SshdChangeStatus::WouldSet)
+        })
+        .map(|d| d.keyword.to_string())
+        .collect();
+    if !out_of_reach.is_empty() {
+        let message = format!(
+            "{} cannot be fixed from the top of the file: a `Match all` block sets it, and sshd \
+             lets that override everything before it. Change it inside that block by hand",
+            out_of_reach.join(", ")
+        );
+        changes.retain(|c| !out_of_reach.contains(&c.keyword));
+        if changes.is_empty() {
+            // Nothing else to report, and "already hardened" would be false.
+            anyhow::bail!(message);
+        }
+        report.note = Some(message);
+        new_content = render(&changes);
+    }
+
+    let to_write = wanted(&changes).len();
+    // Nothing to set, or (the block having moved or been edited) nothing would actually change:
+    // leave the file and the backups alone.
+    if !apply || to_write == 0 || new_content == original {
         report.changes = changes;
         return Ok(report);
     }
 
-    // Build the new config: managed block on top, cleaned original below.
-    let block = render_block(&changes);
-    let new_content = format!("{block}\n{cleaned}");
-
-    // Back up the original (0600) before writing.
-    std::fs::create_dir_all(backup_dir)?;
-    let backup_path = backup_dir.join(format!(
-        "sshd_config.{}.bak",
-        path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("sshd_config")
-    ));
-    std::fs::write(&backup_path, &original)?;
-    crate::platform::set_file_mode(&backup_path, 0o600)?;
+    // Back up the file as it is (0600) before writing.
+    let backup_path = write_backup(backup_dir, path, &original)?;
 
     // Preserve the original file's mode across the rewrite.
     let orig_mode = crate::platform::file_mode(&std::fs::metadata(path)?)
@@ -378,11 +554,12 @@ fn harden_with(
         None => {
             report.validated = None;
             if validate {
-                report.note = Some(
-                    "sshd not found on PATH — wrote the change without `sshd -t` validation; run \
-                     `sshd -t` yourself before restarting sshd"
-                        .to_string(),
-                );
+                let no_sshd = "sshd not found on PATH — wrote the change without `sshd -t` \
+                               validation; run `sshd -t` yourself before restarting sshd";
+                report.note = Some(match report.note.take() {
+                    Some(earlier) => format!("{earlier}. {no_sshd}"),
+                    None => no_sshd.to_string(),
+                });
             }
         }
     }
@@ -419,25 +596,76 @@ fn validate_sshd(path: &Path) -> Option<bool> {
 mod tests {
     use super::*;
 
-    fn no_includes(_: &str) -> Vec<String> {
-        Vec::new()
+    fn no_includes(_: &str) -> anyhow::Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+
+    fn effective_of(text: &str) -> Fact {
+        parse_sshd_config_with(text, &no_includes).unwrap()
+    }
+
+    /// One run against a config in a temp folder, with no drop-ins and no `sshd -t`.
+    fn run(cfg: &Path, bak: &Path, apply: bool, include_lockout: bool) -> SshdHardeningReport {
+        harden_with(cfg, bak, apply, include_lockout, false, &no_includes).unwrap()
+    }
+
+    fn backups_in(bak: &Path) -> Vec<PathBuf> {
+        let mut files: Vec<PathBuf> = match std::fs::read_dir(bak) {
+            Ok(entries) => entries.flatten().map(|e| e.path()).collect(),
+            Err(_) => Vec::new(),
+        };
+        files.sort();
+        files
     }
 
     #[test]
-    fn strip_block_is_idempotent() {
+    fn splitting_out_the_block_leaves_the_rest_byte_for_byte() {
+        let text = format!(
+            "{BEGIN_MARKER} (managed)\nPasswordAuthentication no\n{END_MARKER}\n\n\nPort 22\r\n# caf\u{e9}"
+        );
+        let split = split_managed_block(text.as_bytes()).unwrap();
+        assert_eq!(split.block_lines, ["PasswordAuthentication no"]);
+        assert_eq!(
+            String::from_utf8(split.rest).unwrap(),
+            "\nPort 22\r\n# caf\u{e9}",
+            "only the block and the one blank line the fixer adds after it are taken out"
+        );
+
+        let untouched = b"Port 22\n\n# no block here";
+        let split = split_managed_block(untouched).unwrap();
+        assert!(split.block_lines.is_empty());
+        assert_eq!(split.rest, untouched);
+    }
+
+    #[test]
+    fn a_block_with_no_end_marker_is_refused_not_treated_as_the_rest_of_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("sshd_config");
         let text =
-            format!("{BEGIN_MARKER} (managed)\nPasswordAuthentication no\n{END_MARKER}\nPort 22\n");
-        let cleaned = strip_managed_block(&text);
-        assert!(!cleaned.contains("bulwark-hardening"));
-        assert!(cleaned.contains("Port 22"));
+            format!("{BEGIN_MARKER} (managed)\nX11Forwarding no\nPort 2222\nX11Forwarding yes\n");
+        std::fs::write(&cfg, &text).unwrap();
+        let err = harden_with(
+            &cfg,
+            &dir.path().join("bak"),
+            true,
+            false,
+            false,
+            &no_includes,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("END"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(&cfg).unwrap(),
+            text,
+            "nothing written"
+        );
     }
 
     #[test]
     fn plan_flags_insecure_defaults_and_skips_lockout_by_default() {
         // A stock config relying on defaults: password auth defaults to yes (insecure), tcp
         // forwarding yes, etc.
-        let effective = parse_sshd_config_with("Port 22\n", &no_includes);
-        let changes = plan(&effective, false);
+        let changes = plan(&effective_of("Port 22\n"), false);
         let by = |kw: &str| changes.iter().find(|c| c.keyword == kw).cloned();
 
         // PasswordAuthentication is insecure-by-default AND a lockout risk → skipped without opt-in.
@@ -452,8 +680,7 @@ mod tests {
 
     #[test]
     fn lockout_directives_included_when_opted_in() {
-        let effective = parse_sshd_config_with("PasswordAuthentication yes\n", &no_includes);
-        let changes = plan(&effective, true);
+        let changes = plan(&effective_of("PasswordAuthentication yes\n"), true);
         let pw = changes
             .iter()
             .find(|c| c.keyword == "PasswordAuthentication")
@@ -467,8 +694,7 @@ mod tests {
                     X11Forwarding no\nAllowTcpForwarding no\nPermitUserEnvironment no\n\
                     PermitTunnel no\nStrictModes yes\nGatewayPorts no\nAllowAgentForwarding no\n\
                     MaxAuthTries 4\n";
-        let effective = parse_sshd_config_with(text, &no_includes);
-        let changes = plan(&effective, true);
+        let changes = plan(&effective_of(text), true);
         assert!(
             changes.is_empty(),
             "a fully-hardened config should plan no changes, got: {changes:?}"
@@ -476,21 +702,100 @@ mod tests {
     }
 
     #[test]
+    fn the_values_that_keep_part_of_a_feature_on_are_planned() {
+        // `sshd -T` prints `yes` for `AllowTcpForwarding all`; the others are narrower than `yes`
+        // but still on. Each used to be left alone because only the word "yes" counted.
+        for (text, keyword) in [
+            ("AllowTcpForwarding all\n", "AllowTcpForwarding"),
+            ("AllowTcpForwarding local\n", "AllowTcpForwarding"),
+            ("AllowTcpForwarding remote\n", "AllowTcpForwarding"),
+            ("PermitTunnel point-to-point\n", "PermitTunnel"),
+            ("PermitTunnel ethernet\n", "PermitTunnel"),
+            ("GatewayPorts clientspecified\n", "GatewayPorts"),
+        ] {
+            let changes = plan(&effective_of(text), false);
+            assert!(
+                changes
+                    .iter()
+                    .any(|c| c.keyword == keyword && c.desired == "no"),
+                "{text:?} should be planned"
+            );
+        }
+        // Benign values of the multi-valued directives are left alone.
+        let changes = plan(
+            &effective_of(
+                "PermitRootLogin prohibit-password\nPermitRootLogin forced-commands-only\n\
+                 AllowTcpForwarding no\nPermitTunnel no\nGatewayPorts no\nMaxAuthTries 6\n\
+                 AllowAgentForwarding no\nPasswordAuthentication no\n",
+            ),
+            true,
+        );
+        assert!(changes.is_empty(), "{changes:?}");
+    }
+
+    /// `is_insecure` restates the rule conditions in Rust, so the two can drift. Evaluate the real
+    /// rule files against every value sshd accepts for each managed directive and require the same
+    /// answer.
+    #[test]
+    fn is_insecure_agrees_with_the_shipped_rules() {
+        let rules_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../rules/ssh-remote-access");
+        let values: &[Value] = &[
+            "yes".into(),
+            "no".into(),
+            "all".into(),
+            "local".into(),
+            "remote".into(),
+            "point-to-point".into(),
+            "ethernet".into(),
+            "clientspecified".into(),
+            "prohibit-password".into(),
+            "without-password".into(),
+            "forced-commands-only".into(),
+            "lang,lc_*".into(),
+            1.into(),
+            4.into(),
+            6.into(),
+            7.into(),
+            10.into(),
+        ];
+        for d in DIRECTIVES {
+            let text = std::fs::read_to_string(rules_dir.join(format!("{}.yaml", d.rule_id)))
+                .unwrap_or_else(|e| panic!("{}: {e}", d.rule_id));
+            let rule: crate::models::Rule = crate::yaml::from_str(&text).unwrap();
+            let condition = crate::condition::Condition::parse(&rule.condition).unwrap();
+            for value in values {
+                // A number is only ever the value of MaxAuthTries, and the other way round.
+                if value.is_number() != (d.field == "max_auth_tries") {
+                    continue;
+                }
+                let fact: Fact = [(d.field.to_string(), value.clone())].into_iter().collect();
+                assert_eq!(
+                    condition.eval(&fact).unwrap(),
+                    is_insecure(d.field, value),
+                    "{} and is_insecure disagree on {} = {value}",
+                    d.rule_id,
+                    d.keyword
+                );
+            }
+            // And the value the fixer writes must be one the rule accepts.
+            let desired: Value = match d.desired.parse::<i64>() {
+                Ok(n) => n.into(),
+                Err(_) => d.desired.into(),
+            };
+            let fact: Fact = [(d.field.to_string(), desired)].into_iter().collect();
+            assert!(!condition.eval(&fact).unwrap(), "{} desired", d.rule_id);
+        }
+    }
+
+    #[test]
     fn dry_run_writes_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = dir.path().join("sshd_config");
+        let bak = dir.path().join("bak");
         std::fs::write(&cfg, "AllowTcpForwarding yes\n").unwrap();
         let before = std::fs::read_to_string(&cfg).unwrap();
 
-        let report = harden_with(
-            &cfg,
-            &dir.path().join("bak"),
-            false,
-            false,
-            false,
-            &no_includes,
-        )
-        .unwrap();
+        let report = run(&cfg, &bak, false, false);
         assert!(report.pending_count() >= 1);
         assert!(!report.applied);
         assert_eq!(
@@ -498,19 +803,20 @@ mod tests {
             before,
             "dry run must not write"
         );
+        assert!(!bak.exists(), "a dry run must not write a backup");
     }
 
     #[cfg(unix)]
     #[test]
-    fn apply_inserts_block_and_is_idempotent() {
+    fn apply_inserts_the_block_and_a_second_run_changes_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = dir.path().join("sshd_config");
         let bak = dir.path().join("bak");
-        std::fs::write(&cfg, "AllowTcpForwarding yes\nX11Forwarding yes\nPort 22\n").unwrap();
+        let original = "AllowTcpForwarding yes\nX11Forwarding yes\nPort 22\n";
+        std::fs::write(&cfg, original).unwrap();
 
-        let r1 = harden_with(&cfg, &bak, true, false, false, &no_includes).unwrap();
+        let r1 = run(&cfg, &bak, true, false);
         assert!(r1.applied);
-        assert!(r1.backup_path.is_some());
         let after = std::fs::read_to_string(&cfg).unwrap();
         assert!(
             after.starts_with(BEGIN_MARKER),
@@ -518,20 +824,27 @@ mod tests {
         );
         assert!(after.contains("AllowTcpForwarding no"));
         assert!(after.contains("X11Forwarding no"));
-        assert!(
-            after.contains("Port 22"),
-            "original directives are preserved"
-        );
+        assert!(after.ends_with(original), "the original is kept below");
+        assert_eq!(backups_in(&bak).len(), 1);
 
-        // Re-running sees the underlying (still-insecure) originals below the block, rebuilds the
-        // single block, and does not stack a second one.
-        let r2 = harden_with(&cfg, &bak, true, false, false, &no_includes).unwrap();
-        assert!(r2.applied);
-        let after2 = std::fs::read_to_string(&cfg).unwrap();
-        assert_eq!(
-            after2.matches(BEGIN_MARKER).count(),
-            1,
-            "must not stack blocks:\n{after2}"
+        // The fix took, so there is nothing left to plan: no "would set … (was yes)" for ever, no
+        // rewrite, and above all no second backup taken of the already-changed file.
+        for _ in 0..3 {
+            let again = run(&cfg, &bak, true, false);
+            assert!(!again.applied);
+            assert_eq!(again.pending_count(), 0, "{:?}", again.changes);
+            assert!(again.backup_path.is_none());
+        }
+        assert_eq!(std::fs::read_to_string(&cfg).unwrap(), after);
+        assert_eq!(backups_in(&bak).len(), 1);
+        let preview = run(&cfg, &bak, false, true);
+        assert!(
+            preview
+                .changes
+                .iter()
+                .all(|c| c.status != SshdChangeStatus::WouldSet || c.lockout_risk),
+            "only the opt-in directives are still open: {:?}",
+            preview.changes
         );
     }
 
@@ -543,8 +856,215 @@ mod tests {
         let bak = dir.path().join("bak");
         let original = "AllowTcpForwarding yes\nPort 2222\n";
         std::fs::write(&cfg, original).unwrap();
-        let report = harden_with(&cfg, &bak, true, false, false, &no_includes).unwrap();
+        let report = run(&cfg, &bak, true, false);
         let backup = std::fs::read_to_string(report.backup_path.unwrap()).unwrap();
         assert_eq!(backup, original, "backup is the pre-change file, verbatim");
+    }
+
+    /// The backup of the untouched file used to have a fixed name, so the second applying run
+    /// replaced it with a copy of the already-modified config.
+    #[cfg(unix)]
+    #[test]
+    fn a_later_run_never_overwrites_the_backup_of_the_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("sshd_config");
+        let bak = dir.path().join("bak");
+        let original = "PasswordAuthentication yes\nX11Forwarding yes\n";
+        std::fs::write(&cfg, original).unwrap();
+
+        let first = run(&cfg, &bak, true, false);
+        let after_first = std::fs::read_to_string(&cfg).unwrap();
+        // Straight away, inside the same second: a different name all the same.
+        let second = run(&cfg, &bak, true, true);
+        assert!(first.applied && second.applied);
+
+        let first_backup = first.backup_path.unwrap();
+        let second_backup = second.backup_path.unwrap();
+        assert_ne!(first_backup, second_backup);
+        assert_eq!(std::fs::read_to_string(&first_backup).unwrap(), original);
+        assert_eq!(
+            std::fs::read_to_string(&second_backup).unwrap(),
+            after_first
+        );
+        // Sorted by name, the oldest backup — the untouched file — comes first.
+        let listed = backups_in(&bak);
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].display().to_string(), first_backup);
+    }
+
+    /// `fix sshd --apply --include-auth`, then a plain `fix all --apply`: password logins must stay
+    /// off. The second run used to rebuild the block from its own plan, which leaves the lockout
+    /// directives out, and so turned them back on.
+    #[cfg(unix)]
+    #[test]
+    fn a_later_safe_run_keeps_what_include_auth_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("sshd_config");
+        let bak = dir.path().join("bak");
+        std::fs::write(&cfg, "PasswordAuthentication yes\nPermitRootLogin yes\n").unwrap();
+
+        assert!(run(&cfg, &bak, true, true).applied);
+        let hardened = std::fs::read_to_string(&cfg).unwrap();
+
+        // Nothing new to fix: the plain run leaves the file exactly as it is.
+        let plain = run(&cfg, &bak, true, false);
+        assert!(!plain.applied);
+        assert!(plain.changes.is_empty(), "{:?}", plain.changes);
+        assert_eq!(std::fs::read_to_string(&cfg).unwrap(), hardened);
+
+        // Something new to fix (a line added below since): the block is rewritten, and still
+        // holds the two auth directives.
+        std::fs::write(&cfg, format!("{hardened}X11Forwarding yes\n")).unwrap();
+        let plain = run(&cfg, &bak, true, false);
+        assert!(plain.applied);
+        let text = std::fs::read_to_string(&cfg).unwrap();
+        let fact = effective_of(&text);
+        assert_eq!(fact["password_authentication"], "no");
+        assert_eq!(fact["permit_root_login"], "no");
+        assert_eq!(fact["x11_forwarding"], "no");
+        assert_eq!(text.matches(BEGIN_MARKER).count(), 1, "one block:\n{text}");
+        assert_eq!(text.matches("PasswordAuthentication no").count(), 1);
+    }
+
+    /// Every rewrite used to add one more blank line under the block.
+    #[cfg(unix)]
+    #[test]
+    fn rewrites_do_not_add_blank_lines_and_removing_the_block_restores_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("sshd_config");
+        let bak = dir.path().join("bak");
+        let original = "# site config\nX11Forwarding yes\nPasswordAuthentication yes\n";
+        std::fs::write(&cfg, original).unwrap();
+
+        run(&cfg, &bak, true, false);
+        run(&cfg, &bak, true, true);
+        // A third rewrite, forced by a new insecure line at the end.
+        let mut text = std::fs::read_to_string(&cfg).unwrap();
+        text.push_str("GatewayPorts yes\n");
+        std::fs::write(&cfg, &text).unwrap();
+        assert!(run(&cfg, &bak, true, false).applied);
+
+        let text = std::fs::read_to_string(&cfg).unwrap();
+        let below = text.split_once(END_MARKER).unwrap().1;
+        assert_eq!(
+            below,
+            format!("\n\n{original}GatewayPorts yes\n"),
+            "exactly one blank line between the block and the file"
+        );
+        let split = split_managed_block(text.as_bytes()).unwrap();
+        assert_eq!(
+            String::from_utf8(split.rest).unwrap(),
+            format!("{original}GatewayPorts yes\n")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bytes_and_line_endings_outside_the_block_are_written_back_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("sshd_config");
+        let bak = dir.path().join("bak");
+        // Latin-1 in a comment, CRLF endings, no final newline.
+        let original: &[u8] = b"# caf\xe9\r\nX11Forwarding yes\r\nPort 22";
+        std::fs::write(&cfg, original).unwrap();
+
+        let report = run(&cfg, &bak, true, false);
+        assert!(report.applied, "a non-UTF-8 byte must not stop the fix");
+        let written = std::fs::read(&cfg).unwrap();
+        assert!(written.ends_with(original));
+        assert_eq!(
+            std::fs::read(report.backup_path.unwrap()).unwrap(),
+            original
+        );
+        assert_eq!(
+            effective_of(&String::from_utf8_lossy(&written))["x11_forwarding"],
+            "no"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_hand_edited_block_is_corrected_in_place_and_its_other_lines_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("sshd_config");
+        let text = format!(
+            "{BEGIN_MARKER} (managed)\n# kept: see ticket 42\nx11forwarding yes\n\
+             PasswordAuthentication no\n{END_MARKER}\n\nPort 22\n"
+        );
+        std::fs::write(&cfg, text).unwrap();
+        assert!(run(&cfg, &dir.path().join("bak"), true, false).applied);
+        let text = std::fs::read_to_string(&cfg).unwrap();
+        let block = text.split_once(END_MARKER).unwrap().0;
+        assert!(block.contains("# kept: see ticket 42"), "{block}");
+        assert!(block.contains("X11Forwarding no"), "{block}");
+        assert!(!block.contains("x11forwarding yes"), "{block}");
+        assert!(block.contains("PasswordAuthentication no"), "{block}");
+    }
+
+    /// A `Match all` block overrides whatever comes before it, the managed block included. Writing
+    /// the directive at the top anyway and reporting "set" would be a fix that fixed nothing.
+    #[cfg(unix)]
+    #[test]
+    fn a_directive_set_in_match_all_is_reported_as_out_of_reach() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("sshd_config");
+        let bak = dir.path().join("bak");
+
+        // Only that one is insecure: an error, never "already hardened".
+        let only = "PasswordAuthentication no\nPermitRootLogin no\nAllowTcpForwarding no\n\
+                    AllowAgentForwarding no\nMatch all\nX11Forwarding yes\n";
+        std::fs::write(&cfg, only).unwrap();
+        let err = harden_with(&cfg, &bak, true, false, false, &no_includes).unwrap_err();
+        assert!(err.to_string().contains("X11Forwarding"), "{err}");
+        assert!(err.to_string().contains("Match all"), "{err}");
+        assert_eq!(std::fs::read_to_string(&cfg).unwrap(), only);
+
+        // With something else to fix: that is fixed, and the note names the one that is not.
+        let mixed = "PasswordAuthentication no\nPermitRootLogin no\nAllowTcpForwarding yes\n\
+                     AllowAgentForwarding no\nMatch all\nX11Forwarding yes\n";
+        std::fs::write(&cfg, mixed).unwrap();
+        let report = run(&cfg, &bak, true, false);
+        assert!(report.applied);
+        assert!(report.note.as_deref().unwrap().contains("X11Forwarding"));
+        assert_eq!(report.changes.len(), 1, "{:?}", report.changes);
+        assert_eq!(report.changes[0].keyword, "AllowTcpForwarding");
+        let text = std::fs::read_to_string(&cfg).unwrap();
+        let block = text.split_once(END_MARKER).unwrap().0;
+        assert!(
+            !block.contains("X11Forwarding"),
+            "no useless line:\n{block}"
+        );
+    }
+
+    #[test]
+    fn an_include_that_cannot_be_read_stops_the_fix_instead_of_guessing() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("sshd_config");
+        std::fs::write(&cfg, "Include sshd_config.d/*.conf\nX11Forwarding yes\n").unwrap();
+        let denied = |_: &str| -> anyhow::Result<Vec<String>> {
+            Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied).into())
+        };
+        let err =
+            harden_with(&cfg, &dir.path().join("bak"), false, false, false, &denied).unwrap_err();
+        assert!(err.to_string().contains("sudo"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_drop_in_does_not_beat_the_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("sshd_config");
+        std::fs::write(&cfg, "Include sshd_config.d/*.conf\nX11Forwarding no\n").unwrap();
+        let drop_in = |_: &str| Ok(vec!["X11Forwarding yes\n".to_string()]);
+        let bak = dir.path().join("bak");
+        let report = harden_with(&cfg, &bak, true, false, false, &drop_in).unwrap();
+        assert!(report.applied);
+        let text = std::fs::read_to_string(&cfg).unwrap();
+        let fact = parse_sshd_config_with(&text, &drop_in).unwrap();
+        assert_eq!(fact["x11_forwarding"], "no");
+        // And it stays fixed without another write.
+        let again = harden_with(&cfg, &bak, true, false, false, &drop_in).unwrap();
+        assert!(!again.applied);
+        assert_eq!(again.pending_count(), 0);
     }
 }

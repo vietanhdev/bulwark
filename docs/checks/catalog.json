@@ -1487,14 +1487,14 @@
    "title": "SSH TCP forwarding/tunneling is enabled",
    "category": "ssh-remote-access",
    "severity": "low",
-   "explain": "AllowTcpForwarding is set to \"{{ sshd.allow_tcp_forwarding }}\" in sshd_config. TCP forwarding lets any SSH user open arbitrary local or remote port tunnels through this host — the exact mechanism used to pivot into internal networks or to reach services (like VNC) that are only supposed to be reachable from localhost.",
+   "explain": "AllowTcpForwarding is set to \"{{ sshd.allow_tcp_forwarding }}\" in sshd_config (\"yes\" and \"all\" allow both directions, \"local\" and \"remote\" one each). TCP forwarding lets any SSH user open port tunnels through this host — the exact mechanism used to pivot into internal networks or to reach services (like VNC) that are only supposed to be reachable from localhost.",
    "fix": "Set 'AllowTcpForwarding no' in /etc/ssh/sshd_config, or restrict it per-user with a Match block, unless tunneling is a deliberate requirement.",
    "references": [
     "CIS-5.2.5",
     "ATTACK-T1572"
    ],
    "collector": "sshd_config",
-   "condition": "allow_tcp_forwarding == \"yes\"",
+   "condition": "allow_tcp_forwarding in [\"yes\", \"all\", \"local\", \"remote\"]",
    "source": "rules/ssh-remote-access/BLWK-SSH-005.yaml",
    "group": "remote-access",
    "slug": "blwk-ssh-005"
@@ -1526,7 +1526,7 @@
     "ATTACK-T1572"
    ],
    "collector": "sshd_config",
-   "condition": "permit_tunnel == \"yes\"",
+   "condition": "permit_tunnel in [\"yes\", \"point-to-point\", \"ethernet\"]",
    "source": "rules/ssh-remote-access/BLWK-SSH-007.yaml",
    "group": "remote-access",
    "slug": "blwk-ssh-007"
@@ -1552,13 +1552,13 @@
    "title": "SSH GatewayPorts exposes forwarded ports to the network",
    "category": "ssh-remote-access",
    "severity": "medium",
-   "explain": "GatewayPorts is set to \"{{ sshd.gateway_ports }}\" in sshd_config. By default, a port an SSH client forwards to this host is only reachable from localhost; with GatewayPorts on, it's reachable from anywhere on the network — turning an individual user's ad-hoc SSH tunnel into an accidental (or deliberate) network-wide exposure of whatever it points at.",
+   "explain": "GatewayPorts is set to \"{{ sshd.gateway_ports }}\" in sshd_config. By default, a port an SSH client forwards to this host is only reachable from localhost; with \"yes\" it is reachable from anywhere on the network, and with \"clientspecified\" whenever the client asks for that — turning an individual user's ad-hoc SSH tunnel into an accidental (or deliberate) network-wide exposure of whatever it points at.",
    "fix": "Set 'GatewayPorts no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'.",
    "references": [
     "ATTACK-T1090"
    ],
    "collector": "sshd_config",
-   "condition": "gateway_ports == \"yes\"",
+   "condition": "gateway_ports in [\"yes\", \"clientspecified\"]",
    "source": "rules/ssh-remote-access/BLWK-SSH-009.yaml",
    "group": "remote-access",
    "slug": "blwk-ssh-009"
