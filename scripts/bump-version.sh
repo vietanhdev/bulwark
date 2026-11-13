@@ -46,6 +46,10 @@ COPR_SPEC="packaging/copr/bulwarkctl.spec"
 # passed"), and a tag cannot be fixed afterwards. Nothing in CI builds with --locked, so
 # without this check the first to find out is an Arch user.
 CARGO_LOCK="Cargo.lock"
+# The app's npm lock file repeats the package version twice (top level and the root package).
+# Nothing fails on a stale one, which is why it drifted for four releases; it is set and checked
+# like the others.
+APP_LOCK="apps/bulwark-app/package-lock.json"
 
 # Pull the current version out of each file with a pattern specific enough that it can't match
 # a dependency's version or an unrelated field.
@@ -138,7 +142,15 @@ check() {
     echo "       Run: cargo update --workspace   (then commit Cargo.lock)" >&2
     exit 1
   fi
-  echo "OK: all ten declarations agree at $ct, Cargo.lock matches, and the metainfo changelog matches"
+  local lock_versions
+  lock_versions=$(sed -n '1,12p' "$APP_LOCK" | grep -oE '"version": "[^"]+"' | sort -u | grep -oE '[0-9][^"]*')
+  report "$APP_LOCK (root package)" "$lock_versions"
+  if [ "$lock_versions" != "$ct" ]; then
+    echo "ERROR: $APP_LOCK records $lock_versions for the app itself, not $ct." >&2
+    echo "       Run: scripts/bump-version.sh $ct   (or npm install --package-lock-only)" >&2
+    exit 1
+  fi
+  echo "OK: all ten declarations agree at $ct, Cargo.lock and the app's package-lock.json match, and the metainfo changelog matches"
   # The AUR checksum can only be right after the tag exists, so it is reported rather than
   # verified: fetching it would put a network call in the middle of a version bump.
   local sha
@@ -193,6 +205,8 @@ edit "$AUR_PKGBUILD" "s/^pkgver=$OLD$/pkgver=$NEW/"                             
 # so a global replace is correct here and keeps it byte-identical to `makepkg --printsrcinfo`.
 edit "$AUR_SRCINFO" "s/$OLD/$NEW/g"                                                                                          "AUR .SRCINFO"
 edit "$COPR_SPEC"   "s/^(Version: +)$OLD$/\1$NEW/"                                                                           "COPR Version"
+# Only the app's own two entries, which sit at the top of the file before any dependency.
+edit "$APP_LOCK"    "1,12s/^(  (    )?\"version\": )\"$OLD\",/\1\"$NEW\",/"                                                 "app package-lock.json"
 
 # Sync Cargo.lock so the workspace crates' recorded versions match. Offline + minimal so this
 # neither hits the network nor upgrades unrelated dependencies. If neither attempt works (no

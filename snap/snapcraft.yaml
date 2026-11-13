@@ -4,7 +4,7 @@ title: Bulwark
 # image's glibc is the oldest glibc the app runs on. A classic snap runs against the HOST's libc
 # (see "what the snap carries" below), so a core24 build would not start on Ubuntu 22.04.
 base: core22
-version: '0.15.0'   # set by scripts/bump-version.sh (checked by scripts/check-packaging-consistency.sh)
+version: '0.16.0'   # set by scripts/bump-version.sh (checked by scripts/check-packaging-consistency.sh)
 summary: Linux security misconfiguration & intrusion scanner (GUI)
 description: |
   Bulwark scans a Linux host for security misconfigurations and intrusion
