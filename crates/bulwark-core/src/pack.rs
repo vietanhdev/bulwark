@@ -87,22 +87,40 @@ fn is_yaml(path: &Path) -> bool {
     )
 }
 
-/// Reads at most `max` bytes of `path` as UTF-8 (lossy), so an oversized pack file can't be used
-/// to exhaust memory. Opens without following a symlink at the final component.
+/// Reads `path` as UTF-8 (lossy) if it is a regular file of at most `max` bytes.
+///
+/// A pack folder can be one the user owns (`~/.config/bulwark/rules`, `--rules-dir`), so three
+/// things a file there can be are refused instead of read:
+/// - a symlink (not followed at the final component);
+/// - a named pipe or device: the open does not wait, and anything that is not a regular file is
+///   an error. A pipe named `x.yaml` used to hold the scan, `rules list` and `rules validate`
+///   forever;
+/// - a file larger than `max`. Cutting it would hand the parser the first part of a document,
+///   which can still be a valid rule with its last lines missing.
 pub(crate) fn read_capped(path: &Path, max: u64) -> std::io::Result<String> {
     use std::io::Read;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
     #[cfg(unix)]
-    let file = {
+    {
         use std::os::unix::fs::OpenOptionsExt;
-        std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(path)?
-    };
-    #[cfg(not(unix))]
-    let file = std::fs::File::open(path)?;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a regular file (a pipe, socket or device), so it was not read",
+        ));
+    }
     let mut buf = Vec::new();
-    file.take(max).read_to_end(&mut buf)?;
+    file.take(max + 1).read_to_end(&mut buf)?;
+    if buf.len() as u64 > max {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("larger than {max} bytes, so it was not read"),
+        ));
+    }
     Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
@@ -146,5 +164,39 @@ mod tests {
             })
             .collect();
         assert_eq!(names, ["a.yaml", "b/2.yaml"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_or_an_oversized_file_in_a_pack_is_an_error_not_a_wait() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.yaml"), "id: A").unwrap();
+        let fifo = dir.path().join("b.yaml");
+        let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        // SAFETY: a valid NUL-terminated path and a plain mode.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        std::fs::write(
+            dir.path().join("c.yaml"),
+            "x".repeat(MAX_PACK_FILE_BYTES as usize + 1),
+        )
+        .unwrap();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let path = dir.path().to_path_buf();
+        std::thread::spawn(move || {
+            let _ = tx.send(PackSource::Dir(&path).files());
+        });
+        let files = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("a pipe named *.yaml must not block the loader");
+        assert_eq!(files.len(), 3);
+        assert_eq!(files[0].text.as_deref(), Ok("id: A"));
+        // Both are returned with their error, so the loader reports them by name.
+        assert!(files[1]
+            .text
+            .as_ref()
+            .unwrap_err()
+            .contains("not a regular file"));
+        assert!(files[2].text.as_ref().unwrap_err().contains("larger than"));
     }
 }

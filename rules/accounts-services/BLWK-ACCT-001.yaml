@@ -3,10 +3,23 @@ title: Cron entry runs a downloader piped to a shell
 category: accounts-services
 severity: critical
 collector: cron_entries
-condition: command matches "(curl|wget).*\|\s*(ba)?sh\b"
+# Four shapes of "run whatever this address returns", each with curl or wget:
+#   1. piped to a shell:             curl … | sh        | sudo bash   | env X=1 /bin/sh   |& zsh
+#   2. piped to an interpreter that
+#      reads its program from stdin:  curl … | python3   | python -
+#   3. given to a shell as a command: bash -c "$(curl …)"   eval "$(wget -qO- …)"
+#   4. given to a shell as a file:    sh <(curl …)   . <(curl …)
+# A pipe into 'python3 -m json.tool', 'jq', 'tee', 'tar' or 'gpg' handles the download as data and
+# does not match; nor does '|| sh fallback.sh', which runs a local script when the download fails.
+# \x22, \x27 and \x60 are the two quotes and the backtick, which cannot be written inside the string.
+condition: >-
+  command matches "\b(?:curl|wget)\b.*[^|]\|&?\s*(?:(?:[\w./-]*/)?(?:sudo|doas|env|nice|ionice|nohup|timeout|setsid|stdbuf)(?:\s+(?:-\S+(?:\s+[\w.-]+)?|\w+=\S*|\d+\w?))*\s+)*(?:[\w./-]*/)?(?:ba|z|da|k|a)?sh(?:\s|$|[;&|)<>\x22\x27\x60])"
+  or command matches "\b(?:curl|wget)\b.*[^|]\|&?\s*(?:(?:[\w./-]*/)?(?:sudo|doas|env|nice|ionice|nohup|timeout|setsid|stdbuf)(?:\s+(?:-\S+(?:\s+[\w.-]+)?|\w+=\S*|\d+\w?))*\s+)*(?:[\w./-]*/)?(?:python[\d.]*|perl|ruby|node|php)\s*(?:-\s*)?(?:$|[;&|)\x22\x27\x60])"
+  or command matches "(?:^|[\s;&|(/\x22\x27])(?:(?:(?:ba|z|da|k|a)?sh|python[\d.]*|perl)\s+(?:-\w+\s+)*-[a-z]*[ce]\s+|eval\s+)[\x22\x27]?\s*(?:\$\(|\x60)\s*(?:(?:sudo|env|nice|timeout)\s+(?:-\S+\s+|\d+\w?\s+)*)?(?:[\w./-]*/)?(?:curl|wget)\b"
+  or command matches "(?:^|[\s;&|(/\x22\x27])(?:(?:ba|z|da|k|a)?sh|source|\.|python[\d.]*)\s+(?:-\S+\s+)*<\(\s*(?:(?:sudo|env|nice|timeout)\s+(?:-\S+\s+|\d+\w?\s+)*)?(?:[\w./-]*/)?(?:curl|wget)\b"
 explain: >
   A cron entry's command ("{{ cron_entries.command }}", scheduled "{{ cron_entries.schedule }}"
-  via {{ cron_entries.source }}) pipes a downloaded script straight into a shell. This pattern
+  via {{ cron_entries.source }}) downloads a script and runs it at once. This pattern
   hides what actually runs, changes on the attacker's schedule, and leaves nothing on disk to
   inspect between runs.
 fix: "Review the cron entry, and if unrecognized, remove it and download/inspect the script manually before deciding whether it's legitimate."

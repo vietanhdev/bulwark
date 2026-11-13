@@ -7,7 +7,11 @@ os: [linux, macos]
 # git_config rows carry no readable_by_others field; the kind guard keeps them out cleanly.
 # Shell startup files and ~/.aws/config are world-readable by default and are read only for
 # secrets written into them (CRED-005, CRED-001), so their mode alone is not a finding.
-condition: kind != "git_config" and kind != "shell_startup" and kind != "shell_history" and kind != "aws_config" and readable_by_others == true
+# `holds_secret` is set by the collector for every kind once the file has been read: an .npmrc
+# that only sets a prefix, a Docker config that names a credential helper, or a token written as
+# ${NPM_TOKEN} holds nothing to protect. It is absent when the file could not be parsed, and the
+# rule then reports "could not check" instead of passing.
+condition: kind != "git_config" and kind != "shell_startup" and kind != "shell_history" and kind != "aws_config" and readable_by_others == true and holds_secret == true
 explain: >
   {{ credential_stores.path }} holds a login token for a tool ({{ credential_stores.kind }}), and other users or
   programs on this computer can read it (permissions {{ credential_stores.mode }}). Token files should be

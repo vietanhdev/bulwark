@@ -1,0 +1,30 @@
+Nov 13 17:37:40 host1 sshd[29]: Server listening on 0.0.0.0 port 22.
+Nov 13 17:37:40 host1 sshd[29]: Server listening on :: port 22.
+Nov 13 17:37:40 host1 sshd[33]: Failed password for root from 127.0.0.1 port 43450 ssh2
+Nov 13 17:37:40 host1 sshd[33]: Failed password for root from 127.0.0.1 port 43450 ssh2
+Nov 13 17:37:40 host1 sshd[33]: Failed password for root from 127.0.0.1 port 43450 ssh2
+Nov 13 17:37:40 host1 sshd[33]: Connection closed by authenticating user root 127.0.0.1 port 43450 [preauth]
+Nov 13 17:37:40 host1 sshd[40]: Invalid user nosuchuser from 127.0.0.1 port 43464
+Nov 13 17:37:40 host1 sshd[40]: error: Could not get shadow information for NOUSER
+Nov 13 17:37:40 host1 sshd[40]: Failed password for invalid user nosuchuser from 127.0.0.1 port 43464 ssh2
+Nov 13 17:37:40 host1 sshd[40]: Failed password for invalid user nosuchuser from 127.0.0.1 port 43464 ssh2
+Nov 13 17:37:40 host1 sshd[40]: Connection closed by invalid user nosuchuser 127.0.0.1 port 43464 [preauth]
+Nov 13 17:37:40 host1 sshd[46]: Invalid user odd name from 127.0.0.1 port 43476
+Nov 13 17:37:40 host1 sshd[46]: error: Could not get shadow information for NOUSER
+Nov 13 17:37:40 host1 sshd[46]: Failed password for invalid user odd name from 127.0.0.1 port 43476 ssh2
+Nov 13 17:37:40 host1 sshd[46]: Connection closed by invalid user odd name 127.0.0.1 port 43476 [preauth]
+Nov 13 17:37:41 host1 sshd[51]: Failed password for deploy from ::1 port 50578 ssh2
+Nov 13 17:37:41 host1 sshd[51]: Connection closed by authenticating user deploy ::1 port 50578 [preauth]
+Nov 13 17:37:44 host1 sshd[66]: Accepted publickey for root from 127.0.0.1 port 43486 ssh2: ED25519 SHA256:HfTjSse2yFMj2PICD89gLSSwJloglo3HC5JWiiI3Sag
+Nov 13 17:37:44 host1 sshd[66]: Received disconnect from 127.0.0.1 port 43486:11: disconnected by user
+Nov 13 17:37:44 host1 sshd[66]: Disconnected from user root 127.0.0.1 port 43486
+Nov 13 17:37:44 host1 sshd[71]: Accepted publickey for root from 127.0.0.1 port 43496 ssh2: RSA SHA256:GhenR0KAxsf7jlgbaF3+Rys4CzaHp2gr0sl0BlkqTs4
+Nov 13 17:37:44 host1 sshd[71]: Received disconnect from 127.0.0.1 port 43496:11: disconnected by user
+Nov 13 17:37:44 host1 sshd[71]: Disconnected from user root 127.0.0.1 port 43496
+Nov 13 17:37:44 host1 sshd[76]: Accepted publickey for deploy from 127.0.0.1 port 43506 ssh2: ECDSA SHA256:Otw32+V5QCP0c1/yPrV9EXjWux6+ek4YDsZw1pUweEs
+Nov 13 17:37:44 host1 sshd[78]: Received disconnect from 127.0.0.1 port 43506:11: disconnected by user
+Nov 13 17:37:44 host1 sshd[78]: Disconnected from user deploy 127.0.0.1 port 43506
+Nov 13 17:37:44 host1 sshd[83]: Connection closed by authenticating user root 127.0.0.1 port 43518 [preauth]
+Nov 13 17:37:45 host1 sshd[88]: Accepted password for root from 127.0.0.1 port 43524 ssh2
+Nov 13 17:37:45 host1 sshd[88]: Received disconnect from 127.0.0.1 port 43524:11: disconnected by user
+Nov 13 17:37:45 host1 sshd[88]: Disconnected from user root 127.0.0.1 port 43524

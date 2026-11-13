@@ -17,6 +17,7 @@
 //! the compromised state as "known good."
 
 use super::Collector;
+use crate::homefs::HomeFile;
 use crate::models::Fact;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -111,13 +112,24 @@ fn denied_to_this_user(path: &Path) -> bool {
 /// watched file — nine identical rows that said one thing. It carries every field the per-file
 /// rules read, set so none of them fire on it, because a condition over a missing field is an error.
 fn collect_for(watched: &[&str], baseline_file: &Path, with_summary: bool) -> Vec<Fact> {
-    let baseline_exists = baseline_file.exists();
-    let baseline = if baseline_exists {
-        std::fs::read_to_string(baseline_file)
-            .map(|t| parse_hash_lines(&t))
-            .unwrap_or_default()
-    } else {
-        HashMap::new()
+    // The baseline normally lives in the home folder, so it is opened under the rules of
+    // `homefs`: a named pipe put in its place used to hold every scan forever. One that exists
+    // and cannot be read leaves every file-integrity rule undecided, and says so, where it used
+    // to be read as an empty baseline ("nothing is covered").
+    let (read, refused) = match super::home_of(baseline_file) {
+        Some(home) => (
+            super::read_home(&home, baseline_file),
+            crate::homefs::REFUSED,
+        ),
+        None => (
+            super::read_system(baseline_file),
+            super::refused_reason(baseline_file),
+        ),
+    };
+    let (baseline_exists, baseline, cut) = match read {
+        HomeFile::Missing => (false, HashMap::new(), false),
+        HomeFile::Found(read) => (true, parse_hash_lines(&read.text), read.truncated),
+        HomeFile::Refused => return vec![super::unread_row(baseline_file, refused)],
     };
 
     let mut paths: Vec<String> = watched
@@ -178,6 +190,9 @@ fn collect_for(watched: &[&str], baseline_file: &Path, with_summary: bool) -> Ve
             fact
         })
         .collect::<Vec<_>>();
+    if cut {
+        rows.push(super::unread_row(baseline_file, super::TOO_LARGE));
+    }
     if with_summary && !baseline_exists {
         let mut summary = Fact::new();
         summary.insert("path".to_string(), Value::String("(no baseline)".into()));
@@ -565,6 +580,36 @@ mod tests {
             rows[0].get("currently_present").unwrap(),
             &Value::Bool(false)
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_in_place_of_the_baseline_is_reported_and_never_waited_on() {
+        let tmp = tempfile::tempdir().unwrap();
+        let watched_file = tmp.path().join("watched.conf");
+        std::fs::write(&watched_file, "content\n").unwrap();
+        let watched_path = watched_file.to_str().unwrap().to_string();
+        let baseline_file = tmp.path().join("fim-baseline.txt");
+        let c = std::ffi::CString::new(baseline_file.to_str().unwrap()).unwrap();
+        // SAFETY: a valid NUL-terminated path and a plain mode.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let baseline = baseline_file.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(collect_for(&[watched_path.as_str()], &baseline, true));
+        });
+        let rows = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("a pipe named fim-baseline.txt must not block the scan");
+        // One row that says the baseline could not be read, and no verdict on any file: an
+        // unreadable baseline is neither "no baseline yet" nor "nothing changed".
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0]["path"], baseline_file.display().to_string());
+        assert!(rows[0].contains_key(crate::homefs::COULD_NOT_READ));
+        for field in ["changed", "baseline_exists", "kind", "unreadable"] {
+            assert!(!rows[0].contains_key(field), "{field}");
+        }
     }
 
     #[test]

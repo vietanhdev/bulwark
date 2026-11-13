@@ -2,8 +2,8 @@
 # looks for: ExecStart referencing a tunneling tool, Restart=always so it survives both
 # reboots and manual kills. Values here are entirely fictional/generic — no real hostnames,
 # tokens, or domains — this fixture only needs to match the rule's condition pattern
-# (exec_start matches "ngrok|cloudflared|serveo|localtunnel|ssh -R"), not reproduce anything
-# real.
+# (exec_start matches "ngrok|cloudflared|serveo|localtunnel", or an ssh reverse tunnel), not
+# reproduce anything real.
 FROM ubuntu:24.04
 # A shell heredoc (`cat <<'EOF'`) spanning multiple physical Dockerfile lines is NOT one RUN
 # instruction unless every line ends in `\` — without that, each line is parsed as its own

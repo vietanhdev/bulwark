@@ -59,10 +59,26 @@ impl Collector for AuthorizedKeysCollector {
         let Some(path) = Self::path() else {
             return Ok(vec![]);
         };
-        // Size-capped: this is a user-writable file, so a local user could otherwise inflate it
-        // to exhaust memory during a (possibly root) scan.
-        let text = super::read_capped(&path)?;
-        Ok(parse_authorized_keys(&text))
+        let home = std::path::PathBuf::from(crate::paths::home_var_os().unwrap_or_default());
+        Ok(rows_for(&home, &path))
+    }
+}
+
+/// The rows for one `authorized_keys` file. It is a file its owner controls, so it is opened
+/// through `homefs` (never a pipe, never a link out of the home folder) and size-capped; one that
+/// cannot be read, or is larger than the cap, is reported as not fully checked.
+fn rows_for(home: &std::path::Path, path: &std::path::Path) -> Vec<Fact> {
+    use crate::homefs::HomeFile;
+    match super::read_home(home, path) {
+        HomeFile::Found(read) => {
+            let mut rows = parse_authorized_keys(&read.text);
+            if read.truncated {
+                rows.push(super::unread_row(path, super::TOO_LARGE));
+            }
+            rows
+        }
+        HomeFile::Missing => Vec::new(),
+        HomeFile::Refused => vec![super::unread_row(path, crate::homefs::REFUSED)],
     }
 }
 
@@ -92,5 +108,27 @@ mod tests {
         let text = "# a comment\n\nssh-rsa AAAAB3NzaC1yc2EAAAExample\n";
         let rows = parse_authorized_keys(text);
         assert_eq!(rows.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_in_place_of_authorized_keys_is_reported_and_never_waited_on() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir(home.path().join(".ssh")).unwrap();
+        let path = home.path().join(".ssh/authorized_keys");
+        let c = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+        // SAFETY: a valid NUL-terminated path and a plain mode.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (h, p) = (home.path().to_path_buf(), path.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(rows_for(&h, &p));
+        });
+        let rows = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("must not block");
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].contains_key(crate::homefs::COULD_NOT_READ));
+        assert!(!rows[0].contains_key("key_type"));
     }
 }

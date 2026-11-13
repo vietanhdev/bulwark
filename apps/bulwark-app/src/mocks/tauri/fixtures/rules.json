@@ -6,7 +6,7 @@
     "severity": "critical",
     "collector": "cron_entries",
     "references": ["ATTACK-T1053.003"],
-    "explain": "A cron entry's command (\"{{ cron_entries.command }}\", scheduled \"{{ cron_entries.schedule }}\" via {{ cron_entries.source }}) pipes a downloaded script straight into a shell. This pattern hides what actually runs, changes on the attacker's schedule, and leaves nothing on disk to inspect between runs.",
+    "explain": "A cron entry's command (\"{{ cron_entries.command }}\", scheduled \"{{ cron_entries.schedule }}\" via {{ cron_entries.source }}) downloads a script and runs it at once. This pattern hides what actually runs, changes on the attacker's schedule, and leaves nothing on disk to inspect between runs.",
     "fix": "Review the cron entry, and if unrecognized, remove it and download/inspect the script manually before deciding whether it's legitimate.",
     "os": ["linux"],
     "profiles": []
@@ -18,7 +18,7 @@
     "severity": "low",
     "collector": "login_defs",
     "references": ["CIS-6.2.1"],
-    "explain": "PASS_MAX_DAYS in /etc/login.defs is {{ login_defs.pass_max_days }} \u2014 passwords never expire in any practical sense, so a leaked credential stays valid indefinitely.",
+    "explain": "PASS_MAX_DAYS in /etc/login.defs is {{ login_defs.pass_max_days }} — passwords never expire in any practical sense, so a leaked credential stays valid indefinitely.",
     "fix": "Set 'PASS_MAX_DAYS 90' (or your organization's policy) in /etc/login.defs.",
     "os": ["linux"],
     "profiles": ["server"]
@@ -30,7 +30,7 @@
     "severity": "low",
     "collector": "login_defs",
     "references": ["CIS-6.2.1"],
-    "explain": "PASS_MIN_DAYS in /etc/login.defs is 0 \u2014 a user forced to rotate a leaked password can immediately change it right back to the old (compromised) one, defeating the point of the forced rotation.",
+    "explain": "PASS_MIN_DAYS in /etc/login.defs is 0 — a user forced to rotate a leaked password can immediately change it right back to the old (compromised) one, defeating the point of the forced rotation.",
     "fix": "Set 'PASS_MIN_DAYS 1' (or your organization's policy) in /etc/login.defs.",
     "os": ["linux"],
     "profiles": ["server"]
@@ -42,7 +42,7 @@
     "severity": "low",
     "collector": "login_defs",
     "references": ["CIS-6.2.2"],
-    "explain": "This host hashes passwords with SHA-512/256 (ENCRYPT_METHOD), but SHA_CRYPT_MIN_ROUNDS isn't set in /etc/login.defs, so new passwords get whatever the system's compiled-in default hashing cost is rather than a deliberately chosen one \u2014 fine until you actually need to raise the cost to keep pace with faster cracking hardware, at which point \"never configured\" means nobody has ever checked.",
+    "explain": "This host hashes passwords with SHA-512/256 (ENCRYPT_METHOD), but SHA_CRYPT_MIN_ROUNDS isn't set in /etc/login.defs, so new passwords get whatever the system's compiled-in default hashing cost is rather than a deliberately chosen one — fine until you actually need to raise the cost to keep pace with faster cracking hardware, at which point \"never configured\" means nobody has ever checked.",
     "fix": "Set 'SHA_CRYPT_MIN_ROUNDS 5000' (or higher, per current guidance) in /etc/login.defs.",
     "os": ["linux"],
     "profiles": []
@@ -54,10 +54,46 @@
     "severity": "low",
     "collector": "login_defs",
     "references": ["CIS-6.2.3"],
-    "explain": "No default umask is configured \u2014 neither an explicit UMASK line in /etc/login.defs nor a pam_umask entry in /etc/pam.d. Without a deliberate value, new files created by shells that don't set their own umask fall back to whatever the system default happens to be \u2014 commonly 022, which leaves new files group/world-readable by default rather than requiring an explicit opt-in to share them.",
+    "explain": "No default umask is configured — neither an explicit UMASK line in /etc/login.defs nor a pam_umask entry in /etc/pam.d. Without a deliberate value, new files created by shells that don't set their own umask fall back to whatever the system default happens to be — commonly 022, which leaves new files group/world-readable by default rather than requiring an explicit opt-in to share them.",
     "fix": "Set 'UMASK 027' (or your organization's policy) in /etc/login.defs, or add pam_umask to the session stack.",
     "os": ["linux"],
     "profiles": []
+  },
+  {
+    "id": "BLWK-AV-001",
+    "title": "ClamAV is not installed",
+    "category": "rootkit-malware",
+    "severity": "low",
+    "collector": "clamav_status",
+    "references": [],
+    "explain": "No clamscan binary was found. Bulwark deliberately doesn't reimplement signature-based malware detection (see the project's own non-goals) — it expects ClamAV to cover that ground, so without it this whole category goes unchecked.",
+    "fix": "Install ClamAV with your package manager (the package is 'clamav'; Fedora and RHEL also need 'clamav-update' for freshclam), then run 'freshclam' to fetch signatures.",
+    "os": ["linux"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-AV-002",
+    "title": "ClamAV signature database is stale",
+    "category": "rootkit-malware",
+    "severity": "medium",
+    "collector": "clamav_status",
+    "references": [],
+    "explain": "ClamAV's signature database is {{ clamav_status.db_age_days }} days old. An installed but outdated scanner gives a false sense of coverage — it won't catch anything discovered since the last update.",
+    "fix": "Run 'freshclam' (or check that the freshclam timer/service is enabled: 'systemctl status clamav-freshclam').",
+    "os": ["linux"],
+    "profiles": []
+  },
+  {
+    "id": "BLWK-BANN-001",
+    "title": "No custom legal warning banner is set (/etc/{{ banners.file }})",
+    "category": "logging-auditing",
+    "severity": "info",
+    "collector": "banners",
+    "references": ["CIS-1.7.1"],
+    "explain": "/etc/{{ banners.file }} {{ banners.found }}, so it does not warn that access is restricted. In some jurisdictions, a clear \"unauthorized access is prohibited\" banner is what establishes that someone connecting without authorization was actually warned. The distribution's default banner does not do that, and it also tells anyone who connects the exact OS version. Scoped to the server profile: a login banner's function is legal, not technical — it establishes that access was unauthorized, which matters for a multi-user remote system. On a personal desktop it protects nothing, and /etc/issue.net is read only by sshd, so on a host that doesn't run sshd it is inert text in a file nobody opens.",
+    "fix": "Replace the contents of /etc/issue (local login) and /etc/issue.net (remote login) with a warning banner, not OS version info. 'sudo bulwarkctl fix banner --apply' does this for a file that still holds the distribution's default text; a banner you wrote yourself, or an emptied file, is never overwritten, so edit that one by hand.",
+    "os": ["linux"],
+    "profiles": ["server"]
   },
   {
     "id": "BLWK-CRED-001",
@@ -67,7 +103,7 @@
     "collector": "credential_stores",
     "references": ["ATTACK-T1552.001", "ATTACK-T1078.004"],
     "explain": "Your AWS access key is saved in a plain file ({{ credential_stores.path }}, {{ credential_stores.long_lived_keys }} key(s)). These keys never expire, so whoever copies the file can use your AWS account, and run up your bill, until you notice. That is exactly what a poisoned Python package did in October 2026: LiteLLM 1.107.0 read these files on every developer machine that installed it.",
-    "fix": "Sign in to AWS with sessions that expire on their own, instead of a key that works forever.\n1. Run 'aws configure sso' once to connect the AWS CLI to IAM Identity Center.\n2. Start each work session with 'aws sso login'. The session expires after a few hours.\n3. In the AWS console, deactivate and delete the old access key.\n4. Remove the key from {{ credential_stores.path }}.\nCan't use Identity Center? Keep the key in a password manager (1Password, Bitwarden or KeePassXC) and let the AWS CLI fetch it when needed with 'credential_process'.\n",
+    "fix": "Sign in to AWS with sessions that expire on their own, instead of a key that works forever. 1. Run 'aws configure sso' once to connect the AWS CLI to IAM Identity Center. 2. Start each work session with 'aws sso login'. The session expires after a few hours. 3. In the AWS console, deactivate and delete the old access key. 4. Remove the key from {{ credential_stores.path }}. Can't use Identity Center? Keep the key in a password manager (1Password, Bitwarden or KeePassXC) and let the AWS CLI fetch it when needed with 'credential_process'.",
     "os": ["linux", "macos", "windows"],
     "profiles": []
   },
@@ -79,7 +115,7 @@
     "collector": "credential_stores",
     "references": ["ATTACK-T1552.001"],
     "explain": "Git is saving your passwords and access tokens in a plain text file ({{ credential_stores.path }}). Any program running as you can read it, and a GitHub token usually lets someone push code to your repositories or publish packages in your name.",
-    "fix": "Let Git keep your tokens in your computer's keychain instead of a plain file.\n1. For GitHub, run 'gh auth setup-git'. Git then uses the GitHub CLI's login, which is stored in your keychain.\n2. For other Git hosts, install Git Credential Manager. It works on Linux, macOS and Windows and uses the system keychain.\n3. Stop using the plain-file store: 'git config --global --unset credential.helper'.\n4. Delete ~/.git-credentials and revoke the tokens it contained, in case they were already copied.\nEven better: use SSH keys for Git, protected by a passphrase or a hardware key.\n",
+    "fix": "Let Git keep your tokens in your computer's keychain instead of a plain file. 1. For GitHub, run 'gh auth setup-git'. Git then uses the GitHub CLI's login, which is stored in your keychain. 2. For other Git hosts, install Git Credential Manager. It works on Linux, macOS and Windows and uses the system keychain. 3. Stop using the plain-file store: 'git config --global --unset credential.helper'. 4. Delete ~/.git-credentials and revoke the tokens it contained, in case they were already copied. Even better: use SSH keys for Git, protected by a passphrase or a hardware key.",
     "os": ["linux", "macos", "windows"],
     "profiles": []
   },
@@ -91,7 +127,7 @@
     "collector": "credential_stores",
     "references": ["ATTACK-T1552.001"],
     "explain": "Docker saved {{ credential_stores.inline_auths }} registry login(s) inside {{ credential_stores.path }}. They look scrambled, but it is only base64 encoding, not encryption: anyone who can read the file can decode your username and password or token in seconds.",
-    "fix": "Let Docker keep registry logins in your computer's keychain.\n1. Install Docker's credential helper ('golang-docker-credential-helpers' on Ubuntu; built in on macOS and Windows, and Docker Desktop sets it up for you).\n2. In {{ credential_stores.path }}, set \"credsStore\" to \"secretservice\" (Linux), \"osxkeychain\" (macOS) or \"wincred\" (Windows).\n3. Delete the entries under \"auths\", then run 'docker login' again for each registry.\n4. Rotate any registry token that was stored in the file.\n",
+    "fix": "Let Docker keep registry logins in your computer's keychain. 1. Install Docker's credential helper ('golang-docker-credential-helpers' on Ubuntu; built in on macOS and Windows, and Docker Desktop sets it up for you). 2. In {{ credential_stores.path }}, set \"credsStore\" to \"secretservice\" (Linux), \"osxkeychain\" (macOS) or \"wincred\" (Windows). 3. Delete the entries under \"auths\", then run 'docker login' again for each registry. 4. Rotate any registry token that was stored in the file.",
     "os": ["linux", "macos", "windows"],
     "profiles": []
   },
@@ -103,7 +139,7 @@
     "collector": "credential_stores",
     "references": ["CIS-6.1", "ATTACK-T1552.001"],
     "explain": "{{ credential_stores.path }} holds a login token for a tool ({{ credential_stores.kind }}), and other users or programs on this computer can read it (permissions {{ credential_stores.mode }}). Token files should be readable by you alone.",
-    "fix": "Make the file private, then keep the token somewhere safer if the tool allows it.\n1. Run 'chmod 600 {{ credential_stores.path }}' so only you can read it.\n2. Move the token into a password manager and pass it to the tool when it runs: for example 'op run' (1Password) or 'bws run' (Bitwarden).\n3. For npm, write '//registry.npmjs.org/:_authToken=${NPM_TOKEN}' in .npmrc so the file holds no secret.\n4. For PyPI, let twine read the token from your keychain: 'pip install keyring'.\nIf other people use this computer, rotate the token too.\n",
+    "fix": "Make the file private, then keep the token somewhere safer if the tool allows it. 1. Run 'chmod 600 {{ credential_stores.path }}' so only you can read it. 2. Move the token into a password manager and pass it to the tool when it runs: for example 'op run' (1Password) or 'bws run' (Bitwarden). 3. For npm, write '//registry.npmjs.org/:_authToken=${NPM_TOKEN}' in .npmrc so the file holds no secret. 4. For PyPI, let twine read the token from your keychain: 'pip install keyring'. If other people use this computer, rotate the token too.",
     "os": ["linux", "macos"],
     "profiles": []
   },
@@ -115,7 +151,7 @@
     "collector": "credential_stores",
     "references": ["ATTACK-T1552.001"],
     "explain": "{{ credential_stores.path }} sets {{ credential_stores.exported_secrets }} secret-looking variable(s) to a literal value ({{ credential_stores.secret_names }}). Every program you start inherits them, dotfile backups and sync tools copy them, and anything that can read your home folder, including a malicious package's install script, can read them.",
-    "fix": "Keep the value in a secrets store and fetch it when it is needed, not in the file.\n1. Rotate each key listed above: it has been sitting in a plain file.\n2. Store the new value in your system keychain or password manager (for example 'secret-tool store', 'security add-generic-password', 1Password CLI 'op read' or 'pass').\n3. Replace the line with a lookup that runs only when needed, or use a per-project tool such as direnv with a keychain-backed value.\n4. For AWS, prefer short-lived sessions ('aws configure sso' or AWS Vault) to exporting keys at all.\n",
+    "fix": "Keep the value in a secrets store and fetch it when it is needed, not in the file. 1. Rotate each key listed above: it has been sitting in a plain file. 2. Store the new value in your system keychain or password manager (for example 'secret-tool store', 'security add-generic-password', 1Password CLI 'op read' or 'pass'). 3. Replace the line with a lookup that runs only when needed, or use a per-project tool such as direnv with a keychain-backed value. 4. For AWS, prefer short-lived sessions ('aws configure sso' or AWS Vault) to exporting keys at all.",
     "os": ["linux", "macos", "windows"],
     "profiles": []
   },
@@ -127,7 +163,7 @@
     "collector": "credential_stores",
     "references": ["ATTACK-T1552.001", "ATTACK-T1195.002"],
     "explain": "{{ credential_stores.path }} contains {{ credential_stores.plaintext_tokens }} registry login(s) written out in full. A publish token in this file lets anyone who copies it push packages under your name, which is how several 2025-2026 npm worms spread from one developer machine to thousands of projects.",
-    "fix": "1. Revoke the token on the registry and create a granular token with an expiry and only the packages it needs.\n2. Reference it from the environment instead of writing it down: '//registry.npmjs.org/:_authToken=${NPM_TOKEN}'.\n3. For publishing from CI, prefer trusted publishing (OIDC), which needs no long-lived token at all.\n",
+    "fix": "1. Revoke the token on the registry and create a granular token with an expiry and only the packages it needs. 2. Reference it from the environment instead of writing it down: '//registry.npmjs.org/:_authToken=${NPM_TOKEN}'. 3. For publishing from CI, prefer trusted publishing (OIDC), which needs no long-lived token at all.",
     "os": ["linux", "macos", "windows"],
     "profiles": []
   },
@@ -139,7 +175,7 @@
     "collector": "credential_stores",
     "references": ["ATTACK-T1552.001", "ATTACK-T1195.002"],
     "explain": "{{ credential_stores.path }} holds {{ credential_stores.plaintext_tokens }} upload credential(s) in plain text. Whoever copies the file can publish a release of your package.",
-    "fix": "1. Revoke the token on PyPI and create a new one scoped to a single project.\n2. Let twine read it from your keychain instead: 'keyring set https://upload.pypi.org/legacy/ __token__', then remove the password line.\n3. For releases from CI, use PyPI trusted publishing, which needs no stored token.\n",
+    "fix": "1. Revoke the token on PyPI and create a new one scoped to a single project. 2. Let twine read it from your keychain instead: 'keyring set https://upload.pypi.org/legacy/ __token__', then remove the password line. 3. For releases from CI, use PyPI trusted publishing, which needs no stored token.",
     "os": ["linux", "macos", "windows"],
     "profiles": []
   },
@@ -151,7 +187,7 @@
     "collector": "credential_stores",
     "references": ["ATTACK-T1552.001", "ATTACK-T1078.004"],
     "explain": "{{ credential_stores.path }} contains {{ credential_stores.static_credentials }} embedded credential(s): bearer tokens, client keys or passwords. Unlike a cloud login, these usually do not expire, so a copied kubeconfig keeps working against the cluster.",
-    "fix": "1. Switch each cluster entry to an exec plugin that fetches short-lived tokens ('aws eks update-kubeconfig', 'gcloud container clusters get-credentials', 'az aks get-credentials' or 'kubelogin').\n2. Revoke the embedded token or certificate on the cluster.\n3. Keep any kubeconfig that must hold static credentials readable by you alone ('chmod 600').\n",
+    "fix": "1. Switch each cluster entry to an exec plugin that fetches short-lived tokens ('aws eks update-kubeconfig', 'gcloud container clusters get-credentials', 'az aks get-credentials' or 'kubelogin'). 2. Revoke the embedded token or certificate on the cluster. 3. Keep any kubeconfig that must hold static credentials readable by you alone ('chmod 600').",
     "os": ["linux", "macos", "windows"],
     "profiles": []
   },
@@ -163,7 +199,7 @@
     "collector": "credential_stores",
     "references": ["ATTACK-T1552.001"],
     "explain": "{{ credential_stores.path }} holds {{ credential_stores.plaintext_tokens }} login token(s) for {{ credential_stores.tool }}, written out in full. Anything that can read your home folder, a backup, or a package install script that goes looking can copy them and act as you on that service.",
-    "fix": "Move the token into your system keychain, then delete it from the file and revoke the old one.\n- GitHub CLI: run 'gh auth logout' and 'gh auth login' on a machine with a keyring (secret-service, macOS Keychain or Windows Credential Manager) so the token is not written to hosts.yml.\n- Cargo: set 'global-credential-providers = [\"cargo:libsecret\"]' (or \"cargo:macos-keychain\", \"cargo:wincred\") in ~/.cargo/config.toml, then 'cargo login' again.\n- Terraform: use a credentials helper, or set TF_TOKEN_<host> from your password manager instead of credentials.tfrc.json.\n- RubyGems: pass the key through GEM_HOST_API_KEY from your password manager when publishing.\n- Composer: provide auth through the COMPOSER_AUTH environment variable from your password manager.\n- netrc: use your tool's credential helper (for Git, a keychain-backed helper) instead of passwords in .netrc.\n",
+    "fix": "Move the token into your system keychain, then delete it from the file and revoke the old one. - GitHub CLI: run 'gh auth logout' and 'gh auth login' on a machine with a keyring (secret-service, macOS Keychain or Windows Credential Manager) so the token is not written to hosts.yml. - Cargo: set 'global-credential-providers = [\"cargo:libsecret\"]' (or \"cargo:macos-keychain\", \"cargo:wincred\") in ~/.cargo/config.toml, then 'cargo login' again. - Terraform: use a credentials helper, or set TF_TOKEN_<host> from your password manager instead of credentials.tfrc.json. - RubyGems: pass the key through GEM_HOST_API_KEY from your password manager when publishing. - Composer: provide auth through the COMPOSER_AUTH environment variable from your password manager. - netrc: use your tool's credential helper (for Git, a keychain-backed helper) instead of passwords in .netrc.",
     "os": ["linux", "macos", "windows"],
     "profiles": []
   },
@@ -174,21 +210,9 @@
     "severity": "high",
     "collector": "credential_stores",
     "references": ["ATTACK-T1552.003"],
-    "explain": "{{ credential_stores.path }} contains {{ credential_stores.secrets_found }} key(s) typed as part of a command ({{ credential_stores.secret_kinds }}; first at line {{ credential_stores.secret_lines }}). Your shell saved the whole line, so the key now sits in a plain file that backups, sync tools and any program running as you can read. History files are one of the first places credential-stealing malware looks.",
-    "fix": "Treat each key as leaked: replace it first, then clean up.\n1. Revoke the key where it was issued and create a new one.\n2. Remove the lines from {{ credential_stores.path }} with a text editor (close other terminals first, or they will write the old history back).\n3. To stop it happening again, do not put keys on the command line. Read them from your keychain or password manager when needed, for example 'export GITHUB_TOKEN=$(gh auth token)' or 'op run -- <command>'.\n4. As a safety net, make the shell skip lines that start with a space: 'HISTCONTROL=ignorespace' for bash, 'setopt HIST_IGNORE_SPACE' for zsh.\n",
+    "explain": "{{ credential_stores.path }} contains {{ credential_stores.secrets_found }} key(s) typed as part of a command ({{ credential_stores.secret_kinds }}; {{ credential_stores.secret_lines }}). Your shell saved the whole line, so the key now sits in a plain file that backups, sync tools and any program running as you can read. History files are one of the first places credential-stealing malware looks.",
+    "fix": "Treat each key as leaked: replace it first, then clean up. 1. Revoke the key where it was issued and create a new one. 2. Remove the lines from {{ credential_stores.path }} with a text editor (close other terminals first, or they will write the old history back). 3. To stop it happening again, do not put keys on the command line. Read them from your keychain or password manager when needed, for example 'export GITHUB_TOKEN=$(gh auth token)' or 'op run -- <command>'. 4. As a safety net, make the shell skip lines that start with a space: 'HISTCONTROL=ignorespace' for bash, 'setopt HIST_IGNORE_SPACE' for zsh.",
     "os": ["linux", "macos", "windows"],
-    "profiles": []
-  },
-  {
-    "id": "BLWK-EVASION-001",
-    "title": "Shell history recording is suppressed",
-    "category": "defense-evasion",
-    "severity": "medium",
-    "collector": "shell_history_config",
-    "references": ["ATTACK-T1070.003"],
-    "explain": "A shell startup file sets HISTSIZE=0, clears HISTFILE, or unsets it \u2014 commands run in that shell leave no trace in history. This is either a deliberate defense-evasion step by an attacker with a shell on the box, or a privacy tweak you made yourself; worth confirming which.",
-    "fix": "If unrecognized, remove the HISTSIZE/HISTFILE override from ~/.bashrc, ~/.zshrc, or ~/.profile.",
-    "os": ["linux"],
     "profiles": []
   },
   {
@@ -198,8 +222,8 @@
     "severity": "high",
     "collector": "dev_tool_config",
     "references": ["ATTACK-T1557", "ATTACK-T1195.001"],
-    "explain": "{{ dev_tool_config.path }} sets http.sslVerify = false for every remote. Anyone on the network path \u2014 public Wi-Fi, a compromised router or proxy \u2014 can impersonate GitHub or your Git server, read the credentials Git sends, and hand you modified code that you then build and run.",
-    "fix": "Remove the line with 'git config --global --unset http.sslVerify'. If one server has a private certificate, trust its CA for that server only: git config --global http.https://git.example.com/.sslCAInfo /path/to/ca.pem",
+    "explain": "{{ dev_tool_config.path }} sets http.sslVerify = false for every remote. Anyone on the network path — public Wi-Fi, a compromised router or proxy — can impersonate GitHub or your Git server, read the credentials Git sends, and hand you modified code that you then build and run.",
+    "fix": "Remove the line with 'git config --global --unset http.sslVerify'. If one server has a private certificate, trust its CA for that server only: 'git config --global http.https://git.example.com/.sslCAInfo /path/to/ca.pem'",
     "os": ["linux", "macos", "windows"],
     "profiles": []
   },
@@ -210,7 +234,7 @@
     "severity": "medium",
     "collector": "dev_tool_config",
     "references": ["ATTACK-T1059", "ATTACK-T1204"],
-    "explain": "{{ dev_tool_config.path }} sets safe.directory = *, which turns off Git's protection against repositories owned by another user (CVE-2022-24765). A repository someone else controls \u2014 on a shared machine, in /tmp or a mounted drive \u2014 can then set core.fsmonitor or a hook that runs a command as you the moment you, your shell prompt or your editor runs git status there.",
+    "explain": "{{ dev_tool_config.path }} sets safe.directory = *, which turns off Git's protection against repositories owned by another user (CVE-2022-24765). A repository someone else controls — on a shared machine, in /tmp or a mounted drive — can then set core.fsmonitor or a hook that runs a command as you the moment you, your shell prompt or your editor runs git status there.",
     "fix": "Replace the wildcard with the specific directories you need: git config --global --unset-all safe.directory, then git config --global --add safe.directory /path/to/that/repo for each one.",
     "os": ["linux", "macos", "windows"],
     "profiles": []
@@ -246,7 +270,7 @@
     "severity": "medium",
     "collector": "dev_tool_config",
     "references": ["ATTACK-T1563.001"],
-    "explain": "{{ dev_tool_config.path }} sets ForwardAgent yes for all hosts. While you are connected, root \u2014 or an attacker \u2014 on any server you log in to can use your loaded keys to sign in to every other machine and Git host those keys open, without ever seeing the key itself.",
+    "explain": "{{ dev_tool_config.path }} sets ForwardAgent yes for all hosts. While you are connected, root — or an attacker — on any server you log in to can use your loaded keys to sign in to every other machine and Git host those keys open, without ever seeing the key itself.",
     "fix": "Remove ForwardAgent from Host * (and the top of the file). To reach a machine through another, use ProxyJump (ssh -J bastion target), which needs no forwarding; if one host truly needs it, set ForwardAgent yes in that host's block only.",
     "os": ["linux", "macos", "windows"],
     "profiles": []
@@ -258,7 +282,7 @@
     "severity": "high",
     "collector": "dev_tool_config",
     "references": ["ATTACK-T1195.001", "ATTACK-T1557"],
-    "explain": "{{ dev_tool_config.path }} turns off certificate checks for the package registry. Anyone on the network path can serve a modified package \u2014 whose install script runs on this machine \u2014 and read the registry token npm sends.",
+    "explain": "{{ dev_tool_config.path }} turns off certificate checks for the package registry. Anyone on the network path can serve a modified package — whose install script runs on this machine — and read the registry token npm sends.",
     "fix": "Remove strict-ssl=false (npm config delete strict-ssl), or enableStrictSsl: false for yarn. Behind a corporate proxy, point npm at its CA instead: npm config set cafile /path/to/proxy-ca.pem",
     "os": ["linux", "macos", "windows"],
     "profiles": []
@@ -271,7 +295,7 @@
     "collector": "dev_tool_config",
     "references": ["ATTACK-T1195.001", "ATTACK-T1557"],
     "explain": "{{ dev_tool_config.path }} installs from {{ dev_tool_config.detail }} over unencrypted HTTP. Anyone on the network path can swap in a package that runs its own code at install time, and can read any token sent with the request.",
-    "fix": "Change the address to https:// (npm config set registry https://\u2026, or index-url / extra-index-url in pip.conf). If the registry has no HTTPS, put it behind a TLS proxy rather than installing over plain HTTP.",
+    "fix": "Change the address to https:// (npm config set registry https://…, or index-url / extra-index-url in pip.conf). If the registry has no HTTPS, put it behind a TLS proxy rather than installing over plain HTTP.",
     "os": ["linux", "macos", "windows"],
     "profiles": []
   },
@@ -282,7 +306,7 @@
     "severity": "medium",
     "collector": "dev_tool_config",
     "references": ["ATTACK-T1195.001", "ATTACK-T1557"],
-    "explain": "{{ dev_tool_config.path }} lists {{ dev_tool_config.detail }} as a trusted-host, which tells pip to accept any certificate \u2014 or none \u2014 from it. A spoofed or intercepted index can then serve packages that run code when installed.",
+    "explain": "{{ dev_tool_config.path }} lists {{ dev_tool_config.detail }} as a trusted-host, which tells pip to accept any certificate — or none — from it. A spoofed or intercepted index can then serve packages that run code when installed.",
     "fix": "Remove the trusted-host line and give pip the index's CA instead: pip config set global.cert /path/to/ca.pem",
     "os": ["linux", "macos", "windows"],
     "profiles": []
@@ -294,8 +318,8 @@
     "severity": "high",
     "collector": "dev_tool_config",
     "references": ["ATTACK-T1610", "ATTACK-T1133"],
-    "explain": "{{ dev_tool_config.path }} opens the Docker API on {{ dev_tool_config.detail }} with no authentication. Any program running as any user on this computer \u2014 a malicious package's install script, another account \u2014 can start a container with this machine's disk mounted and become root here. (An API reachable from the network is reported separately, from the open port.)",
-    "fix": "Remove the tcp:// entry from daemon.json (or untick 'Expose daemon on tcp://localhost:2375 without TLS' in Docker Desktop \u2192 Settings \u2192 General) and use the default socket. For remote access use ssh://user@host as the Docker host, or TLS with client certificates on port 2376.",
+    "explain": "{{ dev_tool_config.path }} opens the Docker API on {{ dev_tool_config.detail }} with no authentication. Any program running as any user on this computer — a malicious package's install script, another account — can start a container with this machine's disk mounted and become root here. (An API reachable from the network is reported separately, from the open port.)",
+    "fix": "Remove the tcp:// entry from daemon.json (or untick 'Expose daemon on tcp://localhost:2375 without TLS' in Docker Desktop → Settings → General) and use the default socket. For remote access use ssh://user@host as the Docker host, or TLS with client certificates on port 2376.",
     "os": ["linux", "macos", "windows"],
     "profiles": []
   },
@@ -307,7 +331,7 @@
     "collector": "dev_tool_config",
     "references": ["ATTACK-T1195.002", "ATTACK-T1059"],
     "explain": "By default, 'npm install' runs scripts that packages ship (preinstall, install, postinstall) with your account's full access. That is how the 2025-2026 npm worms spread: one poisoned release of a popular package ran a script on every machine that installed it and copied tokens, SSH keys and cloud credentials. Your user settings ({{ dev_tool_config.path }}) do not turn this off.",
-    "fix": "Turn install scripts off for your account, then allow them only where a project needs them.\n1. Run 'npm config set ignore-scripts true'.\n2. If a package needs its build step (for example a native module), run it on purpose: 'npm rebuild <package>' inside that project.\n3. Commands you start yourself, such as 'npm test' and 'npm run build', keep working.\n",
+    "fix": "Turn install scripts off for your account, then allow them only where a project needs them. 1. Run 'npm config set ignore-scripts true'. 2. If a package needs its build step (for example a native module), run it on purpose: 'npm rebuild <package>' inside that project. 3. Commands you start yourself, such as 'npm test' and 'npm run build', keep working.",
     "os": ["linux", "macos", "windows"],
     "profiles": []
   },
@@ -324,14 +348,26 @@
     "profiles": []
   },
   {
+    "id": "BLWK-EVASION-001",
+    "title": "Shell history recording is suppressed",
+    "category": "defense-evasion",
+    "severity": "medium",
+    "collector": "shell_history_config",
+    "references": ["ATTACK-T1070.003"],
+    "explain": "A shell startup file sets HISTSIZE=0, clears HISTFILE, or unsets it — commands run in that shell leave no trace in history. This is either a deliberate defense-evasion step by an attacker with a shell on the box, or a privacy tweak you made yourself; worth confirming which.",
+    "fix": "If unrecognized, remove the HISTSIZE/HISTFILE override from ~/.bashrc, ~/.zshrc, or ~/.profile.",
+    "os": ["linux"],
+    "profiles": []
+  },
+  {
     "id": "BLWK-FIM-001",
     "title": "File modified since baseline: {{ file_integrity.path }}",
     "category": "file-integrity",
     "severity": "critical",
     "collector": "file_integrity",
     "references": ["ATTACK-T1098", "ATTACK-T1556"],
-    "explain": "{{ file_integrity.path }} no longer matches its recorded baseline hash. This file is monitored because it directly controls authentication, privilege, or persistence on this host \u2014 an unexpected change here is exactly what credential theft, backdoor account creation, or PAM/sudo tampering looks like.",
-    "fix": "Review the file's current contents against what you expect (version control, package manager, or your own memory of the last legitimate change). If the change wasn't yours, treat this as a likely compromise. If it was legitimate, run 'bulwarkctl fim baseline' to record the new state as the baseline.\n",
+    "explain": "{{ file_integrity.path }} no longer matches its recorded baseline hash. This file is monitored because it directly controls authentication, privilege, or persistence on this host — an unexpected change here is exactly what credential theft, backdoor account creation, or PAM/sudo tampering looks like.",
+    "fix": "Review the file's current contents against what you expect (version control, package manager, or your own memory of the last legitimate change). If the change wasn't yours, treat this as a likely compromise. If it was legitimate, run 'bulwarkctl fim baseline' to record the new state as the baseline.",
     "os": ["linux"],
     "profiles": []
   },
@@ -342,8 +378,8 @@
     "severity": "high",
     "collector": "file_integrity",
     "references": ["ATTACK-T1070"],
-    "explain": "{{ file_integrity.path }} was present when the file-integrity baseline was recorded and is now missing. Deleting a security-critical file (rather than modifying it) is also a documented defense-evasion pattern \u2014 removing logs, PAM modules, or cron definitions to cover tracks or disable a control.",
-    "fix": "Confirm whether the deletion was intentional (e.g. deliberate service removal). If not, restore the file from a package manager reinstall or backup, then run 'bulwarkctl fim baseline' once the host is back to a known-good state.\n",
+    "explain": "{{ file_integrity.path }} was present when the file-integrity baseline was recorded and is now missing. Deleting a security-critical file (rather than modifying it) is also a documented defense-evasion pattern — removing logs, PAM modules, or cron definitions to cover tracks or disable a control.",
+    "fix": "Confirm whether the deletion was intentional (e.g. deliberate service removal). If not, restore the file from a package manager reinstall or backup, then run 'bulwarkctl fim baseline' once the host is back to a known-good state.",
     "os": ["linux"],
     "profiles": []
   },
@@ -354,8 +390,8 @@
     "severity": "info",
     "collector": "file_integrity",
     "references": [],
-    "explain": "{{ file_integrity.path }} is present but has no recorded baseline hash, so Bulwark can tell that it exists but not whether it has been tampered with. This fires per-file, on purpose: the previous version keyed on whether a baseline existed *at all*, which meant that once you had baselined anything, a critical file you had never actually recorded \u2014 including one added to the watch list later \u2014 read as \"verified clean\" rather than \"never checked\". A file nobody ever baselined is not a file known to be good. (With no baseline recorded at all, that single fact is reported once, as BLWK-FIM-009, instead of once per watched file.)",
-    "fix": "Run 'bulwarkctl fim baseline' now, while you trust this host, to record a known-good hash for this file (add '--privileged' to also cover /etc/shadow and /etc/sudoers).",
+    "explain": "{{ file_integrity.path }} is present but has no recorded baseline hash, so Bulwark can tell that it exists but not whether it has been tampered with. This fires per-file, on purpose: the previous version keyed on whether a baseline existed *at all*, which meant that once you had baselined anything, a critical file you had never actually recorded — including one added to the watch list later — read as \"verified clean\" rather than \"never checked\". A file nobody ever baselined is not a file known to be good. (With no baseline recorded at all, that single fact is reported once, as BLWK-FIM-009, instead of once per watched file.)",
+    "fix": "Run 'bulwarkctl fim baseline' now, while you trust this host, to record a known-good hash for this file (add '--privileged' to also cover /etc/shadow and /etc/sudoers). If only an administrator can read the file, an ordinary scan cannot check it: record the baseline and scan with 'sudo bulwarkctl fim baseline --privileged' and 'sudo bulwarkctl scan --privileged'.",
     "os": ["linux"],
     "profiles": []
   },
@@ -366,8 +402,8 @@
     "severity": "critical",
     "collector": "file_integrity_privileged",
     "references": ["ATTACK-T1098", "ATTACK-T1548.003"],
-    "explain": "{{ file_integrity_privileged.path }} no longer matches its recorded baseline hash. This is one of the two root-only credential/privilege files Bulwark tracks (/etc/shadow, /etc/sudoers) \u2014 a change here is about as direct a signal of credential tampering or privilege-escalation setup as this host can produce.",
-    "fix": "Review the change immediately. If it wasn't yours (a password reset via 'passwd', or a deliberate 'visudo' edit), treat this as a likely compromise. If legitimate, re-run 'sudo bulwarkctl fim baseline --privileged' to record the new known-good state.\n",
+    "explain": "{{ file_integrity_privileged.path }} no longer matches its recorded baseline hash. This is one of the two root-only credential/privilege files Bulwark tracks (/etc/shadow, /etc/sudoers) — a change here is about as direct a signal of credential tampering or privilege-escalation setup as this host can produce.",
+    "fix": "Review the change immediately. If it wasn't yours (a password reset via 'passwd', or a deliberate 'visudo' edit), treat this as a likely compromise. If legitimate, re-run 'sudo bulwarkctl fim baseline --privileged' to record the new known-good state.",
     "os": ["linux"],
     "profiles": []
   },
@@ -378,8 +414,8 @@
     "severity": "critical",
     "collector": "file_integrity_privileged",
     "references": ["ATTACK-T1070"],
-    "explain": "{{ file_integrity_privileged.path }} was present at the last baseline and is now missing. A missing /etc/shadow or /etc/sudoers is either severe accidental damage or deliberate tampering \u2014 neither leaves this host in a safe state.",
-    "fix": "Restore the file immediately from a package manager reinstall or backup \u2014 do not leave this host running without it. Then re-run 'sudo bulwarkctl fim baseline --privileged'.",
+    "explain": "{{ file_integrity_privileged.path }} was present at the last baseline and is now missing. A missing /etc/shadow or /etc/sudoers is either severe accidental damage or deliberate tampering — neither leaves this host in a safe state.",
+    "fix": "Restore the file immediately from a package manager reinstall or backup — do not leave this host running without it. Then re-run 'sudo bulwarkctl fim baseline --privileged'.",
     "os": ["linux"],
     "profiles": []
   },
@@ -390,7 +426,7 @@
     "severity": "low",
     "collector": "file_integrity_privileged",
     "references": ["ATTACK-T1098", "ATTACK-T1548.003"],
-    "explain": "{{ file_integrity_privileged.path }} \u2014 one of the two root-only credential/privilege files Bulwark tracks (/etc/shadow, /etc/sudoers) \u2014 is present but has no baseline hash, so its integrity is unverifiable. This is the specific gap that made the old logic dangerous: a baseline recorded without '--privileged' never contains these two files, so a later privileged scan would hash them, find them \"not baselined\", and report nothing \u2014 the two most security-critical files on the host reading as clean when they had never actually been checked. Rated above info because these two files, unlike an ordinary config, are exactly where credential tampering hides.",
+    "explain": "{{ file_integrity_privileged.path }} — one of the two root-only credential/privilege files Bulwark tracks (/etc/shadow, /etc/sudoers) — is present but has no baseline hash, so its integrity is unverifiable. This is the specific gap that made the old logic dangerous: a baseline recorded without '--privileged' never contains these two files, so a later privileged scan would hash them, find them \"not baselined\", and report nothing — the two most security-critical files on the host reading as clean when they had never actually been checked. Rated above info because these two files, unlike an ordinary config, are exactly where credential tampering hides.",
     "fix": "Run 'sudo bulwarkctl fim baseline --privileged' while you trust this host, to record a known-good hash for /etc/shadow and /etc/sudoers.",
     "os": ["linux"],
     "profiles": []
@@ -402,8 +438,8 @@
     "severity": "medium",
     "collector": "file_integrity",
     "references": [],
-    "explain": "{{ file_integrity.path }} exists and is on the watch list, but Bulwark could not compute its hash this scan (sha256sum unavailable, or the file could not be read), so it cannot say whether the file matches its baseline. This is reported as its own state rather than being folded into \"modified\" \u2014 treating \"I couldn't look\" as \"it changed\" would raise a false critical alarm, and treating it as \"unchanged\" would hide a real one. Neither is honest.",
-    "fix": "Check that the file is readable by the scanning user and that 'sha256sum' is installed and on PATH. If a privileged scan is needed to read it, run 'sudo bulwarkctl scan --privileged'.\n",
+    "explain": "{{ file_integrity.path }} exists and is on the watch list, but Bulwark could not compute its hash this scan (sha256sum unavailable, or the file could not be read), so it cannot say whether the file matches its baseline. This is reported as its own state rather than being folded into \"modified\" — treating \"I couldn't look\" as \"it changed\" would raise a false critical alarm, and treating it as \"unchanged\" would hide a real one. Neither is honest.",
+    "fix": "Check that the file is readable by the scanning user and that 'sha256sum' is installed and on PATH. If the file was readable when you recorded the baseline and no longer is, find out what changed its permissions. If a privileged scan is needed to read it, run 'sudo bulwarkctl scan --privileged'.",
     "os": ["linux"],
     "profiles": []
   },
@@ -414,8 +450,8 @@
     "severity": "high",
     "collector": "file_integrity_privileged",
     "references": [],
-    "explain": "{{ file_integrity_privileged.path }} (/etc/shadow or /etc/sudoers) exists but its hash could not be computed this scan, so its integrity is unverifiable. Rated high because on the two most sensitive files Bulwark tracks, an inability to read them is itself worth attention \u2014 it can mean a permissions change that a privileged scan should have handled, or something actively interfering with access. It is deliberately not reported as \"modified\": a failure to look is not evidence of a change.",
-    "fix": "Re-run under privilege ('sudo bulwarkctl scan --privileged') so the file is readable, and confirm 'sha256sum' is installed. If it still can't be read as root, investigate why.\n",
+    "explain": "{{ file_integrity_privileged.path }} (/etc/shadow or /etc/sudoers) exists but its hash could not be computed this scan, so its integrity is unverifiable. Rated high because on the two most sensitive files Bulwark tracks, an inability to read them is itself worth attention — it can mean a permissions change that a privileged scan should have handled, or something actively interfering with access. It is deliberately not reported as \"modified\": a failure to look is not evidence of a change.",
+    "fix": "Re-run under privilege ('sudo bulwarkctl scan --privileged') so the file is readable, and confirm 'sha256sum' is installed. If it still can't be read as root, investigate why.",
     "os": ["linux"],
     "profiles": []
   },
@@ -427,7 +463,7 @@
     "collector": "file_integrity",
     "references": [],
     "explain": "Bulwark watches {{ file_integrity.watched }} critical files (sshd_config, PAM, sudo, su, login settings and similar) for tampering, but no known-good baseline has been recorded on this machine, so it can see the files exist but not whether any of them has been changed.",
-    "fix": "Run 'bulwarkctl fim baseline' now, while you trust this machine, to record known-good hashes (add '--privileged' with sudo to also cover /etc/shadow and /etc/sudoers). In the desktop app: File changes \u2192 Record baseline.",
+    "fix": "Run 'bulwarkctl fim baseline' now, while you trust this machine, to record known-good hashes (add '--privileged' with sudo to also cover /etc/shadow and /etc/sudoers). In the desktop app: File changes → Record baseline.",
     "os": ["linux"],
     "profiles": []
   },
@@ -438,7 +474,7 @@
     "severity": "critical",
     "collector": "file_permissions",
     "references": ["CIS-6.1", "ATTACK-T1222"],
-    "explain": "\"{{ file_permissions.path }}\" is world-writable (mode {{ file_permissions.mode_octal }}). Any local user \u2014 or any process running as any user \u2014 can modify it directly.",
+    "explain": "\"{{ file_permissions.path }}\" is world-writable (mode {{ file_permissions.mode_octal }}). Any local user — or any process running as any user — can modify it directly.",
     "fix": "chmod o-w {{ file_permissions.path }}",
     "os": ["linux"],
     "profiles": []
@@ -450,8 +486,8 @@
     "severity": "critical",
     "collector": "file_permissions",
     "references": ["CIS-6.1.2", "ATTACK-T1003.008"],
-    "explain": "/etc/shadow (mode {{ file_permissions.mode_octal }}) is readable by any local user. It holds every account's password hash \u2014 world-readable turns any local foothold into an offline password-cracking opportunity against every account on the box.",
-    "fix": "chmod 640 /etc/shadow (or your distro's default \u2014 verify with 'stat /etc/shadow' on a known-good system).",
+    "explain": "/etc/shadow (mode {{ file_permissions.mode_octal }}) is readable by any local user. It holds every account's password hash — world-readable turns any local foothold into an offline password-cracking opportunity against every account on the box.",
+    "fix": "chmod 640 /etc/shadow (or your distro's default — verify with 'stat /etc/shadow' on a known-good system).",
     "os": ["linux"],
     "profiles": []
   },
@@ -462,7 +498,7 @@
     "severity": "medium",
     "collector": "sysctl_kernel",
     "references": ["ATTACK-T1003.007"],
-    "explain": "ptrace is unrestricted: kernel.yama.ptrace_scope is 0 (or the Yama LSM isn't loaded at all, which the collector reports the same way, since without Yama there is no restriction to begin with). Any process can attach to and read the memory of any other process owned by the same user \u2014 including credential-scraping via /proc/<pid>/mem, a documented credential-access technique.",
+    "explain": "ptrace is unrestricted: kernel.yama.ptrace_scope is 0 (or the Yama LSM isn't loaded at all, which the collector reports the same way, since without Yama there is no restriction to begin with). Any process can attach to and read the memory of any other process owned by the same user — including credential-scraping via /proc/<pid>/mem, a documented credential-access technique.",
     "fix": "Set 'kernel.yama.ptrace_scope=1' via /etc/sysctl.d/ and run 'sysctl --system'.",
     "os": ["linux"],
     "profiles": []
@@ -474,7 +510,7 @@
     "severity": "low",
     "collector": "sysctl_kernel",
     "references": ["CIS-1.5.3"],
-    "explain": "kernel.kptr_restrict is 0 \u2014 kernel pointer addresses in /proc are readable by any user, making kernel-exploit development easier (defeats KASLR for local attackers).",
+    "explain": "kernel.kptr_restrict is 0 — kernel pointer addresses in /proc are readable by any user, making kernel-exploit development easier (defeats KASLR for local attackers).",
     "fix": "Set 'kernel.kptr_restrict=1' (or 2) via /etc/sysctl.d/ and run 'sysctl --system'.",
     "os": ["linux"],
     "profiles": []
@@ -486,7 +522,7 @@
     "severity": "medium",
     "collector": "mac_status",
     "references": ["CIS-1.4"],
-    "explain": "Neither AppArmor nor SELinux has any profile in enforcing mode. Without MAC, a compromised service runs with the full privileges of its process owner instead of being confined to what it actually needs. The 'enforcement_known' guard matters: AppArmor's profile list is readable only with CAP_MAC_ADMIN, so an unprivileged scan on a host where AppArmor is loaded cannot see whether it's enforcing. That is reported as undetermined, not as a finding \u2014 claiming \"no MAC\" because we lack the privilege to look would be alarming and wrong.",
+    "explain": "Neither AppArmor nor SELinux has any profile in enforcing mode. Without MAC, a compromised service runs with the full privileges of its process owner instead of being confined to what it actually needs. The 'enforcement_known' guard matters: AppArmor's profile list is readable only with CAP_MAC_ADMIN, so an unprivileged scan on a host where AppArmor is loaded cannot see whether it's enforcing. That is reported as undetermined, not as a finding — claiming \"no MAC\" because we lack the privilege to look would be alarming and wrong.",
     "fix": "On Debian/Ubuntu: 'sudo aa-enforce /etc/apparmor.d/*' for the profiles you want enforced, or install apparmor-profiles.",
     "os": ["linux"],
     "profiles": []
@@ -498,7 +534,7 @@
     "severity": "high",
     "collector": "sysctl_kernel",
     "references": ["CIS-1.5.1", "ATTACK-T1055"],
-    "explain": "kernel.randomize_va_space is {{ sysctl_kernel.randomize_va_space }}, not 2 (full ASLR). ASLR randomizes where the stack, heap, and shared libraries load in memory \u2014 without it (or with only partial randomization), memory-corruption exploits become dramatically easier to write reliably.",
+    "explain": "kernel.randomize_va_space is {{ sysctl_kernel.randomize_va_space }}, not 2 (full ASLR). ASLR randomizes where the stack, heap, and shared libraries load in memory — without it (or with only partial randomization), memory-corruption exploits become dramatically easier to write reliably.",
     "fix": "Set 'kernel.randomize_va_space=2' via /etc/sysctl.d/ and run 'sysctl --system'.",
     "os": ["linux"],
     "profiles": []
@@ -510,7 +546,7 @@
     "severity": "medium",
     "collector": "sysctl_kernel",
     "references": ["CIS-1.5.4"],
-    "explain": "kernel.sysrq exposes dangerous SysRq functions to anyone with keyboard or console access (physical, or a hijacked serial/BMC console). A value of 1 enables every function; a value above 1 is a bitmask, and this fires when that mask still includes the memory-dump bit (0x08, leaks kernel memory) or the signal bit (0x40, SIGKILL any process) \u2014 so a widened mask like 510 is caught, not just a plain 1, which the old exact-match condition missed.",
+    "explain": "kernel.sysrq exposes dangerous SysRq functions to anyone with keyboard or console access (physical, or a hijacked serial/BMC console). A value of 1 enables every function; a value above 1 is a bitmask, and this fires when that mask still includes the memory-dump bit (0x08, leaks kernel memory) or the signal bit (0x40, SIGKILL any process) — so a widened mask like 510 is caught, not just a plain 1, which the old exact-match condition missed.",
     "fix": "Set 'kernel.sysrq=176' (Ubuntu's restricted default) or '0' via /etc/sysctl.d/ and run 'sysctl --system'.",
     "os": ["linux"],
     "profiles": []
@@ -522,7 +558,7 @@
     "severity": "high",
     "collector": "sysctl_kernel",
     "references": ["CIS-1.5.2", "ATTACK-T1068"],
-    "explain": "kernel.unprivileged_bpf_disabled is 0 \u2014 any local user can load BPF programs into the kernel without CAP_SYS_ADMIN. The BPF verifier has been the source of numerous local privilege-escalation CVEs; this setting is what determines whether that class of bug is reachable by an unprivileged attacker at all.",
+    "explain": "kernel.unprivileged_bpf_disabled is 0 — any local user can load BPF programs into the kernel without CAP_SYS_ADMIN. The BPF verifier has been the source of numerous local privilege-escalation CVEs; this setting is what determines whether that class of bug is reachable by an unprivileged attacker at all.",
     "fix": "Set 'kernel.unprivileged_bpf_disabled=1' via /etc/sysctl.d/ and run 'sysctl --system'.",
     "os": ["linux"],
     "profiles": []
@@ -534,7 +570,7 @@
     "severity": "medium",
     "collector": "sysctl_kernel",
     "references": ["CIS-1.5.5"],
-    "explain": "kernel.perf_event_paranoid is {{ sysctl_kernel.perf_event_paranoid }}, below 2 \u2014 the perf_event_open() syscall is a documented side-channel and kernel-address-disclosure vector, and several real privilege-escalation exploits have used it once accessible to unprivileged users.",
+    "explain": "kernel.perf_event_paranoid is {{ sysctl_kernel.perf_event_paranoid }}, below 2 — the perf_event_open() syscall is a documented side-channel and kernel-address-disclosure vector, and several real privilege-escalation exploits have used it once accessible to unprivileged users.",
     "fix": "Set 'kernel.perf_event_paranoid=2' (or higher) via /etc/sysctl.d/ and run 'sysctl --system'.",
     "os": ["linux"],
     "profiles": []
@@ -546,8 +582,8 @@
     "severity": "low",
     "collector": "sysctl_kernel",
     "references": ["ATTACK-T1601"],
-    "explain": "kernel.kexec_load_disabled is 0 \u2014 a process with sufficient privilege can use kexec to load and immediately switch execution to a completely different, unverified kernel image, bypassing secure boot and any measured-boot chain entirely, to survive a reboot with a backdoored kernel. This fires only when kernel lockdown is off: with Secure Boot enabled the kernel runs in lockdown 'integrity' mode, which already refuses an unsigned kexec image regardless of this flag, so the flag is defense-in-depth there rather than a gap \u2014 and the rule stays quiet. Rated low because loading a kexec image already requires CAP_SYS_BOOT (root); this hardens against a post-compromise persistence step.",
-    "fix": "Set 'kernel.kexec_load_disabled=1' via /etc/sysctl.d/ and run 'sysctl --system'. Note this disables kdump/crash-dump capture and 'systemctl kexec'; and once it is set to 1 at runtime it cannot be returned to 0 without a reboot (the sysctl.d drop-in itself re-applies every boot).\n",
+    "explain": "kernel.kexec_load_disabled is 0 — a process with sufficient privilege can use kexec to load and immediately switch execution to a completely different, unverified kernel image, bypassing secure boot and any measured-boot chain entirely, to survive a reboot with a backdoored kernel. This fires only when kernel lockdown is off: with Secure Boot enabled the kernel runs in lockdown 'integrity' mode, which already refuses an unsigned kexec image regardless of this flag, so the flag is defense-in-depth there rather than a gap — and the rule stays quiet. Rated low because loading a kexec image already requires CAP_SYS_BOOT (root); this hardens against a post-compromise persistence step.",
+    "fix": "Set 'kernel.kexec_load_disabled=1' via /etc/sysctl.d/ and run 'sysctl --system'. Note this disables kdump/crash-dump capture and 'systemctl kexec'; and once it is set to 1 at runtime it cannot be returned to 0 without a reboot (the sysctl.d drop-in itself re-applies every boot).",
     "os": ["linux"],
     "profiles": []
   },
@@ -558,7 +594,7 @@
     "severity": "medium",
     "collector": "sysctl_kernel",
     "references": ["CIS-1.5.6", "ATTACK-T1003"],
-    "explain": "fs.suid_dumpable is 1 (\"debuggable\") \u2014 a crashed setuid/setgid process dumps core as a file the invoking (unprivileged) user can read, which can leak secrets that were in that process's memory (keys, passwords, tokens) to a lower-privileged user. This is distinct from the safer \"0\" (no dump) or \"2\" (routed through a controlled dump handler like systemd-coredump/apport) settings.",
+    "explain": "fs.suid_dumpable is 1 (\"debuggable\") — a crashed setuid/setgid process dumps core as a file the invoking (unprivileged) user can read, which can leak secrets that were in that process's memory (keys, passwords, tokens) to a lower-privileged user. This is distinct from the safer \"0\" (no dump) or \"2\" (routed through a controlled dump handler like systemd-coredump/apport) settings.",
     "fix": "Set 'fs.suid_dumpable=0' via /etc/sysctl.d/ and run 'sysctl --system'.",
     "os": ["linux"],
     "profiles": []
@@ -570,7 +606,7 @@
     "severity": "medium",
     "collector": "sysctl_kernel",
     "references": ["CIS-1.5.7", "ATTACK-T1068"],
-    "explain": "fs.protected_hardlinks is 0 \u2014 any user can create a hardlink to a file they don't own (e.g. a setuid binary or a file another process will later run as root), a classic TOCTOU/race primitive for local privilege escalation.",
+    "explain": "fs.protected_hardlinks is 0 — any user can create a hardlink to a file they don't own (e.g. a setuid binary or a file another process will later run as root), a classic TOCTOU/race primitive for local privilege escalation.",
     "fix": "Set 'fs.protected_hardlinks=1' via /etc/sysctl.d/ and run 'sysctl --system'.",
     "os": ["linux"],
     "profiles": []
@@ -582,7 +618,7 @@
     "severity": "medium",
     "collector": "sysctl_kernel",
     "references": ["CIS-1.5.8", "ATTACK-T1068"],
-    "explain": "fs.protected_symlinks is 0 \u2014 a process can follow a symlink in a world-writable sticky directory (like /tmp) even when it doesn't own the link, a long-standing local-privilege-escalation and file-clobbering primitive.",
+    "explain": "fs.protected_symlinks is 0 — a process can follow a symlink in a world-writable sticky directory (like /tmp) even when it doesn't own the link, a long-standing local-privilege-escalation and file-clobbering primitive.",
     "fix": "Set 'fs.protected_symlinks=1' via /etc/sysctl.d/ and run 'sysctl --system'.",
     "os": ["linux"],
     "profiles": []
@@ -594,7 +630,7 @@
     "severity": "low",
     "collector": "sysctl_kernel",
     "references": ["CIS-1.5.9"],
-    "explain": "fs.protected_fifos is 0 \u2014 a process can write to a FIFO it doesn't own inside a world-writable sticky directory, which has been used to intercept or tamper with data another (possibly privileged) process expects to read back.",
+    "explain": "fs.protected_fifos is 0 — a process can write to a FIFO it doesn't own inside a world-writable sticky directory, which has been used to intercept or tamper with data another (possibly privileged) process expects to read back.",
     "fix": "Set 'fs.protected_fifos=1' (or 2 for stricter mode) via /etc/sysctl.d/ and run 'sysctl --system'.",
     "os": ["linux"],
     "profiles": []
@@ -606,7 +642,7 @@
     "severity": "low",
     "collector": "sysctl_kernel",
     "references": ["CIS-1.5.9"],
-    "explain": "fs.protected_regular is 0 \u2014 a process can open a regular file it doesn't own inside a world-writable sticky directory in write mode, the same class of interception/tampering risk as the FIFO case but for plain files.",
+    "explain": "fs.protected_regular is 0 — a process can open a regular file it doesn't own inside a world-writable sticky directory in write mode, the same class of interception/tampering risk as the FIFO case but for plain files.",
     "fix": "Set 'fs.protected_regular=1' (or 2 for stricter mode) via /etc/sysctl.d/ and run 'sysctl --system'.",
     "os": ["linux"],
     "profiles": []
@@ -615,10 +651,10 @@
     "id": "BLWK-KERNEL-014",
     "title": "ICMP redirects are accepted",
     "category": "kernel-hardening",
-    "severity": "medium",
+    "severity": "low",
     "collector": "sysctl_kernel",
     "references": ["CIS-3.2.1", "ATTACK-T1557"],
-    "explain": "net.ipv4.conf.all.accept_redirects is 1 \u2014 this host will update its routing table based on unauthenticated ICMP redirect packets from anyone on the local network, a classic man-in-the-middle primitive for redirecting traffic through an attacker-controlled host.",
+    "explain": "net.ipv4.conf.all.accept_redirects is 1 — this host will update its routing table based on unauthenticated ICMP redirect packets from anyone on the local network, a classic man-in-the-middle primitive for redirecting traffic through an attacker-controlled host.",
     "fix": "Set 'net.ipv4.conf.all.accept_redirects=0' via /etc/sysctl.d/ and run 'sysctl --system'.",
     "os": ["linux"],
     "profiles": []
@@ -630,7 +666,7 @@
     "severity": "medium",
     "collector": "sysctl_kernel",
     "references": ["CIS-3.2.2"],
-    "explain": "net.ipv4.conf.all.accept_source_route is 1 \u2014 this host accepts packets that specify their own route, letting a remote attacker bypass normal routing/firewall path assumptions and spoof traffic as if it originated from a trusted internal address.",
+    "explain": "net.ipv4.conf.all.accept_source_route is 1 — this host accepts packets that specify their own route, letting a remote attacker bypass normal routing/firewall path assumptions and spoof traffic as if it originated from a trusted internal address.",
     "fix": "Set 'net.ipv4.conf.all.accept_source_route=0' via /etc/sysctl.d/ and run 'sysctl --system'.",
     "os": ["linux"],
     "profiles": []
@@ -642,7 +678,7 @@
     "severity": "low",
     "collector": "sysctl_kernel",
     "references": ["CIS-3.2.1"],
-    "explain": "net.ipv4.conf.all.send_redirects is 1 \u2014 a non-router host has no legitimate reason to send ICMP redirects, and leaving this on is unnecessary route-manipulation surface.",
+    "explain": "net.ipv4.conf.all.send_redirects is 1 — a non-router host has no legitimate reason to send ICMP redirects, and leaving this on is unnecessary route-manipulation surface.",
     "fix": "Set 'net.ipv4.conf.all.send_redirects=0' via /etc/sysctl.d/ and run 'sysctl --system' (skip this if the host is intentionally acting as a router).",
     "os": ["linux"],
     "profiles": ["server"]
@@ -654,7 +690,7 @@
     "severity": "low",
     "collector": "sysctl_kernel",
     "references": ["CIS-3.2.3"],
-    "explain": "net.ipv4.conf.all.log_martians is 0 \u2014 packets with impossible/spoofed source addresses (no route back to the claimed source) are silently dropped instead of logged, losing an early signal of spoofing or scanning activity on the network.",
+    "explain": "net.ipv4.conf.all.log_martians is 0 — packets with impossible/spoofed source addresses (no route back to the claimed source) are silently dropped instead of logged, losing an early signal of spoofing or scanning activity on the network.",
     "fix": "Set 'net.ipv4.conf.all.log_martians=1' via /etc/sysctl.d/ and run 'sysctl --system'.",
     "os": ["linux"],
     "profiles": ["server"]
@@ -666,8 +702,8 @@
     "severity": "medium",
     "collector": "sysctl_kernel",
     "references": ["CIS-3.2.4"],
-    "explain": "net.ipv4.conf.all.rp_filter is 0 \u2014 the kernel will forward packets whose source address couldn't possibly have arrived via the interface they came in on, which is exactly the condition IP spoofing depends on. (A value of 1 or 2 \u2014 strict or loose mode \u2014 is fine; this only fires when filtering is fully off.)",
-    "fix": "Set 'net.ipv4.conf.all.rp_filter=2' (loose mode) via /etc/sysctl.d/ and run 'sysctl --system'. Use '1' (strict) only on single-homed hosts \u2014 strict reverse-path filtering drops legitimate traffic on multi-homed servers and any asymmetric-routing setup, which is exactly the server class most likely to be affected, so loose is the safe default that still blocks spoofing.\n",
+    "explain": "net.ipv4.conf.all.rp_filter is 0 — the kernel will forward packets whose source address couldn't possibly have arrived via the interface they came in on, which is exactly the condition IP spoofing depends on. (A value of 1 or 2 — strict or loose mode — is fine; this only fires when filtering is fully off.)",
+    "fix": "Set 'net.ipv4.conf.all.rp_filter=2' (loose mode) via /etc/sysctl.d/ and run 'sysctl --system'. Use '1' (strict) only on single-homed hosts — strict reverse-path filtering drops legitimate traffic on multi-homed servers and any asymmetric-routing setup, which is exactly the server class most likely to be affected, so loose is the safe default that still blocks spoofing.",
     "os": ["linux"],
     "profiles": []
   },
@@ -678,7 +714,7 @@
     "severity": "medium",
     "collector": "sysctl_kernel",
     "references": ["CIS-3.1.1"],
-    "explain": "net.ipv4.tcp_syncookies is 0 \u2014 this host's TCP stack has no fallback protection against a SYN-flood connection-table exhaustion denial of service.",
+    "explain": "net.ipv4.tcp_syncookies is 0 — this host's TCP stack has no fallback protection against a SYN-flood connection-table exhaustion denial of service.",
     "fix": "Set 'net.ipv4.tcp_syncookies=1' via /etc/sysctl.d/ and run 'sysctl --system'.",
     "os": ["linux"],
     "profiles": []
@@ -690,8 +726,8 @@
     "severity": "low",
     "collector": "module_blacklist",
     "references": ["CIS-1.1.1"],
-    "explain": "The '{{ module_blacklist.module }}' kernel module isn't blacklisted in /etc/modprobe.d/, meaning it can still be auto-loaded on demand \u2014 simply by an unprivileged process opening a socket of that family. All four of these network protocol modules (dccp, sctp, rds, tipc) have a documented history of local-privilege-escalation vulnerabilities reachable exactly that way, and essentially no host actually uses them. usb-storage is deliberately NOT covered here \u2014 it's a different threat (physical-media exfiltration/BadUSB, not remote exploitation) and the remediation is destructive on a workstation, so it lives in BLWK-KERNEL-021 behind the server profile.",
-    "fix": "If '{{ module_blacklist.module }}' isn't actually needed on this host, add 'install {{ module_blacklist.module }} /bin/true' to a file under /etc/modprobe.d/ (e.g. /etc/modprobe.d/blacklist-rare.conf) and run 'update-initramfs -u'.\n",
+    "explain": "The '{{ module_blacklist.module }}' kernel module isn't blacklisted in /etc/modprobe.d/, meaning it can still be auto-loaded on demand — simply by an unprivileged process opening a socket of that family. All four of these network protocol modules (dccp, sctp, rds, tipc) have a documented history of local-privilege-escalation vulnerabilities reachable exactly that way, and essentially no host actually uses them. usb-storage is deliberately NOT covered here — it's a different threat (physical-media exfiltration/BadUSB, not remote exploitation) and the remediation is destructive on a workstation, so it lives in BLWK-KERNEL-021 behind the server profile.",
+    "fix": "If '{{ module_blacklist.module }}' isn't actually needed on this host, add 'install {{ module_blacklist.module }} /bin/true' to a file under /etc/modprobe.d/ (e.g. /etc/modprobe.d/blacklist-rare.conf), then rebuild the boot image so it applies early too ('update-initramfs -u' on Debian and Ubuntu, 'dracut -f' on Fedora and RHEL, 'mkinitcpio -P' on Arch).",
     "os": ["linux"],
     "profiles": []
   },
@@ -702,20 +738,8 @@
     "severity": "low",
     "collector": "module_blacklist",
     "references": ["CIS-1.1.1"],
-    "explain": "The 'usb-storage' module isn't blacklisted, so plugging in a USB mass-storage device on this host will auto-mount it. On a server \u2014 especially one in a rack you don't physically control, like a colo or a branch office \u2014 that's a data-exfiltration and BadUSB path that needs no credentials and leaves little trace: someone with thirty seconds of physical access walks away with the disk contents. This rule is scoped to the server profile on purpose. The same advice on a laptop or desktop is actively harmful \u2014 it breaks every USB stick, external drive, and SD reader the user owns, to defend against an attacker who by definition already has their hands on the machine. Split out of BLWK-KERNEL-020 for exactly that reason.",
-    "fix": "On a server with no legitimate need for USB storage, add 'install usb-storage /bin/true' to a file under /etc/modprobe.d/ (e.g. /etc/modprobe.d/blacklist-usb-storage.conf) and run 'update-initramfs -u'. Do NOT apply this to a workstation \u2014 you will break all removable media on it.\n",
-    "os": ["linux"],
-    "profiles": ["server"]
-  },
-  {
-    "id": "BLWK-BANN-001",
-    "title": "No custom legal warning banner is set (/etc/{{ banners.file }})",
-    "category": "logging-auditing",
-    "severity": "info",
-    "collector": "banners",
-    "references": ["CIS-1.7.1"],
-    "explain": "/etc/{{ banners.file }} still contains the distro's default auto-generated content (OS name and getty templating codes), not a deliberate legal warning. In some jurisdictions, a clear \"unauthorized access is prohibited\" banner is what establishes that someone connecting without authorization was actually warned \u2014 the default OS-identification banner doesn't do that, and also unnecessarily advertises the exact OS version to anyone who connects. Scoped to the server profile: a login banner's function is legal, not technical \u2014 it establishes that access was unauthorized, which matters for a multi-user remote system. On a personal desktop it protects nothing, and /etc/issue.net is read only by sshd, so on a host that doesn't run sshd it is inert text in a file nobody opens.",
-    "fix": "Replace the contents of /etc/issue (local login) and /etc/issue.net (remote login) with a warning banner, not OS version info.",
+    "explain": "The 'usb-storage' module isn't blacklisted, so plugging in a USB mass-storage device on this host will auto-mount it. On a server — especially one in a rack you don't physically control, like a colo or a branch office — that's a data-exfiltration and BadUSB path that needs no credentials and leaves little trace: someone with thirty seconds of physical access walks away with the disk contents. This rule is scoped to the server profile on purpose. The same advice on a laptop or desktop is actively harmful — it breaks every USB stick, external drive, and SD reader the user owns, to defend against an attacker who by definition already has their hands on the machine. Split out of BLWK-KERNEL-020 for exactly that reason.",
+    "fix": "On a server with no legitimate need for USB storage, add 'install usb-storage /bin/true' to a file under /etc/modprobe.d/ (e.g. /etc/modprobe.d/blacklist-usb-storage.conf), then rebuild the boot image so it applies early too ('update-initramfs -u' on Debian and Ubuntu, 'dracut -f' on Fedora and RHEL, 'mkinitcpio -P' on Arch). Do NOT apply this to a workstation — you will break all removable media on it.",
     "os": ["linux"],
     "profiles": ["server"]
   },
@@ -723,11 +747,11 @@
     "id": "BLWK-LOG-001",
     "title": "auditd is not installed",
     "category": "logging-auditing",
-    "severity": "medium",
+    "severity": "low",
     "collector": "logging",
     "references": ["CIS-4.1"],
-    "explain": "No auditd binary was found. Without it, there's no kernel-level record of privileged syscalls (file access, exec, permission changes) \u2014 the trail that makes a break-in reviewable after the fact instead of just a guess.",
-    "fix": "Install auditd (e.g. 'apt install auditd') and enable it with 'systemctl enable --now auditd'.",
+    "explain": "No auditd binary was found. Without it, there's no kernel-level record of privileged syscalls (file access, exec, permission changes) — the trail that makes a break-in reviewable after the fact instead of just a guess.",
+    "fix": "Install the audit daemon with your package manager (the package is 'auditd' on Debian and Ubuntu, 'audit' on Fedora, RHEL, Arch and Alpine), then start it and have it start at boot (with systemd: 'systemctl enable --now auditd').",
     "os": ["linux"],
     "profiles": ["server"]
   },
@@ -738,7 +762,7 @@
     "severity": "low",
     "collector": "logging",
     "references": [],
-    "explain": "rsyslog has no remote forwarding rule configured \u2014 logs only exist locally. Anyone with root on this machine can edit or delete them, so local-only logging can't be trusted as evidence of what a root-level attacker did. A workstation has no central syslog to ship to, so this is scoped to the server profile; the point of off-box logs is that an attacker who roots the machine can't erase the record of how they got in, which only means something where someone is actually doing IR.",
+    "explain": "rsyslog has no remote forwarding rule configured — logs only exist locally. Anyone with root on this machine can edit or delete them, so local-only logging can't be trusted as evidence of what a root-level attacker did. A workstation has no central syslog to ship to, so this is scoped to the server profile; the point of off-box logs is that an attacker who roots the machine can't erase the record of how they got in, which only means something where someone is actually doing IR.",
     "fix": "Add a forwarding rule to /etc/rsyslog.conf (e.g. '*.* @@logs.example.com:514') pointing at a log destination this machine doesn't control.",
     "os": ["linux"],
     "profiles": ["server"]
@@ -750,8 +774,8 @@
     "severity": "low",
     "collector": "process_accounting",
     "references": ["CIS-4.6"],
-    "explain": "Neither 'accton' nor 'lastcomm' is present, so there's no kernel-level record of every process that ran on this host, who ran it, and how long it took \u2014 a different, harder- to-tamper-with data source than shell history or application logs, since it's written by the kernel itself rather than by the process being recorded.",
-    "fix": "Install process accounting (e.g. 'apt install acct') and enable it with 'systemctl enable --now acct'.",
+    "explain": "Neither 'accton' nor 'lastcomm' is present, so there's no kernel-level record of every process that ran on this host, who ran it, and how long it took — a different, harder- to-tamper-with data source than shell history or application logs, since it's written by the kernel itself rather than by the process being recorded.",
+    "fix": "Install process accounting with your package manager (the package is 'acct' on Debian, Ubuntu and Alpine, 'psacct' on Fedora and RHEL), then start it and have it start at boot (with systemd: 'systemctl enable --now acct', or 'psacct' where the package has that name).",
     "os": ["linux"],
     "profiles": ["server"]
   },
@@ -762,8 +786,8 @@
     "severity": "high",
     "collector": "macos_security",
     "references": ["ATTACK-T1005", "ATTACK-T1552.001"],
-    "explain": "The startup disk isn't encrypted. Anyone who gets hold of this Mac \u2014 lost bag, repair shop, theft \u2014 can read every file on it, including SSH keys, browser sessions and cloud credentials, without knowing your password.",
-    "fix": "Turn it on in System Settings \u2192 Privacy & Security \u2192 FileVault (or 'sudo fdesetup enable'). Keep the recovery key in your password manager, not on the Mac.",
+    "explain": "The startup disk isn't encrypted. Anyone who gets hold of this Mac — lost bag, repair shop, theft — can read every file on it, including SSH keys, browser sessions and cloud credentials, without knowing your password.",
+    "fix": "Turn it on in System Settings → Privacy & Security → FileVault (or 'sudo fdesetup enable'). Keep the recovery key in your password manager, not on the Mac.",
     "os": ["macos"],
     "profiles": []
   },
@@ -774,7 +798,7 @@
     "severity": "high",
     "collector": "macos_security",
     "references": ["ATTACK-T1553.001"],
-    "explain": "Gatekeeper checks that apps are signed and notarized before they run. With it off, a downloaded app \u2014 or one a malicious installer drops \u2014 runs without that check.",
+    "explain": "Gatekeeper checks that apps are signed and notarized before they run. With it off, a downloaded app — or one a malicious installer drops — runs without that check.",
     "fix": "Run 'sudo spctl --master-enable', then confirm with 'spctl --status' (it should print 'assessments enabled').",
     "os": ["macos"],
     "profiles": []
@@ -787,7 +811,7 @@
     "collector": "macos_security",
     "references": ["ATTACK-T1562.001", "ATTACK-T1014"],
     "explain": "System Integrity Protection stops even root from modifying macOS system files, kernel extensions and protected processes. With it off, malware that gets root can tamper with the operating system itself and hide there.",
-    "fix": "Restart into Recovery (hold the power button on Apple silicon), open Utilities \u2192 Terminal, run 'csrutil enable', and restart. 'csrutil status' should then print 'enabled'.",
+    "fix": "Restart into Recovery (hold the power button on Apple silicon), open Utilities → Terminal, run 'csrutil enable', and restart. 'csrutil status' should then print 'enabled'.",
     "os": ["macos"],
     "profiles": []
   },
@@ -799,7 +823,7 @@
     "collector": "macos_security",
     "references": ["ATTACK-T1133"],
     "explain": "The application firewall is off, so any service on this Mac that listens on the network can be reached from whatever network you're on.",
-    "fix": "Turn it on in System Settings \u2192 Network \u2192 Firewall (or 'sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate on'). Stealth mode is worth enabling too.",
+    "fix": "Turn it on in System Settings → Network → Firewall (or 'sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate on'). Stealth mode is worth enabling too.",
     "os": ["macos"],
     "profiles": []
   },
@@ -811,7 +835,7 @@
     "collector": "macos_security",
     "references": ["ATTACK-T1562.001"],
     "explain": "macOS can install security responses and system data files (XProtect malware signatures among them) automatically. That's turned off, so protection against newly found malware arrives only when you update by hand.",
-    "fix": "In System Settings \u2192 General \u2192 Software Update \u2192 Automatic Updates, turn on 'Install Security Responses and system files'.",
+    "fix": "In System Settings → General → Software Update → Automatic Updates, turn on 'Install Security Responses and system files'.",
     "os": ["macos"],
     "profiles": []
   },
@@ -823,7 +847,7 @@
     "collector": "macos_security",
     "references": ["ATTACK-T1078.001"],
     "explain": "Anyone can log in to this Mac as a guest without a password. Guest sessions are limited, but they still give a stranger a foothold on the machine.",
-    "fix": "Turn it off in System Settings \u2192 Users & Groups \u2192 Guest User.",
+    "fix": "Turn it off in System Settings → Users & Groups → Guest User.",
     "os": ["macos"],
     "profiles": []
   },
@@ -834,8 +858,8 @@
     "severity": "high",
     "collector": "listening_ports",
     "references": ["ATTACK-T1219"],
-    "explain": "Port {{ listening_ports.port }} is listening on {{ listening_ports.listen_address }} \u2014 a standard VNC (5900-range) or noVNC/websockify (6080) port, reachable from the network. If this wasn't deliberately set up with a password and restricted access, it's a full remote-desktop backdoor. A listener bound only to loopback (127.0.0.1/::1) is deliberately excluded: that's the normal SSH-tunnel / container-published pattern and isn't remotely reachable.",
-    "fix": "If this isn't an intentional remote-desktop setup: stop the service (check 'ps aux' for x11vnc/vncserver/websockify) and remove any systemd unit or cron entry that restarts it.\n",
+    "explain": "Port {{ listening_ports.port }} is listening on {{ listening_ports.listen_address }} — a standard VNC (5900-range) or noVNC/websockify (6080) port, reachable from the network. If this wasn't deliberately set up with a password and restricted access, it's a full remote-desktop backdoor. A listener bound only to loopback (127.0.0.1/::1) is deliberately excluded: that's the normal SSH-tunnel / container-published pattern and isn't remotely reachable.",
+    "fix": "If this isn't an intentional remote-desktop setup: stop the service (check 'ps aux' for x11vnc/vncserver/websockify) and remove any systemd unit or cron entry that restarts it.",
     "os": ["linux"],
     "profiles": []
   },
@@ -846,7 +870,7 @@
     "severity": "medium",
     "collector": "listening_ports",
     "references": ["ATTACK-T1090"],
-    "explain": "Port 4040 is listening on {{ listening_ports.listen_address }} \u2014 most often ngrok's local web-inspector/API port, present while an ngrok tunnel is active. It's also Apache Spark's default UI port and is used by a few other dev tools, so this isn't conclusive on its own: if you're not running ngrok, check what it is. A loopback-only 4040 (the usual case for both ngrok and Spark) is excluded \u2014 this fires only when it's exposed on the network.",
+    "explain": "Port 4040 is listening on {{ listening_ports.listen_address }} — most often ngrok's local web-inspector/API port, present while an ngrok tunnel is active. It's also Apache Spark's default UI port and is used by a few other dev tools, so this isn't conclusive on its own: if you're not running ngrok, check what it is. A loopback-only 4040 (the usual case for both ngrok and Spark) is excluded — this fires only when it's exposed on the network.",
     "fix": "Check 'ps aux | grep ngrok' and 'systemctl list-units | grep -i ngrok' to find what started it.",
     "os": ["linux"],
     "profiles": []
@@ -858,8 +882,8 @@
     "severity": "high",
     "collector": "listening_ports",
     "references": ["ATTACK-T1133", "ATTACK-T1210"],
-    "explain": "A database or development service is reachable from your network on port {{ listening_ports.port }} (listening on {{ listening_ports.listen_address }}). On home, office or caf\u00e9 Wi-Fi, anyone nearby can connect to it, and development services often run without a password. Docker opens ports to the whole network by default.",
-    "fix": "Make the service reachable from this computer only.\n1. For Docker Compose, change the port line from '{{ listening_ports.port }}:{{ listening_ports.port }}' to '127.0.0.1:{{ listening_ports.port }}:{{ listening_ports.port }}' and restart the stack.\n2. For a service installed directly, set its listen or bind address to 127.0.0.1 in its config file.\n3. Need it from another machine? Use an SSH tunnel ('ssh -L {{ listening_ports.port }}:localhost:{{ listening_ports.port }} you@this-machine') or a private network such as Tailscale or WireGuard.\n",
+    "explain": "A database or development service is reachable from your network on port {{ listening_ports.port }} (listening on {{ listening_ports.listen_address }}). On home, office or café Wi-Fi, anyone nearby can connect to it, and development services often run without a password. Docker opens ports to the whole network by default.",
+    "fix": "Make the service reachable from this computer only. 1. For Docker Compose, change the port line from '{{ listening_ports.port }}:{{ listening_ports.port }}' to '127.0.0.1:{{ listening_ports.port }}:{{ listening_ports.port }}' and restart the stack. 2. For a service installed directly, set its listen or bind address to 127.0.0.1 in its config file. 3. Need it from another machine? Use an SSH tunnel ('ssh -L {{ listening_ports.port }}:localhost:{{ listening_ports.port }} you@this-machine') or a private network such as Tailscale or WireGuard.",
     "os": ["linux"],
     "profiles": []
   },
@@ -871,7 +895,7 @@
     "collector": "host_firewall",
     "references": ["CIS-3.5", "ATTACK-T1133"],
     "explain": "No firewall is blocking incoming connections, so every service that listens on the network can be reached from any network you join. A firewall is your safety net for the service you forgot was running.",
-    "fix": "Turn on a firewall that blocks incoming connections by default.\n1. Ubuntu and Debian: 'sudo ufw default deny incoming', then 'sudo ufw enable'.\n2. If you log in to this machine remotely, allow SSH first: 'sudo ufw allow OpenSSH'.\n3. Fedora and RHEL: 'sudo systemctl enable --now firewalld'.\nNote: Docker opens its ports around ufw, so also bind containers to 127.0.0.1.\n",
+    "fix": "Turn on a firewall that blocks incoming connections by default. 1. Ubuntu and Debian: 'sudo ufw default deny incoming', then 'sudo ufw enable'. 2. If you log in to this machine remotely, allow SSH first: 'sudo ufw allow OpenSSH'. 3. Fedora and RHEL: 'sudo systemctl enable --now firewalld'. Note: Docker opens its ports around ufw, so also bind containers to 127.0.0.1.",
     "os": ["linux"],
     "profiles": []
   },
@@ -882,8 +906,8 @@
     "severity": "medium",
     "collector": "listening_ports",
     "references": ["ATTACK-T1133"],
-    "explain": "A database or development service listens on every network interface (port {{ listening_ports.port }}, on {{ listening_ports.listen_address }}). The host firewall denies incoming connections by default, so unless something opened this port it isn't directly reachable \u2014 but its safety now depends on that firewall. Bulwark can't see your allow rules: if you (or a tool) allowed this port, it is open to the network, and ports published by Docker bypass ufw unless DOCKER-USER rules restrict them. Check with: sudo ufw status numbered",
-    "fix": "Bind it to this computer only, so it doesn't depend on the firewall.\n1. For Docker Compose, change the port line from '{{ listening_ports.port }}:{{ listening_ports.port }}' to '127.0.0.1:{{ listening_ports.port }}:{{ listening_ports.port }}' and restart the stack.\n2. For a service installed directly, set its listen or bind address to 127.0.0.1.\n3. If it must stay reachable from other machines, restrict it in DOCKER-USER (for Docker) or with a ufw rule scoped to your private network (e.g. your tailnet), and accept the risk here.\n",
+    "explain": "A database or development service listens on every network interface (port {{ listening_ports.port }}, on {{ listening_ports.listen_address }}). The host firewall denies incoming connections by default, so unless something opened this port it isn't directly reachable — but its safety now depends on that firewall. Bulwark can't see your allow rules: if you (or a tool) allowed this port, it is open to the network, and ports published by Docker bypass ufw unless DOCKER-USER rules restrict them. Check with: sudo ufw status numbered",
+    "fix": "Bind it to this computer only, so it doesn't depend on the firewall. 1. For Docker Compose, change the port line from '{{ listening_ports.port }}:{{ listening_ports.port }}' to '127.0.0.1:{{ listening_ports.port }}:{{ listening_ports.port }}' and restart the stack. 2. For a service installed directly, set its listen or bind address to 127.0.0.1. 3. If it must stay reachable from other machines, restrict it in DOCKER-USER (for Docker) or with a ufw rule scoped to your private network (e.g. your tailnet), and accept the risk here.",
     "os": ["linux"],
     "profiles": []
   },
@@ -894,8 +918,8 @@
     "severity": "high",
     "collector": "systemd_units",
     "references": ["ATTACK-T1543.002", "ATTACK-T1090"],
-    "explain": "The systemd unit \"{{ systemd_units.unit_name }}\" runs a command referencing a tunneling tool (\"{{ systemd_units.exec_start }}\"). A reverse tunnel that reaches back out through a service like ngrok or cloudflared survives reboots and bypasses inbound firewall rules entirely, since it's an outbound connection \u2014 which is why it's both a legitimate way to expose a service and a common attacker persistence pattern. The two look identical from here, so this is high rather than critical: if you deliberately installed cloudflared, autossh, or a similar tunnel, this is expected and you can accept the risk for this rule.",
-    "fix": "If you didn't set this up yourself: 'systemctl disable --now <unit>' and remove the unit file from /etc/systemd/system/, then rotate any credentials the box had access to.\n",
+    "explain": "The systemd unit \"{{ systemd_units.unit_name }}\" runs a command referencing a tunneling tool (\"{{ systemd_units.exec_start }}\"). A reverse tunnel that reaches back out through a service like ngrok or cloudflared survives reboots and bypasses inbound firewall rules entirely, since it's an outbound connection — which is why it's both a legitimate way to expose a service and a common attacker persistence pattern. The two look identical from here, so this is high rather than critical: if you deliberately installed cloudflared, autossh, or a similar tunnel, this is expected and you can accept the risk for this rule.",
+    "fix": "If you didn't set this up yourself: 'systemctl disable --now <unit>', remove the unit file ('systemctl cat <unit>' shows where it and its drop-ins are), then rotate any credentials the box had access to.",
     "os": ["linux"],
     "profiles": []
   },
@@ -906,8 +930,8 @@
     "severity": "high",
     "collector": "systemd_units",
     "references": ["ATTACK-T1041", "ATTACK-T1071.001"],
-    "explain": "The systemd unit \"{{ systemd_units.unit_name }}\" shells out to curl against a chat/ messaging API on start (\"{{ systemd_units.exec_start }}\"). This exact pattern is used to notify an attacker (e.g. of a new SSH tunnel URL) every time the service restarts \u2014 treat it as exfiltration infrastructure unless you recognize it as your own notification script.",
-    "fix": "Review the unit file under /etc/systemd/system/ and disable it if you didn't create it.",
+    "explain": "The systemd unit \"{{ systemd_units.unit_name }}\" shells out to curl against a chat/ messaging API on start (\"{{ systemd_units.exec_start }}\"). This exact pattern is used to notify an attacker (e.g. of a new SSH tunnel URL) every time the service restarts — treat it as exfiltration infrastructure unless you recognize it as your own notification script.",
+    "fix": "Review the unit ('systemctl cat <unit>' shows its file and drop-ins) and disable it if you didn't create it.",
     "os": ["linux"],
     "profiles": []
   },
@@ -918,7 +942,7 @@
     "severity": "high",
     "collector": "launchd_persistence",
     "references": ["ATTACK-T1543.001"],
-    "explain": "The launch job \"{{ launchd_persistence.label }}\" ({{ launchd_persistence.path }}) starts on every login or boot, and {{ launchd_persistence.reason }} \u2014 the shape macOS persistence malware takes rather than the shape installed software does. It runs: {{ launchd_persistence.program }}.",
+    "explain": "The launch job \"{{ launchd_persistence.label }}\" ({{ launchd_persistence.path }}) starts on every login or boot, and {{ launchd_persistence.reason }} — the shape macOS persistence malware takes rather than the shape installed software does. It runs: {{ launchd_persistence.program }}.",
     "fix": "If you didn't create it, unload it with `launchctl bootout gui/$(id -u) {{ launchd_persistence.path }}` (or `sudo launchctl bootout system {{ launchd_persistence.path }}` for /Library/LaunchDaemons), move the plist and the program it runs aside, and check what else that program touched.",
     "os": ["macos"],
     "profiles": ["desktop"]
@@ -930,7 +954,7 @@
     "severity": "high",
     "collector": "windows_run_keys",
     "references": ["ATTACK-T1547.001"],
-    "explain": "The registry Run-key entry \"{{ windows_run_keys.name }}\" launches \"{{ windows_run_keys.command }}\" on every login and isn't one this host's baseline recognizes \u2014 Windows's equivalent of a rogue systemd unit.",
+    "explain": "The registry Run-key entry \"{{ windows_run_keys.name }}\" launches \"{{ windows_run_keys.command }}\" on every login and isn't one this host's baseline recognizes — Windows's equivalent of a rogue systemd unit.",
     "fix": "Review the entry under HKLM/HKCU ...\\CurrentVersion\\Run and remove it if you didn't create it.",
     "os": ["windows"],
     "profiles": ["desktop", "server"]
@@ -943,7 +967,7 @@
     "collector": "python_startup_hooks",
     "references": ["ATTACK-T1546.018", "ATTACK-T1195.001"],
     "explain": "{{ python_startup_hooks.path }} runs code every time Python starts in this environment, before your own program and even if you never import the package that added it. Some tools use this legitimately, but it is also how the poisoned LiteLLM 1.107.0 package stole credentials in October 2026.",
-    "fix": "Check where this file came from, and remove it if you don't recognise it.\n1. Find the package that installed it: 'pip show -f <package>' lists a package's files.\n2. If you recognise it, ignore this issue with the package name as the reason.\n3. If you don't, uninstall that package and rotate any secrets this Python environment could read.\n",
+    "fix": "Check where this file came from, and remove it if you don't recognise it. 1. Find the package that installed it: 'pip show -f <package>' lists a package's files. 2. If you recognise it, ignore this issue with the package name as the reason. 3. If you don't, uninstall that package and rotate any secrets this Python environment could read.",
     "os": ["linux"],
     "profiles": []
   },
@@ -954,8 +978,8 @@
     "severity": "high",
     "collector": "sudoers",
     "references": ["ATTACK-T1548.003"],
-    "explain": "A NOPASSWD sudo rule in {{ sudoers.source }} (\"{{ sudoers.line }}\") lets that user/group run commands as root without re-authenticating \u2014 anyone who reaches that account, even briefly, has unrestricted root with no password prompt to slow them down.",
-    "fix": "Review the entry and remove NOPASSWD unless there's a specific, scoped reason for it (e.g. a single monitoring command, not 'ALL').",
+    "explain": "A sudo rule in {{ sudoers.source }} (\"{{ sudoers.line }}\") switches off the password prompt with {{ sudoers.how }}. Whoever it covers runs commands as root without re-authenticating — anyone who reaches that account, even briefly, has root with no password prompt to slow them down.",
+    "fix": "Review the entry and remove NOPASSWD (or the '!authenticate' setting) unless there's a specific, scoped reason for it (e.g. a single monitoring command, not 'ALL'). 'sudo -l -U <user>' shows what a user may run.",
     "os": ["linux"],
     "profiles": []
   },
@@ -963,35 +987,11 @@
     "id": "BLWK-PRIV-002",
     "title": "No GRUB boot loader password is set",
     "category": "privilege-escalation",
-    "severity": "medium",
+    "severity": "low",
     "collector": "grub_password",
     "references": ["CIS-1.4.1", "ATTACK-T1542"],
-    "explain": "/boot/grub/grub.cfg has no 'password' or 'password_pbkdf2' directive. Anyone with physical or console access to this machine can interrupt the boot menu and edit kernel parameters directly (e.g. appending 'init=/bin/bash' or 'single') to get a root shell without ever needing a valid credential \u2014 no OS-level control can prevent this once someone has unrestricted access to the boot menu itself.",
-    "fix": "Set a GRUB password: run 'grub-mkpasswd-pbkdf2' to generate a hash, add 'set superusers=\"root\"' and 'password_pbkdf2 root <hash>' to /etc/grub.d/40_custom, then run 'update-grub'. IMPORTANT: on stock Ubuntu/Debian, 'set superusers' makes GRUB prompt for that password before booting ANY entry \u2014 the machine will halt at a password prompt on every reboot, including unattended ones. To keep normal boot automatic and only gate *editing* entries and recovery, append '--unrestricted' to the CLASS list of your default menuentry (edit /etc/grub.d/10_linux, or use a submenu). Test with a reboot you can physically recover from before relying on this on a headless host.\n",
-    "os": ["linux"],
-    "profiles": []
-  },
-  {
-    "id": "BLWK-AV-001",
-    "title": "ClamAV is not installed",
-    "category": "rootkit-malware",
-    "severity": "low",
-    "collector": "clamav_status",
-    "references": [],
-    "explain": "No clamscan binary was found. Bulwark deliberately doesn't reimplement signature-based malware detection (see the project's own non-goals) \u2014 it expects ClamAV to cover that ground, so without it this whole category goes unchecked.",
-    "fix": "Install ClamAV (e.g. 'apt install clamav') and run 'freshclam' to fetch signatures.",
-    "os": ["linux"],
-    "profiles": []
-  },
-  {
-    "id": "BLWK-AV-002",
-    "title": "ClamAV signature database is stale",
-    "category": "rootkit-malware",
-    "severity": "medium",
-    "collector": "clamav_status",
-    "references": [],
-    "explain": "ClamAV's signature database is {{ clamav_status.db_age_days }} days old. An installed but outdated scanner gives a false sense of coverage \u2014 it won't catch anything discovered since the last update.",
-    "fix": "Run 'freshclam' (or check that the freshclam timer/service is enabled: 'systemctl status clamav-freshclam').",
+    "explain": "/boot/grub/grub.cfg has no 'password' or 'password_pbkdf2' directive. Anyone with physical or console access to this machine can interrupt the boot menu and edit kernel parameters directly (e.g. appending 'init=/bin/bash' or 'single') to get a root shell without ever needing a valid credential — no OS-level control can prevent this once someone has unrestricted access to the boot menu itself.",
+    "fix": "Set a GRUB password: run 'grub-mkpasswd-pbkdf2' to generate a hash, add 'set superusers=\"root\"' and 'password_pbkdf2 root <hash>' to /etc/grub.d/40_custom, then run 'update-grub'. IMPORTANT: on stock Ubuntu/Debian, 'set superusers' makes GRUB prompt for that password before booting ANY entry — the machine will halt at a password prompt on every reboot, including unattended ones. To keep normal boot automatic and only gate *editing* entries and recovery, append '--unrestricted' to the CLASS list of your default menuentry (edit /etc/grub.d/10_linux, or use a submenu). Test with a reboot you can physically recover from before relying on this on a headless host.",
     "os": ["linux"],
     "profiles": []
   },
@@ -1002,8 +1002,8 @@
     "severity": "high",
     "collector": "network_interfaces",
     "references": ["ATTACK-T1040"],
-    "explain": "{{ network_interfaces.interface }} is in promiscuous mode \u2014 it's capturing all traffic on its network segment, not just traffic addressed to this host. This is the defining behavior of a packet sniffer, and is exactly what chkrootkit's own \"sniffer\" test checks for. Bridge ports are excluded: the kernel makes every bridge-enslaved interface promiscuous by design, so a Docker/VM veth being promiscuous means nothing. This interface is not one of those.",
-    "fix": "Run 'ip -d link show {{ network_interfaces.interface }}' and check 'ps aux' for a legitimate reason (tcpdump, Wireshark/tshark). If nothing legitimate explains it, treat this as active traffic interception and investigate immediately.\n",
+    "explain": "{{ network_interfaces.interface }} is in promiscuous mode — it's capturing all traffic on its network segment, not just traffic addressed to this host. This is the defining behavior of a packet sniffer, and is exactly what chkrootkit's own \"sniffer\" test checks for. Bridge ports are excluded: the kernel makes every bridge-enslaved interface promiscuous by design, so a Docker/VM veth being promiscuous means nothing. This interface is not one of those.",
+    "fix": "Run 'ip -d link show {{ network_interfaces.interface }}' and check 'ps aux' for a legitimate reason (tcpdump, Wireshark/tshark). If nothing legitimate explains it, treat this as active traffic interception and investigate immediately.",
     "os": ["linux"],
     "profiles": []
   },
@@ -1015,7 +1015,7 @@
     "collector": "supply_chain_iocs",
     "references": ["ATTACK-T1195.001", "ATTACK-T1552.001"],
     "explain": "Found a trace of the poisoned LiteLLM 1.107.0 package ({{ supply_chain_iocs.indicator }} at {{ supply_chain_iocs.path }}). That release stole cloud, AI, SSH and browser credentials and installed a backdoor. A lock file in /tmp means the backdoor ran; a .pc_once_ file means the theft already happened.",
-    "fix": "Treat this computer as compromised and change your credentials from a different, clean device.\n1. Disconnect this computer from the network.\n2. From another device, rotate cloud keys, CI tokens, AI API keys and SSH keys, starting with the most powerful.\n3. Uninstall litellm 1.107.0 everywhere (the last safe version is 1.106.2) and delete cook.pth, cook.py and the sitecustomize.py it added.\n4. Rebuild affected Python environments from pinned, verified packages.\n",
+    "fix": "Treat this computer as compromised and change your credentials from a different, clean device. 1. Disconnect this computer from the network. 2. From another device, rotate cloud keys, CI tokens, AI API keys and SSH keys, starting with the most powerful. 3. Uninstall litellm 1.107.0 everywhere (the last safe version is 1.106.2) and delete cook.pth, cook.py and the sitecustomize.py it added. 4. Rebuild affected Python environments from pinned, verified packages.",
     "os": ["linux"],
     "profiles": []
   },
@@ -1027,7 +1027,7 @@
     "collector": "sshd_config",
     "references": ["CIS-5.2.10", "ATTACK-T1110"],
     "explain": "PasswordAuthentication is set to \"{{ sshd.password_authentication }}\" in sshd_config, which allows an attacker to brute-force their way in with a password guess instead of needing a private key. It is the OpenSSH default and a brute-force *exposure* rather than a definite compromise, so it's rated high (aligning with CIS's L1 treatment and with BLWK-SSH-002), not critical.",
-    "fix": "Set 'PasswordAuthentication no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'. IMPORTANT: confirm key-based login works in a SECOND session before you rely on this \u2014 if the only working credential is a password and no key is installed, you will lock yourself out on the next login. Existing sessions survive the restart; a new key-authenticated login must succeed first.\n",
+    "fix": "Set 'PasswordAuthentication no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'. IMPORTANT: confirm key-based login works in a SECOND session before you rely on this — if the only working credential is a password and no key is installed, you will lock yourself out on the next login. Existing sessions survive the restart; a new key-authenticated login must succeed first.",
     "os": ["linux"],
     "profiles": []
   },
@@ -1050,7 +1050,7 @@
     "severity": "critical",
     "collector": "sshd_config",
     "references": ["CIS-5.2.11"],
-    "explain": "PermitEmptyPasswords is set to \"{{ sshd.permit_empty_passwords }}\" \u2014 any account with a blank password can log in over SSH with no credential at all.",
+    "explain": "PermitEmptyPasswords is set to \"{{ sshd.permit_empty_passwords }}\" — any account with a blank password can log in over SSH with no credential at all.",
     "fix": "Set 'PermitEmptyPasswords no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'.",
     "os": ["linux"],
     "profiles": []
@@ -1071,10 +1071,10 @@
     "id": "BLWK-SSH-005",
     "title": "SSH TCP forwarding/tunneling is enabled",
     "category": "ssh-remote-access",
-    "severity": "medium",
+    "severity": "low",
     "collector": "sshd_config",
     "references": ["CIS-5.2.5", "ATTACK-T1572"],
-    "explain": "AllowTcpForwarding is set to \"{{ sshd.allow_tcp_forwarding }}\" in sshd_config. TCP forwarding lets any SSH user open arbitrary local or remote port tunnels through this host \u2014 the exact mechanism used to pivot into internal networks or to reach services (like VNC) that are only supposed to be reachable from localhost.",
+    "explain": "AllowTcpForwarding is set to \"{{ sshd.allow_tcp_forwarding }}\" in sshd_config (\"yes\" and \"all\" allow both directions, \"local\" and \"remote\" one each). TCP forwarding lets any SSH user open port tunnels through this host — the exact mechanism used to pivot into internal networks or to reach services (like VNC) that are only supposed to be reachable from localhost.",
     "fix": "Set 'AllowTcpForwarding no' in /etc/ssh/sshd_config, or restrict it per-user with a Match block, unless tunneling is a deliberate requirement.",
     "os": ["linux"],
     "profiles": []
@@ -1086,7 +1086,7 @@
     "severity": "medium",
     "collector": "sshd_config",
     "references": ["CIS-5.2.6"],
-    "explain": "PermitUserEnvironment is set to \"{{ sshd.permit_user_environment }}\" in sshd_config, letting an SSH client set arbitrary environment variables for its session (via ~/.ssh/environment or SendEnv) \u2014 including ones like LD_PRELOAD that can hijack the behavior of programs the session later runs.",
+    "explain": "PermitUserEnvironment is set to \"{{ sshd.permit_user_environment }}\" in sshd_config, letting an SSH client set arbitrary environment variables for its session (via ~/.ssh/environment or SendEnv) — including ones like LD_PRELOAD that can hijack the behavior of programs the session later runs.",
     "fix": "Set 'PermitUserEnvironment no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'.",
     "os": ["linux"],
     "profiles": []
@@ -1098,7 +1098,7 @@
     "severity": "medium",
     "collector": "sshd_config",
     "references": ["ATTACK-T1572"],
-    "explain": "PermitTunnel is set to \"{{ sshd.permit_tunnel }}\" in sshd_config. Unlike ordinary TCP port forwarding, tun-device tunneling gives an SSH client a full virtual network interface into this host's network \u2014 a much broader pivot/VPN-like capability that's rarely needed and should be off by default.",
+    "explain": "PermitTunnel is set to \"{{ sshd.permit_tunnel }}\" in sshd_config. Unlike ordinary TCP port forwarding, tun-device tunneling gives an SSH client a full virtual network interface into this host's network — a much broader pivot/VPN-like capability that's rarely needed and should be off by default.",
     "fix": "Set 'PermitTunnel no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'.",
     "os": ["linux"],
     "profiles": []
@@ -1110,7 +1110,7 @@
     "severity": "medium",
     "collector": "sshd_config",
     "references": ["CIS-5.2.9"],
-    "explain": "StrictModes is set to \"{{ sshd.strict_modes }}\" in sshd_config. With StrictModes off, sshd no longer verifies that a user's home directory and key files have safe ownership and permissions before trusting them \u2014 a world-writable home directory or key file then becomes a usable login bypass instead of a rejected, obviously-broken config.",
+    "explain": "StrictModes is set to \"{{ sshd.strict_modes }}\" in sshd_config. With StrictModes off, sshd no longer verifies that a user's home directory and key files have safe ownership and permissions before trusting them — a world-writable home directory or key file then becomes a usable login bypass instead of a rejected, obviously-broken config.",
     "fix": "Set 'StrictModes yes' in /etc/ssh/sshd_config and run 'systemctl restart sshd'.",
     "os": ["linux"],
     "profiles": []
@@ -1122,7 +1122,7 @@
     "severity": "medium",
     "collector": "sshd_config",
     "references": ["ATTACK-T1090"],
-    "explain": "GatewayPorts is set to \"{{ sshd.gateway_ports }}\" in sshd_config. By default, a port an SSH client forwards to this host is only reachable from localhost; with GatewayPorts on, it's reachable from anywhere on the network \u2014 turning an individual user's ad-hoc SSH tunnel into an accidental (or deliberate) network-wide exposure of whatever it points at.",
+    "explain": "GatewayPorts is set to \"{{ sshd.gateway_ports }}\" in sshd_config. By default, a port an SSH client forwards to this host is only reachable from localhost; with \"yes\" it is reachable from anywhere on the network, and with \"clientspecified\" whenever the client asks for that — turning an individual user's ad-hoc SSH tunnel into an accidental (or deliberate) network-wide exposure of whatever it points at.",
     "fix": "Set 'GatewayPorts no' in /etc/ssh/sshd_config and run 'systemctl restart sshd'.",
     "os": ["linux"],
     "profiles": []
@@ -1134,7 +1134,7 @@
     "severity": "low",
     "collector": "sshd_config",
     "references": ["ATTACK-T1563"],
-    "explain": "AllowAgentForwarding is set to \"{{ sshd.allow_agent_forwarding }}\" in sshd_config. Agent forwarding lets anyone with root (or the forwarding user's privileges) on this host make use of the connecting client's SSH agent to authenticate onward as that client, without ever seeing the private key itself \u2014 a well-known lateral-movement technique on multi-hop SSH setups.",
+    "explain": "AllowAgentForwarding is set to \"{{ sshd.allow_agent_forwarding }}\" in sshd_config. Agent forwarding lets anyone with root (or the forwarding user's privileges) on this host make use of the connecting client's SSH agent to authenticate onward as that client, without ever seeing the private key itself — a well-known lateral-movement technique on multi-hop SSH setups.",
     "fix": "Set 'AllowAgentForwarding no' in /etc/ssh/sshd_config unless agent forwarding is a deliberate requirement.",
     "os": ["linux"],
     "profiles": []
@@ -1146,7 +1146,7 @@
     "severity": "low",
     "collector": "sshd_config",
     "references": ["CIS-5.2.7", "ATTACK-T1110"],
-    "explain": "MaxAuthTries is set to {{ sshd.max_auth_tries }} in sshd_config \u2014 well above the recommended ceiling of 3-6. A high limit gives an online password-guessing attempt many more tries per TCP connection before being cut off.",
+    "explain": "MaxAuthTries is set to {{ sshd.max_auth_tries }} in sshd_config — well above the recommended ceiling of 3-6. A high limit gives an online password-guessing attempt many more tries per TCP connection before being cut off.",
     "fix": "Set 'MaxAuthTries 3' (or up to 6) in /etc/ssh/sshd_config and run 'systemctl restart sshd'.",
     "os": ["linux"],
     "profiles": []
@@ -1159,7 +1159,7 @@
     "collector": "ssh_private_keys",
     "references": ["CIS-5.2", "ATTACK-T1552.004", "ATTACK-T1078"],
     "explain": "Your SSH key {{ ssh_private_keys.path }} has no passphrase. It works like a password that is written down: anyone or any program that copies this one file can log in to every server and Git host that trusts it, with nothing else needed.",
-    "fix": "Lock the key with a passphrase. It takes a minute and your servers need no changes.\n1. In the Bulwark app, open this issue and use \"Add a passphrase\". In a terminal, run 'ssh-keygen -p -f {{ ssh_private_keys.path }}'.\n2. To avoid typing it all the time, load the key once per session with 'ssh-add {{ ssh_private_keys.path }}'.\n3. Delete keys for machines you no longer use.\nStronger options: keep keys in a password manager's SSH agent (Bitwarden, 1Password, KeePassXC), or use a hardware key that cannot be copied at all ('ssh-keygen -t ed25519-sk' with a YubiKey).\n",
+    "fix": "Lock the key with a passphrase. It takes a minute and your servers need no changes. 1. In the Bulwark app, open this issue and use \"Add a passphrase\". In a terminal, run 'ssh-keygen -p -f {{ ssh_private_keys.path }}'. 2. To avoid typing it all the time, load the key once per session with 'ssh-add {{ ssh_private_keys.path }}'. 3. Delete keys for machines you no longer use. Stronger options: keep keys in a password manager's SSH agent (Bitwarden, 1Password, KeePassXC), or use a hardware key that cannot be copied at all ('ssh-keygen -t ed25519-sk' with a YubiKey).",
     "os": ["linux", "macos"],
     "profiles": []
   },
@@ -1170,8 +1170,8 @@
     "severity": "low",
     "collector": "ssh_private_keys",
     "references": ["CIS-5.2", "ATTACK-T1552.004"],
-    "explain": "The file at {{ ssh_private_keys.path }} (format: {{ ssh_private_keys.key_format }}) is a private key, but its encryption header could not be parsed, so Bulwark cannot confirm whether it is passphrase-protected. Rather than guess \u2014 and risk reporting a plaintext key as safe \u2014 it is surfaced here for you to check by hand. A healthy key does not normally hit this state, so the file may be truncated, corrupted, or in a format this version doesn't fully recognize.",
-    "fix": "Inspect the key directly: 'ssh-keygen -y -f {{ ssh_private_keys.path }}' will prompt for a passphrase if one is set (and error out plainly if the file is malformed). If it is unprotected, add a passphrase with 'ssh-keygen -p -f {{ ssh_private_keys.path }}'. If the file is corrupt or not actually a key you use, remove or restore it.\n",
+    "explain": "The file at {{ ssh_private_keys.path }} (format: {{ ssh_private_keys.key_format }}) is a private key, but its encryption header could not be parsed, so Bulwark cannot confirm whether it is passphrase-protected. Rather than guess — and risk reporting a plaintext key as safe — it is surfaced here for you to check by hand. A healthy key does not normally hit this state, so the file may be truncated, corrupted, or in a format this version doesn't fully recognize.",
+    "fix": "Inspect the key directly: 'ssh-keygen -y -f {{ ssh_private_keys.path }}' will prompt for a passphrase if one is set (and error out plainly if the file is malformed). If it is unprotected, add a passphrase with 'ssh-keygen -p -f {{ ssh_private_keys.path }}'. If the file is corrupt or not actually a key you use, remove or restore it.",
     "os": ["linux", "macos"],
     "profiles": []
   },
@@ -1183,7 +1183,7 @@
     "collector": "ssh_private_keys",
     "references": ["ATTACK-T1552.004"],
     "explain": "{{ ssh_private_keys.path }} is a {{ ssh_private_keys.key_algorithm }} key ({{ ssh_private_keys.key_bits }} bits for RSA). DSA keys are disabled by default in current OpenSSH, and RSA keys shorter than 2048 bits can be broken with affordable computing. Servers increasingly refuse both, and those that still accept them offer little protection.",
-    "fix": "Create a modern key, switch to it, then retire the old one.\n1. Run 'ssh-keygen -t ed25519' (with a passphrase) to create a new key.\n2. Add the new public key wherever the old one is accepted: servers' ~/.ssh/authorized_keys, GitHub, GitLab, and so on.\n3. Remove the old public key from those places, then delete the old key pair.\nIf something you connect to only supports RSA, use 'ssh-keygen -t rsa -b 4096' instead.\n",
+    "fix": "Create a modern key, switch to it, then retire the old one. 1. Run 'ssh-keygen -t ed25519' (with a passphrase) to create a new key. 2. Add the new public key wherever the old one is accepted: servers' ~/.ssh/authorized_keys, GitHub, GitLab, and so on. 3. Remove the old public key from those places, then delete the old key pair. If something you connect to only supports RSA, use 'ssh-keygen -t rsa -b 4096' instead.",
     "os": ["linux", "macos"],
     "profiles": []
   },
@@ -1195,7 +1195,7 @@
     "collector": "windows_security",
     "references": ["ATTACK-T1562.001"],
     "explain": "Real-time protection is what stops malware as it's downloaded or run. With it off, Defender only finds threats when a scan happens to run.",
-    "fix": "Turn it on in Windows Security \u2192 Virus & threat protection \u2192 Manage settings \u2192 Real-time protection. If it keeps switching off, check for another antivirus or a policy disabling it.",
+    "fix": "Turn it on in Windows Security → Virus & threat protection → Manage settings → Real-time protection. If it keeps switching off, check for another antivirus or a policy disabling it.",
     "os": ["windows"],
     "profiles": []
   },
@@ -1207,7 +1207,7 @@
     "collector": "windows_security",
     "references": ["ATTACK-T1562.001"],
     "explain": "Defender's malware signatures are {{ windows_security.defender_signature_age }} days old, so recently discovered threats aren't recognised.",
-    "fix": "Run 'Update-MpSignature' in PowerShell (or Windows Security \u2192 Virus & threat protection \u2192 Protection updates), and check that Windows Update can reach the internet.",
+    "fix": "Run 'Update-MpSignature' in PowerShell (or Windows Security → Virus & threat protection → Protection updates), and check that Windows Update can reach the internet.",
     "os": ["windows"],
     "profiles": []
   },
@@ -1219,7 +1219,7 @@
     "collector": "windows_security",
     "references": ["ATTACK-T1562.004"],
     "explain": "The firewall is off for: {{ windows_security.firewall_off_profiles }}. On a network of that type, every listening service on this machine can be reached.",
-    "fix": "Turn it back on in Windows Security \u2192 Firewall & network protection, or run 'Set-NetFirewallProfile -All -Enabled True' in an elevated PowerShell.",
+    "fix": "Turn it back on in Windows Security → Firewall & network protection, or run 'Set-NetFirewallProfile -All -Enabled True' in an elevated PowerShell.",
     "os": ["windows"],
     "profiles": []
   },
@@ -1230,8 +1230,8 @@
     "severity": "high",
     "collector": "windows_security",
     "references": ["ATTACK-T1005"],
-    "explain": "The system drive isn't encrypted, so anyone with physical access to the disk can read every file on it \u2014 including saved credentials and SSH keys.",
-    "fix": "Turn on BitLocker (Control Panel \u2192 BitLocker Drive Encryption, or 'manage-bde -on C:' elevated) and store the recovery key somewhere other than this machine.",
+    "explain": "The system drive isn't encrypted, so anyone with physical access to the disk can read every file on it — including saved credentials and SSH keys.",
+    "fix": "Turn on BitLocker (Control Panel → BitLocker Drive Encryption, or 'manage-bde -on C:' elevated) and store the recovery key somewhere other than this machine.",
     "os": ["windows"],
     "profiles": []
   },
@@ -1242,8 +1242,8 @@
     "severity": "high",
     "collector": "windows_security",
     "references": ["ATTACK-T1548.002"],
-    "explain": "With UAC off, every program an administrator runs gets full administrator rights silently \u2014 a malicious download included.",
-    "fix": "Set EnableLUA to 1 under HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System (or restore the default in Control Panel \u2192 User Account Control Settings) and restart.",
+    "explain": "With UAC off, every program an administrator runs gets full administrator rights silently — a malicious download included.",
+    "fix": "Set EnableLUA to 1 under HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System (or restore the default in Control Panel → User Account Control Settings) and restart.",
     "os": ["windows"],
     "profiles": []
   },
@@ -1254,8 +1254,8 @@
     "severity": "high",
     "collector": "windows_security",
     "references": ["ATTACK-T1021.001"],
-    "explain": "Remote Desktop accepts connections, and without Network Level Authentication anyone who can reach it gets a login screen \u2014 and the pre-authentication attack surface \u2014 before proving who they are.",
-    "fix": "Turn on 'Require devices to use Network Level Authentication' in Settings \u2192 System \u2192 Remote Desktop, or turn Remote Desktop off if you don't use it. Limit it to your VPN or private network.",
+    "explain": "Remote Desktop accepts connections, and without Network Level Authentication anyone who can reach it gets a login screen — and the pre-authentication attack surface — before proving who they are.",
+    "fix": "Turn on 'Require devices to use Network Level Authentication' in Settings → System → Remote Desktop, or turn Remote Desktop off if you don't use it. Limit it to your VPN or private network.",
     "os": ["windows"],
     "profiles": []
   },
@@ -1279,7 +1279,7 @@
     "collector": "windows_security",
     "references": ["ATTACK-T1078.001"],
     "explain": "The built-in Guest account is switched on. Anyone who can reach this computer, at the keyboard or over the network, can sign in without a password of their own and reach shared folders and printers.",
-    "fix": "In an administrator PowerShell run: Get-LocalUser | Where-Object { $_.SID -like '*-501' } | Disable-LocalUser. Or open Computer Management \u2192 Local Users and Groups \u2192 Users \u2192 Guest and tick 'Account is disabled'.",
+    "fix": "In an administrator PowerShell run: Get-LocalUser | Where-Object { $_.SID -like '*-501' } | Disable-LocalUser. Or open Computer Management → Local Users and Groups → Users → Guest and tick 'Account is disabled'.",
     "os": ["windows"],
     "profiles": []
   },
@@ -1303,7 +1303,7 @@
     "collector": "windows_security",
     "references": ["ATTACK-T1190"],
     "explain": "The newest installed Windows update is {{ windows_security.last_update_days }} days old. Microsoft releases security fixes every month, so this computer is likely missing fixes for vulnerabilities that are already public.",
-    "fix": "Open Settings \u2192 Windows Update \u2192 Check for updates and install what's offered. If updates keep failing or are paused, check 'Pause updates' and any update policy set by your organisation.",
+    "fix": "Open Settings → Windows Update → Check for updates and install what's offered. If updates keep failing or are paused, check 'Pause updates' and any update policy set by your organisation.",
     "os": ["windows"],
     "profiles": []
   }

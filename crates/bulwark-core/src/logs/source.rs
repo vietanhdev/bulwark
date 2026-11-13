@@ -39,18 +39,39 @@ const MAX_LINE_BYTES: usize = 1024 * 1024;
 /// real line boundaries), it just stops *storing* bytes past the cap.
 struct CappedLines<R: BufRead> {
     reader: R,
+    /// Set by the first read error. A reader that failed once is not asked again: reading a
+    /// folder fails the same way on every call, so a stream that kept answering `Some(Err)` never
+    /// ended and its caller collected errors until memory ran out.
+    failed: bool,
+}
+
+impl<R: BufRead> CappedLines<R> {
+    fn new(reader: R) -> Self {
+        Self {
+            reader,
+            failed: false,
+        }
+    }
 }
 
 impl<R: BufRead> Iterator for CappedLines<R> {
     type Item = std::io::Result<String>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if self.failed {
+            return None;
+        }
         let mut buf: Vec<u8> = Vec::new();
         let mut saw_any = false;
         loop {
             let available = match self.reader.fill_buf() {
                 Ok(b) => b,
-                Err(e) => return Some(Err(e)),
+                // A signal is not a failure of the input; ask again.
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => {
+                    self.failed = true;
+                    return Some(Err(e));
+                }
             };
             if available.is_empty() {
                 if !saw_any {
@@ -149,9 +170,7 @@ impl JournaldSource {
         let stderr = child.stderr.take();
         Ok(Self {
             child,
-            lines: CappedLines {
-                reader: BufReader::new(stdout),
-            },
+            lines: CappedLines::new(BufReader::new(stdout)),
             stderr,
             exit_checked: false,
         })
@@ -261,6 +280,37 @@ fn bytes_to_string(bytes: &[serde_json::Value]) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// log files
+// ---------------------------------------------------------------------------
+
+/// Opens a log file named by the user (`logs scan --from-file`), refusing anything that is not a
+/// regular file with a message that says what it is. A folder used to open without complaint and
+/// then fail on every read; a named pipe with no writer blocked the open forever. The open itself
+/// never waits (see [`crate::homefs::open_system_file`]).
+pub fn open_log_file(path: &std::path::Path) -> anyhow::Result<std::fs::File> {
+    let meta = std::fs::metadata(path)
+        .map_err(|e| anyhow::anyhow!("can't read {}: {e}", path.display()))?;
+    let kind = meta.file_type();
+    if kind.is_dir() {
+        anyhow::bail!(
+            "{} is a folder, not a log file. Name one file in it, for example {}",
+            path.display(),
+            path.join("auth.log").display()
+        );
+    }
+    if !kind.is_file() {
+        anyhow::bail!(
+            "{} is not a regular file (a pipe, socket or device), so it can't be read as a log",
+            path.display()
+        );
+    }
+    match crate::homefs::open_system_file(path) {
+        crate::homefs::HomeFile::Found(file) => Ok(file),
+        _ => anyhow::bail!("can't open {} for reading", path.display()),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // syslog lines
 // ---------------------------------------------------------------------------
 
@@ -307,7 +357,7 @@ pub struct SyslogLinesSource<R: BufRead> {
 impl<R: BufRead> SyslogLinesSource<R> {
     pub fn new(reader: R, reference: chrono::DateTime<Utc>) -> Self {
         Self {
-            lines: CappedLines { reader },
+            lines: CappedLines::new(reader),
             reference,
             unrecognized: 0,
         }
@@ -476,15 +526,59 @@ mod tests {
         assert!(s.next_event().is_none());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_or_a_pipe_is_refused_as_a_log_file_without_waiting() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("fifo.log");
+        let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        // SAFETY: a valid NUL-terminated path and a plain mode.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        let file = dir.path().join("auth.log");
+        std::fs::write(&file, "Jul 12 13:45:01 h sshd[7]: hello\n").unwrap();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (folder, pipe) = (dir.path().to_path_buf(), fifo.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send((
+                open_log_file(&folder)
+                    .map(|_| ())
+                    .map_err(|e| e.to_string()),
+                open_log_file(&pipe).map(|_| ()).map_err(|e| e.to_string()),
+            ));
+        });
+        let (folder, pipe) = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("opening a pipe must not wait for a writer");
+        assert!(folder.unwrap_err().contains("is a folder"));
+        assert!(pipe.unwrap_err().contains("not a regular file"));
+        assert!(open_log_file(&dir.path().join("absent")).is_err());
+        assert!(open_log_file(&file).is_ok());
+    }
+
+    #[test]
+    fn a_reader_that_fails_is_not_asked_again() {
+        struct Fails(u32);
+        impl std::io::Read for Fails {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                self.0 += 1;
+                Err(std::io::Error::other("Is a directory"))
+            }
+        }
+        let mut lines = CappedLines::new(BufReader::new(Fails(0)));
+        assert!(lines.next().unwrap().is_err());
+        assert!(lines.next().is_none(), "the stream ends after the error");
+        assert!(lines.next().is_none());
+        assert_eq!(lines.reader.get_ref().0, 1);
+    }
+
     #[test]
     fn an_oversized_line_is_capped_and_the_next_line_still_parses() {
         // A newline-free "line" far larger than the cap, followed by a real line. The giant line
         // must not be buffered whole (memory bound) and must not swallow the following line.
         let huge = "A".repeat(MAX_LINE_BYTES + 5_000);
         let text = format!("{huge}\nJul 12 13:45:01 h sshd[7]: hello\n");
-        let mut lines = CappedLines {
-            reader: Cursor::new(text.into_bytes()),
-        };
+        let mut lines = CappedLines::new(Cursor::new(text.into_bytes()));
         let first = lines.next().unwrap().unwrap();
         assert_eq!(
             first.len(),

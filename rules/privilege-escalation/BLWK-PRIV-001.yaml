@@ -3,10 +3,14 @@ title: A sudoers entry allows passwordless root
 category: privilege-escalation
 severity: high
 collector: sudoers
+# The collector reads the policy the way sudo does (sudoers(5)): it follows @include and
+# @includedir, skips the files sudo skips (a name ending in '~' or containing '.'), ignores
+# comments, and sets `nopasswd` for a NOPASSWD: tag on a rule and for 'Defaults !authenticate'.
 condition: nopasswd == true
 explain: >
-  A NOPASSWD sudo rule in {{ sudoers.source }} ("{{ sudoers.line }}") lets that
-  user/group run commands as root without re-authenticating — anyone who reaches that
-  account, even briefly, has unrestricted root with no password prompt to slow them down.
-fix: "Review the entry and remove NOPASSWD unless there's a specific, scoped reason for it (e.g. a single monitoring command, not 'ALL')."
+  A sudo rule in {{ sudoers.source }} ("{{ sudoers.line }}") switches off the password prompt
+  with {{ sudoers.how }}. Whoever it covers runs commands as root without re-authenticating —
+  anyone who reaches that account, even briefly, has root with no password prompt to slow them
+  down.
+fix: "Review the entry and remove NOPASSWD (or the '!authenticate' setting) unless there's a specific, scoped reason for it (e.g. a single monitoring command, not 'ALL'). 'sudo -l -U <user>' shows what a user may run."
 references: [ATTACK-T1548.003]

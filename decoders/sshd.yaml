@@ -1,5 +1,11 @@
 id: sshd
 program: sshd
+# OpenSSH 9.8 split the server: the listener is still `sshd`, but each connection is handled by
+# `sshd-session` (and, from 10.0, an unprivileged `sshd-auth` helper), and that is the name the
+# authentication lines are logged under. With only `sshd` here, a current Fedora, Debian or Arch
+# log decoded to nothing and a brute-force read as a clean log. Real lines from OpenSSH 9.6
+# (Ubuntu 24.04) and 10.0 (Fedora 43) are in crates/bulwark-core/tests/data/sshd-*.txt.
+program_aliases: [sshd-session, sshd-auth]
 # Cheap guard: skip the (many) sshd lines that aren't about authentication before running any
 # capture regex — connection open/close, key exchange, session lifecycle, etc.
 prematch: '^Failed|^Accepted|^Invalid user'
@@ -8,16 +14,27 @@ patterns:
   # attacker-chosen username verbatim, BEFORE the genuine `from <ip> port <n>` tuple — so a
   # non-greedy `\S+` user lets a username like `x from 6.6.6.6 port 1 ssh2` hijack the srcip capture
   # (framing an innocent IP, and — by varying the injected IP per attempt — evading the by-srcip
-  # brute-force correlation entirely). Greedy `.+` backtracks to the LAST ` from … port … ` at the
+  # brute-force correlation entirely). Greedy `.*` backtracks to the LAST ` from … port … ` at the
   # end of the line, which is always the real one; any injected copy is absorbed into `user`. This
-  # also fixes ordinary usernames that contain spaces, which the old `\S+` dropped silently.
+  # also fixes ordinary usernames that contain spaces, which the old `\S+` dropped silently, and
+  # the empty username some scanners send (`Invalid user  from …`).
+  #
+  # After `ssh2` a public-key line names the key: `: ED25519 SHA256:…`, and for a certificate
+  # `: ED25519-CERT SHA256:… ID … (serial 1) CA …`. Without that tail no key-based login decoded,
+  # so a root login with a key was never seen. The tail must look like a key (a type, then
+  # `HASH:fingerprint`), which keeps it from swallowing a `from … port …` a username injected.
+  #
   # Invalid-user failures first (more specific), so they get the `invalid_user` tag.
-  - regex: '^Failed \S+ for invalid user (?P<user>.+) from (?P<srcip>\S+) port (?P<srcport>\d+)(?: ssh2)?\s*$'
+  - regex: '^Failed \S+ for invalid user (?P<user>.*) from (?P<srcip>\S+) port (?P<srcport>\d+)(?: ssh2)?(?:: [A-Za-z0-9@._-]+ [A-Z0-9]+:\S+(?: .*)?)?\s*$'
     tags: [authentication_failed, invalid_user]
-  - regex: '^Failed \S+ for (?P<user>.+) from (?P<srcip>\S+) port (?P<srcport>\d+)(?: ssh2)?\s*$'
+  - regex: '^Failed \S+ for (?P<user>.+) from (?P<srcip>\S+) port (?P<srcport>\d+)(?: ssh2)?(?:: [A-Za-z0-9@._-]+ [A-Z0-9]+:\S+(?: .*)?)?\s*$'
     tags: [authentication_failed]
-  - regex: '^Accepted \S+ for (?P<user>.+) from (?P<srcip>\S+) port (?P<srcport>\d+)(?: ssh2)?\s*$'
+  - regex: '^Accepted \S+ for (?P<user>.+) from (?P<srcip>\S+) port (?P<srcport>\d+)(?: ssh2)?(?:: [A-Za-z0-9@._-]+ [A-Z0-9]+:\S+(?: .*)?)?\s*$'
     tags: [authentication_success]
-  # Standalone "Invalid user X from Y" line (emitted separately from the Failed line).
-  - regex: '^Invalid user (?P<user>.+) from (?P<srcip>\S+)\s*$'
+  # Standalone "Invalid user X from Y port N" line (emitted separately from the Failed line, and
+  # the only line a key-only server logs for a name that does not exist). The port is absent in
+  # OpenSSH before 7.5.
+  - regex: '^Invalid user (?P<user>.*) from (?P<srcip>\S+) port (?P<srcport>\d+)\s*$'
+    tags: [invalid_user]
+  - regex: '^Invalid user (?P<user>.*) from (?P<srcip>\S+)\s*$'
     tags: [invalid_user]

@@ -1,6 +1,7 @@
 mod authorized_keys;
 pub(crate) mod banners;
 mod clamav;
+pub(crate) mod cmdline;
 mod credential_stores;
 pub use credential_stores::{token_files, TokenFile};
 mod cron;
@@ -50,11 +51,120 @@ pub(crate) const MAX_COLLECTOR_READ_BYTES: u64 = 4 * 1024 * 1024;
 /// Like `std::fs::read_to_string` but reads at most [`MAX_COLLECTOR_READ_BYTES`], so a collector
 /// can't be made to allocate unbounded memory by an oversized (possibly attacker-grown) input.
 /// Lossy UTF-8 so a stray non-UTF-8 byte truncates a line rather than failing the whole read.
+/// Never waits on a named pipe: anything that is not a regular file is an error.
+///
+/// A file larger than the cap is cut without a word, so a caller whose result is "nothing found
+/// here" must use [`read_system`] or [`read_home`] instead and report the cut.
 pub(crate) fn read_capped(path: &Path) -> std::io::Result<String> {
-    let f = std::fs::File::open(path)?;
     let mut buf = Vec::new();
-    f.take(MAX_COLLECTOR_READ_BYTES).read_to_end(&mut buf)?;
+    open_regular(path)?
+        .take(MAX_COLLECTOR_READ_BYTES)
+        .read_to_end(&mut buf)?;
     Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// Opens `path` for reading if it is a regular file. The open does not wait: a named pipe with no
+/// writer would otherwise hold the scan forever, and a scan that never ends reports nothing.
+pub(crate) fn open_regular(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{} is not a regular file", path.display()),
+        ));
+    }
+    Ok(file)
+}
+
+/// What a size-capped read returned.
+pub(crate) struct CappedText {
+    pub text: String,
+    /// The file is larger than [`MAX_COLLECTOR_READ_BYTES`] and `text` is only its beginning. The
+    /// rest was not looked at, so the caller reports the file with [`unread_row`] and
+    /// [`TOO_LARGE`]: a payload placed after four megabytes of padding must not read as a pass.
+    pub truncated: bool,
+}
+
+/// Why a row says a file was only partly read.
+pub(crate) const TOO_LARGE: &str =
+    "it is larger than 4 MiB and only the first 4 MiB were read, so the rest was not checked";
+
+fn capped_text(mut file: std::fs::File) -> Option<CappedText> {
+    let mut buf = Vec::new();
+    (&mut file)
+        .take(MAX_COLLECTOR_READ_BYTES + 1)
+        .read_to_end(&mut buf)
+        .ok()?;
+    let truncated = buf.len() as u64 > MAX_COLLECTOR_READ_BYTES;
+    buf.truncate(MAX_COLLECTOR_READ_BYTES as usize);
+    Some(CappedText {
+        text: String::from_utf8_lossy(&buf).into_owned(),
+        truncated,
+    })
+}
+
+/// The start of a system file (one outside any home folder), with whether it was cut. Never waits
+/// on a pipe; a folder, pipe, device or unreadable file is `Refused`.
+pub(crate) fn read_system(path: &Path) -> crate::homefs::HomeFile<CappedText> {
+    use crate::homefs::HomeFile;
+    match open_regular(path) {
+        Ok(file) => capped_text(file).map_or(HomeFile::Refused, HomeFile::Found),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => HomeFile::Missing,
+        Err(_) => HomeFile::Refused,
+    }
+}
+
+/// The start of a file inside `home`, opened under the rules of [`crate::homefs`].
+pub(crate) fn read_home(home: &Path, path: &Path) -> crate::homefs::HomeFile<CappedText> {
+    use crate::homefs::HomeFile;
+    match crate::homefs::open_in_home(home, path) {
+        HomeFile::Found(file) => capped_text(file).map_or(HomeFile::Refused, HomeFile::Found),
+        HomeFile::Missing => HomeFile::Missing,
+        HomeFile::Refused => HomeFile::Refused,
+    }
+}
+
+/// Why a system file that exists came back `Refused`, in words for the "could not check" line.
+pub(crate) fn refused_reason(path: &Path) -> &'static str {
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.is_file() && !crate::platform::is_root() => {
+            "only an administrator can read it, so it is checked when root checks are on"
+        }
+        Ok(meta) if meta.is_file() => "it could not be read",
+        _ => "it is not a regular file (a pipe, a folder or a device)",
+    }
+}
+
+/// A row for a file a collector found but could not read, or could only partly read. It carries
+/// the path and the reason and none of the fields a rule reads, so the engine reports one plain
+/// "could not check <path>" line and counts no rule over this collector as having passed.
+pub(crate) fn unread_row(path: &Path, reason: &str) -> Fact {
+    let mut fact = Fact::new();
+    fact.insert(
+        "path".to_string(),
+        serde_json::Value::String(path.display().to_string()),
+    );
+    fact.insert(
+        crate::homefs::COULD_NOT_READ.to_string(),
+        serde_json::Value::String(reason.to_string()),
+    );
+    fact
+}
+
+/// The home folder (of those this scan covers) that `path` is inside, if any.
+pub(crate) fn home_of(path: &Path) -> Option<PathBuf> {
+    user_homes().into_iter().find(|home| {
+        // Either spelling: a caller may hold a path it has already resolved.
+        path.starts_with(home)
+            || std::fs::canonicalize(home).is_ok_and(|real| path.starts_with(real))
+    })
 }
 
 /// Home directories of the people a scan is about. Under a privileged scan `$HOME` is root's, so

@@ -4,6 +4,9 @@ category: persistence
 severity: medium
 collector: python_startup_hooks
 # executes_code is omitted when a .pth couldn't be read, so an unreadable hook is a collector error.
+# known_benign is true only when the file has the name of a tool known to write such a file
+# (setuptools, virtualenv, coverage, ...) AND every line of code in it is one that tool writes. The
+# name alone is not enough: a payload saved as '__editable__.x.pth' is reported.
 # The LiteLLM payload name is handled by BLWK-ROOTKIT-002 at critical severity.
 condition: executes_code == true and known_benign == false and malicious_name == false
 explain: >

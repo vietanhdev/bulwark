@@ -263,17 +263,30 @@ pub fn save(store: &mut Store, cfg: &NotifyConfig) -> anyhow::Result<()> {
 }
 
 pub fn load_secrets(path: &Path) -> NotifySecrets {
-    std::fs::read_to_string(path)
+    read_secrets_text(path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
+}
+
+/// The text of the secrets file. It lives in the home folder, so the open never waits (a named
+/// pipe in its place would hold every command that sends an alert) and only a regular file of a
+/// sane size is read.
+fn read_secrets_text(path: &Path) -> std::io::Result<String> {
+    use std::io::Read;
+    const MAX: u64 = 1024 * 1024;
+    let mut text = String::new();
+    crate::collectors::open_regular(path)?
+        .take(MAX)
+        .read_to_string(&mut text)?;
+    Ok(text)
 }
 
 /// [`load_secrets`] for a caller about to change and save the file: a missing file is empty, but
 /// one that exists and can't be read or parsed is an error. Treating a damaged file as empty would
 /// let the next save silently overwrite whatever it still held (the SMTP password, say).
 pub fn try_load_secrets(path: &Path) -> anyhow::Result<NotifySecrets> {
-    match std::fs::read_to_string(path) {
+    match read_secrets_text(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(NotifySecrets::default()),
         Err(e) => anyhow::bail!("can't read {}: {e} — not overwriting it", path.display()),
         Ok(text) => serde_json::from_str(&text).map_err(|e| {
@@ -450,5 +463,32 @@ mod tests {
             to: vec!["ops@example.com\nBcc: x@y.z".into()],
         });
         assert!(save(&mut store, &cfg).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_in_place_of_the_secrets_file_is_not_waited_on_and_not_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notify-secrets.json");
+        let c = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+        // SAFETY: a valid NUL-terminated path and a plain mode.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let p = path.clone();
+        std::thread::spawn(move || {
+            let loaded = load_secrets(&p);
+            let _ = tx.send((
+                loaded,
+                try_load_secrets(&p).map(|_| ()).map_err(|e| e.to_string()),
+            ));
+        });
+        let (loaded, checked) = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("reading the secrets file must not wait on a pipe");
+        assert_eq!(
+            serde_json::to_string(&loaded).unwrap(),
+            serde_json::to_string(&NotifySecrets::default()).unwrap()
+        );
+        assert!(checked.unwrap_err().contains("not overwriting"));
     }
 }

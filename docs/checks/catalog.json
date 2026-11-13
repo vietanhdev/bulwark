@@ -42,13 +42,13 @@
    "title": "Cron entry runs a downloader piped to a shell",
    "category": "accounts-services",
    "severity": "critical",
-   "explain": "A cron entry's command (\"{{ cron_entries.command }}\", scheduled \"{{ cron_entries.schedule }}\" via {{ cron_entries.source }}) pipes a downloaded script straight into a shell. This pattern hides what actually runs, changes on the attacker's schedule, and leaves nothing on disk to inspect between runs.",
+   "explain": "A cron entry's command (\"{{ cron_entries.command }}\", scheduled \"{{ cron_entries.schedule }}\" via {{ cron_entries.source }}) downloads a script and runs it at once. This pattern hides what actually runs, changes on the attacker's schedule, and leaves nothing on disk to inspect between runs.",
    "fix": "Review the cron entry, and if unrecognized, remove it and download/inspect the script manually before deciding whether it's legitimate.",
    "references": [
     "ATTACK-T1053.003"
    ],
    "collector": "cron_entries",
-   "condition": "command matches \"(curl|wget).*\\|\\s*(ba)?sh\\b\"",
+   "condition": "command matches \"\\b(?:curl|wget)\\b.*[^|]\\|&?\\s*(?:(?:[\\w./-]*/)?(?:sudo|doas|env|nice|ionice|nohup|timeout|setsid|stdbuf)(?:\\s+(?:-\\S+(?:\\s+[\\w.-]+)?|\\w+=\\S*|\\d+\\w?))*\\s+)*(?:[\\w./-]*/)?(?:ba|z|da|k|a)?sh(?:\\s|$|[;&|)<>\\x22\\x27\\x60])\" or command matches \"\\b(?:curl|wget)\\b.*[^|]\\|&?\\s*(?:(?:[\\w./-]*/)?(?:sudo|doas|env|nice|ionice|nohup|timeout|setsid|stdbuf)(?:\\s+(?:-\\S+(?:\\s+[\\w.-]+)?|\\w+=\\S*|\\d+\\w?))*\\s+)*(?:[\\w./-]*/)?(?:python[\\d.]*|perl|ruby|node|php)\\s*(?:-\\s*)?(?:$|[;&|)\\x22\\x27\\x60])\" or command matches \"(?:^|[\\s;&|(/\\x22\\x27])(?:(?:(?:ba|z|da|k|a)?sh|python[\\d.]*|perl)\\s+(?:-\\w+\\s+)*-[a-z]*[ce]\\s+|eval\\s+)[\\x22\\x27]?\\s*(?:\\$\\(|\\x60)\\s*(?:(?:sudo|env|nice|timeout)\\s+(?:-\\S+\\s+|\\d+\\w?\\s+)*)?(?:[\\w./-]*/)?(?:curl|wget)\\b\" or command matches \"(?:^|[\\s;&|(/\\x22\\x27])(?:(?:ba|z|da|k|a)?sh|source|\\.|python[\\d.]*)\\s+(?:-\\S+\\s+)*<\\(\\s*(?:(?:sudo|env|nice|timeout)\\s+(?:-\\S+\\s+|\\d+\\w?\\s+)*)?(?:[\\w./-]*/)?(?:curl|wget)\\b\"",
    "source": "rules/accounts-services/BLWK-ACCT-001.yaml",
    "group": "hardening",
    "slug": "blwk-acct-001"
@@ -178,7 +178,7 @@
     "ATTACK-T1552.001"
    ],
    "collector": "credential_stores",
-   "condition": "kind != \"git_config\" and kind != \"shell_startup\" and kind != \"shell_history\" and kind != \"aws_config\" and readable_by_others == true",
+   "condition": "kind != \"git_config\" and kind != \"shell_startup\" and kind != \"shell_history\" and kind != \"aws_config\" and readable_by_others == true and holds_secret == true",
    "source": "rules/credential-exposure/BLWK-CRED-004.yaml",
    "group": "secrets",
    "slug": "blwk-cred-004"
@@ -1245,13 +1245,13 @@
    "category": "persistence",
    "severity": "high",
    "explain": "The systemd unit \"{{ systemd_units.unit_name }}\" runs a command referencing a tunneling tool (\"{{ systemd_units.exec_start }}\"). A reverse tunnel that reaches back out through a service like ngrok or cloudflared survives reboots and bypasses inbound firewall rules entirely, since it's an outbound connection — which is why it's both a legitimate way to expose a service and a common attacker persistence pattern. The two look identical from here, so this is high rather than critical: if you deliberately installed cloudflared, autossh, or a similar tunnel, this is expected and you can accept the risk for this rule.",
-   "fix": "If you didn't set this up yourself: 'systemctl disable --now <unit>' and remove the unit file from /etc/systemd/system/, then rotate any credentials the box had access to.",
+   "fix": "If you didn't set this up yourself: 'systemctl disable --now <unit>', remove the unit file ('systemctl cat <unit>' shows where it and its drop-ins are), then rotate any credentials the box had access to.",
    "references": [
     "ATTACK-T1543.002",
     "ATTACK-T1090"
    ],
    "collector": "systemd_units",
-   "condition": "exec_start matches \"ngrok|cloudflared|serveo|localtunnel|ssh -R\"",
+   "condition": "exec_start matches \"ngrok|cloudflared|serveo|localtunnel\" or reverse_ssh_tunnel == true",
    "source": "rules/persistence/BLWK-PERSIST-001.yaml",
    "group": "intrusion",
    "slug": "blwk-persist-001"
@@ -1262,13 +1262,13 @@
    "category": "persistence",
    "severity": "high",
    "explain": "The systemd unit \"{{ systemd_units.unit_name }}\" shells out to curl against a chat/ messaging API on start (\"{{ systemd_units.exec_start }}\"). This exact pattern is used to notify an attacker (e.g. of a new SSH tunnel URL) every time the service restarts — treat it as exfiltration infrastructure unless you recognize it as your own notification script.",
-   "fix": "Review the unit file under /etc/systemd/system/ and disable it if you didn't create it.",
+   "fix": "Review the unit ('systemctl cat <unit>' shows its file and drop-ins) and disable it if you didn't create it.",
    "references": [
     "ATTACK-T1041",
     "ATTACK-T1071.001"
    ],
    "collector": "systemd_units",
-   "condition": "exec_start contains \"curl\" and exec_start matches \"telegram|discord.com/api/webhooks|slack.com/api\"",
+   "condition": "exec_start matches \"\\b(curl|wget)\\b\" and exec_start matches \"telegram|discord(app)?\\.com|slack\\.com\"",
    "source": "rules/persistence/BLWK-PERSIST-002.yaml",
    "group": "intrusion",
    "slug": "blwk-persist-002"
@@ -1327,8 +1327,8 @@
    "title": "A sudoers entry allows passwordless root",
    "category": "privilege-escalation",
    "severity": "high",
-   "explain": "A NOPASSWD sudo rule in {{ sudoers.source }} (\"{{ sudoers.line }}\") lets that user/group run commands as root without re-authenticating — anyone who reaches that account, even briefly, has unrestricted root with no password prompt to slow them down.",
-   "fix": "Review the entry and remove NOPASSWD unless there's a specific, scoped reason for it (e.g. a single monitoring command, not 'ALL').",
+   "explain": "A sudo rule in {{ sudoers.source }} (\"{{ sudoers.line }}\") switches off the password prompt with {{ sudoers.how }}. Whoever it covers runs commands as root without re-authenticating — anyone who reaches that account, even briefly, has root with no password prompt to slow them down.",
+   "fix": "Review the entry and remove NOPASSWD (or the '!authenticate' setting) unless there's a specific, scoped reason for it (e.g. a single monitoring command, not 'ALL'). 'sudo -l -U <user>' shows what a user may run.",
    "references": [
     "ATTACK-T1548.003"
    ],

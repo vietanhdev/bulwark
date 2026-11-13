@@ -3,11 +3,13 @@ title: systemd unit posts to a messaging API on start
 category: persistence
 severity: high
 collector: systemd_units
-condition: exec_start contains "curl" and exec_start matches "telegram|discord.com/api/webhooks|slack.com/api"
+# The collector keeps only the host of an address (a bot token or webhook secret is in the path),
+# so the services are matched by host name.
+condition: exec_start matches "\b(curl|wget)\b" and exec_start matches "telegram|discord(app)?\.com|slack\.com"
 explain: >
   The systemd unit "{{ systemd_units.unit_name }}" shells out to curl against a chat/
   messaging API on start ("{{ systemd_units.exec_start }}"). This exact pattern is used to
   notify an attacker (e.g. of a new SSH tunnel URL) every time the service restarts — treat
   it as exfiltration infrastructure unless you recognize it as your own notification script.
-fix: "Review the unit file under /etc/systemd/system/ and disable it if you didn't create it."
+fix: "Review the unit ('systemctl cat <unit>' shows its file and drop-ins) and disable it if you didn't create it."
 references: [ATTACK-T1041, ATTACK-T1071.001]
