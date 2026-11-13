@@ -631,6 +631,27 @@ impl Store {
             let mut matched_ids: std::collections::HashSet<String> =
                 std::collections::HashSet::new();
 
+            // An open row re-observed by this scan keeps its identity and takes the new facts.
+            // The rule's current wording and severity too, not just the facts: otherwise an open
+            // finding keeps the text (and severity) its rule had when first seen, and a tuned rule
+            // — a clearer title, a corrected severity — never reaches the issues already on screen.
+            let refresh = |conn: &mut SqliteConnection, id: &str, f: &Finding| {
+                diesel::update(findings::table.find(id))
+                    .set((
+                        findings::last_seen.eq(f.last_seen.to_rfc3339()),
+                        findings::scan_run_id.eq(f.scan_run_id.to_string()),
+                        findings::context.eq(serde_json::to_string(&f.context)?),
+                        findings::title.eq(&f.title),
+                        findings::explanation.eq(&f.explanation),
+                        findings::fix_hint.eq(&f.fix_hint),
+                        findings::severity.eq(severity_str(f.severity)),
+                    ))
+                    .execute(conn)?;
+                Ok::<_, anyhow::Error>(())
+            };
+
+            // First pass: the stored facts are still true (a subset of what this scan saw).
+            let mut unmatched: Vec<&Finding> = Vec::new();
             for f in &scan.findings {
                 // Ordered oldest-first (then by id to break ties) so that when more than one stored
                 // row is subset-compatible with this finding, reconciliation deterministically picks
@@ -655,24 +676,52 @@ impl Store {
 
                 match existing_id {
                     Some(id) => {
-                        diesel::update(findings::table.find(&id))
-                            // The rule's current wording and severity too, not just the facts:
-                            // otherwise an open finding keeps the text (and severity) its rule had
-                            // when first seen, and a tuned rule — a clearer title, a corrected
-                            // severity — never reaches the issues already on screen.
-                            .set((
-                                findings::last_seen.eq(f.last_seen.to_rfc3339()),
-                                findings::scan_run_id.eq(f.scan_run_id.to_string()),
-                                findings::context.eq(serde_json::to_string(&f.context)?),
-                                findings::title.eq(&f.title),
-                                findings::explanation.eq(&f.explanation),
-                                findings::fix_hint.eq(&f.fix_hint),
-                                findings::severity.eq(severity_str(f.severity)),
-                            ))
-                            .execute(conn)?;
+                        refresh(conn, &id, f)?;
                         matched_ids.insert(id);
                     }
-                    None => {
+                    None => unmatched.push(f),
+                }
+            }
+
+            // Second pass: the same rule at the same place, with facts that have since changed.
+            // "Place" is `finding_location`, the identity a single-finding ignore is already keyed
+            // on. Without this pass a whole-machine collector (sshd_config, login.defs: one row
+            // holding every setting) re-created every one of its findings whenever any one setting
+            // changed — fix X11Forwarding and "password logins are enabled" was closed and raised
+            // again as new, with a fresh `first_seen` and a notification. Only an unambiguous pair
+            // is joined: one finding and one unclaimed open row at that place.
+            for f in &unmatched {
+                let place = crate::models::finding_location(f);
+                let alone = unmatched
+                    .iter()
+                    .filter(|o| {
+                        o.rule_id == f.rule_id && crate::models::finding_location(o) == place
+                    })
+                    .count()
+                    == 1;
+                let mut same_place: Vec<String> = Vec::new();
+                if alone {
+                    let rows: Vec<FindingRow> = findings::table
+                        .filter(findings::rule_id.eq(&f.rule_id))
+                        .filter(findings::status.eq("open"))
+                        .select(FindingRow::as_select())
+                        .load(conn)?;
+                    for row in rows {
+                        if matched_ids.contains(&row.id) {
+                            continue;
+                        }
+                        let id = row.id.clone();
+                        if crate::models::finding_location(&row.try_into_finding()?) == place {
+                            same_place.push(id);
+                        }
+                    }
+                }
+                match same_place.as_slice() {
+                    [id] => {
+                        refresh(conn, id, f)?;
+                        matched_ids.insert(id.clone());
+                    }
+                    _ => {
                         diesel::insert_into(findings::table)
                             .values(FindingRow::from_finding(f)?)
                             .execute(conn)?;
@@ -680,7 +729,7 @@ impl Store {
                         // immediately close the row we just inserted — it is, after all, an open
                         // row for an evaluated rule that nothing has "matched".
                         matched_ids.insert(f.id.to_string());
-                        newly_appeared.push(f.clone());
+                        newly_appeared.push((*f).clone());
                     }
                 }
             }
@@ -2198,6 +2247,87 @@ mod tests {
             1,
             "must still be exactly one open row for this rule, not two"
         );
+    }
+
+    /// One row holds every sshd setting, so changing any of them changed the stored context of
+    /// every SSH finding, and each was closed and raised again as new.
+    #[test]
+    fn a_whole_machine_finding_survives_a_change_to_an_unrelated_fact() {
+        let mut store = Store::open_in_memory().unwrap();
+        let sshd = |x11: &str| -> crate::models::Fact {
+            [
+                ("password_authentication".to_string(), "yes".into()),
+                ("x11_forwarding".to_string(), x11.into()),
+            ]
+            .into_iter()
+            .collect()
+        };
+
+        let mut first = sample_scan();
+        first.findings[0].context = sshd("yes");
+        first.rules_evaluated = vec![first.findings[0].rule_id.clone()];
+        store.persist_and_reconcile(&first).unwrap();
+        let before = store.open_findings().unwrap();
+
+        // X11Forwarding was fixed; password logins were not.
+        let mut second = sample_scan();
+        second.id = Uuid::new_v4();
+        second.findings[0].id = Uuid::new_v4();
+        second.findings[0].scan_run_id = second.id;
+        second.findings[0].context = sshd("no");
+        second.rules_evaluated = vec![second.findings[0].rule_id.clone()];
+        let newly_appeared = store.persist_and_reconcile(&second).unwrap();
+
+        assert!(newly_appeared.is_empty(), "the same issue, not a new one");
+        let after = store.open_findings().unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].id, before[0].id, "the same row");
+        assert_eq!(after[0].first_seen, before[0].first_seen);
+        assert_eq!(after[0].context, sshd("no"), "with the current facts");
+    }
+
+    /// The limit of that rule: the same rule at a different place is a different finding, and two
+    /// candidates at one place are never guessed between.
+    #[test]
+    fn a_finding_at_another_place_is_new_and_the_old_one_is_resolved() {
+        let mut store = Store::open_in_memory().unwrap();
+        let at = |path: &str, line: u64| -> crate::models::Fact {
+            [
+                ("path".to_string(), serde_json::Value::from(path)),
+                ("line".to_string(), serde_json::Value::from(line)),
+            ]
+            .into_iter()
+            .collect()
+        };
+
+        let mut first = sample_scan();
+        first.findings[0].context = at("/home/u/.npmrc", 3);
+        first.rules_evaluated = vec![first.findings[0].rule_id.clone()];
+        store.persist_and_reconcile(&first).unwrap();
+        let original = store.open_findings().unwrap()[0].id;
+
+        // The same file, edited: the line moved. Still the same finding.
+        let mut moved = sample_scan();
+        moved.id = Uuid::new_v4();
+        moved.findings[0].id = Uuid::new_v4();
+        moved.findings[0].scan_run_id = moved.id;
+        moved.findings[0].context = at("/home/u/.npmrc", 9);
+        moved.rules_evaluated = first.rules_evaluated.clone();
+        assert!(store.persist_and_reconcile(&moved).unwrap().is_empty());
+        assert_eq!(store.open_findings().unwrap()[0].id, original);
+
+        // Another file: a new finding, and the first is closed because its rule ran without it.
+        let mut elsewhere = sample_scan();
+        elsewhere.id = Uuid::new_v4();
+        elsewhere.findings[0].id = Uuid::new_v4();
+        elsewhere.findings[0].scan_run_id = elsewhere.id;
+        elsewhere.findings[0].context = at("/home/u/.yarnrc", 9);
+        elsewhere.rules_evaluated = first.rules_evaluated.clone();
+        let newly_appeared = store.persist_and_reconcile(&elsewhere).unwrap();
+        assert_eq!(newly_appeared.len(), 1);
+        let open = store.open_findings().unwrap();
+        assert_eq!(open.len(), 1);
+        assert_ne!(open[0].id, original);
     }
 
     /// The other side of the same fix: two genuinely different findings from a list-shaped
