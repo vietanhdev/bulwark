@@ -1,4 +1,4 @@
-import { h } from "vue";
+import { defineAsyncComponent, h } from "vue";
 import DefaultTheme from "vitepress/theme";
 import MermaidLightbox from "./MermaidLightbox.vue";
 import HeroDemo from "./HeroDemo.vue";
@@ -19,6 +19,13 @@ import "./custom.css";
 export default {
   extends: DefaultTheme,
   enhanceApp({ app }) {
+    // The diagram component, loaded on demand: mermaid is about 600 kB, and most pages have no
+    // diagram. config.mts removes the plugin's own static registration; this replaces it, so
+    // mermaid is fetched the first time a page actually renders a ```mermaid block.
+    app.component(
+      "Mermaid",
+      defineAsyncComponent(() => import("vitepress-plugin-mermaid/Mermaid.vue")),
+    );
     app.component("ChecksIndex", ChecksIndex);
     app.component("CliDemo", CliDemo);
   },

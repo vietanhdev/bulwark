@@ -21,9 +21,10 @@ place for you here, whether or not you write Rust.
   pipeline (`bulwarkctl logs scan`). Teaching it a new log format is a YAML **decoder**; catching a
   new attack pattern is a YAML **log rule** with an optional correlation window. Both are data, not
   code — an easy, high-impact place to start.
-- **Collectors for macOS and Windows** — the rule/collector model is already OS-aware; the
-  non-Linux collectors are honest stubs waiting to be filled in. Porting Bulwark beyond Linux is a
-  well-scoped, high-leverage project.
+- **More checks for macOS and Windows** — both now have a native CLI, a desktop app and a first set
+  of checks (FileVault, Gatekeeper and launchd persistence on a Mac; Defender, BitLocker, UAC and
+  Remote Desktop on Windows). Each has room for many more, and one collector on Windows (registry
+  Run keys) is still an honest stub waiting to be filled in.
 - **The background agent** — continuous, follow-mode log monitoring (the streaming counterpart of
   the one-shot `logs scan`) is the next milestone for the `bulwark-agent` daemon.
 - **Testing on real distros** — run Bulwark on your Debian, Fedora, Arch, or Ubuntu box and tell us

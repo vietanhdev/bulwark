@@ -133,9 +133,12 @@ indexer/manager/dashboard stack is disproportionate to the job.
 
 Both front-ends share one engine, one local scan history, and a rule pack that ships CIS/MITRE
 ATT&CK references per finding (see [the mapping](/articles/cis-mitre-mapping)) without needing
-OpenSearch underneath it. Bulwark deliberately doesn't attempt log correlation, multi-host
-alerting, or active response — those are Wazuh's actual job, done well, at a cost (operational
-complexity, resource footprint) that only makes sense once you're actually managing a fleet.
+OpenSearch underneath it. Bulwark does a small part of Wazuh's job in two places: a one-shot
+`bulwarkctl logs scan` that spots SSH brute force and sudo abuse in one machine's own logs, and
+[agentless checks of a handful of machines](/guide/remote-monitoring) with Telegram or e-mail
+alerts. It deliberately doesn't attempt live log collection, correlation across hosts, or active
+response — those are Wazuh's actual job, done well, at a cost (operational complexity, resource
+footprint) that only makes sense once you're actually managing a fleet.
 
 ## The decision rule
 

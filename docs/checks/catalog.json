@@ -304,7 +304,7 @@
    "category": "developer-tools",
    "severity": "high",
    "explain": "{{ dev_tool_config.path }} sets http.sslVerify = false for every remote. Anyone on the network path — public Wi-Fi, a compromised router or proxy — can impersonate GitHub or your Git server, read the credentials Git sends, and hand you modified code that you then build and run.",
-   "fix": "Remove the line with 'git config --global --unset http.sslVerify'. If one server has a private certificate, trust its CA for that server only: git config --global http.https://git.example.com/.sslCAInfo /path/to/ca.pem",
+   "fix": "Remove the line with 'git config --global --unset http.sslVerify'. If one server has a private certificate, trust its CA for that server only: 'git config --global http.https://git.example.com/.sslCAInfo /path/to/ca.pem'",
    "references": [
     "ATTACK-T1557",
     "ATTACK-T1195.001"
@@ -472,7 +472,7 @@
    "category": "developer-tools",
    "severity": "low",
    "explain": "Malicious package releases are usually caught and removed within hours or days. With no waiting period set in {{ dev_tool_config.path }}, {{ dev_tool_config.tool }} installs a version published minutes ago, which is the window attackers rely on. A short delay lets the registry and scanners catch a bad release before it reaches this machine.",
-   "fix": "{{ dev_tool_config.how_to_fix }}",
+   "fix": "npm: Run 'npm config set min-release-age 7' for a 7-day waiting period (needs npm 11.10 or newer; check with 'npm --version'). For an urgent security patch, override once: 'npm install <package> --min-release-age=0'.\nbun: Add these two lines to ~/.bunfig.toml for a 7-day waiting period (the value is in seconds): '[install]' and 'minimumReleaseAge = 604800'. Exempt a package you trust with 'minimumReleaseAgeExcludes'.\nuv: Add the line 'exclude-newer = \"1 week\"' to ~/.config/uv/uv.toml (on Windows: %APPDATA%\\uv\\uv.toml). For one urgent install, pass '--exclude-newer' with today's date.",
    "references": [
     "ATTACK-T1195.002"
    ],
@@ -521,10 +521,10 @@
    "category": "file-integrity",
    "severity": "info",
    "explain": "{{ file_integrity.path }} is present but has no recorded baseline hash, so Bulwark can tell that it exists but not whether it has been tampered with. This fires per-file, on purpose: the previous version keyed on whether a baseline existed *at all*, which meant that once you had baselined anything, a critical file you had never actually recorded — including one added to the watch list later — read as \"verified clean\" rather than \"never checked\". A file nobody ever baselined is not a file known to be good. (With no baseline recorded at all, that single fact is reported once, as BLWK-FIM-009, instead of once per watched file.)",
-   "fix": "Run 'bulwarkctl fim baseline' now, while you trust this host, to record a known-good hash for this file (add '--privileged' to also cover /etc/shadow and /etc/sudoers).",
+   "fix": "Run 'bulwarkctl fim baseline' now, while you trust this host, to record a known-good hash for this file (add '--privileged' to also cover /etc/shadow and /etc/sudoers). If only an administrator can read the file, an ordinary scan cannot check it: record the baseline and scan with 'sudo bulwarkctl fim baseline --privileged' and 'sudo bulwarkctl scan --privileged'.",
    "references": [],
    "collector": "file_integrity",
-   "condition": "kind == \"file\" and baseline_exists == true and in_baseline == false and currently_present == true and unreadable == false",
+   "condition": "kind == \"file\" and baseline_exists == true and in_baseline == false and currently_present == true and (unreadable == false or needs_admin == true)",
    "source": "rules/file-integrity/BLWK-FIM-003.yaml",
    "group": "intrusion",
    "slug": "blwk-fim-003"
@@ -585,10 +585,10 @@
    "category": "file-integrity",
    "severity": "medium",
    "explain": "{{ file_integrity.path }} exists and is on the watch list, but Bulwark could not compute its hash this scan (sha256sum unavailable, or the file could not be read), so it cannot say whether the file matches its baseline. This is reported as its own state rather than being folded into \"modified\" — treating \"I couldn't look\" as \"it changed\" would raise a false critical alarm, and treating it as \"unchanged\" would hide a real one. Neither is honest.",
-   "fix": "Check that the file is readable by the scanning user and that 'sha256sum' is installed and on PATH. If a privileged scan is needed to read it, run 'sudo bulwarkctl scan --privileged'.",
+   "fix": "Check that the file is readable by the scanning user and that 'sha256sum' is installed and on PATH. If the file was readable when you recorded the baseline and no longer is, find out what changed its permissions. If a privileged scan is needed to read it, run 'sudo bulwarkctl scan --privileged'.",
    "references": [],
    "collector": "file_integrity",
-   "condition": "unreadable == true",
+   "condition": "unreadable == true and (needs_admin == false or in_baseline == true)",
    "source": "rules/file-integrity/BLWK-FIM-007.yaml",
    "group": "intrusion",
    "slug": "blwk-fim-007"
@@ -872,7 +872,7 @@
    "id": "BLWK-KERNEL-014",
    "title": "ICMP redirects are accepted",
    "category": "kernel-hardening",
-   "severity": "medium",
+   "severity": "low",
    "explain": "net.ipv4.conf.all.accept_redirects is 1 — this host will update its routing table based on unauthenticated ICMP redirect packets from anyone on the local network, a classic man-in-the-middle primitive for redirecting traffic through an attacker-controlled host.",
    "fix": "Set 'net.ipv4.conf.all.accept_redirects=0' via /etc/sysctl.d/ and run 'sysctl --system'.",
    "references": [
@@ -1017,7 +1017,7 @@
    "id": "BLWK-LOG-001",
    "title": "auditd is not installed",
    "category": "logging-auditing",
-   "severity": "medium",
+   "severity": "low",
    "explain": "No auditd binary was found. Without it, there's no kernel-level record of privileged syscalls (file access, exec, permission changes) — the trail that makes a break-in reviewable after the fact instead of just a guess.",
    "fix": "Install auditd (e.g. 'apt install auditd') and enable it with 'systemctl enable --now auditd'.",
    "references": [
@@ -1342,7 +1342,7 @@
    "id": "BLWK-PRIV-002",
    "title": "No GRUB boot loader password is set",
    "category": "privilege-escalation",
-   "severity": "medium",
+   "severity": "low",
    "explain": "/boot/grub/grub.cfg has no 'password' or 'password_pbkdf2' directive. Anyone with physical or console access to this machine can interrupt the boot menu and edit kernel parameters directly (e.g. appending 'init=/bin/bash' or 'single') to get a root shell without ever needing a valid credential — no OS-level control can prevent this once someone has unrestricted access to the boot menu itself.",
    "fix": "Set a GRUB password: run 'grub-mkpasswd-pbkdf2' to generate a hash, add 'set superusers=\"root\"' and 'password_pbkdf2 root <hash>' to /etc/grub.d/40_custom, then run 'update-grub'. IMPORTANT: on stock Ubuntu/Debian, 'set superusers' makes GRUB prompt for that password before booting ANY entry — the machine will halt at a password prompt on every reboot, including unattended ones. To keep normal boot automatic and only gate *editing* entries and recovery, append '--unrestricted' to the CLASS list of your default menuentry (edit /etc/grub.d/10_linux, or use a submenu). Test with a reboot you can physically recover from before relying on this on a headless host.",
    "references": [
@@ -1486,7 +1486,7 @@
    "id": "BLWK-SSH-005",
    "title": "SSH TCP forwarding/tunneling is enabled",
    "category": "ssh-remote-access",
-   "severity": "medium",
+   "severity": "low",
    "explain": "AllowTcpForwarding is set to \"{{ sshd.allow_tcp_forwarding }}\" in sshd_config. TCP forwarding lets any SSH user open arbitrary local or remote port tunnels through this host — the exact mechanism used to pivot into internal networks or to reach services (like VNC) that are only supposed to be reachable from localhost.",
    "fix": "Set 'AllowTcpForwarding no' in /etc/ssh/sshd_config, or restrict it per-user with a Match block, unless tunneling is a deliberate requirement.",
    "references": [

@@ -41,7 +41,7 @@ With the [agent skill](https://bulwark.nrl.ai/agents) installed, ask your agent 
 safe?": it runs the scan, explains what it found and asks before fixing anything.
 
 ```text
-Bulwark 0.13.1 · AI coding agents · 1 project · 4 agent files checked
+Bulwark 0.15.0 · AI coding agents · 1 project · 4 agent files checked
 
 4 problems to fix  1 critical · 3 high
 
@@ -66,7 +66,7 @@ Bulwark 0.13.1 · AI coding agents · 1 project · 4 agent files checked
 ## How it works
 
 <p align="center">
-  <img src="docs/public/diagrams/architecture.svg" alt="Bulwark architecture: the desktop app and the bulwarkctl CLI share one Rust engine. Collectors, the AI-assistant scanner, the auth-log scanner and ClamAV feed a rule engine of 100 YAML rules plus your own; findings explain themselves and come with fixes, are scored honestly, and are stored in a local SQLite database. The same engine scans remote Linux, macOS, Windows and WSL machines over SSH, and alerts go to Telegram or e-mail." width="100%">
+  <img src="docs/public/diagrams/architecture.svg" alt="Bulwark architecture: the desktop app and the bulwarkctl CLI share one Rust engine. Collectors, the AI-assistant scanner, the auth-log scanner and ClamAV feed a rule engine of 109 YAML rules plus your own; findings explain themselves and come with fixes, are scored honestly, and are stored in a local SQLite database. The same engine scans remote Linux, macOS, Windows and WSL machines over SSH, and alerts go to Telegram or e-mail." width="100%">
 </p>
 
 Every check is a small YAML rule over facts that a **collector** gathers — one place to read, one
@@ -99,14 +99,14 @@ as such and never counted as a pass, so a green result means something.
 
 | | |
 |---|---|
-| ![Home: the problems to fix on this machine, grouped by cause and ranked by severity](docs/public/screenshots/overview.png) | ![An opened problem: why it matters, the one-click fix, and details](docs/public/screenshots/fix.png) |
-| **Home** — problems grouped by cause, ranked by severity | **Fix** — why it matters, the one-click fix, then details |
-| ![Home in dark mode](docs/public/screenshots/overview-dark.png) | ![Virus scan: ClamAV signature status, folder watching, and a finished scan](docs/public/screenshots/antivirus.png) |
-| **Dark mode** — follows your desktop or set by hand | **Virus scan** — ClamAV with live progress and folder watching |
-| ![All checks: the full rule pack, searchable and filterable by severity](docs/public/screenshots/rules.png) | ![Settings: theme, accent and sidebar colour, monitoring, AI assistant checks](docs/public/screenshots/settings.png) |
-| **All checks** — every rule, searchable, with CIS / MITRE ATT&CK coverage | **Settings** — light or dark, eight accents, six sidebar colours |
-| ![Remote: every monitored machine with its system, connection and last scan](docs/public/screenshots/machines.png) | ![One remote machine: connection and last scan side by side, issues grouped by cause](docs/public/screenshots/machine.png) |
-| **Remote** — Linux, macOS, Windows and WSL machines at a glance | **One machine** — connection and scan kept apart, issues grouped |
+| ![Scan: the problems to fix on this machine, grouped by cause and ranked by severity](docs/public/screenshots/overview.png) | ![An opened problem: why it matters, the one-click fix, and details](docs/public/screenshots/fix.png) |
+| **Scan** — problems grouped by cause, ranked by severity | **Fix** — why it matters, the one-click fix, then details |
+| ![Scan in dark mode](docs/public/screenshots/overview-dark.png) | ![Malware scan: ClamAV signature status, folder watching, and a finished scan](docs/public/screenshots/antivirus.png) |
+| **Dark mode** — follows your desktop or set by hand | **Malware scan** — ClamAV with live progress and folder watching |
+| ![Rule catalog: the full rule pack, searchable and filterable by severity](docs/public/screenshots/rules.png) | ![Settings: theme, accent colour and window chrome, monitoring, AI assistant checks](docs/public/screenshots/settings.png) |
+| **Rule catalog** — every rule, searchable, with a framework compliance tab | **Settings** — light or dark, eight accents, six title-bar colours |
+| ![Remote hosts: every monitored machine with its system, connection and last scan](docs/public/screenshots/machines.png) | ![One remote machine: connection and last scan side by side, issues grouped by cause](docs/public/screenshots/machine.png) |
+| **Remote hosts** — Linux, macOS, Windows and WSL machines at a glance | **One machine** — connection and scan kept apart, issues grouped |
 
 ## Features
 
@@ -119,8 +119,8 @@ as such and never counted as a pass, so a green result means something.
   auto-approve/"YOLO mode" (CVE-2025-53773), MCP servers on unpinned `npx` or vulnerable
   `mcp-remote` (CVE-2025-6514), hidden-Unicode "Rules File Backdoor" instruction files,
   base-URL exfil overrides, and world-readable credential stores. Workspaces are auto-discovered;
-  leaked secrets are opt-in redactable (dry-run first, `0600` backup, permissions preserved). A
-  highlighted tab in the GUI and `bulwarkctl ai scan` / `bulwarkctl ai redact` in the CLI.
+  leaked secrets are opt-in redactable (dry-run first, `0600` backup, permissions preserved). Part
+  of every scan in the app, and `bulwarkctl ai scan` / `bulwarkctl ai redact` in the CLI.
 - **109 rules** across 15 categories (credential exposure, SSH/remote access, persistence, network
   egress, kernel hardening, filesystem permissions, privilege escalation, logging/auditing,
   accounts/services, defense evasion, rootkit/malware, file integrity, developer-tool settings, macOS and
@@ -133,7 +133,7 @@ as such and never counted as a pass, so a green result means something.
   installed on or listens on a monitored machine, and there is no server to run: it uses your own
   SSH (config aliases, agent, jump hosts — or a password once, to install its own `restrict`ed
   key). Every machine's identity is verified once and a changed host key stops scans; a machine it
-  can't reach is reported as unreachable, never as clean. A **Machines** page in the GUI, or
+  can't reach is reported as unreachable, never as clean. **Tools → Remote hosts** in the app, or
   `bulwarkctl hosts …` plus one cron line. See
   [Monitoring other machines](https://bulwark.nrl.ai/guide/remote-monitoring).
 - **Alerts on Telegram or by e-mail** — opt-in: new issues, a machine that stops answering, a
@@ -175,7 +175,7 @@ a single desktop.
 
 | Tool | Type | Scope | GUI | Continuous | Compliance mapping | Remediation |
 |---|---|---|---|---|---|---|
-| **Bulwark** | Open source | Host config audit + AV + basic rootkit indicators | ✅ native desktop | ✅ periodic + file-watch | ✅ CIS/ATT&CK per rule | Plain-language fix hint |
+| **Bulwark** | Open source | Host config audit + AV + basic rootkit indicators | ✅ native desktop | ✅ periodic + file-watch | ✅ CIS/ATT&CK per rule | Plain-language fix per finding; previewed autofixes for the safe ones |
 | [Lynis](https://github.com/cisofy/lynis) | Open source | Host config audit, ~300+ checks across boot, filesystem, network, auth, kernel[^1] | ❌ CLI-only[^1] | ❌ on-demand/cron only[^1] | Partial (HIPAA/ISO27001/PCI DSS via Enterprise)[^1] | Suggestions in report, no auto-fix |
 | [rkhunter](https://rkhunter.sourceforge.net/) / [chkrootkit](https://github.com/Magentron/chkrootkit) | Open source | Rootkit/backdoor signature detection[^2] | ❌ CLI-only | ❌ on-demand/cron only | ❌ | Detection only, no remediation[^2] |
 | AIDE | Open source | File-integrity monitoring (checksummed baseline vs. current state) | ❌ CLI-only | ❌ on-demand/cron only | ❌ | Detection only |
@@ -189,10 +189,11 @@ SIEM) but with the desktop-native GUI, continuous file-triggered re-checks, and 
 integration that Lynis intentionally doesn't provide[^1]. It doesn't attempt Wazuh's or the
 commercial EDR platforms' real-time syscall/process telemetry — that's real-time *kernel-level*
 monitoring (eBPF-class), which is a deliberate v1 non-goal (see the design doc, §2 and §13
-Option C) rather than a gap nobody noticed. It also doesn't do AIDE-style cryptographic
-file-integrity baselining or Wazuh/rkhunter-style rootkit signature databases beyond a small,
-targeted set of persistence/rootkit indicator rules — those are natural, scoped directions for
-the rule pack to grow into, not architectural blockers. The one place it now steps toward
+Option C) rather than a gap nobody noticed. Its file-integrity check hashes a short, fixed list
+of critical files rather than baselining the whole filesystem as AIDE does, and it has no
+Wazuh/rkhunter-style rootkit signature database beyond a small, targeted set of
+persistence/rootkit indicator rules — those are natural, scoped directions for the rule pack to
+grow into, not architectural blockers. The one place it now steps toward
 Wazuh's territory is **log analysis**: `bulwarkctl logs scan` decodes and correlates journal/auth
 events (SSH brute-force, sudo abuse, invalid-user scans) with a keyed sliding-window correlator —
 OSSEC's decode→detect→correlate design without its dated XML/global-list internals. This ships as
@@ -212,7 +213,8 @@ cargo build --workspace
 cargo run -p bulwarkctl -- scan
 
 # Scan another machine over SSH (agentless: reuses your ~/.ssh config, keys, and agent).
-# Prefers a bulwark installed on the remote; otherwise pushes the binary + rules and cleans up.
+# Prefers a bulwark installed on the remote; otherwise copies its own single-file binary there
+# (the checks are built in) and cleans up.
 cargo run -p bulwarkctl -- scan --ssh user@host
 
 # Or monitor it: register it, verify it, and let cron (or the GUI) scan it on a schedule.

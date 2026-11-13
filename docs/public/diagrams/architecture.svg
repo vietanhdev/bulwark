@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 660" width="1200" height="660" font-family="-apple-system, 'Segoe UI', Ubuntu, Roboto, 'Helvetica Neue', Arial, sans-serif" role="img" aria-labelledby="t d">
   <title id="t">Bulwark architecture</title>
-  <desc id="d">A desktop app and a CLI share one Rust engine. Collectors, the AI-assistant scanner, the log scanner and ClamAV feed facts to a rule engine of 100 YAML rules plus your own; findings come with plain-language explanations and fixes, are filtered by your audited ignores, and are stored locally in SQLite. The same engine scans remote Linux, macOS, Windows and WSL machines over SSH, and alerts go to Telegram or e-mail.</desc>
+  <desc id="d">A desktop app and a CLI share one Rust engine. Collectors, the AI-assistant scanner, the log scanner and ClamAV feed facts to a rule engine of 109 YAML rules plus your own; findings come with plain-language explanations and fixes, are filtered by your audited ignores, and are stored locally in SQLite. The same engine scans remote Linux, macOS, Windows and WSL machines over SSH, and alerts go to Telegram or e-mail.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f7fafc"/><stop offset="1" stop-color="#eef3f8"/></linearGradient>
     <linearGradient id="teal" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#19b3a3"/><stop offset="1" stop-color="#0b7f86"/></linearGradient>
@@ -114,7 +114,7 @@
     <rect x="16" y="16" width="44" height="44" rx="11" fill="#ffffff" opacity="0.18"/>
     <path d="M27 30h22M27 38h22M27 46h14" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
     <text x="74" y="36" font-size="16" font-weight="700" fill="#fff">Rule engine</text>
-    <text x="74" y="56" font-size="12.5" fill="#dcfffa">100 declarative YAML rules + your own · a check that couldn't run is never a pass</text>
+    <text x="74" y="56" font-size="12.5" fill="#dcfffa">109 declarative YAML rules + your own · a check that couldn't run is never a pass</text>
   </g>
 
   <path d="M578 382v30" stroke="#5b6b7d" stroke-width="2" marker-end="url(#ar)"/>

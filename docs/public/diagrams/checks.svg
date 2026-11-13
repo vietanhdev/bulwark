@@ -43,7 +43,7 @@
       <text x="254" y="52" font-size="30" font-weight="800" fill="#ef6c1a" text-anchor="end">16</text>
       <text x="16" y="88" font-size="15" font-weight="700" fill="#16202c">Supply chain &amp; dev tools</text>
       <g fill="#33414f"><text x="16" y="114">• Malicious-package traces</text><text x="16" y="136">• Python startup hooks</text><text x="16" y="158">• Git / npm / pip skipping TLS</text><text x="16" y="180">• Unpinned MCP servers</text></g>
-      <text x="16" y="204" font-size="11" fill="#ef6c1a">new: 9 developer-tool settings</text>
+      <text x="16" y="204" font-size="11" fill="#ef6c1a">11 developer-tool settings</text>
     </g>
     <!-- 3 Exposed services -->
     <g transform="translate(608 96)" filter="url(#sh)">

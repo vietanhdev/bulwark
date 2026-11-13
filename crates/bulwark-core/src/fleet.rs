@@ -183,7 +183,7 @@ impl RemoteErrorKind {
             Self::HostKeyChanged => format!(
                 "This happens when a machine is reinstalled — or when someone is intercepting the \
                  connection. Scans are refused until you confirm the new key with whoever manages \
-                 the machine. Once confirmed, replace the stored key (Remote → Check connection, \
+                 the machine. Once confirmed, replace the stored key (Remote hosts → Check connection, \
                  or `bulwarkctl hosts trust <name> --fingerprint <new> --replace`). If the old key \
                  is in your own ~/.ssh/known_hosts, also remove it there (`ssh-keygen -R <host>`), \
                  or test with `{ssh}`."

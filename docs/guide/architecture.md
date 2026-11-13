@@ -15,7 +15,7 @@ Bulwark is a Tauri + Rust desktop app that scans a Linux host for security misco
 
 ## Status update
 
-This document was written before implementation and has been revised to describe what actually shipped, not just what was planned. As of v0.1:
+This document was written before implementation and has been revised to describe what actually shipped, not just what was planned. As of 0.15:
 
 - **109 rules across 15 categories** (developer-tool settings — Git, SSH client, npm/yarn, pip and Docker options that switch a security check off — SSH/remote access, persistence, privilege escalation, defense evasion, credential exposure (plaintext credential stores, added in 0.11), filesystem permissions, network egress, kernel/sysctl hardening, logging/auditing, accounts & services, rootkit/malware indicators, file integrity, macOS hardening, Windows hardening), plus a dedicated 23-rule AI agent-security pass covering two dozen coding agents.
 - **Both front-doors work end-to-end**: `bulwarkctl` (scan, rules list/validate, history) and `bulwark-app` (Tauri v2 + React GUI), sharing one `bulwark-core` engine and one local SQLite store, exactly as designed in §4.
@@ -23,7 +23,7 @@ This document was written before implementation and has been revised to describe
 - **File-integrity monitoring** for a curated set of security-relevant files, plus a background monitoring loop that re-scans on an interval and reconciles findings across runs.
 - **A system tray icon** so closing the window hides the app instead of killing the monitoring loop — verified live against the real `org.kde.StatusNotifierWatcher` D-Bus registration, not just "no error thrown."
 - **A Lynis-style hardening index** score on the Compliance view, computed the same way Lynis computes its own: only checks the stored scan records as evaluated (`rules_evaluated`) count, so a skipped, privileged-only or other-OS check is neither a pass nor a fail, and with no such record there is no score.
-- **A profile system (OS + opt-in "needs")** is now built into the rule/collector model, with macOS and Windows collector *skeletons* wired end-to-end but not yet real — see §17.
+- **A profile system (OS + opt-in "needs")** is now built into the rule/collector model, and macOS and Windows have real collectors and their own checks (BLWK-MAC-*, BLWK-WIN-*) — see §17.
 
 Sections below are the original design reasoning, updated in place where the as-shipped decision differs from the draft (notably §16's color decision). Section numbers are preserved since other project docs (`AGENTS.md`) reference them by number.
 
@@ -56,7 +56,7 @@ The research groundwork is already done — a checklist grounded in Lynis's test
 - Real-time eBPF/syscall monitoring in v1 (Falco-class complexity) — v1 is on-demand/periodic scanning, "Lynis with a GUI."
 - A full EDR/antivirus replacement — shells out to the system's own ClamAV installation for signature-based malware rather than reimplementing it.
 - Wrapping Lynis/rkhunter as a backend — native Rust checks only (§13, Option A).
-- Working macOS/Windows support in v1 — Linux desktop only, Debian/Ubuntu-first packaging, for actual detection coverage. The rule/collector *model* is now OS-aware (§17) precisely so this can change without an engine rewrite, but no macOS/Windows collector does anything real yet — there's no machine to build and verify one against in this project's current environment.
+- Working macOS/Windows support in v1 — v1 was Linux desktop only, Debian/Ubuntu-first packaging. **No longer a non-goal:** the rule/collector *model* was made OS-aware (§17) so this could change without an engine rewrite, and it has: macOS and Windows now have a native CLI, a desktop app and a first set of checks, each verified on a real machine of that OS.
 - A hosted/cloud dashboard or telemetry phone-home — fully local, no data leaves the machine, ever.
 - **Sandboxed untrusted-code execution and autonomous "agents" are explicitly out of v1 scope**, but the architecture (crate boundaries, a generic executor pattern, Channel-based event streaming) is deliberately shaped so adding them later is a new workspace member, not a rewrite. See §4 and §14. Still true as of this update — neither has been started.
 
@@ -104,7 +104,7 @@ flowchart LR
   term["Terminal / SSH session"] -->|"args, stdout, exit code"| cli["bulwarkctl"]
   shell -->|"Secrets page: names and storage only"| access["bulwark-access<br/>passive readers"]
   access -->|"reads each tool's own files"| stores["AWS CLI, Docker, Git,<br/>npm, PyPI, kubeconfig…"]
-  vault -->|"metadata only, no persistence"| access
+  vault["aws-vault<br/>(preview, off by default)"] -->|"metadata only, no persistence"| access
   shell -->|"invoke scan"| core["bulwark-core"]
   cli -->|"invoke scan"| core
   core -->|"loads"| rules["rules/<br/>(YAML rule pack)"]
@@ -158,9 +158,9 @@ to be one.
 
 **Since v0.1 (implemented, not just reserved):** a system tray icon (`apps/bulwark-app/src-tauri/src/tray.rs`) keeps the app resident when the window is closed — the window's `CloseRequested` event is intercepted and the window is hidden rather than destroyed, so a background monitoring loop that's mid-interval keeps running. The monitoring loop periodically re-invokes the same `bulwark-core` scan path used by a manual "Scan" click and reconciles findings across runs (see §5).
 
-**Future extension seam (still not built, deliberately):** `bulwark-sandbox` and `bulwark-agent` remain reserved as future workspace members, not started. `bulwark-core`'s executor and event-streaming pattern (a Tauri Channel for the GUI, a plain iterator/stream for the CLI) is written generically enough that a sandboxed-execution job or an agent action could plug into the same pattern instead of requiring a parallel system — see §14.
+**Future extension seam (still not built, deliberately):** `bulwark-sandbox` is not started, and `bulwark-agent` exists only as an empty placeholder crate in the workspace. `bulwark-core`'s executor and event-streaming pattern (a Tauri Channel for the GUI, a plain iterator/stream for the CLI) is written generically enough that a sandboxed-execution job or an agent action could plug into the same pattern instead of requiring a parallel system — see §14.
 
-**Remote scanning and monitoring over SSH** (`bulwarkctl scan --ssh [user@]host` for a one-off, `bulwarkctl hosts …` and the GUI's **Machines** page for scheduled monitoring) lives in the CLI front-door (`crates/bulwarkctl/src/remote.rs`, `hosts.rs`), **never** in `bulwark-core` — the core's no-network invariant (§10) is what backs the "fully local, no telemetry" claim, so anything that crosses the network is a front-door concern. What *can* be decided without a socket — the machine registry and its validation, scheduling and backoff, failure classification and its plain-language hints, health, and which events deserve an alert — is `bulwark_core::fleet`, so both front-doors share one set of rules. The GUI never links an SSH client: its `machines.rs` reads and edits the registry through core and runs the bundled CLI sidecar (`bulwark hosts test|trust|setup-key|scan --json`) for anything that connects. User-facing guide: [Monitoring other machines](/guide/remote-monitoring).
+**Remote scanning and monitoring over SSH** (`bulwarkctl scan --ssh [user@]host` for a one-off, `bulwarkctl hosts …` and the GUI's **Remote hosts** page for scheduled monitoring) lives in the CLI front-door (`crates/bulwarkctl/src/remote.rs`, `hosts.rs`), **never** in `bulwark-core` — the core's no-network invariant (§10) is what backs the "fully local, no telemetry" claim, so anything that crosses the network is a front-door concern. What *can* be decided without a socket — the machine registry and its validation, scheduling and backoff, failure classification and its plain-language hints, health, and which events deserve an alert — is `bulwark_core::fleet`, so both front-doors share one set of rules. The GUI never links an SSH client: its `machines.rs` reads and edits the registry through core and runs the bundled CLI sidecar (`bulwark hosts test|trust|setup-key|scan --json`) for anything that connects. User-facing guide: [Monitoring other machines](/guide/remote-monitoring).
 
 The model is **agentless by design** — this is the line between Bulwark and agent-based fleet platforms such as Wazuh. No agent runs on, and nothing listens on, a monitored machine between scans (a Linux machine needs nothing installed at all; a Mac or Windows machine needs Bulwark installed, which runs only when a scan asks for it); there is no manager server; findings stay on the operator's computer. That rules out real-time telemetry and SIEM-style correlation, and is meant to: the target is a developer or small team with a handful to a few dozen machines.
 
@@ -231,7 +231,7 @@ erDiagram
     Rule {
         text id PK "e.g. BLWK-SSH-001, YAML file, not DB-stored"
         text title "becomes Finding dot title"
-        text category "one of 11 categories"
+        text category "one of 15 categories"
         enum severity
         text collector "which collector produces the fact this rule reads"
         expr condition "boolean condition over the collector output"
@@ -312,15 +312,14 @@ There's no network API — the "client" and "server" are the same process, expos
 | `secrets_inventory` | One manager's inventory: names, storage kind, expiry; `provider` is matched against a fixed list | local user; no value is read |
 | `access_aws_snapshot` | Preview, off unless `BULWARK_AWS_VAULT_PREVIEW=1`: AWS Vault profile metadata through a fixed, bounded subprocess | local user; authenticate separately in a terminal |
 | `scan_start` | Kick off a scan; streams findings via Channel as they're produced | none (local single-user) |
-| `scan_get_history` | List past `ScanRun`s | none |
-| `finding_get_by_run` | Fetch findings for a given run | none |
-| `finding_update_status` | Mark a finding acknowledged/resolved | none |
-| `rule_list` | List loaded rules (built-in + user-added), including any that failed to load, with `explain`/`fix` text for the Rules browser | none |
-| `privileged_collect` | Runs the subset of collectors that need root, via `pkexec` | polkit prompt |
+| `history_list` / `history_count` | The 50 most recent `ScanRun`s for History, and the total number of runs | none |
+| `dashboard_snapshot` | What a newly opened window shows: the stored open findings and the last scan, so the app never starts blank after a background scan | none |
+| `finding_ignore` / `finding_unignore` / `rule_suppress` / `rule_unsuppress` / `suppressions_list` / `suppression_audit` | Ignore one finding or turn a whole check off (a reason is required), undo either, and read the audit trail | none |
+| `rules_list` | List the loaded rules (built-in and your own) with their `explain`/`fix` text for the Rule catalog; `custom_rules_info` reports rules that were refused or failed to load | none |
+| `scan_privileged` | Runs the bundled CLI as `pkexec <cli> scan --privileged --json` and replaces the finding list with its result; no collector logic is duplicated in the app | polkit prompt |
 | `run_virus_scan` | Streams ClamAV progress (`FileScanned`/`ThreatFound`/`Complete`/`Error`) via Channel | none |
 | `clamav_info` | Reports installed engine/database version, or a distro-aware install command if absent | none |
-| `monitoring_get_status` / `monitoring_set_interval` | Query/configure the background re-scan loop | none |
-| `history_count` | Total past scan runs (the sidebar no longer shows it; kept for callers that need a count) | none |
+| `monitoring_get_status` / `monitoring_set_enabled` / `monitoring_set_interval_minutes` | Query/configure the background re-scan loop | none |
 | `machines_list` / `machine_add` / `machine_update` / `machine_remove` / `machine_findings` / `machines_set_enabled` | The Remote page's registry and stored results, read and written through `bulwark_core` (no network) | none |
 | `machine_test` / `machine_trust` / `machine_setup_key` / `machine_scan_now` / `machines_scan_all` | Anything that connects — run through the bundled CLI (`bulwark hosts … --json`) | none (remote `sudo -n` only) |
 | `ssh_suggestions` | Host aliases from `~/.ssh/config` and key files in `~/.ssh`, for the add-machine form | none |
@@ -543,16 +542,16 @@ flowchart LR
 - **Nothing from the scanned machine is trusted as text.** Values substituted into a finding are made display-safe (control, bidirectional and invisible characters replaced, long values cut). A value placed in a rule's `fix` text must be one plain word, or it is replaced by a stand-in, so a file named `id; curl … | sh` can never become part of a command a user copies. A URL from a config file is reduced to scheme, host and port, because registry URLs carry credentials.
 - **Known limitation — root-level compromise:** Bulwark cannot defend against an attacker who already has root on the machine it's running on. Such an attacker can disable rules, tamper with the local SQLite findings store, or replace the Bulwark binary itself, exactly as easily as they'd disable any other local defense — a local-only tool cannot be tamper-evident against the privilege level it's trying to detect. This is a structural limit of the v1 design (no phone-home, see Non-goals), not an oversight; it's stated here explicitly rather than left implicit. A future opt-in mode that ships scan results to a destination the same attacker doesn't control (e.g. remote syslog) would close this gap but is out of v1 scope.
 - **Network use is opt-in and lives in the front-doors.** Two features cross the network, both only when the user sets them up and both outside `bulwark-core`: monitoring other machines over SSH (to machines the user registers, with host keys verified) and alerts to Telegram / an SMTP server (machine names, severities and issue titles only — never evidence or secrets). Nothing is sent to the Bulwark project. See §4 and [Monitoring other machines](/guide/remote-monitoring).
-- **Audit logging:** every privileged action is logged locally with timestamp and exact command, viewable in-app — useful for review, though subject to the same limitation above if the attacker already has root.
+- **Audit logging:** every decision to hide something (ignoring a finding, turning a check off, turning it back on) is appended with its reason and time to `rule_suppression_events`, viewable in the app and with `bulwarkctl rules suppressions --audit`. Bulwark keeps no log of its own for privileged scans. Both are subject to the same limitation above if the attacker already has root.
 
 ---
 
 ## 11. Observability
 
 - **Metrics:** none exported — no telemetry, by design (non-goal). Local-only counters (scan duration, rules loaded, collectors failed) shown in-app only.
-- **Logs:** local rotating log file (`~/.local/share/bulwark/logs/`), never transmitted.
+- **Logs:** Bulwark writes no log file of its own. Errors go to the terminal (CLI) or are shown in the app, and each scan's own record is kept in the local SQLite database.
 - **Traces:** N/A — single-process desktop app, not a distributed system.
-- **Alerts:** a desktop notification on new findings from a background monitoring run, via Tauri's notification API — implemented, not just an analog. No other alerting channel exists or is planned for v1.
+- **Alerts:** a desktop notification on new findings from a manual scan or a background monitoring run, via Tauri's notification API. Telegram and e-mail alerts are opt-in and were added with remote monitoring (§4).
 
 ---
 
@@ -565,7 +564,7 @@ Reframed as release channels, since there's no %-traffic rollout for a desktop a
 | 1 | `bulwarkctl` only, dogfood on real machines, including over SSH | ✅ Done |
 | 2 | v0.1 GitHub Release, CLI binary only (`.deb`/`.rpm`/tarball) | ✅ `bulwark-core` stable, CLI builds clean |
 | 3 | `bulwark-app` (Tauri GUI) joins the release, full `.deb`/`.rpm`/AppImage line-up | ✅ GUI built, packaged, and dogfooded end-to-end including the `pkexec` privileged path and tray icon |
-| 4 | Public announce (README only, no paid promo) | Not yet — repository is currently private |
+| 4 | Public announce (README only, no paid promo) | ✅ The repository and its releases are public |
 
 Shipping the CLI first validated `bulwark-core` — the actual hard part — fast, with far less UI work, and it's the only form factor that can reach a headless/remote box at all.
 
@@ -599,7 +598,7 @@ Uninstalling via the package manager removes the binary only. The local SQLite f
 - [ ] Rule-signing/provenance story for community-contributed rules — still deferred until there's an actual external contributor, but §10 flags it as required before any "install rules from the internet" feature ships.
 - [ ] Whether findings context needs at-rest encryption in the local SQLite store, or whether OS-level disk encryption is the sufficient boundary — still leaning toward the latter, not yet decided.
 - [ ] Exact collector memoization/caching strategy across rules — flagged as necessary in §9, not designed in detail.
-- [x] ~~A compliance-coverage view (HIPAA/ISO27001/PCI-DSS-style, mirroring Lynis's own compliance-testing angle)~~ — **implemented**, in two layers. The Compliance view groups findings by the `references` field every rule already carries, and shows a Lynis-style hardening index headline score (passing / evaluated, excluding privileged-and-skipped checks — same convention Lynis itself uses so skipped tests don't count against the score). On top of that, `bulwark-core::compliance` carries real, editorially-owned mappings onto **PCI DSS 4.0.1, the HIPAA Security Rule and ISO 27001:2022** (control definitions embedded via `include_str!`, covering 58 of 65 rules), scored per standard and surfaced through the `compliance_report` command in "All checks → Framework compliance".
+- [x] ~~A compliance-coverage view (HIPAA/ISO27001/PCI-DSS-style, mirroring Lynis's own compliance-testing angle)~~ — **implemented**, in two layers. The Compliance view groups findings by the `references` field every rule already carries, and shows a Lynis-style hardening index headline score (passing / evaluated, excluding privileged-and-skipped checks — same convention Lynis itself uses so skipped tests don't count against the score). On top of that, `bulwark-core::compliance` carries real, editorially-owned mappings onto **PCI DSS 4.0.1, the HIPAA Security Rule and ISO 27001:2022** (control definitions embedded via `include_str!`, covering 61 of the 109 rules), scored per standard and surfaced through the `compliance_report` command in "Rule catalog → Framework compliance".
 
   Three constraints shape that view, and all three are deliberate rather than incidental:
 
@@ -609,7 +608,7 @@ Uninstalling via the package manager removes the binary only. The local SQLite f
 
   **CIS is mapping only.** CIS control IDs appear as coverage annotations on rules and are never given a compliance percentage or level, which CIS's non-member terms forbid representing. MITRE ATT&CK likewise carries no ratio: it is a technique taxonomy, not a compliance standard.
 - [ ] An `sshd -T` (effective-config, defaults-resolved) collector path — the current `sshd_config` collector only sees directives explicitly written to the file, so a directive relying on its OpenSSH-compiled-in default is invisible to every SSH rule. Needs a real `sshd` binary to dogfood against; not yet done.
-- [ ] Real macOS/Windows collectors — see §17. Blocked on access to a real machine for each OS to build and verify against; skeletons exist, nothing behind them does yet.
+- [x] ~~Real macOS/Windows collectors~~ — **implemented**, each verified on a real machine of that OS; see §17. One Windows collector (registry Run keys) is still a skeleton.
 - [ ] Persisting the GUI's active profile ("needs") selection across restarts, and threading it through to the background monitoring loop (which currently always scans with the default profile — see §17 and `monitoring.rs`'s `run_tick`).
 
 ---
@@ -635,7 +634,7 @@ Uninstalling via the package manager removes the binary only. The local SQLite f
 - No animation on content the user is actively reading or scrolling — motion is reserved for state transitions, never decorative idle motion.
 - `prefers-reduced-motion` is respected everywhere — all micro-animations degrade to instant state changes when the OS signals reduced motion.
 
-**As shipped:** shadcn/ui (Radix primitives) + Tailwind v4, styled entirely off the token system above rather than shadcn's default palette. Screens: Overview, Compliance, Antivirus, Agent Security, File integrity, Rules, Analytics, Settings — a frameless window with a custom title bar, and a system tray icon for background residency (§4). A dedicated animation/motion tuning pass (beyond the principles above being followed ad hoc per component) remains open — see `AGENTS.md`'s current-status notes.
+**As shipped:** shadcn/ui (Radix primitives) + Tailwind v4, styled entirely off the token system above rather than shadcn's default palette. Screens: three tabs, Scan, Secrets and Tools, plus Settings (§18 lists what each holds) — a frameless window with a custom title bar, and a system tray icon for background residency (§4). A dedicated animation/motion tuning pass (beyond the principles above being followed ad hoc per component) remains open — see `AGENTS.md`'s current-status notes.
 
 ---
 
@@ -671,20 +670,20 @@ Both axes are enforced in `engine::run_scan`, via a `Profile { os, needs }` pass
 
 ### What's real today, and what's a skeleton
 
-- The **schema, engine filtering, and collector gate are fully real** — tested (`crates/bulwark-core/src/engine.rs`'s `rule_matches_profile`, plus per-collector tests), and live in both front-doors: the CLI's `bulwarkctl scan --needs server,...` flag and the GUI Dashboard's need-toggle chips (currently just "Server," since that's the only tag with a real rule behind it).
+- The **schema, engine filtering, and collector gate are fully real** — tested (`crates/bulwark-core/src/engine.rs`'s `rule_matches_profile`, plus per-collector tests), and live in both front-doors: the CLI's `bulwarkctl scan --needs server,...` flag and the GUI's **Checks → Change** on the Scan page (a "Server checks" switch, the one opt-in need the app offers).
 - **`macos_security::MacosSecurityCollector`** reads the Mac posture settings with the tools Apple ships (`fdesetup`, `spctl`, `csrutil`, `socketfilterfw`, `defaults`), unprivileged, each value paired with a `*_known` flag so a failed or unrecognised read is "unknown", never "off" (BLWK-MAC-001…006). `credential_stores` and `ssh_private_keys` only read files in the home directory and now run on macOS too (`LINUX_AND_MACOS`); their rules carry `os: [linux, macos]`. Detection was verified on a real Mac against a throw-away `HOME` holding a test key and a dummy credential file.
 - **`macos_launchd::LaunchdPersistenceCollector` is real** (the first non-Linux collector), built and verified against a real Mac reached through remote monitoring. It reads every LaunchAgent/LaunchDaemon plist with `plutil` (binary plists included) and flags the *shapes* persistence malware takes — a program in a world-writable or hidden directory, an interpreter running inline code, a job that downloads on start, a readable plist that can't be parsed — rather than "anything not from Apple", which on a developer's Mac would be dozens of legitimate updaters. Three real-machine cases are deliberately not findings: dangling plist symlinks and empty `{}` plists left behind by uninstallers (launchd can't run either), and root-only `0600` daemon plists during an unprivileged scan (recorded as unreadable — "couldn't look" is not "looks malicious"). Each of those cases came up on a real machine before it was handled, which is why they are covered by unit tests.
-- **`windows_security::WindowsSecurityCollector`** is real (BLWK-WIN-001…007): one PowerShell invocation reads Defender, the firewall profiles, BitLocker on the system drive, UAC, Remote Desktop/NLA and SMBv1 into one JSON object, each read in its own `try`, so an unreadable setting (BitLocker without elevation) is `null` — "unknown" — and never fires a rule. Verified on a real Windows 11 machine: all seven evaluated, zero findings on a hardened box. The Windows CLI and desktop app cross-compile from Linux (`x86_64-pc-windows-gnu`, MinGW) and build natively on `windows-2022` in `release.yml`; `build.rs` stages the sidecar with its `.exe` suffix (it used to look for `bulwarkctl` without one and would have shipped the empty placeholder).
+- **`windows_security::WindowsSecurityCollector`** is real (BLWK-WIN-001…010): one PowerShell invocation reads Defender, the firewall profiles, BitLocker on the system drive, UAC, Remote Desktop/NLA, SMBv1, the Guest account, a stored automatic sign-in password and the days since the last update into one JSON object, each read in its own `try`, so an unreadable setting (BitLocker without elevation) is `null` — "unknown" — and never fires a rule. Verified on a real Windows 11 machine: the first seven checks all evaluated, with zero findings on a hardened box; the three added later were verified the same way. The Windows CLI and desktop app cross-compile from Linux (`x86_64-pc-windows-gnu`, MinGW) and build natively on `windows-2022` in `release.yml`; `build.rs` stages the sidecar with its `.exe` suffix (it used to look for `bulwarkctl` without one and would have shipped the empty placeholder).
 - **WSL is Linux, minus what Windows owns.** `RoleEvidence::wsl` (a Microsoft kernel in `/proc/version`, or the WSL interop handler) adds a `wsl` host trait; rules carry `skip_on: [wsl]` for checks about the WSL2 kernel, its network stack, auditd and console banners. Skipped rules are listed in `ScanRun::rules_not_applicable` — not evaluated, so never evidence of a pass — and the reconciler closes findings they raised before, so a check that stopped applying doesn't leave a finding open forever.
-- **`windows_persistence::WindowsRunKeysCollector`** is still an intentionally-honest skeleton: it declares its target OS, `is_applicable()` returns `false`, and `collect()` returns an explicit "not yet implemented" error rather than fabricating facts. `BLWK-PERSIST-004` exists so the OS-tagging pipeline keeps end-to-end coverage. Windows machines are monitored through their WSL instead (see [Monitoring other machines](/guide/remote-monitoring)).
-- **Support grows one OS at a time, honestly.** A remote scan that evaluated no rules is recorded as *nothing assessed* — never persisted as a clean scan — and a Windows SSH shell as *unsupported OS*; both show as a neutral "Not supported yet", are retried daily and never alerted on. Every machine view carries how many checks its last scan ran. `engine::host_fingerprint` uses `gethostname`/`uname` where `/etc/hostname` and `/proc` don't exist, so the remote-identity pin works on a Mac.
+- **`windows_persistence::WindowsRunKeysCollector`** is still an intentionally-honest skeleton: it declares its target OS, `is_applicable()` returns `false`, and `collect()` returns an explicit "not yet implemented" error rather than fabricating facts. `BLWK-PERSIST-004` exists so the OS-tagging pipeline keeps end-to-end coverage, and it never fires. The other Windows checks, and remote monitoring of a Windows machine, do not depend on it (see [Monitoring other machines](/guide/remote-monitoring)).
+- **Support grows one OS at a time, honestly.** A remote scan that evaluated no rules is recorded as *nothing assessed* — never persisted as a clean scan — and a shell that is neither a Unix shell nor Windows' cmd or PowerShell as *unsupported OS*; both show as a neutral "Not supported yet", are retried daily and never alerted on. Every machine view carries how many checks its last scan ran. `engine::host_fingerprint` uses `gethostname`/`uname` where `/etc/hostname` and `/proc` don't exist, so the remote-identity pin works on a Mac.
 - Turning a skeleton into a real collector is "implement `collect()` against real OS APIs, verified on a real machine of that OS" — it does not require touching the engine, the rule schema, or any existing Linux collector.
 
 ### Not done as part of this
 
-- Only one rule (`BLWK-LOG-003`) carries a `profiles` tag today; a full pass deciding which of the other 55 Linux rules are genuinely server-only, desktop-only, etc. is future work, not attempted here — mistagging a broadly-relevant rule as opt-in-only would be a real regression (it would silently stop running for most users by default), so this was deliberately left conservative rather than guessed at in bulk.
+- Eleven rules carry a `profiles` tag today (nine as `server`: login banners, password ageing, auditd, remote log forwarding, process accounting, ICMP redirects, martian logging and the usb-storage module; the macOS and Windows persistence rules as `desktop`). A full pass deciding which of the other Linux rules are genuinely server-only or desktop-only is future work — mistagging a broadly-relevant rule as opt-in-only would be a real regression (it would silently stop running for most users by default), so this was deliberately left conservative rather than guessed at in bulk.
 - The GUI's active-needs selection isn't persisted across restarts, and the background monitoring loop doesn't know about it yet (see §14).
-- CI does not yet build/test on macOS or Windows runners — see the research on cheap options for that (GitHub Actions `macos-latest`/`windows-latest` runners, free once this repository is public) — so the two skeleton collectors are only ever compiled on Linux CI today, never actually exercised on their target OS.
+- `ci.yml` does not run the test suite on macOS or Windows runners. The release workflow builds the CLI and the desktop app natively on `macos-15` and `windows-2022`, and the parsers behind each collector are pure functions, so their unit tests run on Linux with the rest. A collector's read of the live system is checked on a real machine by hand, not in CI.
 
 ## 18. The desktop workbench
 

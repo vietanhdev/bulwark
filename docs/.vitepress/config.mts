@@ -2,9 +2,8 @@ import { withMermaid } from "vitepress-plugin-mermaid";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-// Canonical domain (not yet deployed — see AGENTS.md's current-status notes). Set here so
-// the sitemap and social-preview tags are correct from day one instead of needing a
-// find-and-replace once hosting is actually wired up.
+// Canonical domain the site is published at. Set in one place so the sitemap, the canonical
+// links and the social-preview tags all agree.
 const SITE_URL = "https://bulwark.nrl.ai";
 
 // One designed 1200x630 social card per page (not a generic site-wide image), so links shared
@@ -34,7 +33,7 @@ function ogSlugFor(relativePath: string): string {
   return existsSync(onDisk) ? slug : OG_FALLBACK;
 }
 
-export default withMermaid({
+const config = withMermaid({
   title: "Bulwark",
   description:
     "Scan your dev machine for risky AI-agent settings, MCP servers, leaked keys, plain-text credentials and unsafe package-manager configs — in seconds. Nothing leaves your computer.",
@@ -107,7 +106,7 @@ export default withMermaid({
         downloadUrl: `${SITE_URL}/download`,
         softwareHelp: `${SITE_URL}/guide/architecture`,
         description:
-          "A free, open-source security scanner for Linux developer machines and servers, with " +
+          "A free, open-source security scanner for developer machines and servers (Linux, macOS and Windows), with " +
           "a native CLI and a Tauri desktop GUI. Checks plaintext credentials, supply-chain " +
           "startup hooks, exposed dev services, SSH, sudoers, kernel/sysctl hardening, " +
           "persistence, file permissions, logging and rootkit indicators against declarative rules; " +
@@ -197,11 +196,10 @@ export default withMermaid({
       include: ["mermaid > fastdom", "mermaid > fastdom/extensions/fastdom-promised.js"],
     },
     build: {
-      // Two files pass Vite's 500 kB default, both about 700 kB and both from the mermaid
-      // plugin: the site's main script, which carries mermaid's core, and one diagram type.
-      // The limit sits just above them so the build stays quiet today and still reports
-      // anything that grows past it. Loading mermaid only on pages with a diagram would be
-      // the real reduction.
+      // Two files pass Vite's 500 kB default, both about 700 kB and both part of mermaid: its
+      // core and one diagram type. Neither is in the site's main script any more (see the end
+      // of this file): they are fetched only on a page that has a diagram. The limit sits just
+      // above them so the build stays quiet today and still reports anything that grows past it.
       chunkSizeWarningLimit: 800,
     },
   },
@@ -365,3 +363,29 @@ export default withMermaid({
     },
   },
 });
+
+// Load mermaid only on pages that have a diagram.
+//
+// The plugin registers its <Mermaid> component by adding a static import to VitePress's client
+// entry (the `transform` hook of its Vite plugin). A static import there puts mermaid's core,
+// about 600 kB, in the main script that every page downloads, and makes every page preload all
+// of mermaid's diagram chunks. Dropping that one hook leaves everything else the plugin does in
+// place (the ```mermaid fence, the `virtual:mermaid-config` module, the dayjs/cytoscape
+// aliases); theme/index.ts registers the same component as an async one instead, so its code is
+// fetched the first time a page renders a diagram.
+//
+// If a plugin update renames its Vite plugin, fail the build: silently keeping the static import
+// would bring the weight back with nothing to show for it.
+const mermaidVitePlugin = (config.vite?.plugins ?? []).find(
+  (p): p is { name: string; transform?: unknown } =>
+    !!p && typeof p === "object" && "name" in p && p.name === "vite-plugin-mermaid",
+);
+if (!mermaidVitePlugin || typeof mermaidVitePlugin.transform !== "function") {
+  throw new Error(
+    "vitepress-plugin-mermaid no longer exposes the 'vite-plugin-mermaid' transform hook; " +
+      "update the lazy-loading setup at the end of docs/.vitepress/config.mts",
+  );
+}
+delete mermaidVitePlugin.transform;
+
+export default config;

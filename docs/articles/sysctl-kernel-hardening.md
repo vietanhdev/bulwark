@@ -10,9 +10,9 @@ Most Linux hardening guides give you a wall of `sysctl -w` commands to copy-past
 The problem isn't the advice — it's the missing half: several of these settings have real,
 documented cases of breaking legitimate things, and a guide that doesn't mention that isn't
 actually helping you make a decision, just handing you a script. Below are the kernel and
-network sysctls [Bulwark](/)'s `kernel-hardening` category checks — 18 of its 20 rules are
-sysctl-based (the other two, mandatory access control enforcement and kernel-module
-blacklisting, work through different mechanisms entirely and aren't sysctls) — grouped by what
+network sysctls [Bulwark](/)'s `kernel-hardening` category checks — 18 of its 21 rules are
+sysctl-based (the other three, mandatory access control enforcement and two kernel-module
+blacklisting rules, work through different mechanisms entirely and aren't sysctls) — grouped by what
 they actually protect against, with the genuine tradeoffs called out wherever one exists and
 cited, not invented for the sake of balance. Every default, level and behavior below links to the
 kernel's own documentation or the source, because most of the corrections here are corrections of
@@ -70,7 +70,7 @@ or a permission gap into root.
   Linux 5.2 — the behavior changed two years before the text describing it did.)
 - **`kernel.dmesg_restrict=1`** — restricts `dmesg` to `CAP_SYSLOG`, since the kernel ring buffer
   routinely contains addresses and driver-internal state useful for exploit development. Not
-  currently one of Bulwark's 20 rules, but the same family of setting as `kptr_restrict` above
+  currently one of Bulwark's 21 rules, but the same family of setting as `kptr_restrict` above
   and worth setting alongside it.
 - **`kernel.perf_event_paranoid`** — this is the one hardening guides most consistently describe
   incorrectly, so it's worth stating what it does *not* do. Level `2` does **not** restrict
@@ -146,7 +146,7 @@ out afterward.
   the load fails with `kexec_load failed: Operation not permitted`. Skip this one on hosts where
   you rely on `kdump`.
 - **`user.max_user_namespaces=0`** (or the older `kernel.unprivileged_userns_clone=0`) — not
-  currently one of Bulwark's 20 rules, but included here because it's the one hardening guides
+  currently one of Bulwark's 21 rules, but included here because it's the one hardening guides
   most often get wrong in the other direction: it closes off a real kernel attack-surface-widening
   feature, but breaks rootless Podman/Docker, Flatpak, and `bubblewrap`-based sandboxing outright —
   [bubblewrap#324](https://github.com/containers/bubblewrap/issues/324) and

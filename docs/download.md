@@ -1,6 +1,6 @@
 ---
 title: Download
-description: Download Bulwark for Linux — desktop app (.deb, .rpm, AppImage) and CLI (.deb, .rpm, PPA, AUR, COPR, tarball).
+description: Download Bulwark for Linux, macOS and Windows. Desktop app (.deb, .rpm, AppImage, .dmg, Windows installer) and CLI (.deb, .rpm, PPA, COPR, AUR, tarball).
 ---
 
 <script setup>
@@ -126,7 +126,7 @@ sudo dnf install ./bulwark-desktop-*.x86_64.rpm   # x86_64
 sudo dnf install ./bulwark-desktop-*.aarch64.rpm  # arm64
 
 # AppImage — portable, nothing to install
-chmod +x bulwark-desktop-*-x86_64.AppImage      # x86_64 (arm64: -aarch64.AppImage)
+chmod +x bulwark-desktop-*-x86_64.AppImage    # arm64: *-aarch64.AppImage
 ./bulwark-desktop-*-x86_64.AppImage
 ```
 
@@ -143,7 +143,7 @@ To upgrade, install the newer package the same way; your scan history and settin
 Direct arm64 downloads:
 <span v-if="find(is.guiDebArm)"><a :href="url(is.guiDebArm)">.deb</a> · </span><span v-if="find(is.guiRpmArm)"><a :href="url(is.guiRpmArm)">.rpm</a> · </span><a :href="url(is.guiAppImageArm)">AppImage</a>
 
-### Snap and Flatpak — not currently available
+### Snap Store and Flathub — not available
 
 Bulwark is **not** published on the Snap Store or Flathub, and installing it from
 either is not possible today. Both stores sandbox applications, and both restrict
@@ -153,9 +153,14 @@ criteria exclude reading `/etc` and using `pkexec` — which is how Bulwark's
 privileged scans work.
 
 Packaging for both exists in the repository and builds correctly, so this may
-change. Until it does, use the `.deb`, `.rpm`, AppImage or PPA above. Those are
+change. Until it does, use the `.deb`, `.rpm` or AppImage above. Those are
 unconfined, so they run the complete product: privileged scans, host ClamAV
 integration and all.
+
+The [releases page](https://github.com/vietanhdev/bulwark/releases) also carries a
+Flatpak bundle, `bulwark.flatpak`, for people who want to try the sandboxed build. It
+is not the recommended install: inside the sandbox, checks that need administrator
+rights only work when `bulwarkctl` is also installed on the host.
 
 ## CLI
 
@@ -197,7 +202,7 @@ bulwarkctl scan --all            # also low-priority items, and every place each
 The report is short on purpose — the problems worth fixing first, one line each, with why and how:
 
 ```text
-Bulwark 0.13.1 · this computer · 55 of 73 checks ran
+Bulwark 0.15.0 · this computer · 55 of 73 checks ran
 
 1 problem to fix  1 medium
 
@@ -221,7 +226,9 @@ Direct arm64 downloads:
 
 ### Ubuntu PPA
 
-For Ubuntu, install from the PPA to get automatic updates via `apt`:
+For Ubuntu 24.04, 26.04 and 26.10, on x86_64 and arm64, install from the PPA to get automatic
+updates via `apt`. (On another Ubuntu release, such as 22.04, use the `.deb` above: the PPA has
+no build for it.)
 
 ```bash
 sudo add-apt-repository ppa:vietanhng/bulwark

@@ -136,8 +136,8 @@ bulwarkctl ai redact
 bulwarkctl ai redact --apply
 ```
 
-Or open the **Agent Security** tab in the desktop app, which does the same thing and offers a Redact
-button per finding.
+Or press **Scan now** in the desktop app, which runs the same checks and offers **Remove secret
+from this file** on a finding it can clean up.
 
 Three things worth saying about what it will and won't do:
 
