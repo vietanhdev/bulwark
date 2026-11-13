@@ -568,7 +568,10 @@ static PACK: LazyLock<Pack> = LazyLock::new(|| {
             }
         }
 
-        let high_conf = !r.id.starts_with("generic-");
+        // An OAuth client ID is a public identifier (it sits in every login URL the app builds),
+        // not a credential: reporting one as a leaked key to rotate is a false alarm. The matching
+        // client *secret* rules stay.
+        let high_conf = !r.id.starts_with("generic-") && !is_public_identifier(&r.id);
         let shape = match r.id.as_str() {
             "private-key" => Shape::PrivateKey,
             "jwt" => Shape::Jwt,
@@ -1542,6 +1545,11 @@ pub fn scan_text_high_confidence_in(path: Option<&str>, text: &str) -> Vec<Secre
     scan_high_confidence(path, text).matches
 }
 
+/// Rules in the vendored pack that find a public identifier rather than a secret.
+fn is_public_identifier(rule_id: &str) -> bool {
+    rule_id.ends_with("-client-id")
+}
+
 /// What a scan of one text found.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SecretScan {
@@ -1643,6 +1651,29 @@ pub fn redact_text_in(path: Option<&str>, text: &str) -> (String, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_client_id_is_not_reported_as_a_leaked_key() {
+        let ids: Vec<&str> = PACK
+            .rules
+            .iter()
+            .filter(|r| r.id.ends_with("-client-id"))
+            .map(|r| r.id.as_str())
+            .collect();
+        assert!(ids.len() >= 5, "{ids:?}");
+        assert!(PACK
+            .rules
+            .iter()
+            .filter(|r| r.id.ends_with("-client-id"))
+            .all(|r| !r.high_conf));
+        // The secret half of the same providers is still looked for.
+        assert!(PACK
+            .rules
+            .iter()
+            .any(|r| r.id.ends_with("-client-secret") && r.high_conf));
+        let text = "discord_client_id = '123456789012345678'\n";
+        assert!(scan_text_high_confidence(text).is_empty());
+    }
     use rand::distr::Distribution;
     use rand::SeedableRng;
     use std::collections::BTreeSet;
