@@ -241,6 +241,10 @@ export function connectionState(m: Machine): { dot: Dot; label: string; problem:
     const bad = m.last_status.kind === "host_key_changed" || m.last_status.kind === "auth_failed";
     return { dot: bad ? "bad" : "warn", label: SHORT[m.last_status.kind] ?? "Can't connect", problem: true };
   }
+  // An unclassified failure can be an ssh error nobody recognised (the machine may never have
+  // answered), so it proves nothing about the connection: neutral, never the green "Connected".
+  if (m.last_status.state === "failed" && m.last_status.kind === "other")
+    return { dot: "idle", label: "Not confirmed", problem: false };
   return { dot: "ok", label: "Connected", problem: false };
 }
 

@@ -24,6 +24,8 @@ export function SecretsView({ active, onNavigate }: { active: boolean; onNavigat
   const [saved, setAdded] = useState<string[]>(loadAdded);
   const [tab, setTab] = useState<string>(() => (loadAdded().length ? ALL : MARKET));
   const [present, setPresent] = useState<Record<string, boolean>>({});
+  // Whether the backend has said which managers this build offers.
+  const [detected, setDetected] = useState(false);
   const [states, setStates] = useState<Record<string, InventoryState>>({});
   const wasActive = useRef(false);
 
@@ -52,6 +54,7 @@ export function SecretsView({ active, onNavigate }: { active: boolean; onNavigat
     invoke<{ id: string; present: boolean }[]>("secrets_detect")
       .then((rows) => {
         setPresent(Object.fromEntries(rows.map((r) => [r.id, r.present])));
+        setDetected(true);
         // First run: nothing chosen yet, so start with every manager found on this computer.
         if (!hasSavedChoice()) {
           const found = SECRET_MANAGERS.map((m) => m.id).filter((id) =>
@@ -65,7 +68,10 @@ export function SecretsView({ active, onNavigate }: { active: boolean; onNavigat
           }
         }
       })
-      .catch(() => setPresent({}));
+      .catch(() => {
+        setPresent({});
+        setDetected(true);
+      });
   }, [read]);
 
   // AWS Vault is a preview the backend offers only when it is switched on. When it is not, the
@@ -110,9 +116,13 @@ export function SecretsView({ active, onNavigate }: { active: boolean; onNavigat
   });
   const loading = passiveAdded.some((id) => !states[id] || states[id].status === "loading");
   const plaintext = rows.filter((r) => r.item.storage === "plaintext").length;
-  const notFound = passiveAdded.filter(
-    (id) => states[id]?.status === "unavailable" || states[id]?.status === "error",
-  );
+  const notFound = passiveAdded.filter((id) => states[id]?.status === "unavailable");
+  // A read that failed is not an absent tool: it is named separately, never as "not found".
+  const unreadable = passiveAdded.filter((id) => states[id]?.status === "error");
+  const readCount = passiveAdded.length - notFound.length - unreadable.length;
+  // A saved tab can name a manager this build no longer offers (the AWS Vault preview). Once the
+  // backend has answered, fall back to Add rather than leave a panel with no tab selected.
+  const shown = detected && !tabs.some((t) => t.id === tab) ? MARKET : tab;
 
   return (
     <PageShell title="Secrets" description="Your secrets managers, and what each one holds.">
@@ -126,12 +136,12 @@ export function SecretsView({ active, onNavigate }: { active: boolean; onNavigat
             key={t.id}
             role="tab"
             type="button"
-            aria-selected={tab === t.id}
+            aria-selected={shown === t.id}
             aria-controls={`secrets-panel-${t.id}`}
             onClick={() => setTab(t.id)}
             className={cn(
               "-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-primary",
-              tab === t.id
+              shown === t.id
                 ? "border-primary font-medium text-foreground"
                 : "border-transparent text-muted-foreground hover:text-foreground",
             )}
@@ -142,13 +152,13 @@ export function SecretsView({ active, onNavigate }: { active: boolean; onNavigat
         ))}
       </div>
 
-      <div id={`secrets-panel-${ALL}`} role="tabpanel" hidden={tab !== ALL} aria-label="Inventory">
+      <div id={`secrets-panel-${ALL}`} role="tabpanel" hidden={shown !== ALL} aria-label="Inventory">
         <section className="overflow-hidden rounded-lg border border-border bg-card">
           <header className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-4 py-2.5">
             <p className="text-xs text-muted-foreground">
               {loading
                 ? "Reading your tools' files…"
-                : `${rows.length} stored ${rows.length === 1 ? "credential" : "credentials"} across ${passiveAdded.length - notFound.length} ${passiveAdded.length - notFound.length === 1 ? "manager" : "managers"}`}
+                : `${rows.length} ${rows.length === 1 ? "entry" : "entries"} across ${readCount} ${readCount === 1 ? "manager" : "managers"}`}
             </p>
             <Button
               size="sm"
@@ -173,11 +183,13 @@ export function SecretsView({ active, onNavigate }: { active: boolean; onNavigat
               </p>
             )
           )}
-          {!loading && (notFound.length > 0 || added.includes("aws-vault")) && (
+          {!loading && (notFound.length > 0 || unreadable.length > 0 || added.includes("aws-vault")) && (
             <p className="border-t border-border px-4 py-2 text-xs text-muted-foreground">
               {notFound.length > 0 &&
                 `Not found on this computer: ${notFound.map((id) => managerById(id)!.name).join(", ")}. `}
-              {added.includes("aws-vault") && "AWS Vault is read when you open its tab."}
+              {unreadable.length > 0 &&
+                `Could not be read: ${unreadable.map((id) => managerById(id)!.name).join(", ")}. `}
+              {added.includes("aws-vault") && "AWS Vault is read only from its own tab."}
             </p>
           )}
         </section>
@@ -193,11 +205,11 @@ export function SecretsView({ active, onNavigate }: { active: boolean; onNavigat
             key={id}
             id={`secrets-panel-${id}`}
             role="tabpanel"
-            hidden={tab !== id}
+            hidden={shown !== id}
             aria-label={manager.name}
           >
             {id === "aws-vault" ? (
-              <AwsVaultPanel active={active && tab === id} />
+              <AwsVaultPanel active={active && shown === id} />
             ) : (
               <InventoryPanel
                 manager={manager}
@@ -219,7 +231,7 @@ export function SecretsView({ active, onNavigate }: { active: boolean; onNavigat
       <div
         id={`secrets-panel-${MARKET}`}
         role="tabpanel"
-        hidden={tab !== MARKET}
+        hidden={shown !== MARKET}
         aria-label="Add a secrets manager"
       >
         <p className="mb-3 text-sm text-muted-foreground">

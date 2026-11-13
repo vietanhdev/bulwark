@@ -38,6 +38,6 @@ export function expiryText(timestamp: string, now: number): string {
       ? `${minutes} min`
       : minutes < 1440
         ? `${Math.ceil(minutes / 60)} hr`
-        : `${Math.ceil(minutes / 1440)} days`;
+        : `${Math.ceil(minutes / 1440)} ${minutes === 1440 ? "day" : "days"}`;
   return delta > 0 ? `Expires in ${duration}` : `Expired ${duration} ago`;
 }

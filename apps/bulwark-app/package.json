@@ -37,7 +37,7 @@
     "@types/node": "^26.6.5",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@vitejs/plugin-react": "^6",
+    "@vitejs/plugin-react": "^6.2.1",
     "eslint": "^10.8.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.3",
@@ -50,6 +50,7 @@
     "vite": "^8.3.6"
   },
   "overrides": {
-    "minimatch": "^11.0.1"
+    "minimatch": "^11.0.1",
+    "@babel/plugin-transform-runtime": "^7.29.0"
   }
 }

@@ -58,7 +58,7 @@ test("the inventory combines every added file-based manager and never shows valu
   await expect(all).toBeVisible();
   await expect(all.getByRole("rowheader", { name: /legacy-ci/ })).toBeVisible();
   await expect(all.getByRole("rowheader", { name: /docker\.io/ })).toBeVisible();
-  await expect(all.getByText("AWS Vault is read when you open its tab.")).toBeVisible();
+  await expect(all.getByText("AWS Vault is read only from its own tab.")).toBeVisible();
 });
 
 test("a manager whose files are missing explains how to set it up, and tabs can be removed", async ({
@@ -99,7 +99,7 @@ test("the AWS Vault preview is hidden unless the build offers it, even if a tab 
   await page.locator("nav").getByRole("button", { name: "Secrets", exact: true }).click();
   await expect(page.getByRole("tab", { name: "Docker" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "AWS Vault" })).toHaveCount(0);
-  await expect(page.getByText("AWS Vault is read when you open its tab.")).toHaveCount(0);
+  await expect(page.getByText("AWS Vault is read only from its own tab.")).toHaveCount(0);
   await page.getByRole("tab", { name: "Add" }).click();
   await expect(page.getByRole("button", { name: "Add AWS CLI" })).toBeVisible();
   await expect(page.getByRole("button", { name: /AWS Vault/ })).toHaveCount(0);

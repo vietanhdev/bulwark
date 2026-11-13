@@ -4,6 +4,14 @@ import { WorkbenchIcon } from "./WorkbenchIcon";
 const phrases = {
   scan: "Checking your setup…",
   sessions: "Reading profile metadata…",
+  inventory: "Reading this tool's files…",
+};
+
+/** What a screen reader hears; `sessions` is the AWS Vault tab, `inventory` every file-based manager. */
+const announcements: Record<keyof typeof phrases, string> = {
+  scan: "Scan in progress.",
+  sessions: "Reading local AWS Vault metadata.",
+  inventory: "Reading this tool's files.",
 };
 
 /** Mount only during real work. The progress mark is the single moving element. */
@@ -24,9 +32,7 @@ export function TaskActivity({
       role="status"
       aria-live="polite"
     >
-      <span className="sr-only">
-        {task === "scan" ? "Scan in progress." : "Reading local AWS Vault metadata."}
-      </span>
+      <span className="sr-only">{announcements[task]}</span>
       <WorkbenchIcon
         kind={task === "scan" ? "scan" : "sessions"}
         busy

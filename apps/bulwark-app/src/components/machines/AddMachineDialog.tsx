@@ -65,11 +65,14 @@ export function AddMachineDialog({
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setForm((f) => ({ ...f, [k]: v }));
 
   const cancel = useCallback(() => {
+    // While the machine is being saved its id is not known yet, so closing now would leave it
+    // behind, paused and unlisted in this dialog. Wait for the answer.
+    if (busy) return;
     if (machine) {
       void invoke("machine_remove", { id: machine.id, deleteHistory: true }).catch(() => {});
     }
     onClose();
-  }, [machine, onClose]);
+  }, [busy, machine, onClose]);
 
   async function saveAndConnect() {
     setBusy(true);
@@ -148,7 +151,7 @@ export function AddMachineDialog({
   const footer =
     step === 1 ? (
       <>
-        <Button variant="ghost" onClick={cancel}>
+        <Button variant="ghost" onClick={cancel} disabled={busy}>
           Cancel
         </Button>
         <Button onClick={saveAndConnect} disabled={!form.spec.trim() || busy}>
@@ -221,6 +224,7 @@ export function AddMachineDialog({
                   <button
                     key={a.alias}
                     type="button"
+                    aria-pressed={form.spec === a.alias}
                     onClick={() => pickAlias(a)}
                     title={[
                       a.user && `${a.user}@`,
@@ -256,6 +260,7 @@ export function AddMachineDialog({
           <button
             type="button"
             onClick={() => setAdvanced((a) => !a)}
+            aria-expanded={advanced}
             className="flex w-fit items-center gap-1 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
           >
             {advanced ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
@@ -309,7 +314,11 @@ export function AddMachineDialog({
                 machine — ideally limited to the scanner; the next step checks it and shows the exact rule.
               </p>
             </div>
-            <Switch checked={form.privileged} onCheckedChange={(v) => set("privileged", v)} />
+            <Switch
+              checked={form.privileged}
+              onCheckedChange={(v) => set("privileged", v)}
+              aria-label="Include checks that need root"
+            />
           </div>
         </div>
       )}
@@ -341,7 +350,7 @@ export function AddMachineDialog({
           </Field>
           <p className="text-sm leading-relaxed text-muted-foreground">
             Bulwark scans {machine.name} on this schedule while the app is running, and shows its issues on
-            the Remote page. If it stops answering, Bulwark retries less often and tells you after three
+            the Remote hosts page. If it stops answering, Bulwark retries less often and tells you after three
             failed attempts in a row. To get alerts on your phone or by e-mail, set up Alerts in Settings.
           </p>
           {report?.steps.find((s) => s.id === "engine")?.detail.startsWith("Not installed") && (

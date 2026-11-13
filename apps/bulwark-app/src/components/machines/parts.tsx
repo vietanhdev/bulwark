@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { HEALTH, type Health } from "@/lib/machines";
 import { cn } from "@/lib/utils";
@@ -57,7 +57,11 @@ export function HealthPill({ health, scanning }: { health: Health; scanning?: bo
   );
 }
 
-/** A minimal accessible modal: overlay, Escape to close, focus stays inside the panel. */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/** A minimal accessible modal: overlay, Escape to close, focus moves into the panel, stays there
+ *  while it is open and returns to whatever opened it. */
 export function Modal({
   title,
   onClose,
@@ -71,9 +75,31 @@ export function Modal({
   footer?: ReactNode;
   wide?: boolean;
 }) {
+  const panel = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    // A field with autoFocus inside the dialog keeps the focus it already took.
+    if (!panel.current?.contains(document.activeElement)) panel.current?.focus();
+    return () => {
+      if (opener?.isConnected) opener.focus();
+    };
+  }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
+      if (e.key !== "Tab" || !panel.current) return;
+      const items = panel.current.querySelectorAll<HTMLElement>(FOCUSABLE);
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      const at = document.activeElement;
+      if (!panel.current.contains(at) || (!e.shiftKey && at === last)) {
+        e.preventDefault();
+        first.focus();
+      } else if (e.shiftKey && (at === first || at === panel.current)) {
+        e.preventDefault();
+        last.focus();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -86,11 +112,13 @@ export function Modal({
       }}
     >
       <div
+        ref={panel}
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        tabIndex={-1}
         className={cn(
-          "w-full rounded-xl border border-border bg-card shadow-xl",
+          "w-full rounded-xl border border-border bg-card shadow-xl outline-none",
           wide ? "max-w-2xl" : "max-w-lg",
         )}
       >

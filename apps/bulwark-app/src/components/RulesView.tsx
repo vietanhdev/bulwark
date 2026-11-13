@@ -651,9 +651,9 @@ export function RulesView() {
                                 {open && (
                                   <div className="border-t border-border bg-muted/30 py-3 pr-3 pl-8">
                                     <p className="text-xs leading-relaxed text-muted-foreground">
-                                      {r.explain.trim()}
+                                      {withPlaceholders(r.explain.trim())}
                                     </p>
-                                    <FixSteps text={r.fix} className="mt-2.5 bg-card" />
+                                    <FixSteps text={withPlaceholders(r.fix)} className="mt-2.5 bg-card" />
                                     {/* Which standards this one rule is evidence for. Answers the
                                     question an auditor actually asks — "why does this check
                                     matter to me?" — without making the reader cross-reference the
@@ -933,7 +933,7 @@ function SuppressionControl({
           onChange={(e) => onDraft(e.target.value)}
           placeholder={suppressed ? "Why turn it back on?" : "Why turn this check off?"}
           className="h-8 flex-1 text-xs"
-          aria-label="Suppression reason"
+          aria-label={suppressed ? "Why turn it back on?" : "Why turn this check off?"}
         />
         {suppressed ? (
           <button
@@ -995,7 +995,7 @@ function SuppressedTab({
   onUnsuppress: (id: string) => void;
   onGoToRules: () => void;
 }) {
-  const titleOf = (id: string) => rules.find((r) => r.id === id)?.title ?? id;
+  const titleOf = (id: string) => withPlaceholders(rules.find((r) => r.id === id)?.title ?? id);
   const active = Array.from(suppressions.values());
 
   return (
@@ -1009,8 +1009,8 @@ function SuppressedTab({
             <button className="underline underline-offset-2" onClick={onGoToRules}>
               Rules
             </button>{" "}
-            tab and choose Turn off, with a reason. To hide just one finding, use Ignore next to it in System
-            review. Every decision is logged below, and nothing is deleted.
+            tab and choose Turn off, with a reason. To hide just one finding, use Ignore next to it on the
+            Scan page. Every decision is logged below, and nothing is deleted.
           </Callout>
         ) : (
           <div className="overflow-hidden rounded-lg border border-border bg-card">

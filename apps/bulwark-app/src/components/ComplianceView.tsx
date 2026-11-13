@@ -35,7 +35,7 @@ interface ScanRunResult {
   findings: Finding[];
   host_fingerprint: string;
   privileged_collectors_skipped: string[];
-  collector_errors: { collector: string; message: string }[];
+  collector_errors: { collector: string; message: string; skipped?: boolean }[];
 }
 
 type ScanEvent =
@@ -99,6 +99,7 @@ export function ComplianceView({ active }: { active: boolean }) {
         setHasScanned(true);
         setStreamed(false);
       })
+      .catch(() => setErrors((prev) => [...prev, "Could not load saved scan results. Run the check again."]))
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `scanning` guards, must not retrigger
   }, [revision]);
@@ -215,7 +216,9 @@ export function ComplianceView({ active }: { active: boolean }) {
         ].sort(bySeverity),
       );
       setSkippedPrivileged(result.privileged_collectors_skipped);
-      setErrors(result.collector_errors.map((e) => `${e.collector}: ${e.message}`));
+      // As on Scan: a file that could not be read is a note about a skipped check, not a failure.
+      setErrors(result.collector_errors.filter((e) => !e.skipped).map((e) => `${e.collector}: ${e.message}`));
+      setUnreadFiles(result.collector_errors.filter((e) => e.skipped).map((e) => e.message));
       setPrivilegedRunDone(true);
       bump();
     } catch (e) {

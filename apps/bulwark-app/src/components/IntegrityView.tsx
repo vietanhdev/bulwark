@@ -21,7 +21,11 @@ interface Finding {
 
 interface DashboardSnapshot {
   findings: Finding[];
+  /** Findings the user chose to ignore: still true of the machine, only hidden from the list. */
+  suppressedFindings?: Finding[];
   meta: unknown | null;
+  /** The checks the stored scan actually ran. */
+  rules_evaluated?: string[];
 }
 
 /* File-integrity findings are the ones the FIM collector raises. Matching on the rule-ID
@@ -46,14 +50,28 @@ export function IntegrityView() {
   // means nothing at all, and the empty state must not claim a clean bill of health nobody has
   // earned — the same mistake the Compliance view used to make with its rows of green ticks.
   const [hasScanned, setHasScanned] = useState(false);
+  // A scan having run is not enough either: "no file has changed" is only true when that scan ran
+  // the file checks. They do not run on every system, and a scan can skip them.
+  const [checked, setChecked] = useState(false);
+  const [ignored, setIgnored] = useState(0);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   useEffect(() => {
+    const isFim = (id: string) => id.startsWith(FIM_RULE_PREFIX);
     invoke<DashboardSnapshot>("dashboard_snapshot")
       .then((snap) => {
-        setFindings(snap.findings.filter((f) => f.rule_id.startsWith(FIM_RULE_PREFIX)));
+        const fim = snap.findings.filter((f) => isFim(f.rule_id));
+        const hidden = (snap.suppressedFindings ?? []).filter((f) => isFim(f.rule_id)).length;
+        setFindings(fim);
+        setIgnored(hidden);
         setHasScanned(snap.meta !== null);
+        setChecked(fim.length > 0 || hidden > 0 || (snap.rules_evaluated ?? []).some(isFim));
+        setLoadFailed(false);
       })
-      .catch(() => setFindings([]));
+      .catch(() => {
+        setFindings([]);
+        setLoadFailed(true);
+      });
   }, [revision]);
 
   const drift = useMemo(() => findings.length > 0, [findings]);
@@ -61,6 +79,8 @@ export function IntegrityView() {
   async function runBaseline() {
     setBaselining(true);
     setError(null);
+    // Cleared first, so a failed attempt is not followed by the previous "recorded" message.
+    setBaselineCount(null);
     try {
       setBaselineCount(await invoke<number>("fim_baseline"));
       // A fresh baseline changes what the next scan will consider "changed", so anything
@@ -73,18 +93,20 @@ export function IntegrityView() {
     }
   }
 
-  // The watched set is Unix system files (/etc/passwd, PAM, sshd_config, sudo). Windows has none of
-  // them, so a baseline would record nothing and "no file has changed" would be a claim with no
-  // check behind it.
-  if (platform === "windows") {
+  // The file checks (BLWK-FIM-*) are Linux rules and their collector is Linux-only. Anywhere else a
+  // baseline could be recorded, but no scan would ever compare against it, and "no file has
+  // changed" would be a claim with no check behind it.
+  if (platform !== "linux") {
     return (
       <PageShell title="File changes" description="Compare tracked system files with a saved baseline.">
         <div className="rounded-lg border border-dashed border-border px-6 py-14 text-center">
           <FileCheck2 className="mx-auto h-7 w-7 text-muted-foreground/40" strokeWidth={1.5} />
-          <p className="mt-3 text-sm font-medium">Not available on Windows yet.</p>
+          <p className="mt-3 text-sm font-medium">
+            Not available on {platform === "windows" ? "Windows" : "macOS"} yet.
+          </p>
           <p className="mx-auto mt-1 max-w-xl text-sm text-muted-foreground">
-            The files this watches — accounts, sign-in and SSH configuration, sudo — are Linux and macOS
-            system files.
+            The checks behind this page — accounts, sign-in and SSH configuration, sudo — run on Linux only
+            for now, so there is nothing here to compare.
           </p>
         </div>
       </PageShell>
@@ -137,12 +159,22 @@ export function IntegrityView() {
             <div className="rounded-lg border border-dashed border-border py-14 text-center">
               <FileCheck2 className="mx-auto h-7 w-7 text-muted-foreground/40" strokeWidth={1.5} />
               <p className="mt-3 text-sm font-medium">
-                {hasScanned ? "No watched file has changed." : "This host hasn't been scanned yet."}
+                {loadFailed
+                  ? "The saved results could not be read."
+                  : !hasScanned
+                    ? "This host hasn't been scanned yet."
+                    : !checked
+                      ? "The last scan did not check these files."
+                      : ignored > 0
+                        ? "No other watched file has changed."
+                        : "No watched file has changed."}
               </p>
               <p className="mt-1 text-sm text-muted-foreground">
-                {hasScanned
-                  ? "Nothing has drifted from the recorded baseline."
-                  : "Run a scan from Scan to compare these files against the baseline."}
+                {loadFailed || !hasScanned || !checked
+                  ? "Run a scan from Scan to compare these files against the baseline."
+                  : ignored > 0
+                    ? `${ignored} ${ignored === 1 ? "change is" : "changes are"} hidden because you chose to ignore ${ignored === 1 ? "it" : "them"}. Rule catalog → Ignored lists what is ignored.`
+                    : "Nothing has drifted from the recorded baseline."}
               </p>
             </div>
           ) : (

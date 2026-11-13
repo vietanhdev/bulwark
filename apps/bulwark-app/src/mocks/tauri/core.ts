@@ -3,6 +3,7 @@
 // instead of a real scan.
 import rulesFixture from "./fixtures/rules.json";
 import { machineHandlers } from "./machines";
+import { ignoreKeyOf } from "@/components/CategoryFindings";
 import {
   dashboardSnapshot,
   scanRunResult,
@@ -171,7 +172,8 @@ let aiSettings = {
   auto_scan_enabled: true,
 };
 let realtimeAvStatus = {
-  enabled: false,
+  // `?realtime=on`: the watcher was left on by an earlier session.
+  enabled: new URLSearchParams(window.location.search).get("realtime") === "on",
   watched_paths: ["/home/user/Downloads", "/home/user/Desktop"],
   files_scanned: 0,
   threats_found: 0,
@@ -180,6 +182,13 @@ let realtimeAvStatus = {
 
 type Args = Record<string, unknown> | undefined;
 
+const UNREAD_FILE = {
+  collector: "credential_stores",
+  message:
+    "could not check /home/user/.netrc: it is not a regular file inside this home folder (a link that leaves it, a pipe, or a file that could not be opened)",
+  skipped: true,
+};
+
 async function streamScan(channel: Channel<unknown>) {
   await sleep(300);
   for (const f of findings) {
@@ -187,15 +196,7 @@ async function streamScan(channel: Channel<unknown>) {
     await sleep(120);
   }
   if (new URLSearchParams(window.location.search).has("scanUnread"))
-    channel.onmessage?.({
-      event: "collectorError",
-      data: {
-        collector: "credential_stores",
-        message:
-          "could not check /home/user/.netrc: it is not a regular file inside this home folder (a link that leaves it, a pipe, or a file that could not be opened)",
-        skipped: true,
-      },
-    });
+    channel.onmessage?.({ event: "collectorError", data: UNREAD_FILE });
   channel.onmessage?.({
     event: "complete",
     data: {
@@ -275,6 +276,13 @@ const mockAudit: {
   actor: string;
   at: string;
 }[] = [];
+
+function mockIgnored(f: Parameters<typeof ignoreKeyOf>[0]): boolean {
+  return (
+    mockSuppressions.some((sup) => sup.rule_id === f.rule_id) ||
+    mockPlaceIgnores.some((p) => p.rule_id === f.rule_id && p.location === ignoreKeyOf(f))
+  );
+}
 
 /* Report builders for the autofix mocks. Shaped exactly like `bulwark-core`'s report structs so
    the browser mock exercises the same rendering path the real backend drives. */
@@ -596,6 +604,15 @@ const handlers: Record<string, (args: Args) => unknown> = {
   },
   ai_redact: (args) => {
     const paths = (args?.paths as string[]) ?? [];
+    // `?redactFail`: the preview works, the rewrite is refused. Like the real command, that is a
+    // normal return with the reason in `errors` and nothing applied.
+    if (args?.apply && new URLSearchParams(window.location.search).has("redactFail"))
+      return {
+        dry_run: false,
+        entries: [],
+        total_secrets: 0,
+        errors: paths.map((path) => `${path}: could not replace the file (permission denied)`),
+      };
     // Pretend the redaction happened: drop the redactable findings for exactly the files asked
     // for. Scoped to `paths` rather than clearing every redactable finding, so the per-issue
     // redact button can be exercised in the browser mock without looking like a bulk redact.
@@ -627,6 +644,10 @@ const handlers: Record<string, (args: Args) => unknown> = {
           }
         : {
             ...dashboardSnapshot,
+            // Like the store: a finding whose check is turned off, or that is ignored at its place,
+            // moves to the accepted list instead of disappearing.
+            findings: dashboardSnapshot.findings.filter((f) => !mockIgnored(f)),
+            suppressedFindings: dashboardSnapshot.findings.filter(mockIgnored),
             agent_scanned: true,
             // What a real unprivileged Linux scan records: every Linux rule whose collector wasn't skipped.
             rules_evaluated: rulesFixture
@@ -648,8 +669,16 @@ const handlers: Record<string, (args: Args) => unknown> = {
     monitoringStatus = { ...monitoringStatus, interval_minutes: Number(args?.minutes) };
     return monitoringStatus;
   },
-  scan_privileged: () => scanRunResult,
-  clamav_info: () => clamavInfo,
+  // With `?scanUnread`, the privileged run also meets the file that could not be read.
+  scan_privileged: () =>
+    new URLSearchParams(window.location.search).has("scanUnread")
+      ? { ...scanRunResult, collector_errors: [UNREAD_FILE] }
+      : scanRunResult,
+  // `?clamav=missing`: ClamAV is not installed.
+  clamav_info: () =>
+    new URLSearchParams(window.location.search).get("clamav") === "missing"
+      ? { version: null, install_command: "sudo apt install clamav clamav-freshclam", sandbox: null }
+      : clamavInfo,
   fim_baseline: () => 7,
   scan_cancel: () => null,
   realtime_av_get_status: () => realtimeAvStatus,
@@ -697,6 +726,28 @@ const handlers: Record<string, (args: Args) => unknown> = {
   }),
   fix_ssh_permissions: (args?: Args) => {
     const apply = Boolean(args?.apply);
+    // `?sshPerms=failed`: nothing could be checked, as on a system without file modes.
+    if (new URLSearchParams(window.location.search).get("sshPerms") === "failed") {
+      const failed = (path: string, label: string, desired_mode: string) => ({
+        path,
+        label,
+        current_mode: null,
+        desired_mode,
+        outcome: { status: "failed", reason: "file modes are not supported on this platform" },
+      });
+      return {
+        results: [
+          failed("/home/user/.ssh", ".ssh directory", "700"),
+          failed("/home/user/.ssh/id_ed25519", "private key", "600"),
+        ],
+        tightened: 0,
+        would_tighten: 0,
+        already_ok: 0,
+        missing: 0,
+        skipped_symlink: 0,
+        failed: 2,
+      };
+    }
     const status = apply ? "tightened" : "would_tighten";
     return {
       results: [

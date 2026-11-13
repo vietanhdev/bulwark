@@ -75,10 +75,11 @@ export function PathDropZone({ active, mode, label, onPaths, className }: PathDr
   }, []);
 
   async function browse() {
+    // A picker that fails to open (no portal, a denied permission) adds nothing; dropping still works.
     const selection = await open({
       multiple: true,
       directory: mode === "folders-only",
-    });
+    }).catch(() => null);
     if (!selection) return;
     onPaths(Array.isArray(selection) ? selection : [selection]);
   }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   AlertTriangle,
@@ -58,18 +58,29 @@ export function ConnectionCheck({
   const [running, setRunning] = useState(autoRun);
   const [error, setError] = useState<string | null>(null);
 
-  const check = useCallback(
-    () =>
-      invoke<TestReport>("machine_test", { args: { host: machineId, privileged } }).then(
-        (r) => {
-          setReport(r);
-          setError(null);
-          onResult?.(r);
-        },
-        (e) => setError(String(e)),
-      ),
-    [machineId, privileged, onResult],
+  // Only the newest check may report. A slow one that was left behind (Back, then Continue again
+  // in the add dialog) would otherwise arrive later and overwrite the newer result.
+  const latest = useRef(0);
+  useEffect(
+    () => () => {
+      latest.current += 1;
+    },
+    [],
   );
+  const check = useCallback(() => {
+    const id = ++latest.current;
+    return invoke<TestReport>("machine_test", { args: { host: machineId, privileged } }).then(
+      (r) => {
+        if (id !== latest.current) return;
+        setReport(r);
+        setError(null);
+        onResult?.(r);
+      },
+      (e) => {
+        if (id === latest.current) setError(String(e));
+      },
+    );
+  }, [machineId, privileged, onResult]);
 
   const run = useCallback(async () => {
     setRunning(true);
@@ -387,6 +398,7 @@ function KeyAccess({
             type="password"
             autoComplete="off"
             placeholder={`Password on ${machineName}`}
+            aria-label={`Password on ${machineName}`}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             className="max-w-xs"

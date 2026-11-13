@@ -190,7 +190,7 @@ interface PermResult {
   label: string;
   current_mode: string | null;
   desired_mode: string;
-  outcome: { status: string; from?: string; to?: string };
+  outcome: { status: string; from?: string; to?: string; reason?: string };
 }
 interface PermReport {
   results: PermResult[];
@@ -214,6 +214,8 @@ export function SshPermFix() {
   const [error, setError] = useState<string | null>(null);
   const [report, setReport] = useState<PermReport | null>(null);
   const [applied, setApplied] = useState(false);
+  // Which button started the run in progress, so the spinner sits on that one.
+  const [running, setRunning] = useState<"check" | "apply" | null>(null);
 
   const changes = (report?.tightened ?? 0) + (report?.would_tighten ?? 0);
   const previewed = report !== null;
@@ -221,6 +223,7 @@ export function SshPermFix() {
   async function run(apply: boolean) {
     setError(null);
     setBusy(true);
+    setRunning(apply ? "apply" : "check");
     try {
       const r = await invoke<PermReport>("fix_ssh_permissions", { apply });
       setReport(r);
@@ -229,6 +232,7 @@ export function SshPermFix() {
       setError(String(e));
     } finally {
       setBusy(false);
+      setRunning(null);
     }
   }
 
@@ -246,12 +250,12 @@ export function SshPermFix() {
 
           <div className="mt-3 flex flex-wrap gap-2">
             <Button variant="outline" onClick={() => run(false)} disabled={busy} className="self-start">
-              {busy && !applied ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {running === "check" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               {previewed ? "Re-check" : "Check permissions"}
             </Button>
             {previewed && changes > 0 && (
               <Button onClick={() => run(true)} disabled={busy} className="self-start">
-                {busy && applied ? (
+                {running === "apply" ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
                   <ShieldCheck className="h-4 w-4" />
@@ -269,7 +273,12 @@ export function SshPermFix() {
 
           {report && (
             <div className="mt-3 text-sm">
-              {changes === 0 ? (
+              {changes === 0 && report.failed > 0 ? (
+                // A file that could not be read or changed has proved nothing: never the green line.
+                <p className="font-medium">
+                  {report.failed} file{report.failed === 1 ? "" : "s"} could not be checked or changed.
+                </p>
+              ) : changes === 0 ? (
                 <p className="flex items-center gap-1.5 font-medium text-[var(--sev-resolved-fg)]">
                   <ShieldCheck className="h-4 w-4" /> All checked permissions are already correct.
                 </p>
@@ -277,7 +286,7 @@ export function SshPermFix() {
                 <p className="font-medium">
                   {applied
                     ? `${report.tightened} tightened${report.failed > 0 ? `, ${report.failed} failed` : ""}.`
-                    : `${report.would_tighten} file${report.would_tighten === 1 ? "" : "s"} would be tightened.`}
+                    : `${report.would_tighten} file${report.would_tighten === 1 ? "" : "s"} would be tightened${report.failed > 0 ? `, ${report.failed} could not be checked` : ""}.`}
                 </p>
               )}
               <ul className="mt-2 space-y-1 font-mono text-xs">
@@ -288,6 +297,16 @@ export function SshPermFix() {
                       <span className="truncate text-muted-foreground">{r.path}</span>
                       <span className="shrink-0 text-[var(--sev-resolved-fg)]">
                         {r.outcome.from} → {r.outcome.to}
+                      </span>
+                    </li>
+                  ))}
+                {report.results
+                  .filter((r) => r.outcome.status === "failed")
+                  .map((r) => (
+                    <li key={r.path} className="flex flex-wrap items-baseline justify-between gap-x-2">
+                      <span className="truncate text-muted-foreground">{r.path}</span>
+                      <span className="text-[var(--sev-critical-fg)] [overflow-wrap:anywhere]">
+                        {r.outcome.reason ?? "failed"}
                       </span>
                     </li>
                   ))}

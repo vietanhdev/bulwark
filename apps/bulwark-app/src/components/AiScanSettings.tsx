@@ -53,7 +53,7 @@ export function AiScanSettings({ active }: { active: boolean }) {
       {settings && (
         <div className="flex flex-col gap-4 rounded-lg border border-border bg-card p-4">
           <p className="text-xs text-muted-foreground">
-            Checkups also check your AI coding assistants (Claude Code, Cursor, Copilot, Codex and more) for
+            A scan also checks your AI coding assistants (Claude Code, Cursor, Copilot, Codex and more) for
             API keys pasted into sessions and memory, and for settings a prompt injection could abuse.
           </p>
           <div className="flex items-center justify-between gap-3">

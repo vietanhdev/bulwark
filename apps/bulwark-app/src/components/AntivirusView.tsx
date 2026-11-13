@@ -76,6 +76,8 @@ export function AntivirusView({ active }: { active: boolean }) {
 
   const [currentFile, setCurrentFile] = useState<string | null>(null);
   const [filesScanned, setFilesScanned] = useState(0);
+  // The engine's own total when it reports one, else the files counted as they streamed past.
+  const scannedCount = result?.files_scanned ?? filesScanned;
   const [liveThreats, setLiveThreats] = useState<ThreatDetection[]>([]);
 
   const [customPaths, setCustomPaths] = useState<string[]>([]);
@@ -294,14 +296,22 @@ export function AntivirusView({ active }: { active: boolean }) {
                 <div
                   className={cn(
                     "flex h-9 w-9 shrink-0 items-center justify-center rounded-full",
-                    realtime?.enabled ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground",
+                    realtime?.enabled && realtime.watched_paths.length > 0 && !unavailable
+                      ? "bg-primary/15 text-primary"
+                      : "bg-muted text-muted-foreground",
                   )}
                 >
                   <Eye className={"h-4 w-4"} strokeWidth={1.75} />
                 </div>
                 <div>
                   <div className="text-sm font-medium">
-                    {realtime?.enabled ? "Watching for new files" : "Not watching"}
+                    {!realtime?.enabled
+                      ? "Not watching"
+                      : unavailable
+                        ? "On, but nothing to scan with"
+                        : realtime.watched_paths.length > 0
+                          ? "Watching for new files"
+                          : "On, but no folder to watch"}
                   </div>
                   <div className="text-xs text-muted-foreground">
                     Scans files the moment they land in a watched folder
@@ -310,7 +320,8 @@ export function AntivirusView({ active }: { active: boolean }) {
               </div>
               <Switch
                 checked={realtime?.enabled ?? false}
-                disabled={realtimeBusy || !realtime || unavailable}
+                // Without an engine it cannot be turned on, but one left on can still be turned off.
+                disabled={realtimeBusy || !realtime || (unavailable && !realtime.enabled)}
                 onCheckedChange={toggleRealtime}
                 aria-label="Real-time protection"
               />
@@ -429,8 +440,9 @@ export function AntivirusView({ active }: { active: boolean }) {
 
           {result?.cancelled && (
             <Callout tone="warning" className="mt-4">
-              <span className="font-medium">Scan stopped.</span> {result.files_scanned ?? filesScanned}{" "}
-              file(s) were checked before you stopped; the rest were not scanned.
+              <span className="font-medium">Scan stopped.</span> {scannedCount}{" "}
+              {scannedCount === 1 ? "file was" : "files were"} checked before you stopped; the rest were not
+              scanned.
             </Callout>
           )}
 
@@ -438,40 +450,73 @@ export function AntivirusView({ active }: { active: boolean }) {
             <Callout tone="critical" className="mt-4">
               <span className="font-medium">Scan did not complete: {result.scan_error}.</span> The files were
               not actually inspected, so this is not a clean result — resolve the error (for a missing virus
-              database, run <span className="font-mono">sudo freshclam</span>) and scan again.
+              database,{" "}
+              {platform === "windows" ? (
+                <>
+                  run <span className="font-mono">freshclam</span> from an administrator terminal
+                </>
+              ) : (
+                <>
+                  run <span className="font-mono">sudo freshclam</span>
+                </>
+              )}
+              ) and scan again.
             </Callout>
           )}
 
-          {result?.clamscan_available && !result.cancelled && !result.scan_error && (
-            <div
-              className="rail mt-4 flex items-center gap-3 rounded-md border border-border bg-card py-3.5 pr-4"
-              style={railStyle(result.threats.length > 0 ? "critical" : "resolved")}
-            >
-              {result.threats.length === 0 ? (
-                <ShieldCheck
-                  className="h-6 w-6 shrink-0"
-                  style={{ color: "var(--sev-resolved)" }}
-                  strokeWidth={1.75}
-                />
-              ) : (
-                <ShieldX
-                  className="h-6 w-6 shrink-0"
-                  style={{ color: "var(--sev-critical)" }}
-                  strokeWidth={1.75}
-                />
-              )}
-              <div className="min-w-0">
-                <div className="text-sm font-semibold">
-                  {result.threats.length === 0
-                    ? "No threats found"
-                    : `${result.threats.length} threat${result.threats.length === 1 ? "" : "s"} found`}
-                </div>
-                <div className="truncate font-mono text-xs text-muted-foreground">
-                  {result.files_scanned ?? filesScanned} files scanned in {result.scanned_paths.join(", ")}
+          {result && !result.clamscan_available && !result.cancelled && !result.scan_error && (
+            <Callout tone="warning" className="mt-4">
+              <span className="font-medium">Nothing was scanned.</span> ClamAV could not be started, so no
+              file was inspected.
+            </Callout>
+          )}
+
+          {/* A scan that inspected no file has found nothing out: said plainly, never drawn green. */}
+          {result?.clamscan_available &&
+            !result.cancelled &&
+            !result.scan_error &&
+            result.threats.length === 0 &&
+            scannedCount === 0 && (
+              <Callout tone="info" className="mt-4">
+                <span className="font-medium">No files were scanned.</span> There was nothing to inspect in{" "}
+                {result.scanned_paths.join(", ") || "the chosen locations"}, so this is not a clean result.
+              </Callout>
+            )}
+
+          {result?.clamscan_available &&
+            !result.cancelled &&
+            !result.scan_error &&
+            (result.threats.length > 0 || scannedCount > 0) && (
+              <div
+                className="rail mt-4 flex items-center gap-3 rounded-md border border-border bg-card py-3.5 pr-4"
+                style={railStyle(result.threats.length > 0 ? "critical" : "resolved")}
+              >
+                {result.threats.length === 0 ? (
+                  <ShieldCheck
+                    className="h-6 w-6 shrink-0"
+                    style={{ color: "var(--sev-resolved)" }}
+                    strokeWidth={1.75}
+                  />
+                ) : (
+                  <ShieldX
+                    className="h-6 w-6 shrink-0"
+                    style={{ color: "var(--sev-critical)" }}
+                    strokeWidth={1.75}
+                  />
+                )}
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold">
+                    {result.threats.length === 0
+                      ? "No threats found"
+                      : `${result.threats.length} threat${result.threats.length === 1 ? "" : "s"} found`}
+                  </div>
+                  <div className="truncate font-mono text-xs text-muted-foreground">
+                    {scannedCount} {scannedCount === 1 ? "file" : "files"} scanned in{" "}
+                    {result.scanned_paths.join(", ")}
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
           {threats.length > 0 && (
             <div className="mt-2.5 flex flex-col gap-2">
