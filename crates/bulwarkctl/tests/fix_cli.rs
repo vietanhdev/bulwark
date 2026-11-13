@@ -326,8 +326,9 @@ fn ssh_perms_never_adds_a_permission_bit() {
 
     let (out, ok) = run_fix(home.path(), &["ssh-perms"]);
     assert!(ok, "{out}");
+    // "→" in a UTF-8 locale, "->" without one (the CI containers have none).
     assert!(
-        out.contains("660 → 640"),
+        out.contains("660 → 640") || out.contains("660 -> 640"),
         "the preview shows the real new mode:\n{out}"
     );
 
