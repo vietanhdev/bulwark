@@ -13,7 +13,7 @@
 //! Everything here takes paths as parameters and touches only the filesystem, so it's testable
 //! against a `tempdir` without a real home directory — the same discipline the collectors keep.
 
-use std::collections::BTreeSet;
+use crate::homefs;
 use std::path::{Path, PathBuf};
 
 /// Which assistant an artifact belongs to — the label a finding shows so a user knows *which*
@@ -134,64 +134,69 @@ pub const COMMON_CODE_ROOTS: &[&str] = &[
     "work",
 ];
 
-/// The marker files/dirs whose presence makes a directory a "workspace" worth scanning. Kept in
-/// sync with the artifacts `workspace_artifacts` will then look for.
-const WORKSPACE_MARKERS: &[&str] = &[
-    ".claude",
-    "CLAUDE.md",
-    "CLAUDE.local.md",
-    "AGENTS.md",
-    "AGENT.md",
-    "GEMINI.md",
-    "QWEN.md",
-    "CRUSH.md",
-    "WARP.md",
-    "AmazonQ.md",
-    ".agents",
-    ".cursor",
-    ".cursorrules",
-    ".mcp.json",
-    ".windsurf",
-    ".windsurfrules",
-    ".devin",
-    ".continue",
-    ".clinerules",
-    ".roo",
-    ".roorules",
-    ".roomodes",
-    ".kilo",
-    ".kilocode",
-    "kilo.json",
-    "kilo.jsonc",
-    ".aider.conf.yml",
-    ".aider.chat.history.md",
-    ".gemini",
-    ".qwen",
-    ".kiro",
-    ".amazonq",
-    ".zed",
-    ".rules",
-    ".goosehints",
-    ".opencode",
-    "opencode.json",
-    "opencode.jsonc",
-    "crush.json",
-    ".crush.json",
-    "crushrc",
-    ".crushrc",
-    ".amp",
-    ".augment",
-    ".augment-guidelines",
-    ".junie",
-    ".aiassistant",
-    ".github/copilot-instructions.md",
-    ".github/instructions",
-    ".github/agents",
-    ".github/prompts",
-    ".github/hooks",
-    ".github/mcp.json",
-    ".vscode/mcp.json",
+/// Folders many projects have whether or not an AI agent is used there. A location inside one is
+/// a marker by its full path (`.github/copilot-instructions.md`), never by the folder alone.
+const SHARED_DIRS: &[&str] = &[".github", ".vscode"];
+
+/// Locations that are checked when a project is scanned but say nothing about an agent being used
+/// in a folder, so they do not make a folder a workspace on their own. Every entry needs a reason.
+const NOT_A_MARKER: &[&str] = &[
+    // Nearly every project has one; it is checked for exposed keys in projects found another way.
+    ".env",
 ];
+
+/// Markers that exist in very many projects (editor settings). A folder with only these is still
+/// checked — `chat.tools.autoApprove` lives there — but it is the first to go when the workspace
+/// limit is reached, and the sweep still looks one level below it for agent projects.
+const WEAK_MARKERS: &[&str] = &[".vscode/settings.json", ".vscode/tasks.json"];
+
+/// What makes a folder a workspace, derived from [`WORKSPACE_SPECS`] so the two cannot drift: a
+/// location that is checked is a location that gets a project found.
+struct Markers {
+    /// Names directly in the project folder: an agent's own folder (`.claude`) or a file
+    /// (`CLAUDE.md`).
+    top: std::collections::HashSet<&'static str>,
+    /// Full paths inside a shared folder, by that folder's name; the flag is "weak".
+    shared: Vec<(&'static str, &'static str, bool)>,
+}
+
+/// The marker for one spec location: the first path component, or the whole path inside a shared
+/// folder. `None` for the few locations that are deliberately not markers.
+fn marker_for(rel: &'static str) -> Option<&'static str> {
+    if NOT_A_MARKER.contains(&rel) {
+        return None;
+    }
+    let first = rel.split('/').next().unwrap_or(rel);
+    Some(if SHARED_DIRS.contains(&first) {
+        rel
+    } else {
+        first
+    })
+}
+
+fn markers() -> &'static Markers {
+    static MARKERS: std::sync::OnceLock<Markers> = std::sync::OnceLock::new();
+    MARKERS.get_or_init(|| {
+        let mut top = std::collections::HashSet::new();
+        let mut shared: Vec<(&'static str, &'static str, bool)> = Vec::new();
+        for Spec(rel, ..) in WORKSPACE_SPECS {
+            let Some(marker) = marker_for(rel) else {
+                continue;
+            };
+            match marker.split_once('/') {
+                Some((dir, _)) => {
+                    if !shared.iter().any(|(_, full, _)| *full == marker) {
+                        shared.push((dir, marker, WEAK_MARKERS.contains(&marker)));
+                    }
+                }
+                None => {
+                    top.insert(marker);
+                }
+            }
+        }
+        Markers { top, shared }
+    })
+}
 
 /// Directory names never worth descending into during the workspace sweep — dependency and VCS
 /// trees that would make discovery slow and could contain thousands of vendored `CLAUDE.md`-like
@@ -210,8 +215,66 @@ const SWEEP_SKIP_DIRS: &[&str] = &[
     ".next",
 ];
 
+/// What one look at a folder found.
+#[derive(Default)]
+struct Look {
+    /// An agent's own marker is here.
+    strong: bool,
+    /// Only editor-level markers are here.
+    weak: bool,
+    /// The folders inside it (filled in only when asked for).
+    subdirs: Vec<PathBuf>,
+}
+
+/// Lists `dir` once and says which markers it holds. One directory listing replaces a `stat` per
+/// marker, which matters when a code root holds hundreds of folders. `Err` when the folder cannot
+/// be listed.
+fn look(dir: &Path, want_subdirs: bool) -> std::io::Result<Look> {
+    let table = markers();
+    let mut found = Look::default();
+    let mut shared_present: Vec<&'static str> = Vec::new();
+    for entry in std::fs::read_dir(dir)?.flatten() {
+        let name = entry.file_name();
+        if let Some(name) = name.to_str() {
+            if table.top.contains(name) {
+                found.strong = true;
+            }
+            if let Some(dir) = SHARED_DIRS.iter().find(|d| **d == name) {
+                shared_present.push(*dir);
+            }
+        }
+        if want_subdirs {
+            // The entry's own type where it is a folder; a link is followed with one `stat`.
+            let is_dir = match entry.file_type() {
+                Ok(t) if t.is_dir() => true,
+                Ok(t) if t.is_symlink() => entry.path().is_dir(),
+                _ => false,
+            };
+            if is_dir {
+                found.subdirs.push(entry.path());
+            }
+        }
+    }
+    for (shared_dir, full, weak) in &table.shared {
+        if found.strong {
+            break; // nothing more to learn
+        }
+        if !shared_present.contains(shared_dir) {
+            continue;
+        }
+        if dir.join(full).exists() {
+            if *weak {
+                found.weak = true;
+            } else {
+                found.strong = true;
+            }
+        }
+    }
+    Ok(found)
+}
+
 fn has_any_marker(dir: &Path) -> bool {
-    WORKSPACE_MARKERS.iter().any(|m| dir.join(m).exists())
+    look(dir, false).is_ok_and(|l| l.strong || l.weak)
 }
 
 /// Decodes a `~/.claude/projects/` directory name back to the absolute path it encodes. Claude
@@ -227,28 +290,155 @@ fn decode_claude_project_dir(encoded: &str) -> Option<PathBuf> {
     candidate.is_dir().then_some(candidate)
 }
 
+/// How much of a transcript is read to find the folder it was recorded in.
+const CWD_READ_BYTES: u64 = 64 * 1024;
+/// How many transcripts of one project are tried.
+const CWD_FILES_TRIED: usize = 3;
+/// How many project folders get this second look in one scan. Each is a folder listing and a
+/// read of at most [`CWD_FILES_TRIED`] × [`CWD_READ_BYTES`]; going past the limit is reported.
+const MAX_CWD_LOOKUPS: usize = 5000;
+
+/// The way Claude Code turns a project path into a folder name: every character that is not a
+/// letter or digit becomes `-`. Applied to both sides before comparing, so an older release that
+/// kept a few more characters still matches.
+fn claude_project_name(path: &str) -> String {
+    path.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+/// The project folder a `~/.claude/projects/<name>` directory belongs to, read from the `cwd` its
+/// transcripts record. This is what finds a project whose path contains a `-`, `.` or `_`, where
+/// [`decode_claude_project_dir`] cannot tell a separator from the real character.
+///
+/// The value is text from a file, so it is trusted only as far as it can be checked: it must be an
+/// absolute path, a folder that exists, and one whose name encodes back to this very directory
+/// name — a transcript cannot point the scan at an unrelated place.
+fn project_dir_from_transcripts(home: &homefs::Root, dir: &Path, name: &str) -> Option<PathBuf> {
+    let wanted = claude_project_name(name);
+    let transcripts = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
+        .take(CWD_FILES_TRIED);
+    for transcript in transcripts {
+        let Some(file) = home.try_open(&transcript).ok().flatten() else {
+            continue;
+        };
+        let Some(text) = homefs::read_start(file, CWD_READ_BYTES) else {
+            continue;
+        };
+        for (at, _) in text.match_indices("\"cwd\"") {
+            let rest = text[at + 5..].trim_start();
+            let Some(rest) = rest.strip_prefix(':') else {
+                continue;
+            };
+            // A JSON string, with its escapes (a Windows path is written with `\\`).
+            let mut values = serde_json::Deserializer::from_str(rest).into_iter::<String>();
+            let Some(Ok(cwd)) = values.next() else {
+                continue;
+            };
+            let path = PathBuf::from(&cwd);
+            if path.is_absolute() && claude_project_name(&cwd) == wanted && path.is_dir() {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+/// The workspaces of one scan, and what finding them ran into.
+#[derive(Debug, Default)]
+pub struct Workspaces {
+    pub roots: Vec<PathBuf>,
+    /// More were found than `max_workspaces` allows; `roots` holds the first of them.
+    pub capped: bool,
+    /// Folders that exist but could not be looked into.
+    pub problems: Vec<String>,
+    /// For each excluded folder, in the order given: whether it took a workspace out.
+    pub exclusions_used: Vec<bool>,
+}
+
+/// Whether `path` is `dir` or inside it, comparing the real locations as well as the names given,
+/// so a relative path, a link or a trailing slash does not make an exclusion miss.
+pub(crate) fn is_under(path: &Path, dir: &Path, dir_real: Option<&Path>) -> bool {
+    if path.starts_with(dir) {
+        return true;
+    }
+    let Some(dir_real) = dir_real else {
+        return false;
+    };
+    path.starts_with(dir_real)
+        || std::fs::canonicalize(path).is_ok_and(|real| real.starts_with(dir_real))
+}
+
 /// Discovers workspace roots from all three sources, de-duplicated. `configured_roots` are
-/// user-added directories (each swept like a common root); `excluded` roots are dropped from the
-/// result even if a marker is present. `max_workspaces` caps the result so a pathological home
-/// directory can't make a scan unbounded — the cap being hit is worth surfacing to the user.
+/// user-added directories (each swept like a common root); a workspace at or under an `excluded`
+/// folder is dropped even if a marker is present. `max_workspaces` caps the result so a
+/// pathological home directory can't make a scan unbounded — the cap being hit is worth surfacing
+/// to the user.
 pub fn discover_workspaces(
     home: &Path,
     configured_roots: &[PathBuf],
     excluded: &[PathBuf],
     max_workspaces: usize,
 ) -> Vec<PathBuf> {
-    let mut found: BTreeSet<PathBuf> = BTreeSet::new();
+    find_workspaces(home, configured_roots, excluded, max_workspaces).roots
+}
+
+/// [`discover_workspaces`], also reporting whether the limit cut the list short and which folders
+/// could not be listed.
+pub fn find_workspaces(
+    home: &Path,
+    configured_roots: &[PathBuf],
+    excluded: &[PathBuf],
+    max_workspaces: usize,
+) -> Workspaces {
+    // Path → "an agent's own marker is here" (false: editor settings only).
+    type Seen = std::collections::BTreeMap<PathBuf, bool>;
+    fn add(found: &mut Seen, p: PathBuf, strong: bool) {
+        *found.entry(p).or_insert(strong) |= strong;
+    }
+    let mut found = Seen::new();
+    let mut problems = Vec::new();
 
     // Source 1: Claude Code's own record of every project it's opened.
     let projects_dir = home.join(".claude/projects");
-    if let Ok(entries) = std::fs::read_dir(&projects_dir) {
-        for entry in entries.flatten() {
-            if let Some(name) = entry.file_name().to_str() {
+    match std::fs::read_dir(&projects_dir) {
+        Ok(entries) => {
+            let home_root = homefs::Root::new(home);
+            let mut lookups = 0usize;
+            let mut not_looked_up = 0usize;
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let Some(name) = name.to_str() else {
+                    continue;
+                };
                 if let Some(path) = decode_claude_project_dir(name) {
-                    found.insert(path);
+                    add(&mut found, path, true);
+                } else if lookups < MAX_CWD_LOOKUPS {
+                    lookups += 1;
+                    if let Some(path) = home_root
+                        .as_ref()
+                        .and_then(|root| project_dir_from_transcripts(root, &entry.path(), name))
+                    {
+                        add(&mut found, path, true);
+                    }
+                } else {
+                    not_looked_up += 1;
                 }
             }
+            if not_looked_up > 0 {
+                problems.push(format!(
+                    "{}: {not_looked_up} project records beyond the first {MAX_CWD_LOOKUPS} were \
+                     not matched to their folders, so those projects' own files may not have been \
+                     checked (their transcripts were)",
+                    projects_dir.display()
+                ));
+            }
         }
+        Err(e) => problems.extend(unlistable(&projects_dir, &e)),
     }
 
     // Source 2: a shallow sweep of the common code roots (plus configured roots).
@@ -258,45 +448,103 @@ pub fn discover_workspaces(
         .chain(configured_roots.iter().cloned())
         .collect();
     for root in sweep_roots {
-        sweep_root(&root, &mut found);
+        sweep_root(
+            &root,
+            &mut |p, strong| add(&mut found, p, strong),
+            &mut problems,
+        );
     }
 
     // A configured root can itself be a workspace, not just a container of them.
     for root in configured_roots {
         if root.is_dir() && has_any_marker(root) {
-            found.insert(root.clone());
+            add(&mut found, root.clone(), true);
         }
     }
 
-    let excluded: BTreeSet<&Path> = excluded.iter().map(|p| p.as_path()).collect();
-    found
+    let excluded: Vec<(&Path, Option<PathBuf>)> = excluded
+        .iter()
+        .map(|p| (p.as_path(), std::fs::canonicalize(p).ok()))
+        .collect();
+    let mut exclusions_used = vec![false; excluded.len()];
+    let kept: Vec<(PathBuf, bool)> = found
         .into_iter()
-        .filter(|p| !excluded.contains(p.as_path()))
+        .filter(|(p, _)| {
+            let hit = excluded
+                .iter()
+                .position(|(ex, real)| is_under(p, ex, real.as_deref()));
+            if let Some(i) = hit {
+                exclusions_used[i] = true;
+            }
+            hit.is_none()
+        })
+        .collect();
+    let capped = kept.len() > max_workspaces;
+    // Agent projects first, so a home full of folders that only carry editor settings cannot
+    // push a real agent project past the limit.
+    let mut roots: Vec<PathBuf> = kept
+        .iter()
+        .filter(|(_, strong)| *strong)
+        .chain(kept.iter().filter(|(_, strong)| !*strong))
         .take(max_workspaces)
-        .collect()
+        .map(|(p, _)| p.clone())
+        .collect();
+    roots.sort();
+    Workspaces {
+        roots,
+        capped,
+        problems,
+        exclusions_used,
+    }
+}
+
+/// The line for a folder that exists but could not be listed. A folder that is simply not there
+/// is not a problem.
+fn unlistable(dir: &Path, e: &std::io::Error) -> Option<String> {
+    use std::io::ErrorKind::{NotADirectory, NotFound};
+    (!matches!(e.kind(), NotFound | NotADirectory)).then(|| {
+        format!(
+            "{}: this folder could not be listed ({e}), so nothing in it was checked",
+            dir.display()
+        )
+    })
 }
 
 /// Sweeps one container directory two levels deep for marker-bearing workspaces. Two levels
 /// covers both `~/Projects/app` and `~/Projects/org/app` layouts without a full recursive walk.
-fn sweep_root(root: &Path, found: &mut BTreeSet<PathBuf>) {
-    let Ok(level1) = std::fs::read_dir(root) else {
-        return;
+fn sweep_root(root: &Path, add: &mut dyn FnMut(PathBuf, bool), problems: &mut Vec<String>) {
+    let level1 = match look(root, true) {
+        Ok(l) => l.subdirs,
+        Err(e) => {
+            problems.extend(unlistable(root, &e));
+            return;
+        }
     };
-    for e1 in level1.flatten() {
-        let p1 = e1.path();
-        if !p1.is_dir() || is_skip_dir(&p1) {
+    for p1 in level1 {
+        if is_skip_dir(&p1) {
             continue;
         }
-        if has_any_marker(&p1) {
-            found.insert(p1.clone());
+        // A folder below a code root that cannot be listed (another account's, a container's
+        // data volume) is passed over: only the code roots themselves are reported, or every
+        // machine with a root-owned folder in ~/Projects would show a warning on each scan.
+        let Ok(here) = look(&p1, true) else {
+            continue;
+        };
+        if here.strong {
+            add(p1, true);
             continue; // don't also descend into a directory that's already a workspace
         }
-        if let Ok(level2) = std::fs::read_dir(&p1) {
-            for e2 in level2.flatten() {
-                let p2 = e2.path();
-                if p2.is_dir() && !is_skip_dir(&p2) && has_any_marker(&p2) {
-                    found.insert(p2);
-                }
+        if here.weak {
+            add(p1.clone(), false);
+        }
+        for p2 in here.subdirs {
+            if is_skip_dir(&p2) {
+                continue;
+            }
+            match look(&p2, false) {
+                Ok(l) if l.strong => add(p2, true),
+                Ok(l) if l.weak => add(p2, false),
+                _ => {}
             }
         }
     }
@@ -713,32 +961,168 @@ const EXTENSION_STORAGE: &[(&str, Tool, &str)] = &[
     ("kilocode.kilo-code", Kilo, "settings/mcp_settings.json"),
 ];
 
-fn push_if_exists(
-    out: &mut Vec<Artifact>,
-    path: PathBuf,
+/// What discovery found in one place, and what it could not look at.
+#[derive(Debug, Default)]
+pub struct Found {
+    pub artifacts: Vec<Artifact>,
+    /// Things that exist but could not be examined: a folder that cannot be listed, a link that
+    /// leaves the project. Reported by the scan, never dropped.
+    pub problems: Vec<String>,
+}
+
+impl Found {
+    fn problem(&mut self, text: String) {
+        if !self.problems.contains(&text) {
+            self.problems.push(text);
+        }
+    }
+}
+
+/// Whether a spec location can be examined.
+enum Reach {
+    /// Nothing is there.
+    Absent,
+    /// It exists, and everything it resolves to is inside the folder being checked.
+    Inside(std::fs::Metadata),
+    /// It exists but must not be read; already recorded as a problem.
+    Blocked,
+}
+
+/// Looks at `base/rel` without trusting any link on the way. A project's files are written by
+/// whoever wrote the project: a tracked `.claude/commands -> ../../../Documents` would otherwise
+/// pull the user's own documents into the scan (and from there into redaction). The same rule as
+/// [`homefs`]: a link is followed only while what it resolves to stays inside `base`.
+fn reach(out: &mut Found, base: &Path, base_real: &Path, rel: &Path) -> Reach {
+    use std::io::ErrorKind::{NotADirectory, NotFound, PermissionDenied};
+    let path = base.join(rel);
+    let direct = match std::fs::symlink_metadata(&path) {
+        Ok(meta) => meta,
+        Err(e) if matches!(e.kind(), NotFound | NotADirectory) => return Reach::Absent,
+        Err(e) => {
+            // A folder on the way could not be entered. Name that folder, once, instead of every
+            // location under it.
+            let mut blocked = base.to_path_buf();
+            for part in rel.iter() {
+                let next = blocked.join(part);
+                if std::fs::symlink_metadata(&next).is_err_and(|e| e.kind() == PermissionDenied) {
+                    break;
+                }
+                blocked = next;
+            }
+            out.problem(format!(
+                "{}: this folder could not be opened ({e}), so nothing in it was checked",
+                blocked.display()
+            ));
+            return Reach::Blocked;
+        }
+    };
+    // One component and not a link: nothing to resolve.
+    let plain = rel.iter().count() == 1 && !direct.file_type().is_symlink();
+    if !plain {
+        match std::fs::canonicalize(&path) {
+            Ok(real) if real.starts_with(base_real) => {}
+            Ok(_) => {
+                out.problem(format!(
+                    "{}: not checked, because it is a link to a place outside {}",
+                    first_link(base, rel).display(),
+                    base.display()
+                ));
+                return Reach::Blocked;
+            }
+            Err(e) if e.kind() == PermissionDenied => {
+                out.problem(format!("{}: could not be opened ({e})", path.display()));
+                return Reach::Blocked;
+            }
+            // A link that leads nowhere: there is nothing an agent could read either.
+            Err(_) => return Reach::Absent,
+        }
+    }
+    match std::fs::metadata(&path) {
+        Ok(meta) => Reach::Inside(meta),
+        Err(_) => Reach::Absent,
+    }
+}
+
+/// The first component of `base/rel` that is a symbolic link (for the message), else the path.
+fn first_link(base: &Path, rel: &Path) -> PathBuf {
+    let mut cur = base.to_path_buf();
+    for part in rel.iter() {
+        cur.push(part);
+        if std::fs::symlink_metadata(&cur).is_ok_and(|m| m.file_type().is_symlink()) {
+            return cur;
+        }
+    }
+    cur
+}
+
+/// Adds the file at `base/rel` if it is there. A pipe or device in a file's place is added too:
+/// the scan's own open refuses it without waiting on it, and says so, where leaving it out here
+/// would be a silent gap.
+fn add_file(
+    out: &mut Found,
+    base: &Path,
+    base_real: &Path,
+    rel: &Path,
     tool: Tool,
     kind: ArtifactKind,
     ws: Option<&Path>,
 ) {
-    if path.is_file() {
-        out.push(Artifact {
-            path,
-            tool,
-            kind,
-            workspace: ws.map(Path::to_path_buf),
-        });
+    if let Reach::Inside(meta) = reach(out, base, base_real, rel) {
+        if !meta.is_dir() {
+            out.artifacts.push(Artifact {
+                path: base.join(rel),
+                tool,
+                kind,
+                workspace: ws.map(Path::to_path_buf),
+            });
+        }
     }
 }
 
-fn apply_specs(out: &mut Vec<Artifact>, base: &Path, specs: &[Spec], ws: Option<&Path>) {
+/// Adds every file under the folder `base/rel` accepted by `want`.
+#[allow(clippy::too_many_arguments)]
+fn add_dir(
+    out: &mut Found,
+    base: &Path,
+    base_real: &Path,
+    rel: &Path,
+    want: impl Fn(&Path) -> bool,
+    tool: Tool,
+    kind: ArtifactKind,
+    ws: Option<&Path>,
+) {
+    if let Reach::Inside(meta) = reach(out, base, base_real, rel) {
+        if meta.is_dir() {
+            collect_dir(out, &base.join(rel), want, tool, kind, ws);
+        }
+    }
+}
+
+fn apply_specs(out: &mut Found, base: &Path, specs: &[Spec], ws: Option<&Path>) {
+    // A folder that cannot be resolved is not there to check.
+    let Ok(base_real) = std::fs::canonicalize(base) else {
+        return;
+    };
     for Spec(rel, tool, kind, find) in specs {
+        let rel = Path::new(rel);
         let path = base.join(rel);
         match find {
-            File => push_if_exists(out, path, *tool, *kind, ws),
-            Dir(exts) => collect_dir(out, &path, |p| has_ext(p, exts), *tool, *kind, ws),
-            DirUnder(exts, parents) => collect_dir(
+            File => add_file(out, base, &base_real, rel, *tool, *kind, ws),
+            Dir(exts) => add_dir(
                 out,
-                &path,
+                base,
+                &base_real,
+                rel,
+                |p| has_ext(p, exts),
+                *tool,
+                *kind,
+                ws,
+            ),
+            DirUnder(exts, parents) => add_dir(
+                out,
+                base,
+                &base_real,
+                rel,
                 |p| {
                     has_ext(p, exts)
                         && p.strip_prefix(&path).is_ok_and(|rel| {
@@ -751,9 +1135,11 @@ fn apply_specs(out: &mut Vec<Artifact>, base: &Path, specs: &[Spec], ws: Option<
                 *kind,
                 ws,
             ),
-            Named(name) => collect_dir(
+            Named(name) => add_dir(
                 out,
-                &path,
+                base,
+                &base_real,
+                rel,
                 |p| p.file_name().and_then(|n| n.to_str()) == Some(name),
                 *tool,
                 *kind,
@@ -774,37 +1160,55 @@ fn has_ext(path: &Path, exts: &[&str]) -> bool {
 /// The project-scoped artifacts to examine inside one workspace `ws`. Every entry is gated on
 /// existence, so a project using only Cursor contributes only Cursor artifacts.
 pub fn workspace_artifacts(ws: &Path) -> Vec<Artifact> {
-    let mut out = Vec::new();
+    find_in_workspace(ws).artifacts
+}
+
+/// [`workspace_artifacts`], with what could not be looked at.
+pub fn find_in_workspace(ws: &Path) -> Found {
+    let mut out = Found::default();
     apply_specs(&mut out, ws, WORKSPACE_SPECS, Some(ws));
     out
 }
 
 /// The global `$HOME` tool state to examine, independent of any workspace.
 pub fn global_artifacts(home: &Path) -> Vec<Artifact> {
-    let mut out = Vec::new();
+    find_in_home(home).artifacts
+}
+
+/// [`global_artifacts`], with what could not be looked at.
+pub fn find_in_home(home: &Path) -> Found {
+    let mut out = Found::default();
     apply_specs(&mut out, home, GLOBAL_SPECS, None);
+    let Ok(home_real) = std::fs::canonicalize(home) else {
+        return out;
+    };
     for product in VSCODE_FAMILY {
-        let user = home.join(".config").join(product).join("User");
-        push_if_exists(&mut out, user.join("settings.json"), VsCode, Settings, None);
-        push_if_exists(&mut out, user.join("mcp.json"), VsCode, McpConfig, None);
+        let user = Path::new(".config").join(product).join("User");
+        let file = |out: &mut Found, rel: PathBuf, tool, kind| {
+            add_file(out, home, &home_real, &rel, tool, kind, None)
+        };
+        file(&mut out, user.join("settings.json"), VsCode, Settings);
+        file(&mut out, user.join("mcp.json"), VsCode, McpConfig);
         // Profiles carry their own settings.json — a YOLO flag can live in a non-default profile.
-        if let Ok(profiles) = std::fs::read_dir(user.join("profiles")) {
-            for p in profiles.flatten() {
-                push_if_exists(
-                    &mut out,
-                    p.path().join("settings.json"),
-                    VsCode,
-                    Settings,
-                    None,
-                );
-                push_if_exists(&mut out, p.path().join("mcp.json"), VsCode, McpConfig, None);
+        let profiles = user.join("profiles");
+        if let Reach::Inside(meta) = reach(&mut out, home, &home_real, &profiles) {
+            if meta.is_dir() {
+                if let Ok(entries) = std::fs::read_dir(home.join(&profiles)) {
+                    for p in entries.flatten() {
+                        let profile = profiles.join(p.file_name());
+                        file(&mut out, profile.join("settings.json"), VsCode, Settings);
+                        file(&mut out, profile.join("mcp.json"), VsCode, McpConfig);
+                    }
+                }
             }
         }
         for (ext, tool, mcp) in EXTENSION_STORAGE {
             let store = user.join("globalStorage").join(ext);
-            push_if_exists(&mut out, store.join(mcp), *tool, McpConfig, None);
-            collect_dir(
+            file(&mut out, store.join(mcp), *tool, McpConfig);
+            add_dir(
                 &mut out,
+                home,
+                &home_real,
                 &store.join("tasks"),
                 |p| has_ext(p, JSON),
                 *tool,
@@ -816,12 +1220,15 @@ pub fn global_artifacts(home: &Path) -> Vec<Artifact> {
     out
 }
 
-/// Adds every file under `dir` accepted by `want` as an artifact. Recursion is bounded to a sane
-/// depth so a transcript directory tree (`~/.claude/projects/<proj>/*.jsonl`,
+/// Adds every regular file under `dir` accepted by `want` as an artifact. Recursion is bounded to
+/// a sane depth so a transcript directory tree (`~/.claude/projects/<proj>/*.jsonl`,
 /// `~/.codex/sessions/YYYY/MM/DD/*.jsonl`) is fully covered without an unbounded walk, and
 /// dependency/VCS trees are skipped — an installed plugin can bundle a whole `node_modules`.
+///
+/// A folder that cannot be listed is recorded as a problem: a `chmod 000` agent folder used to
+/// vanish from the scan without a word.
 fn collect_dir(
-    out: &mut Vec<Artifact>,
+    out: &mut Found,
     dir: &Path,
     want: impl Fn(&Path) -> bool,
     tool: Tool,
@@ -829,7 +1236,7 @@ fn collect_dir(
     ws: Option<&Path>,
 ) {
     fn walk(
-        out: &mut Vec<Artifact>,
+        out: &mut Found,
         dir: &Path,
         want: &dyn Fn(&Path) -> bool,
         tool: Tool,
@@ -840,8 +1247,14 @@ fn collect_dir(
         if depth > 6 {
             return;
         }
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                if let Some(line) = unlistable(dir, &e) {
+                    out.problem(line);
+                }
+                return;
+            }
         };
         for entry in entries.flatten() {
             // Use the dirent's own type (does not traverse the link) and skip symlinks entirely:
@@ -860,13 +1273,22 @@ fn collect_dir(
                 if !is_dependency_dir(&path) {
                     walk(out, &path, want, tool, kind, ws, depth + 1);
                 }
-            } else if want(&path) {
-                out.push(Artifact {
+            } else if !want(&path) {
+                // Not a file this location is about.
+            } else if file_type.is_file() {
+                out.artifacts.push(Artifact {
                     path,
                     tool,
                     kind,
                     workspace: ws.map(Path::to_path_buf),
                 });
+            } else {
+                // A pipe, socket or device with an agent file's name. Opening one can wait for
+                // ever (a pipe nobody writes to), so it never becomes something to read.
+                out.problem(format!(
+                    "{}: not checked, because it is not a regular file (a pipe, socket or device)",
+                    path.display()
+                ));
             }
         }
     }
@@ -1266,5 +1688,204 @@ mod tests {
         let arts = global_artifacts(home.path());
         assert!(arts.iter().any(|a| a.path.ends_with("skills/s/SKILL.md")));
         assert!(!arts.iter().any(|a| a.path.ends_with("1.0.0/README.md")));
+    }
+
+    // ---- Projects that discovery used to miss.
+
+    /// The transcript line Claude Code writes, with the folder the session ran in.
+    fn transcript_line(cwd: &Path) -> String {
+        serde_json::json!({
+            "parentUuid": null, "type": "user", "cwd": cwd, "sessionId": "s",
+            "message": {"role": "user", "content": "hi"}
+        })
+        .to_string()
+            + "\n"
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_project_whose_path_has_a_dash_is_found_from_its_transcripts() {
+        // `-home-u-stuff-my-app` decodes to /home/u/stuff/my/app, which is not there. The real
+        // folder is recorded in the transcripts.
+        let home = tempfile::tempdir().unwrap();
+        let home_path = home.path().canonicalize().unwrap();
+        let real = home_path.join("stuff/my-app.v2_final");
+        fs::create_dir_all(&real).unwrap();
+        let encoded = claude_project_name(&real.to_string_lossy());
+        let dir = home_path.join(".claude/projects").join(&encoded);
+        // The first line of a transcript is often something else.
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("a.jsonl"),
+            format!(
+                "{{\"type\":\"summary\",\"summary\":\"x\"}}\n{}",
+                transcript_line(&real)
+            ),
+        )
+        .unwrap();
+
+        let ws = discover_workspaces(&home_path, &[], &[], 100);
+        assert_eq!(ws, std::slice::from_ref(&real));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_recorded_folder_is_believed_only_as_far_as_it_can_be_checked() {
+        let home = tempfile::tempdir().unwrap();
+        let home_path = home.path().canonicalize().unwrap();
+        let elsewhere = home_path.join("Documents");
+        fs::create_dir_all(&elsewhere).unwrap();
+        let gone = home_path.join("was/my-app");
+        let projects = home_path.join(".claude/projects");
+        let record = |name: &str, body: String| {
+            fs::create_dir_all(projects.join(name)).unwrap();
+            fs::write(projects.join(name).join("s.jsonl"), body).unwrap();
+        };
+        // The transcript names a folder that exists, but not the one this record is for: a
+        // transcript is text, and must not be able to point the scan somewhere else.
+        record(
+            &claude_project_name(&gone.to_string_lossy()),
+            transcript_line(&elsewhere),
+        );
+        // The right folder, which no longer exists.
+        record("-x-gone-app", transcript_line(Path::new("/x/gone-app")));
+        // Not a path at all, a relative path, a number, and text cut off mid-string.
+        record("-x-rel", "{\"cwd\":\"x/rel\"}\n".to_string());
+        record("-x-num", "{\"cwd\":42}\n{\"cwd\":\n".to_string());
+        record("-x-cut", "{\"cwd\":\"/x/cu".to_string());
+        // A pipe where a transcript should be is not waited on.
+        fs::create_dir_all(projects.join("-x-pipe")).unwrap();
+        let fifo =
+            std::ffi::CString::new(projects.join("-x-pipe/s.jsonl").to_str().unwrap()).unwrap();
+        // SAFETY: a valid NUL-terminated path and a plain mode.
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+
+        let started = std::time::Instant::now();
+        let ws = discover_workspaces(&home_path, &[], &[], 100);
+        assert!(ws.is_empty(), "{ws:?}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    #[test]
+    fn every_checked_location_makes_its_folder_a_workspace() {
+        // The marker list used to be kept by hand next to the location table, and had drifted:
+        // `.vscode/settings.json`, `.vscode/tasks.json`, `.github/chatmodes`, `.github/copilot`,
+        // `.cline` and `.crush` were checked when a project was found some other way, and never
+        // got a project found. Markers are derived from the table now; this fails if a location
+        // is ever added without one (or without a reason in NOT_A_MARKER).
+        for (i, Spec(rel, _, _, find)) in WORKSPACE_SPECS.iter().enumerate() {
+            let home = tempfile::tempdir().unwrap();
+            let proj = home.path().join(format!("Projects/p{i}"));
+            match find {
+                File => touch(&proj.join(rel)),
+                _ => touch(&proj.join(rel).join("inner/x.md")),
+            }
+            let found = discover_workspaces(home.path(), &[], &[], 100).contains(&proj);
+            assert_eq!(
+                found,
+                !NOT_A_MARKER.contains(rel),
+                "{rel}: a project holding only this must{} be discovered",
+                if NOT_A_MARKER.contains(rel) {
+                    " not"
+                } else {
+                    ""
+                }
+            );
+        }
+        // The shared folders themselves say nothing.
+        let home = tempfile::tempdir().unwrap();
+        touch(&home.path().join("Projects/ci/.github/workflows/ci.yml"));
+        touch(&home.path().join("Projects/ed/.vscode/launch.json"));
+        assert!(discover_workspaces(home.path(), &[], &[], 100).is_empty());
+    }
+
+    #[test]
+    fn editor_only_projects_do_not_crowd_out_or_shadow_agent_projects() {
+        let home = tempfile::tempdir().unwrap();
+        // Many folders with nothing but editor settings, named to sort first.
+        for i in 0..8 {
+            touch(
+                &home
+                    .path()
+                    .join(format!("Projects/aa{i}/.vscode/settings.json")),
+            );
+        }
+        touch(&home.path().join("Projects/zz-agent/CLAUDE.md"));
+        // An editor-settings folder that contains agent projects one level down.
+        touch(&home.path().join("Projects/mono/.vscode/settings.json"));
+        touch(&home.path().join("Projects/mono/svc/AGENTS.md"));
+
+        let all = find_workspaces(home.path(), &[], &[], 100);
+        assert_eq!(all.roots.len(), 11);
+        assert!(!all.capped);
+        assert!(all.roots.contains(&home.path().join("Projects/mono")));
+        assert!(all.roots.contains(&home.path().join("Projects/mono/svc")));
+
+        // With room for three, the two agent projects are in, whatever their names sort as.
+        let few = find_workspaces(home.path(), &[], &[], 3);
+        assert!(few.capped);
+        assert_eq!(few.roots.len(), 3);
+        assert!(few.roots.contains(&home.path().join("Projects/zz-agent")));
+        assert!(few.roots.contains(&home.path().join("Projects/mono/svc")));
+    }
+
+    #[test]
+    fn exclusions_cover_parents_and_other_spellings() {
+        let home = tempfile::tempdir().unwrap();
+        touch(&home.path().join("Projects/org/a/CLAUDE.md"));
+        touch(&home.path().join("Projects/org/b/CLAUDE.md"));
+        touch(&home.path().join("Projects/keep/CLAUDE.md"));
+        let keep = home.path().join("Projects/keep");
+        // A parent of the projects, written with a `..` in it.
+        let roundabout = home.path().join("Projects/keep/../org");
+        let found = find_workspaces(
+            home.path(),
+            &[],
+            &[roundabout, home.path().join("nope")],
+            100,
+        );
+        assert_eq!(found.roots, [keep]);
+        assert_eq!(found.exclusions_used, [true, false]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn links_are_followed_only_while_they_stay_inside() {
+        use std::os::unix::fs::symlink;
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        touch(&outside.path().join("claude/commands/x.md"));
+        touch(&outside.path().join("notes.md"));
+        // Dotfiles kept in one folder of the home and linked into place: followed.
+        touch(&home.path().join("dotfiles/claude/commands/mine.md"));
+        symlink(
+            home.path().join("dotfiles/claude"),
+            home.path().join(".claude"),
+        )
+        .unwrap();
+        // An agent folder that lives outside the home, and a single file that does: not followed.
+        symlink(outside.path().join("claude"), home.path().join(".gemini")).unwrap();
+        fs::create_dir_all(home.path().join(".codex")).unwrap();
+        symlink(
+            outside.path().join("notes.md"),
+            home.path().join(".codex/AGENTS.md"),
+        )
+        .unwrap();
+        // A link that leads nowhere is like a file that is not there.
+        symlink(home.path().join("missing"), home.path().join(".qwen")).unwrap();
+
+        let found = find_in_home(home.path());
+        let paths: Vec<&Path> = found.artifacts.iter().map(|a| a.path.as_path()).collect();
+        assert_eq!(paths, [home.path().join(".claude/commands/mine.md")]);
+        assert_eq!(found.problems.len(), 2, "{:?}", found.problems);
+        assert!(found
+            .problems
+            .iter()
+            .any(|p| p.starts_with(&home.path().join(".gemini").display().to_string())));
+        assert!(found
+            .problems
+            .iter()
+            .any(|p| p.contains(".codex/AGENTS.md")));
+        assert!(found.problems.iter().all(|p| p.contains("outside")));
     }
 }

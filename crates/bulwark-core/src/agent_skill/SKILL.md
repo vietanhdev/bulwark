@@ -37,6 +37,9 @@ when you need a field the report doesn't show.
 Exit codes: `0` nothing medium or worse, `1` medium or high, `2` critical. A non-zero exit is a
 result, not a failure of the command.
 
+A `--target` scan is shown but not saved: only a whole-machine `{bin} ai scan` updates the
+stored results the desktop app shows. `--target` must name a folder that exists.
+
 ## How to report
 
 - Lead with the worst problem. For each: what it is, where (the `in:` path), why it matters in
@@ -52,7 +55,11 @@ result, not a failure of the command.
 - Change nothing until the user says yes to that specific change. Show the preview first:
   `{bin} ai redact` (leaked keys in agent files) or `{bin} fix list` (system settings). Both
   only preview; they change nothing without `--apply`.
-- After a yes, run the same command with `--apply`, then scan again to confirm.
+- After a yes, run the same command with `--apply`, then scan again to confirm. If
+  `ai redact --apply` exits non-zero, some file still holds a key: say which, from its output.
+  It leaves alone a file changed in the last 30 seconds (a running session's transcript).
+- `ai redact --apply` keeps a backup of each file it changes, and the backup still contains the
+  key. Tell the user where it is (the command prints the folder) so they can delete it.
 - A leaked key stays leaked after it is removed from a file. Tell the user to revoke it with its
   provider and create a new one.
 - Never print, copy, or repeat a secret, and don't open a file to look at one. The report shows

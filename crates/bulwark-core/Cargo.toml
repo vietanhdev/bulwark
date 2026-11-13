@@ -27,6 +27,7 @@ toml.workspace = true
 aho-corasick.workspace = true
 rayon.workspace = true
 walkdir.workspace = true
+ignore.workspace = true
 libc.workspace = true
 
 [dev-dependencies]

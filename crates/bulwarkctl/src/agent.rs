@@ -81,6 +81,20 @@ impl Plan {
             Some(c) => c.clone(),
             None => this_command(),
         };
+        // The name goes into the skill's pre-approved commands, so it has to be a name and
+        // nothing else: a line break would add approvals of its own, `*` would approve anything.
+        if !agent_skill::valid_command(&bin) {
+            bail!(
+                "--command must be {}; {:?} is not.{}",
+                agent_skill::COMMAND_RULE,
+                bin,
+                if t.command.is_none() {
+                    " (That is this program's own file name: pass --command with the name agents should run.)"
+                } else {
+                    ""
+                }
+            );
+        }
         let (base, project) = match &t.project {
             Some(dir) => {
                 if !dir.is_dir() {

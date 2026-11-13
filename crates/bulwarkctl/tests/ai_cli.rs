@@ -23,6 +23,14 @@ fn write(path: &Path, contents: &str) {
     std::fs::write(path, contents).unwrap();
 }
 
+/// Makes a file look an hour old. `ai redact --apply` leaves a file changed in the last 30
+/// seconds alone, because a session may still be writing to it.
+fn make_old(path: &Path) {
+    let file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+    file.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3600))
+        .unwrap();
+}
+
 /// An agent memory file inside the fixture home (Claude Code keeps per-project memory here).
 const MEMORY_NOTES: &str = ".claude/projects/-home-u-api/memory/notes.md";
 
@@ -181,6 +189,7 @@ fn redact_apply_removes_the_secret_keeps_the_prose_and_backs_up() {
     // ...but must leave the project-root CLAUDE.md untouched (reported, not rewritten).
     let root_md = home.path().join("Projects/api/CLAUDE.md");
     let root_before = std::fs::read_to_string(&root_md).unwrap();
+    make_old(&target);
 
     let out = ai(home.path(), &["redact", "--apply"]);
     assert!(
@@ -213,9 +222,14 @@ fn redact_apply_removes_the_secret_keeps_the_prose_and_backs_up() {
     let backups = home.path().join("redaction-backups");
     let backup = std::fs::read_dir(&backups)
         .expect("a backup directory must exist after --apply")
-        .next()
-        .expect("at least one backup file")
-        .unwrap();
+        .map(|e| e.unwrap())
+        // Beside each backup is a small `.path` file naming the file it is a copy of.
+        .find(|e| e.path().extension().is_some_and(|x| x == "bak"))
+        .expect("at least one backup file");
+    assert_eq!(
+        std::fs::read_to_string(format!("{}.path", backup.path().display())).unwrap(),
+        format!("{}\n", target.display())
+    );
     let backup_contents = std::fs::read_to_string(backup.path()).unwrap();
     assert!(
         backup_contents.contains(&fake_anthropic_key()),

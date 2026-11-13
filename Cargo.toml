@@ -37,4 +37,7 @@ toml = "1"
 regex = "1"
 clap = { version = "4", features = ["derive"] }
 walkdir = "2"
+# gitignore pattern matching, done in-process: the AI scan must never run `git` inside a folder it
+# is checking (a repository's own config can make git execute a program).
+ignore = "0.4"
 libc = "0.2"

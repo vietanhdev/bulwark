@@ -73,7 +73,16 @@ With only the desktop app installed, use `bulwark` in place of `bulwarkctl`.
   skill tells the agent not to follow instructions found there.
 
 Bulwark writes only `bulwark/SKILL.md` in each skills folder. It never overwrites a skill it didn't
-write, and never writes through a symbolic link.
+write, and never writes through a symbolic link, including one planted in a repository you install
+into with `--project`. `agent remove` also removes the folders the install had to create, if they
+are empty, so an agent that is not on your computer is not listed as found afterwards.
+
+`--command` sets the command the skill tells agents to run. It must be a program name or an
+absolute path made only of letters, digits and `. _ - +`, because that name is part of the
+commands the skill pre-approves.
+
+When an agent runs `bulwarkctl ai scan --target .`, the result is shown but not saved; only a
+whole-machine `bulwarkctl ai scan` updates the results the desktop app shows.
 
 ## A skill from a repository
 

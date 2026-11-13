@@ -64,29 +64,117 @@ pub fn open_in_home(home: &Path, path: &Path) -> HomeFile<File> {
         Err(_) => return HomeFile::Refused,
         Ok(_) => {}
     }
-    // Resolve every link, in the file name and in the folders above it, then require the result
-    // to be inside the home folder. A dangling link resolves to nothing and is refused.
-    let (Ok(target), Ok(home_real)) = (std::fs::canonicalize(path), std::fs::canonicalize(home))
-    else {
-        return HomeFile::Refused;
-    };
-    if !target.starts_with(&home_real) {
-        return HomeFile::Refused;
+    match Root::new(home) {
+        Some(root) => root.open(path),
+        None => HomeFile::Refused,
     }
-    let Ok(file) = open_regular_nofollow(&target) else {
-        return HomeFile::Refused;
-    };
-    let Ok(meta) = file.metadata() else {
-        return HomeFile::Refused;
-    };
-    // Decided from the descriptor: a pipe, socket, device or folder is never read.
-    if !meta.is_file() {
-        return HomeFile::Refused;
+}
+
+/// A folder that everything read through it has to stay inside: a home folder, or a project
+/// folder that is not in any home (`ai scan --target /srv/app`). The same rules as
+/// [`open_in_home`], with the folder resolved once, so a scan can open thousands of files under it
+/// without resolving it again each time.
+#[derive(Debug, Clone)]
+pub struct Root {
+    real: PathBuf,
+}
+
+/// Why [`Root::try_open`] did not hand back a file that exists.
+#[derive(Debug)]
+pub enum Refusal {
+    /// It resolves (through a link in its name or in a folder above it) to a place outside the
+    /// folder, or to nothing.
+    LeavesRoot,
+    /// A pipe, socket, device or folder.
+    NotRegular,
+    /// It could not be opened or examined.
+    Unreadable(std::io::Error),
+    /// Under a root scan: it does not belong to the folder's owner, or where the open file really
+    /// is could not be confirmed.
+    NotOwners,
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Refusal::LeavesRoot => {
+                f.write_str("it is a link that leads outside the folder being checked, or nowhere")
+            }
+            Refusal::NotRegular => {
+                f.write_str("it is not a regular file (a pipe, device or folder)")
+            }
+            Refusal::Unreadable(e) => write!(f, "it could not be opened ({e})"),
+            Refusal::NotOwners => {
+                f.write_str("it does not belong to the owner of the folder being checked")
+            }
+        }
     }
-    if !descriptor_allowed(&file, &meta, &home_real) {
-        return HomeFile::Refused;
+}
+
+impl Root {
+    /// `None` when the folder does not exist or cannot be resolved.
+    pub fn new(dir: &Path) -> Option<Root> {
+        std::fs::canonicalize(dir).ok().map(|real| Root { real })
     }
-    HomeFile::Found(file)
+
+    /// Opens `path` for reading if it is, or resolves to, a regular file inside this folder.
+    /// `Ok(None)` when nothing is there. Never blocks on a pipe, and decides from the open
+    /// descriptor rather than from the path a second time.
+    pub fn try_open(&self, path: &Path) -> Result<Option<File>, Refusal> {
+        match std::fs::symlink_metadata(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(Refusal::Unreadable(e)),
+            Ok(_) => {}
+        }
+        // Resolve every link, in the file name and in the folders above it, then require the
+        // result to be inside the folder. A dangling link resolves to nothing and is refused.
+        let target = match std::fs::canonicalize(path) {
+            Ok(target) => target,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                return Err(Refusal::Unreadable(e))
+            }
+            Err(_) => return Err(Refusal::LeavesRoot),
+        };
+        if !target.starts_with(&self.real) {
+            return Err(Refusal::LeavesRoot);
+        }
+        let file = open_regular_nofollow(&target).map_err(|e| {
+            // ELOOP: the resolved name became a link between the two calls.
+            if e.raw_os_error() == Some(libc_eloop()) {
+                Refusal::LeavesRoot
+            } else {
+                Refusal::Unreadable(e)
+            }
+        })?;
+        let meta = file.metadata().map_err(Refusal::Unreadable)?;
+        // Decided from the descriptor: a pipe, socket, device or folder is never read.
+        if !meta.is_file() {
+            return Err(Refusal::NotRegular);
+        }
+        if !descriptor_allowed(&file, &meta, &self.real) {
+            return Err(Refusal::NotOwners);
+        }
+        Ok(Some(file))
+    }
+
+    /// [`Root::try_open`] in the shape collectors use.
+    pub fn open(&self, path: &Path) -> HomeFile<File> {
+        match self.try_open(path) {
+            Ok(Some(file)) => HomeFile::Found(file),
+            Ok(None) => HomeFile::Missing,
+            Err(_) => HomeFile::Refused,
+        }
+    }
+}
+
+#[cfg(unix)]
+fn libc_eloop() -> i32 {
+    libc::ELOOP
+}
+
+#[cfg(not(unix))]
+fn libc_eloop() -> i32 {
+    -1
 }
 
 /// Opens a system file (one outside any home, such as `/etc/gitconfig`) if it is a regular file.

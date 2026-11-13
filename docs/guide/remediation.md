@@ -140,17 +140,37 @@ sounds: the detection patterns match a *terminator* after the secret (usually th
 and a redactor that rewrote the whole matched span would delete it, welding the next line onto the
 placeholder.
 
-Three things it deliberately will *not* do:
+**The backup still holds the secret.** Each backup is the original file, key included, kept
+`0600` in `~/.local/share/bulwark/redaction-backups` (a `0700` folder) with a small `.path` file
+beside it naming the file it came from. Bulwark never deletes a backup. When you have checked the
+result, delete the folder yourself:
+
+```bash
+rm -r ~/.local/share/bulwark/redaction-backups
+```
+
+Things it deliberately will *not* do:
 
 - **It won't rewrite a file that something reads the key back from.** Only session transcripts,
   memory and instruction files inside an agent's own folder (`.claude`, `.codex`, `.cursor`, …) are
   rewritten. A `.env` is never touched, and a key found in a project's settings or MCP config file
   is reported but left in place: replacing it there would break whatever uses it. An instruction
   file at the root of a project (a bare `CLAUDE.md`, say) is also reported and left for you to edit.
-- **It won't rotate the key for you.** Redaction removes the secret from disk; it cannot un-leak it.
-  Anything that reached a transcript should be assumed compromised — go rotate it at the provider.
+- **It won't rotate the key for you.** Redaction removes the secret from that file; it cannot
+  un-leak it. Anything that reached a transcript should be assumed compromised — go rotate it at
+  the provider.
 - **It won't touch a low-confidence (`generic-*`) match.** Those are reported but never rewritten,
   because blindly editing a value that merely *looked* like a secret could corrupt a real config.
+- **It won't rewrite a file outside an agent's own folder, or through a link.** A `.env`, a
+  `CLAUDE.md` at a project root, a file git ignores, and anything reached through a symbolic link
+  are reported and left as they are. `ai redact` says how many such files hold a key.
+- **It won't rewrite a file that is in use.** A file changed in the last 30 seconds is left alone,
+  because the session that wrote it may still be writing; run it again when the session has
+  ended, or add `--include-active`. A file that changes while it is being rewritten is left as it
+  was.
+
+`ai redact --apply` exits `1` when a file it meant to clean still holds a secret, and names the
+file, so a script or an agent cannot take a refusal for success.
 
 ## What you should fix by hand
 
