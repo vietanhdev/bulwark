@@ -11,9 +11,12 @@ VS Code and its forks (VS Code Insiders, VSCodium, Cursor, Windsurf, Kiro).
    `sk-ant-…`, `AKIA…`, `ghp_…`) in an assistant's **session transcripts**, **memory** and
    **instruction files** (`CLAUDE.md`, slash commands, skills, rules) — anywhere a key ends up in
    the model's context — and in a project's settings, MCP and hook files, which travel with the
-   repository. Transcripts keep a copy on disk long after the conversation. A `.env`, and the
-   same config files in your home folder, hold keys on purpose and are not searched for them;
-   Bulwark checks who can read them and that git ignores them instead.
+   repository. Transcripts keep a copy on disk long after the conversation, and are read to the
+   end however long they are. A `.env`, and the same config files in your home folder, hold keys
+   on purpose, so a key there is not reported as a leak. When one of them holds a key, Bulwark
+   checks instead that other accounts on the computer cannot read it (`BLWK-AI-015`) and, in a
+   project, that git neither tracks the file nor would add it (`BLWK-AI-016`). The key itself is
+   only counted, never shown or stored.
 2. **Dangerous agent configuration.** Settings that a prompt injection can turn into code
    execution on your host, grounded in real, published attacks.
 3. **Sandbox posture.** Whether the agent's own command sandbox is switched off, and whether the
@@ -53,8 +56,8 @@ in this documentation are deliberately generated from fixtures, not from a real 
 | [`BLWK-AI-012`](/checks/blwk-ai-012) | High | Hidden Unicode in an instruction file: bidi controls that reorder what you see, invisible Tag characters that spell text only the model reads (shown decoded), or a long run of zero-width characters (the **Rules File Backdoor**, ASCII smuggling, GlassWorm) | [Pillar Security](https://www.pillar.security/blog/new-vulnerability-in-github-copilot-and-cursor-how-hackers-can-weaponize-code-agents) |
 | [`BLWK-AI-013`](/checks/blwk-ai-013) | Medium | Prompt-injection-style phrases in an instruction file (heuristic) | T1566 |
 | [`BLWK-AI-014`](/checks/blwk-ai-014) | High | An `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` override to a non-official host | CVE-2025-59536 |
-| [`BLWK-AI-015`](/checks/blwk-ai-015) | Medium | A plaintext credential file readable by group/other | T1552.001 |
-| [`BLWK-AI-016`](/checks/blwk-ai-016) | High | A secret-bearing file in a git repo with no `.gitignore` rule covering it | T1552.001 |
+| [`BLWK-AI-015`](/checks/blwk-ai-015) | Medium | A plaintext credential file readable by group/other; a `.env` or home config file holding a key that other accounts can actually read (the file and every folder above it are open to them) | T1552.001 |
+| [`BLWK-AI-016`](/checks/blwk-ai-016) | High | A secret-bearing file in a git repo that git already tracks, or that no `.gitignore` rule covers | T1552.001 |
 | [`BLWK-AI-017`](/checks/blwk-ai-017) | High | Codex `approval_policy = "never"` + `sandbox_mode = "danger-full-access"` | T1059 |
 | [`BLWK-AI-018`](/checks/blwk-ai-018) | High | An MCP server connecting to a **remote endpoint with a plaintext token** in its config | T1552.001, T1071.001 |
 | [`BLWK-AI-019`](/checks/blwk-ai-019) | Critical | An MCP server running a **privileged or host-mounting container** (`--privileged`, `-v /var/run/docker.sock`, `-v /:…`) | T1610, T1611 |
@@ -128,6 +131,39 @@ your automation. A hook that arrives in a repository you cloned runs its authors
 machine (the CVE-2025-59536 pattern), whichever agent it targets. Your home folder is never treated as a cloned
 repository, even when an agent was once run there.
 
+## What `.gitignore` changes, and what it cannot
+
+A project's `.gitignore` is written by the project, and a scan is what you run before you trust
+one. So it decides exactly one thing: whether a **leaked key** in a file is worth reporting.
+
+- **What an agent will run or obey is always checked.** Settings, hooks, MCP servers, tasks, and
+  hidden or injected text in instruction files are checked in every file found, whether git
+  ignores it or not. Your agent reads `.claude/settings.local.json` either way, so Bulwark does
+  too: an ignored, untracked `settings.local.json` with `bypassPermissions` is reported.
+- **A key is left alone only in a file that is both ignored and not tracked**, a file you keep
+  local on purpose. A file that is ignored *and tracked* (added with `git add -f`, or committed
+  before the ignore rule was written) is in the repository, so its key is reported and
+  `BLWK-AI-016` says git already tracks it. Such a file is never offered for redaction.
+- **When Bulwark cannot tell whether a file is tracked**, it reports the key. That is the case in
+  a linked worktree (where `.git` is a file) and with a split or sparse index.
+
+Bulwark **never runs `git`** in a folder it checks: a repository's own `.git/config` can make
+git start a program. It reads the ignore files (every `.gitignore` down to the file's folder,
+`.git/info/exclude`, and your own global ignore file) and the index itself. A `core.excludesFile`
+set in the *repository's* config is not honoured.
+
+```mermaid
+flowchart TD
+  F[A file in a project] --> K{What kind of finding?}
+  K -->|What an agent runs or obeys:<br/>hooks, settings, MCP, hidden text| A[Always checked]
+  K -->|A key in the file| I{Matched by an<br/>ignore rule?}
+  I -->|No| R[Reported · AI-016: not ignored]
+  I -->|Yes| T{Tracked by git?}
+  T -->|No| L[Left alone:<br/>your local file]
+  T -->|Yes| R2[Reported · AI-016: already tracked]
+  T -->|Cannot tell| R3[Reported]
+```
+
 ## Sandbox posture
 
 Approval prompts and sandboxes are the two things between a prompt-injected agent and your machine.
@@ -145,12 +181,24 @@ home directory, and only when at least one agent was found.
 Because every developer's layout differs, the scanned workspace set is derived, not hardcoded:
 
 - **From your assistants' own records** — the projects Claude Code has opened (`~/.claude/projects/`).
+  The folder is taken from the name of the record, or, when that name is ambiguous (a `-`, `.`
+  or `_` in the path), from the folder its transcripts say they ran in.
 - **A shallow sweep of common code roots** — `~/Workspaces`, `~/Projects`, `~/src`, `~/dev`,
   `~/code`, `~/git`, … — for directories carrying any supported agent's marker (`.claude/`,
   `CLAUDE.md`, `.cursor/`, `.mcp.json`, `AGENTS.md`, `.kiro/`, `opencode.json`, `.goosehints`,
-  `.github/instructions/`, …). `node_modules`, `.git`, and build trees are skipped.
+  `.github/instructions/`, …). Every location in the table above is a marker, including
+  `.vscode/settings.json` and `.vscode/tasks.json`; a folder with only those is checked too, but
+  is the first to be left out when there are more projects than one scan covers.
+  `node_modules`, `.git`, and build trees are skipped.
 - **Folders you add** in **Settings → AI assistants**, plus any you exclude there (`--root` and
-  `--exclude` on the command line).
+  `--exclude` on the command line). An excluded folder takes out
+  everything under it.
+
+Files are read in place and nothing in them is run. A link is followed only while it stays inside
+the project (or, for your agents' own state, inside your home folder); a link that leaves it, a
+folder that cannot be listed, a pipe where a file should be, and a file larger than 64 MB (of
+which the first 64 MB are read) are each listed under "Not covered by this scan" (`--all` shows
+them) and never counted as checked.
 
 Global `$HOME` tool state (`~/.claude/`, `~/.codex/`, `~/.gemini/`, `~/.config/<agent>/`, the
 VS Code-family user directories, …) is always included. The desktop app also runs a periodic background sweep and notifies you when a
@@ -169,8 +217,18 @@ it are two deliberate, separate acts, the same stance file-integrity baselining 
   it writes a `0600` backup of every file it touches, and it preserves the original file's
   permissions on the rewritten copy. Only high-confidence provider secrets are redacted — the
   fuzzy `KEY=value` heuristic is report-only.
+- **Only inside an agent's own folder.** A file is rewritten only when it really is inside one
+  (`~/.claude/…`, `.cursor/rules/…`, `~/.config/opencode/…`), with no link anywhere between that
+  folder and the file. A `.env`, a `CLAUDE.md` at a project root, and a file an ignore rule
+  matches are reported and never rewritten.
+- **Never a file in use.** A file changed in the last 30 seconds is left alone (a session may
+  still be writing to it; `--include-active` overrides this), and a file that changes while it is
+  being rewritten is left as it was. `ai redact --apply` exits `1` when a file it meant to clean
+  still holds a key, and names it.
 
-Redaction removes the secret from disk; it can't un-leak it. **Rotate any exposed credential.**
+Redaction removes the secret from that file; it can't un-leak it. **Rotate any exposed
+credential.** The backup is the original file, secret included: it stays in
+`~/.local/share/bulwark/redaction-backups` until you delete that folder.
 
 ## CLI
 
@@ -178,10 +236,11 @@ Redaction removes the secret from disk; it can't un-leak it. **Rotate any expose
 # Scan every discovered workspace + your home-directory tool state.
 bulwarkctl ai scan
 
-# Scan just one project (skips the whole-machine sweep).
+# Scan just one project (skips the whole-machine sweep). The folder must exist. The result is
+# shown but not saved: only a whole-machine scan replaces the stored results.
 bulwarkctl ai scan --target ~/work/service
 
-# Add or exclude discovery roots.
+# Add discovery roots, or leave out a folder and everything under it.
 bulwarkctl ai scan --root ~/oss --exclude ~/Projects/huge-monorepo
 
 # Also low-priority items, every file each problem was found in, and the masked evidence.

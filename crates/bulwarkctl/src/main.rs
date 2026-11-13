@@ -278,28 +278,38 @@ enum AiAction {
         /// Show low-priority items too, and every file each problem was found in
         #[arg(long)]
         all: bool,
-        /// Skip persisting this run to the local findings database
+        /// Skip persisting this run to the local findings database. (A --target run is never
+        /// saved: only a whole-machine scan replaces the stored results.)
         #[arg(long)]
         no_persist: bool,
         /// Extra directory to sweep for workspaces (repeatable). Adds to the built-in common
         /// code roots (~/Workspaces, ~/Projects, ~/src, ...).
         #[arg(long = "root", value_name = "DIR")]
         roots: Vec<PathBuf>,
-        /// Directory to exclude from discovery (repeatable)
+        /// Leave out this directory and everything under it (repeatable). A relative path is
+        /// taken from the current directory, and ~ is your home folder.
         #[arg(long = "exclude", value_name = "DIR")]
         excludes: Vec<PathBuf>,
         /// Scan exactly this workspace directory instead of auto-discovering (repeatable).
-        /// Suppresses the whole-machine sweep — only the given folders are examined.
+        /// Suppresses the whole-machine sweep — only the given folders are examined. The folder
+        /// must exist. The result is shown but not saved, so it never replaces what the last
+        /// whole-machine scan found.
         #[arg(long = "target", value_name = "DIR")]
         targets: Vec<PathBuf>,
     },
     /// Remove leaked secrets from AI context files. Dry-run by default — prints what would
     /// change and touches nothing; pass --apply to rewrite the files (a 0600 backup of each is
-    /// kept, and file permissions are preserved).
+    /// kept — it still holds the secret, so delete it when you have checked the result — and file
+    /// permissions are preserved). Exits 1 when --apply left a secret in a file it meant to clean.
     Redact {
         /// Actually rewrite the files. Without this flag, redact only previews.
         #[arg(long)]
         apply: bool,
+        /// Also rewrite files changed in the last 30 seconds. By default those are left alone: a
+        /// session that is still running may be writing to them, and replacing a file under it
+        /// can lose what it writes next.
+        #[arg(long, requires = "apply")]
+        include_active: bool,
         /// Restrict redaction to these workspace directories (repeatable). Defaults to the same
         /// auto-discovered set `ai scan` uses.
         #[arg(long = "target", value_name = "DIR")]
@@ -694,7 +704,7 @@ fn run() -> anyhow::Result<()> {
     ) {
         std::process::exit(remote::askpass_main(&secret));
     }
-    let cli = Cli::parse();
+    let cli = parse_cli();
 
     match cli.command {
         Commands::Scan {
@@ -1036,7 +1046,13 @@ fn run() -> anyhow::Result<()> {
             }
         },
         Commands::Logs { action } => run_logs(action, cli.db_path)?,
-        Commands::Ai { action } => run_ai(action, cli.db_path)?,
+        Commands::Ai { action } => {
+            note_unused_rule_options(
+                "ai",
+                cli.rules_dir.is_some() || cli.custom_rules_dir.is_some() || cli.no_custom_rules,
+            );
+            run_ai(action, cli.db_path)?
+        }
         Commands::Hosts { action } => {
             let db = resolve_db_path(cli.db_path)?;
             let code = hosts::run(action, &db, cli.rules_dir)?;
@@ -1052,6 +1068,10 @@ fn run() -> anyhow::Result<()> {
             }
         }
         Commands::Agent { action } => {
+            note_unused_rule_options(
+                "agent",
+                cli.rules_dir.is_some() || cli.custom_rules_dir.is_some() || cli.no_custom_rules,
+            );
             let code = agent::run(action, &resolve_home()?)?;
             if code != 0 {
                 std::process::exit(code);
@@ -1300,10 +1320,83 @@ fn run_ssh(action: SshAction) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The command line. The three rule-pack options are global, so clap lists them under every
+/// subcommand, including `ai` and `agent`, which have no rule pack: their checks are built into
+/// the program. They are hidden from the help of those two (a hidden copy defined on the
+/// subcommand takes the place of the one clap would otherwise pass down), and the arms below say
+/// so if one is given anyway.
+fn parse_cli() -> Cli {
+    use clap::{CommandFactory, FromArgMatches};
+    let mut cmd = Cli::command();
+    let hidden: Vec<clap::Arg> = cmd
+        .get_arguments()
+        .filter(|a| RULE_PACK_OPTIONS.contains(&a.get_id().as_str()))
+        .map(|a| a.clone().hide(true))
+        .collect();
+    for sub in ["ai", "agent"] {
+        cmd = cmd.mut_subcommand(sub, |c| c.args(hidden.clone()));
+    }
+    let matches = cmd.get_matches();
+    Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit())
+}
+
+const RULE_PACK_OPTIONS: &[&str] = &["rules_dir", "custom_rules_dir", "no_custom_rules"];
+
+/// Says so when a rule-pack option was given to a command that has no rule pack.
+fn note_unused_rule_options(command: &str, given: bool) {
+    if given {
+        eprintln!(
+            "note: --rules-dir, --custom-rules-dir and --no-custom-rules have no effect on \
+             `{command}`: its checks are built in"
+        );
+    }
+}
+
+/// A path the user typed, made absolute: `~` and `~/x` are the home folder (a shell does not
+/// expand `--exclude=~/x`), and a relative path is taken from the current directory.
+fn user_path(path: &Path, home: &Path) -> PathBuf {
+    let expanded = match path.strip_prefix("~") {
+        Ok(rest) => home.join(rest),
+        Err(_) => path.to_path_buf(),
+    };
+    std::path::absolute(&expanded).unwrap_or(expanded)
+}
+
+/// The folders named with `flag`, each resolved and checked to exist. A folder that is not there
+/// is an error, as a missing `--rules-dir` is: scanning nothing and reporting "no problems" for a
+/// mistyped path is the one answer that must not be given.
+fn existing_folders(flag: &str, paths: &[PathBuf], home: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    paths
+        .iter()
+        .map(|p| {
+            let full = user_path(p, home);
+            match std::fs::canonicalize(&full) {
+                Ok(real) if real.is_dir() => Ok(real),
+                Ok(_) => anyhow::bail!(
+                    "{flag} {}: not a folder",
+                    line_safe(&full.display().to_string())
+                ),
+                Err(e) => anyhow::bail!("{flag} {}: {e}", line_safe(&full.display().to_string())),
+            }
+        })
+        .collect()
+}
+
+/// A file name or message from the scanned machine, safe to print on one line: control
+/// characters, line breaks included, are replaced, so a name cannot move the cursor, ring the
+/// bell or start a line of its own.
+fn line_safe(text: &str) -> String {
+    term_safe(text)
+        .chars()
+        .map(|c| if c.is_control() { '\u{FFFD}' } else { c })
+        .collect()
+}
+
 /// Handles the `ai` subcommand group. Like `scan`, the `scan` path exits with a
 /// severity-derived code so cron/CI can gate on it identically.
 fn run_ai(action: AiAction, db_path: Option<PathBuf>) -> anyhow::Result<()> {
-    use bulwark_core::{ai_redact_paths, run_ai_scan, AiScanOptions};
+    use bulwark_core::ai_scan::redact::{redact_with, RedactOptions};
+    use bulwark_core::{run_ai_scan, AiScanOptions};
 
     match action {
         AiAction::Scan {
@@ -1315,6 +1408,17 @@ fn run_ai(action: AiAction, db_path: Option<PathBuf>) -> anyhow::Result<()> {
             targets,
         } => {
             let home = resolve_home()?;
+            let targets = existing_folders("--target", &targets, &home)?;
+            let roots = existing_folders("--root", &roots, &home)?;
+            let excludes: Vec<PathBuf> = excludes.iter().map(|p| user_path(p, &home)).collect();
+            // Only a whole-machine scan is saved: the store keeps the latest run as the picture of
+            // the machine, and a run of one folder is not that. Where it will be saved is decided
+            // before the scan, so a database this run may not use is an error met at once.
+            let save_to = if no_persist || !targets.is_empty() {
+                None
+            } else {
+                Some(resolve_db_path(db_path)?)
+            };
             let opts = AiScanOptions {
                 home: home.clone(),
                 configured_roots: roots,
@@ -1324,33 +1428,65 @@ fn run_ai(action: AiAction, db_path: Option<PathBuf>) -> anyhow::Result<()> {
             };
             let report = run_ai_scan(&opts, |_| {});
 
-            if !no_persist {
-                let db_path = resolve_db_path(db_path)?;
-                let mut store = Store::open(&db_path)?;
-                store.persist_ai_scan(&report)?;
-            }
-
+            // The report first. Saving it is second, and a failure to save is a warning: it used
+            // to come first, so a read-only home turned a critical finding (exit 2) into a bare
+            // "Permission denied" and exit 1.
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 let opts = report::ReportOptions::for_stdout(all, "");
                 print!("{}", report::render_ai(&report, home.to_str(), &opts));
             }
+            for note in &report.notes {
+                eprintln!("note: {}", line_safe(note));
+            }
+            if let Some(db) = save_to {
+                let saved = Store::open(&db).and_then(|mut store| store.persist_ai_scan(&report));
+                if let Err(e) = saved {
+                    eprintln!(
+                        "warning: this result was not saved — {} could not be written ({e:#})",
+                        db.display()
+                    );
+                }
+            }
             std::process::exit(exit_code_for(report.worst_severity()));
         }
-        AiAction::Redact { apply, targets } => {
+        AiAction::Redact {
+            apply,
+            include_active,
+            targets,
+        } => {
+            let home = resolve_home()?;
             let opts = AiScanOptions {
-                home: resolve_home()?,
-                explicit_targets: targets,
-                ..AiScanOptions::for_home(resolve_home()?)
+                explicit_targets: existing_folders("--target", &targets, &home)?,
+                ..AiScanOptions::for_home(home)
             };
             let report = run_ai_scan(&opts, |_| {});
             let files = report.redactable_files();
+            // Files that hold a key and are not rewritten: a project's own files, a `.env`, a
+            // file reached through a link. Said, so "nothing to redact" is not read as "no keys".
+            let left_alone = report
+                .findings
+                .iter()
+                .filter(|f| f.rule_id == "BLWK-AI-001" && !f.redactable)
+                .map(|f| f.file.as_str())
+                .collect::<std::collections::BTreeSet<_>>()
+                .len();
+            let say_left_alone = || {
+                if left_alone > 0 {
+                    println!(
+                        "{left_alone} other file(s) hold a secret that redact does not rewrite \
+                         (a project's own files, or files reached through a link) — \
+                         `bulwarkctl ai scan` lists them; remove those by hand and rotate the keys."
+                    );
+                }
+            };
             if files.is_empty() {
                 println!(
                     "No redactable secrets found across {} artifact(s).",
                     report.artifacts_scanned
                 );
+                say_left_alone();
                 return Ok(());
             }
 
@@ -1358,17 +1494,32 @@ fn run_ai(action: AiAction, db_path: Option<PathBuf>) -> anyhow::Result<()> {
                 .parent()
                 .map(|p| p.join("redaction-backups"))
                 .unwrap_or_else(|| PathBuf::from("redaction-backups"));
-            let outcome = ai_redact_paths(&files, apply, &backup_dir);
-            print_redaction_report(&outcome, apply);
+            let outcome = redact_with(
+                &files,
+                RedactOptions {
+                    apply,
+                    include_active,
+                },
+                &backup_dir,
+            );
+            print_redaction_report(&outcome, apply, &backup_dir);
+            say_left_alone();
+            // A file that was meant to be cleaned and still holds its key is not a success.
+            if apply && outcome.unfinished() {
+                std::process::exit(1);
+            }
         }
     }
     Ok(())
 }
 
-fn print_redaction_report(report: &bulwark_core::RedactionReport, apply: bool) {
+fn print_redaction_report(report: &bulwark_core::RedactionReport, apply: bool, backup_dir: &Path) {
+    use bulwark_core::ai_scan::redact::IN_USE;
     if report.dry_run {
         println!("Dry run — nothing was changed. Re-run with --apply to redact.\n");
     }
+    // Every name here comes from the scanned machine: printed on one line, with nothing that a
+    // terminal would act on.
     for entry in &report.entries {
         let verb = if entry.applied {
             "redacted"
@@ -1377,14 +1528,16 @@ fn print_redaction_report(report: &bulwark_core::RedactionReport, apply: bool) {
         };
         println!(
             "{} {} secret(s) in {}",
-            verb, entry.secrets_redacted, entry.path
+            verb,
+            entry.secrets_redacted,
+            line_safe(&entry.path)
         );
         if let Some(backup) = &entry.backup_path {
-            println!("  backup: {backup}");
+            println!("  backup: {}", line_safe(backup));
         }
     }
     for e in &report.errors {
-        println!("⚠ {e}");
+        println!("⚠ {}", line_safe(e));
     }
     let verb = if apply { "Redacted" } else { "Found" };
     println!(
@@ -1393,6 +1546,24 @@ fn print_redaction_report(report: &bulwark_core::RedactionReport, apply: bool) {
         report.total_secrets,
         report.entries.len()
     );
+    if apply && report.unfinished() {
+        println!("Not every file was cleaned: a secret is still in each file marked ⚠ above.");
+        if report.errors.iter().any(|e| e.contains(IN_USE)) {
+            println!(
+                "A file changed in the last 30 seconds is left alone. Run this again when the \
+                 session has ended, or add --include-active to rewrite it now."
+            );
+        }
+    }
+    if report.entries.iter().any(|e| e.backup_path.is_some()) {
+        println!(
+            "\nThe backups are the original files, secrets included. They are kept in\n  {}\n\
+             (readable only by you) until you delete that folder. Delete it once you have checked \
+             the result — and rotate the keys either way: removing a key from a file does not \
+             un-leak it.",
+            line_safe(&backup_dir.display().to_string())
+        );
+    }
 }
 
 /// Handles the `logs` subcommand group. Kept as its own function so `main`'s top-level match

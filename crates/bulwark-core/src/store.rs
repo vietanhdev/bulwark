@@ -920,7 +920,17 @@ impl Store {
     /// artifact scanning specifically — a secret the user has since redacted, or a config they've
     /// fixed, should simply be *gone* from the next scan, whereas the config reconciler
     /// deliberately keeps a finding open when the check that would have cleared it never ran.
+    ///
+    /// Latest-run-wins is only right for a run that looked at the whole machine. A run of named
+    /// folders (`targeted`) or one that was stopped (`cancelled`) is **not stored**: it would
+    /// become "the latest", and every finding the last whole-machine scan made would be deleted
+    /// in favour of whatever one folder held — `ai scan --target .` in an empty folder used to
+    /// empty the table. Returning `Ok` without storing is deliberate, so no caller has to
+    /// remember the rule to be safe.
     pub fn persist_ai_scan(&mut self, report: &crate::ai_scan::AiScanReport) -> anyhow::Result<()> {
+        if report.targeted || report.cancelled {
+            return Ok(());
+        }
         self.conn.transaction(|conn| {
             let run_id = report.id.to_string();
             diesel::insert_into(ai_scan_runs::table)
@@ -2775,6 +2785,8 @@ mod tests {
             artifacts_scanned: 5,
             workspaces_capped: false,
             cancelled: false,
+            targeted: false,
+            notes: vec![],
             errors: vec![],
             findings: vec![AiFinding {
                 id: uuid::Uuid::new_v4(),
@@ -2815,6 +2827,66 @@ mod tests {
         assert_eq!(store.latest_ai_scan().unwrap().unwrap().findings.len(), 0);
     }
 
+    /// `ai scan --target .` in an empty folder used to empty the stored findings: the run was
+    /// stored as "the latest", and everything the last whole-machine scan had found was deleted.
+    /// A run of named folders, like a stopped one, is not a picture of the machine.
+    #[test]
+    fn a_run_of_named_folders_does_not_replace_the_machine_wide_findings() {
+        use crate::ai_scan::{AiFinding, AiScanReport};
+        let tmp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&tmp.path().join("ai.db")).unwrap();
+        let whole_machine = AiScanReport {
+            id: uuid::Uuid::new_v4(),
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            host_fingerprint: "host/6.8".into(),
+            workspaces_scanned: vec!["/home/u/proj".into()],
+            artifacts_scanned: 5,
+            workspaces_capped: false,
+            cancelled: false,
+            targeted: false,
+            errors: vec![],
+            notes: vec![],
+            findings: vec![AiFinding {
+                id: uuid::Uuid::new_v4(),
+                rule_id: "BLWK-AI-002".into(),
+                severity: Severity::Critical,
+                tool: "Claude Code".into(),
+                title: "Project-supplied agent hooks".into(),
+                explanation: "hooks".into(),
+                fix_hint: "remove them".into(),
+                file: "/home/u/proj/.claude/settings.json".into(),
+                line: Some(1),
+                evidence: "SessionStart".into(),
+                references: vec![],
+                redactable: false,
+            }],
+        };
+        store.persist_ai_scan(&whole_machine).unwrap();
+        assert_eq!(store.latest_ai_scan().unwrap().unwrap().findings.len(), 1);
+
+        for (targeted, cancelled) in [(true, false), (false, true)] {
+            let partial = AiScanReport {
+                id: uuid::Uuid::new_v4(),
+                started_at: Utc::now() + chrono::Duration::seconds(5),
+                workspaces_scanned: vec!["/empty".into()],
+                artifacts_scanned: 0,
+                findings: vec![],
+                targeted,
+                cancelled,
+                ..whole_machine.clone()
+            };
+            store.persist_ai_scan(&partial).unwrap();
+            let snap = store.latest_ai_scan().unwrap().unwrap();
+            assert_eq!(
+                snap.findings.len(),
+                1,
+                "targeted={targeted} cancelled={cancelled}: the machine-wide finding must survive"
+            );
+            assert_eq!(snap.workspaces_scanned, ["/home/u/proj"]);
+        }
+    }
+
     #[test]
     fn removing_redacted_findings_drops_only_secrets_for_those_files() {
         use crate::ai_scan::{AiFinding, AiScanReport};
@@ -2844,6 +2916,8 @@ mod tests {
             artifacts_scanned: 3,
             workspaces_capped: false,
             cancelled: false,
+            targeted: false,
+            notes: vec![],
             errors: vec![],
             findings: vec![
                 mk("/home/u/a.md", "BLWK-AI-001", true), // secret, will be redacted
@@ -2888,6 +2962,8 @@ mod tests {
             artifacts_scanned: n,
             workspaces_capped: false,
             cancelled: false,
+            targeted: false,
+            notes: vec![],
             errors: vec![],
             findings: (0..n)
                 .map(|i| AiFinding {
