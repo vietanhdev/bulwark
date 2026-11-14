@@ -307,7 +307,9 @@ It installs the `.dsc`'s Build-Depends in a clean `ubuntu:<series>` container, s
 `bulwark-desktop_<v>_<arch>.deb` and `bulwarkctl_<v>_<arch>.deb` in a fresh container and the PPA
 `.deb` over them: it must unpack *over* the release version, leave `bulwarkctl` installed, and
 `bulwark-app --version` / `bulwark --version` must report `<v>`. `--launch` adds the real GUI
-launch test (`scripts/test-gui-packages-docker.sh`) on that series. A desktop `dry_run` of
+launch test (`scripts/test-gui-packages-docker.sh`) on that series. `--reuse-build` skips the
+compile and re-runs the install and launch checks on the `.deb` an earlier run left in
+`target/ppa-desktop-out/<series>/`. A desktop `dry_run` of
 `publish-ppa.yml` runs the same script (without `--launch`) for every series.
 
 ---

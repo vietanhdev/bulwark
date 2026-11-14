@@ -16,17 +16,19 @@
 #
 # Usage:
 #   scripts/test-ppa-desktop-build.sh --series resolute --dsc target/ppa-desktop/bulwark-desktop_<v>.dsc [--launch]
+#   ... --reuse-build   skip steps 1-2 and test the .deb an earlier run left in the output folder
 #
 # Output: the binary packages land in target/ppa-desktop-out/<series>/.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SERIES="" DSC="" LAUNCH=0
+SERIES="" DSC="" LAUNCH=0 REUSE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --series) SERIES="$2"; shift 2 ;;
     --dsc)    DSC="$2"; shift 2 ;;
     --launch) LAUNCH=1; shift ;;
+    --reuse-build) REUSE=1; shift ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -44,11 +46,15 @@ case "$(uname -m)" in
 esac
 OUT="${REPO_ROOT}/target/ppa-desktop-out/${SERIES}"
 IMAGE_TAG="bulwark-ppa-desktop-deps:${SERIES}"
-rm -rf "$OUT"; mkdir -p "$OUT"
+[[ "$REUSE" == 1 ]] || rm -rf "$OUT"
+mkdir -p "$OUT"
 # Same budget as the rest of this repo's Docker builds: a full Tauri compile on every core makes
 # a workstation unusable.
 CPUS="${CPUS:-4}"
 
+if [[ "$REUSE" == 1 ]]; then
+  echo ">> [1-2/4] ${SERIES}: reusing the .deb in ${OUT}"
+else
 echo ">> [1/4] ${SERIES}: Build-Depends of ${DSC_NAME}"
 CID="ppa-desktop-deps-${SERIES}-$$"
 docker rm -f "$CID" >/dev/null 2>&1 || true
@@ -77,6 +83,7 @@ if ! docker run --rm --network none --cpus="$CPUS" -e CARGO_BUILD_JOBS="$CPUS" \
   tail -40 "${OUT}/build.log" >&2
   echo "ERROR: offline build failed on ${SERIES}; full log: ${OUT}/build.log" >&2
   exit 1
+fi
 fi
 PPA_DEB="$(ls "${OUT}"/bulwark_*_"${DEB_ARCH}".deb)"
 echo "   built $(basename "$PPA_DEB")"
