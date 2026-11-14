@@ -533,6 +533,53 @@ shape — a required (`{5,50}`) prefix, an exact count, a rule with no capture g
 *is* the reported secret — is left alone: a rule that stays slow is a bug, a rule that quietly stops
 matching is a vulnerability.
 
+### `\w` means what gitleaks means (realized, fixed)
+
+The pack is written for Go's RE2, where `\w`, `\d` and `\b` are ASCII. The `regex` crate reads them
+as Unicode, and a Unicode `\w` is about 700 ranges of code points. Repeated inside `[\w.-]{0,50}`,
+that made the compiled pack **585 MB** (12 MB for `generic-api-key` alone, past the crate's default
+size limit, which had been raised to let it compile). An AI scan kept most of that for the rest of the
+process: the desktop app sat at about 940 MB after its first background sweep.
+
+`secrets::compile` now writes those escapes out as the ASCII classes RE2 means (`re2_classes`):
+`\w` becomes `[0-9A-Za-z_]`, `\d` becomes `[0-9]`, `\b` becomes `(?-u:\b)`. `\s` stays Unicode,
+because its class is small and it only ever matches more than RE2's. The whole pack now compiles to
+12 MB. A Unicode `\b` also stopped the fast engine on any non-ASCII text, so the scan got faster too.
+
+Two smaller fixes followed from the heap profile (heaptrack) once that was gone:
+
+- **Working memory went away with the workers.** A `Regex` keeps the memory of its searches
+  (lazy-DFA states, sparse sets) in a pool it owns, and the pack's regexes live as long as the
+  process, so each scan worker's working memory stayed after the workers had exited: 55 MB after an
+  eight-worker scan, kept by the app between sweeps. Each thread now searches with its own clone
+  (`secrets::thread_copy`), which shares the compiled program and owns its pool, so that memory
+  goes when a scan's worker pool shuts down.
+- **No second copy of a window for checks that cannot run.** Every window after a file's first was
+  copied into a line-numbered buffer for the line checks, which return nothing for a transcript,
+  the only kind of file that usually has more than one window. `has_line_checks` decides both.
+
+Measured on one home folder with 821 agent files (16 cores):
+
+| | 0.16.1 | now |
+|---|---|---|
+| `ai scan`, 1 worker | 328 MB, 38 s | 48 MB, 10 s |
+| `ai scan`, 8 workers | 730 MB, 15 s | 132 MB, 3 s |
+| heap still in use after an 8-worker scan | — | 13 MB (was 71 MB before `thread_copy`) |
+| host `scan` (CRED-010 reads shell history with the same pack) | 81 MB, 0.47 s | 22 MB, 0.23 s |
+| desktop app after its first sweep | 938 MB | 222 MB |
+
+The app's figure is resident memory, most of which is shared library code (LLVM, WebKit, GPU
+drivers). Its own private memory after a sweep is about 59 MB, and the web view's about 41 MB.
+The findings were identical before and after (same rule, file, line, severity and title; 43 from
+the AI scan, 8 from the host scan with all their facts), from the CLI and from the app.
+`every_rule_fits_the_default_size_limit` fails if a pattern grows past the crate's 10 MB default
+again, and `perl_classes_keep_their_re2_meaning` pins the rewrite.
+
+The app's background sweep, which runs every six hours without anyone watching, also asks for at
+most two workers (`AiScanOptions::max_workers`). `BULWARK_SCAN_THREADS` still overrides it. After an
+AI scan the app returns freed memory to the system (`platform::release_freed_memory`, glibc's
+`malloc_trim`), which measured about 10 MB.
+
 ### Validating the rule pack (and what that surfaced)
 
 262 vendored regexes are not self-evidently correct, and until recently nothing checked that any

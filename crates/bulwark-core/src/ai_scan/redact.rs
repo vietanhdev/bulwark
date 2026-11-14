@@ -117,7 +117,7 @@ pub fn redact_with(paths: &[PathBuf], opts: RedactOptions, backup_dir: &Path) ->
             })
             .collect()
     };
-    let outcomes = match super::bounded_scan_pool() {
+    let outcomes = match super::bounded_scan_pool(None) {
         Some(pool) => pool.install(run),
         None => run(),
     };

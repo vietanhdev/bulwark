@@ -52,3 +52,18 @@ pub fn is_root() -> bool {
         false
     }
 }
+
+/// Hands memory freed by a finished scan back to the operating system.
+///
+/// glibc keeps freed memory in its arenas for reuse, so a long-running process such as the desktop
+/// app keeps some of the peak of its last AI scan for hours (about 10 MB in a measured sweep).
+/// `malloc_trim` returns what is free. It never frees anything still in use, so calling it is
+/// always safe; it only costs a moment of CPU. Elsewhere (musl, macOS, Windows) there is nothing
+/// to call.
+pub fn release_freed_memory() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: malloc_trim only inspects and shrinks the allocator's own free lists.
+    unsafe {
+        libc::malloc_trim(0);
+    }
+}
