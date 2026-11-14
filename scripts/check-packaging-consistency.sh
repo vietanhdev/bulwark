@@ -264,13 +264,31 @@ cmp_arches "COPR spec ExclusiveArch" "${SPEC_ARCHES}" "${CLI_ARCHES}"
 # Launchpad builds whatever the series enables, driven by `Architecture: any`. That is correct,
 # but only while it stays `any` — narrowing it to `amd64` would silently stop producing arm64
 # builds with nothing else in the repo changing. Assert the mechanism rather than a list.
-PPA_CONTROL="packaging/ppa/debian/control"
-if grep -qE '^Architecture:[[:space:]]*any[[:space:]]*$' "${PPA_CONTROL}"; then
-  ok "PPA debian/control is Architecture: any (Launchpad builds every enabled arch)"
+# Both PPA sources: the CLI's and the desktop app's.
+for PPA_CONTROL in packaging/ppa/debian/control packaging/ppa-desktop/debian/control; do
+  if grep -qE '^Architecture:[[:space:]]*any[[:space:]]*$' "${PPA_CONTROL}"; then
+    ok "${PPA_CONTROL} is Architecture: any (Launchpad builds every enabled arch)"
+  else
+    bad "${PPA_CONTROL} is not 'Architecture: any'"
+    note "Launchpad derives the PPA's architectures from this field alone. Anything narrower"
+    note "silently stops producing builds for the arches the download page advertises."
+  fi
+done
+
+# The desktop PPA package replaces the release's .deb in place (same name, `bulwark`), so it
+# should pull in what that .deb recommends. Two lists in two formats, so compare them here.
+PPA_DESKTOP_CONTROL="packaging/ppa-desktop/debian/control"
+PPA_DESKTOP_RECS="$(sed -n 's/^Recommends:[[:space:]]*//p' "${PPA_DESKTOP_CONTROL}")"
+TAURI_DEB_RECS="$(python3 -c 'import json,sys;print(", ".join(json.load(open(sys.argv[1]))["bundle"]["linux"]["deb"]["recommends"]))' apps/bulwark-app/src-tauri/tauri.conf.json)"
+if [[ "${PPA_DESKTOP_RECS}" == "${TAURI_DEB_RECS}" ]]; then
+  ok "desktop PPA Recommends matches tauri.conf.json's deb recommends"
 else
-  bad "PPA debian/control is not 'Architecture: any'"
-  note "Launchpad derives the PPA's architectures from this field alone. Anything narrower"
-  note "silently stops producing builds for the arches the download page advertises."
+  bad "desktop PPA Recommends ('${PPA_DESKTOP_RECS}') differs from tauri.conf.json ('${TAURI_DEB_RECS}')"
+fi
+if grep -qx 'Package: bulwark' "${PPA_DESKTOP_CONTROL}"; then
+  ok "desktop PPA binary package is named 'bulwark' (upgrades the release .deb in place)"
+else
+  bad "desktop PPA binary package is not named 'bulwark'; it would install beside the release .deb, not over it"
 fi
 
 # The snap declares its arches explicitly so the restriction is reviewable. Checked for

@@ -1,0 +1,62 @@
+#!/usr/bin/make -f
+# Bulwark desktop app — Debian packaging rules for the Launchpad PPA build.
+#
+# Same offline model as the CLI's packaging/ppa/debian/rules: vendor/ + .cargo/config.toml in
+# the source tarball, no network on the builder. The result mirrors the package `cargo tauri
+# build` makes for the GitHub release (same name, same paths), built with plain cargo because
+# the Tauri CLI and its bundler are npm/network tools. Layout, as in the release .deb:
+#   /usr/bin/bulwark-app                      the GUI
+#   /usr/bin/bulwark                          the CLI sidecar (pkexec target for privileged scans)
+#   /usr/lib/bulwark/{rules,decoders,log-rules}   Tauri resources (resource_dir on a /usr/bin exe)
+#   /usr/share/applications/bulwark.desktop, hicolor icons named bulwark-app
+#   /usr/share/polkit-1/actions/com.bulwark.policy
+
+export CARGO_NET_OFFLINE = true
+export CARGO_HOME = $(CURDIR)/debian/cargo-home
+export CARGO_INCREMENTAL = 0
+
+PKG := debian/bulwark
+APP := apps/bulwark-app/src-tauri
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+
+# Order matters: the app's build.rs stages target/release/bulwarkctl as the `bulwark` sidecar,
+# and stages a zero-byte placeholder (with only a warning) when it is missing.
+# custom-protocol is load-bearing: without it the app is a dev build that loads devUrl
+# (http://localhost:1420) and shows an empty window (see the comment in the app's Cargo.toml).
+override_dh_auto_build:
+	cargo build --release --offline -p bulwarkctl
+	cargo build --release --offline -p bulwark-app --features custom-protocol
+
+override_dh_auto_test:
+
+override_dh_auto_install:
+	test -s target/release/bulwarkctl
+	install -D -m0755 target/release/bulwark-app $(PKG)/usr/bin/bulwark-app
+	install -D -m0755 target/release/bulwarkctl $(PKG)/usr/bin/bulwark
+	install -d $(PKG)/usr/lib/bulwark
+	cp -r rules decoders log-rules $(PKG)/usr/lib/bulwark/
+	install -D -m0644 polkit/com.bulwark.policy \
+		$(PKG)/usr/share/polkit-1/actions/com.bulwark.policy
+	# The Tauri bundler renders this template; do the same substitutions it does, so the
+	# installed entry matches the release .deb's line for line.
+	install -d $(PKG)/usr/share/applications
+	sed -e 's/{{exec}}/bulwark-app/g' -e 's/{{icon}}/bulwark-app/g' \
+		-e '/^{{#if mime_type}}$$/,/^{{\/if}}$$/d' \
+		$(APP)/bulwark.desktop > $(PKG)/usr/share/applications/bulwark.desktop
+	! grep -n '{{' $(PKG)/usr/share/applications/bulwark.desktop
+	for s in 16 24 32 48 64 128 256 512; do \
+		install -D -m0644 $(APP)/icons/$${s}x$${s}.png \
+			$(PKG)/usr/share/icons/hicolor/$${s}x$${s}/apps/bulwark-app.png || exit 1; \
+	done
+
+override_dh_auto_clean:
+	rm -rf debian/cargo-home
+	cargo clean --offline || true
+
+# dh_clean would delete the vendored crates' Cargo.toml.orig files (see the CLI's rules).
+override_dh_clean:
+	dh_clean -X.orig

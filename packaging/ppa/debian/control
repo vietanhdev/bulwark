@@ -37,4 +37,4 @@ Description: Linux security misconfiguration & intrusion scanner (CLI)
  This package provides the command-line front-door, bulwarkctl. It can scan the
  local host or a remote machine over SSH, with no display session required, and
  covers configuration hardening, SSH, log analysis, and AI-assistant artifact
- checks. See the bulwark-app package for the desktop GUI.
+ checks. See the bulwark package for the desktop app.

@@ -872,6 +872,11 @@ jobs:
             sudo apt install ./bulwark-desktop_${{ steps.version.outputs.version }}_amd64.deb   # x86_64 (also installs the CLI as `bulwark`)
             sudo apt install ./bulwark-desktop_${{ steps.version.outputs.version }}_arm64.deb   # arm64
             ```
+            Ubuntu 24.04, 26.04 and 26.10, kept current by `apt upgrade` (the same `bulwark` package, so
+            it upgrades a `.deb` install; Launchpad builds each release a few hours after it is published):
+            ```bash
+            sudo add-apt-repository ppa:vietanhng/bulwark && sudo apt install bulwark   # CLI only: bulwarkctl
+            ```
             Fedora/RHEL:
             ```bash
             sudo dnf install ./bulwark-desktop-${{ steps.version.outputs.version }}.x86_64.rpm    # x86_64

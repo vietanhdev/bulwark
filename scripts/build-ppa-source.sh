@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build a signed Debian *source* package for the Bulwark CLI, ready to `dput` to a
-# Launchpad PPA. See packaging/README.md for the one-time Launchpad account setup
+# Build a signed Debian *source* package for the Bulwark CLI or desktop app, ready to `dput`
+# to a Launchpad PPA. See packaging/README.md for the one-time Launchpad account setup
 # and the full publish workflow.
 #
 # Why this exists: Launchpad's build farm compiles the .deb itself, on machines
@@ -10,13 +10,21 @@
 # on Launchpad runs fully offline. The premise is validated end-to-end: the same
 # trimmed+vendored tree builds a working bulwarkctl with CARGO_NET_OFFLINE=true.
 #
+# Two source packages share the PPA, each with its own .orig and version history:
+#   --package cli      (default) source `bulwark`         -> binary `bulwarkctl`
+#   --package desktop            source `bulwark-desktop` -> binary `bulwark` (GUI + CLI sidecar)
+# The desktop binary is named `bulwark` on purpose: it is the same package the GitHub release's
+# bulwark-desktop_<v>_<arch>.deb installs, so the PPA upgrades a release-.deb install in place.
+# Separate sources keep the CLI's orig, Build-Depends and build exactly as they were: a WebKit
+# problem on one series can never stop the CLI from building there.
+#
 # Usage:
-#   scripts/build-ppa-source.sh [--series noble] [--ppa-rev 1] [--sign-key KEYID]
+#   scripts/build-ppa-source.sh [--package cli|desktop] [--series noble] [--ppa-rev 1] [--sign-key KEYID]
 #   scripts/build-ppa-source.sh --series noble --sign-key ABCD1234   # signed, uploadable
 #   scripts/build-ppa-source.sh --series noble                       # unsigned, for local test
 #
 # Then, for a signed build:
-#   dput ppa:vietanhng/bulwark <build>/bulwark_<version>_source.changes
+#   dput ppa:vietanhng/bulwark <build>/<source>_<version>_source.changes
 #
 set -euo pipefail
 
@@ -24,6 +32,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 # ---- args ---------------------------------------------------------------------
+PACKAGE="cli"           # cli | desktop (see above)
 SERIES="noble"          # target Ubuntu series (noble, resolute, stonking, ...)
 PPA_REV="1"             # bump when re-uploading the SAME upstream version to the SAME series
 SIGN_KEY=""             # gpg key id/email; empty => unsigned (-us -uc), NOT uploadable
@@ -36,6 +45,7 @@ MAINTAINER="Viet Anh Nguyen <vietanh.dev@gmail.com>"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --package)  PACKAGE="$2"; shift 2 ;;
     --series)   SERIES="$2"; shift 2 ;;
     --ppa-rev)  PPA_REV="$2"; shift 2 ;;
     --sign-key) SIGN_KEY="$2"; shift 2 ;;
@@ -46,7 +56,28 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-for tool in git cargo dpkg-buildpackage dpkg-source python3; do
+case "$PACKAGE" in
+  cli)
+    SOURCE_NAME="bulwark"
+    DEBIAN_TEMPLATE="${REPO_ROOT}/packaging/ppa/debian"
+    BUILD_DIR="${REPO_ROOT}/target/ppa"
+    MEMBERS='"crates/bulwark-core", "crates/bulwarkctl"'
+    WHAT="Bulwark CLI"
+    ;;
+  desktop)
+    SOURCE_NAME="bulwark-desktop"
+    DEBIAN_TEMPLATE="${REPO_ROOT}/packaging/ppa-desktop/debian"
+    BUILD_DIR="${REPO_ROOT}/target/ppa-desktop"
+    # bulwarkctl is built too: it is the GUI's `bulwark` sidecar (the privileged scan path).
+    MEMBERS='"crates/bulwark-core", "crates/bulwark-access", "crates/bulwarkctl", "apps/bulwark-app/src-tauri"'
+    WHAT="Bulwark desktop app"
+    ;;
+  *) echo "unknown --package: $PACKAGE (cli | desktop)" >&2; exit 2 ;;
+esac
+
+TOOLS=(git cargo dpkg-buildpackage dpkg-source python3)
+[[ "$PACKAGE" == desktop && -z "$ORIG_IN" ]] && TOOLS+=(npm)
+for tool in "${TOOLS[@]}"; do
   command -v "$tool" >/dev/null 2>&1 || { echo "ERROR: '$tool' not found on PATH" >&2; exit 1; }
 done
 
@@ -63,14 +94,13 @@ PY
 # the plain 0.7.0-0ppa1, so the same upstream can coexist across series and a
 # later series always upgrades cleanly.
 DEB_VERSION="${UPSTREAM}-0ppa${PPA_REV}~${SERIES}1"
-echo ">> upstream=${UPSTREAM}  series=${SERIES}  deb=${DEB_VERSION}"
+echo ">> ${SOURCE_NAME}: upstream=${UPSTREAM}  series=${SERIES}  deb=${DEB_VERSION}"
 
 # ---- staging ------------------------------------------------------------------
-BUILD_DIR="${REPO_ROOT}/target/ppa"
-SRC_DIR="${BUILD_DIR}/bulwark-${UPSTREAM}"
+SRC_DIR="${BUILD_DIR}/${SOURCE_NAME}-${UPSTREAM}"
 rm -rf "$SRC_DIR"
 mkdir -p "$SRC_DIR"
-ORIG="${BUILD_DIR}/bulwark_${UPSTREAM}.orig.tar.xz"
+ORIG="${BUILD_DIR}/${SOURCE_NAME}_${UPSTREAM}.orig.tar.xz"
 
 if [[ -n "$ORIG_IN" ]]; then
 # A version's .orig is fixed the moment Launchpad accepts it, and any later upload of that
@@ -89,16 +119,34 @@ echo ">> exporting clean tree (git archive HEAD)"
 git archive --format=tar HEAD | tar -x -C "$SRC_DIR"
 [[ -f "$SRC_DIR/Cargo.lock" ]] || { echo "ERROR: Cargo.lock is not in HEAD" >&2; exit 1; }
 
-echo ">> trimming workspace to bulwark-core + bulwarkctl (drops the Tauri/agent members)"
-python3 - "$SRC_DIR/Cargo.toml" <<'PY'
+echo ">> trimming workspace to: ${MEMBERS}"
+python3 - "$SRC_DIR/Cargo.toml" "$MEMBERS" <<'PY'
 import re, sys
-p = sys.argv[1]
+p, members = sys.argv[1], [m.strip() for m in sys.argv[2].split(",")]
 s = open(p).read()
-s = re.sub(r'members\s*=\s*\[[^\]]*\]',
-           'members = [\n    "crates/bulwark-core",\n    "crates/bulwarkctl",\n]',
-           s, count=1)
+body = "".join(f"\n    {m}," for m in members)
+s = re.sub(r'members\s*=\s*\[[^\]]*\]', f'members = [{body}\n]', s, count=1)
 open(p, "w").write(s)
 PY
+
+if [[ "$PACKAGE" == desktop ]]; then
+  # The frontend ships BUILT, not as npm sources. Launchpad's builders have no network, so the
+  # alternative is vendoring node_modules: hundreds of MB, plus per-architecture native bindings
+  # (rolldown, esbuild) for every arch, plus a Node new enough for Vite on every series (noble's
+  # archive Node is 18; Vite needs 20.19+). The output is plain JS/CSS/fonts, identical on every
+  # architecture, and tauri::generate_context! embeds it into the binary anyway. It is built
+  # here from the very tree that goes into the orig, from the committed package-lock.json.
+  echo ">> building the frontend (npm ci + npm run build; needs network, runs on THIS machine)"
+  (
+    cd "$SRC_DIR/apps/bulwark-app"
+    npm ci --no-audit --no-fund >/dev/null
+    npm run build >/dev/null
+    rm -rf node_modules
+  )
+  [[ -f "$SRC_DIR/apps/bulwark-app/dist/index.html" ]] \
+    || { echo "ERROR: frontend build produced no dist/index.html" >&2; exit 1; }
+  echo ">> frontend dist: $(du -sh "$SRC_DIR/apps/bulwark-app/dist" | cut -f1)"
+fi
 
 echo ">> vendoring dependencies (needs network; runs on THIS machine, not the builder)"
 # --locked is expected to fail here: trimming the workspace drops the GUI's packages from the
@@ -146,7 +194,7 @@ tar --create \
     --pax-option='exthdr.name=%d/PaxHeaders/%f,delete=atime,delete=ctime' \
     --exclude='./debian' \
     -C "$BUILD_DIR" \
-    --transform "s,^\./,bulwark-${UPSTREAM}/," \
+    --transform "s,^\./,${SOURCE_NAME}-${UPSTREAM}/," \
     -C "$SRC_DIR" . \
   | xz -6 -T1 > "$ORIG"
 fi
@@ -154,7 +202,7 @@ fi
 
 # ---- debian/ packaging + changelog -------------------------------------------
 echo ">> installing debian/ packaging"
-cp -r "${REPO_ROOT}/packaging/ppa/debian" "$SRC_DIR/debian"
+cp -r "$DEBIAN_TEMPLATE" "$SRC_DIR/debian"
 chmod +x "$SRC_DIR/debian/rules"
 
 # The toolchain each series builds with. The dependency tree needs Rust >= 1.89 (uuid's
@@ -182,9 +230,9 @@ fi
 # devscripts (dch) may be absent; write the changelog directly. RFC2822 date.
 CHANGELOG_DATE="$(date -R)"
 cat > "$SRC_DIR/debian/changelog" <<EOF
-bulwark (${DEB_VERSION}) ${SERIES}; urgency=medium
+${SOURCE_NAME} (${DEB_VERSION}) ${SERIES}; urgency=medium
 
-  * PPA build of Bulwark CLI ${UPSTREAM} for ${SERIES}.
+  * PPA build of ${WHAT} ${UPSTREAM} for ${SERIES}.
     Dependencies vendored for the offline Launchpad builder.
 
  -- ${MAINTAINER}  ${CHANGELOG_DATE}
@@ -203,11 +251,11 @@ fi
 echo
 echo "=============================================================================="
 echo "Source package built under: ${BUILD_DIR}"
-ls -1 "${BUILD_DIR}"/bulwark_"${DEB_VERSION}"* 2>/dev/null || true
+ls -1 "${BUILD_DIR}/${SOURCE_NAME}_${DEB_VERSION}"* 2>/dev/null || true
 if [[ -n "$SIGN_KEY" ]]; then
   echo
   echo "Upload with:"
-  echo "  dput ppa:vietanhng/bulwark ${BUILD_DIR}/bulwark_${DEB_VERSION}_source.changes"
+  echo "  dput ppa:vietanhng/bulwark ${BUILD_DIR}/${SOURCE_NAME}_${DEB_VERSION}_source.changes"
 else
   echo
   echo "UNSIGNED build (local test only). Re-run with --sign-key <KEYID> to upload."
