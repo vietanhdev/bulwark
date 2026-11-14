@@ -108,6 +108,14 @@
   </branding>
 
   <releases>
+    <release version="0.16.1" date="2026-11-14">
+      <description>
+        <p>A new check for SSH keys other accounts can read.</p>
+        <ul>
+          <li>A private SSH key, or the .ssh folder, that other accounts on the computer can open is now reported, and Fix automatically makes it private again</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.16.0" date="2026-11-14">
       <description>
         <p>Fewer false alarms, checks that find what they missed, and a safer scan of untrusted folders.</p>
