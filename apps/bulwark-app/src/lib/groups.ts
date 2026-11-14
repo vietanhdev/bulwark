@@ -72,6 +72,7 @@ const BY_RULE: Record<string, string> = {
   // Secrets, wherever the rule lives.
   "BLWK-SSH-012": "secrets",
   "BLWK-SSH-013": "secrets",
+  "BLWK-SSH-015": "secrets",
   "BLWK-AI-001": "secrets",
   "BLWK-AI-015": "secrets",
   "BLWK-AI-016": "secrets",

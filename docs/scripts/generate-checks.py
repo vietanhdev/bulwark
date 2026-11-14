@@ -53,6 +53,7 @@ BY_CATEGORY = {
 BY_RULE = {
     "BLWK-SSH-012": "secrets",
     "BLWK-SSH-013": "secrets",
+    "BLWK-SSH-015": "secrets",
     "BLWK-AI-001": "secrets",
     "BLWK-AI-015": "secrets",
     "BLWK-AI-016": "secrets",
@@ -70,6 +71,7 @@ BY_RULE = {
 AUTO_FIX = {
     "BLWK-AI-001": "In the app, open the issue and use “Remove secret from this file”. From a terminal: `bulwark ai redact` (preview), then `bulwark ai redact --apply`.",
     "BLWK-SSH-012": "In the app, open the issue and use “Add a passphrase”. From a terminal: `bulwark ssh protect`.",
+    "BLWK-SSH-015": "In the app, open the issue and use “Fix automatically”, or “Fix now” for every safe fix. From a terminal: `bulwarkctl fix ssh-perms` (preview), then `bulwarkctl fix ssh-perms --apply`.",
 }
 
 

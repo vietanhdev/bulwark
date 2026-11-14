@@ -713,6 +713,7 @@ mod tests {
                     "BLWK-CRED-009",
                     "BLWK-CRED-010",
                     "BLWK-SSH-014",
+                    "BLWK-SSH-015",
                     "BLWK-NET-003",
                     "BLWK-NET-004",
                     // The firewalled twin of NET-003 (added with remote monitoring): same

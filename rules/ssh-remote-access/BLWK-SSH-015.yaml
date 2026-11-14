@@ -1,0 +1,23 @@
+id: BLWK-SSH-015
+title: "SSH private key can be read by other accounts: {{ ssh_private_keys.path }}"
+category: ssh-remote-access
+severity: medium
+collector: ssh_private_keys
+os: [linux, macos]
+# The same test ssh applies before it uses a key: any group or other permission bit. ssh then
+# refuses the key ("UNPROTECTED PRIVATE KEY FILE"), so the owner usually notices; the copy other
+# accounts can take is the part this check reports. Medium like CRED-004, the same kind of file
+# exposure; an unprotected key is reported on its own by SSH-012.
+condition: open_to_others == true
+explain: >
+  {{ ssh_private_keys.path }} is a private SSH key with permissions {{ ssh_private_keys.mode }}, so
+  other accounts on this computer, including services that run under their own account, can open it.
+  ssh refuses to use a key in this state, and anyone who copies it can sign in wherever the key is
+  accepted.
+fix: |
+  Make the key readable by you alone.
+  1. Run 'chmod 600 {{ ssh_private_keys.path }}', and 'chmod 700 ~/.ssh' for the folder.
+     'bulwarkctl fix ssh-perms --apply' does both for every file in ~/.ssh and only ever removes access.
+  2. If other people use this computer, or the key was open for a while, replace it: create a new key
+     with 'ssh-keygen -t ed25519', add its public key where the old one is accepted, then remove the old one.
+references: [ATTACK-T1552.004]

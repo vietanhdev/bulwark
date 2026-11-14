@@ -13,7 +13,7 @@
   <a href="https://github.com/vietanhdev/bulwark/actions/workflows/ci.yml"><img src="https://github.com/vietanhdev/bulwark/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License: Apache 2.0"></a>
   <a href="https://bulwark.nrl.ai"><img src="https://img.shields.io/badge/docs-bulwark.nrl.ai-1f8a8c" alt="Docs"></a>
-  <a href="https://bulwark.nrl.ai/checks/"><img src="https://img.shields.io/badge/checks-132-1f8a8c" alt="132 checks"></a>
+  <a href="https://bulwark.nrl.ai/checks/"><img src="https://img.shields.io/badge/checks-133-1f8a8c" alt="133 checks"></a>
 </p>
 
 Bulwark checks what an attacker would use on a developer machine:
@@ -74,7 +74,7 @@ place to fix. A check that couldn't run (no privilege, wrong OS, a file it could
 as such and never counted as a pass, so a green result means something.
 
 <p align="center">
-  <img src="docs/public/diagrams/checks.svg" alt="132 checks in seven groups: secrets and credentials (16), supply chain and developer tools (16), exposed services (6), AI coding agents (15), SSH (12), compromise indicators (17), OS hardening (50), plus your own YAML checks; runs on Linux, macOS, Windows and WSL." width="100%">
+  <img src="docs/public/diagrams/checks.svg" alt="133 checks in seven groups: secrets and credentials (17), supply chain and developer tools (16), exposed services (6), AI coding agents (15), SSH (12), compromise indicators (17), OS hardening (50), plus your own YAML checks; runs on Linux, macOS, Windows and WSL." width="100%">
 </p>
 
 ### AI coding agents

@@ -232,6 +232,17 @@ impl SshPrivateKeysCollector {
                 "key_strength_known".to_string(),
                 Value::Bool(strength.is_some()),
             );
+            // Who else may open the key. `ssh` itself refuses a private key with any group or
+            // other bit set ("UNPROTECTED PRIVATE KEY FILE"), so the same test is used here:
+            // such a key no longer works for its owner and can be copied by every other account.
+            // `DirEntry::metadata` does not follow a link, and links were skipped above.
+            #[cfg(unix)]
+            if let Ok(meta) = entry.metadata() {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = meta.permissions().mode() & 0o777;
+                fact.insert("mode".to_string(), Value::String(format!("{mode:03o}")));
+                fact.insert("open_to_others".to_string(), Value::Bool(mode & 0o077 != 0));
+            }
             facts.push(fact);
         }
         facts
@@ -618,6 +629,39 @@ mod strength_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_key_other_accounts_may_open_is_marked_the_way_ssh_judges_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let ssh = home.path().join(".ssh");
+        std::fs::create_dir(&ssh).unwrap();
+        let key = "-----BEGIN OPENSSH PRIVATE KEY-----\n\
+                   b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gt\n\
+                   -----END OPENSSH PRIVATE KEY-----\n";
+        // ssh accepts 600 and 400 and refuses anything with a group or other bit, 640 included.
+        for (name, mode) in [
+            ("id_600", 0o600),
+            ("id_400", 0o400),
+            ("id_640", 0o640),
+            ("id_604", 0o604),
+            ("id_644", 0o644),
+        ] {
+            let path = ssh.join(name);
+            std::fs::write(&path, key).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        }
+        let facts = SshPrivateKeysCollector::private_key_facts(&ssh);
+        assert_eq!(facts.len(), 5);
+        for fact in facts {
+            let path = fact["path"].as_str().unwrap().to_string();
+            let mode = &path[path.len() - 3..];
+            assert_eq!(fact["mode"], Value::String(mode.to_string()), "{path}");
+            let open = !matches!(mode, "600" | "400");
+            assert_eq!(fact["open_to_others"], Value::Bool(open), "{path}");
+        }
+    }
 
     #[test]
     fn unencrypted_openssh_key_is_detected() {
