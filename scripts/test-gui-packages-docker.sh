@@ -32,7 +32,8 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ASSETS="${REPO_ROOT}/build/relassets"
+# ASSETS= points it at another folder of packages (a PPA build, say); same file-name patterns.
+ASSETS="${ASSETS:-${REPO_ROOT}/build/relassets}"
 SETTLE="${SETTLE:-20}"
 
 # Which architecture's artifacts to test. Defaults to the machine running the script, because

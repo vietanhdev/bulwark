@@ -1,0 +1,50 @@
+Source: bulwark-desktop
+Section: admin
+Priority: optional
+Maintainer: Viet Anh Nguyen <vietanh.dev@gmail.com>
+# The desktop app's own source package, beside the CLI's `bulwark` source in the same PPA.
+# Like the CLI, every crate is vendored into the source tarball and the build runs with
+# CARGO_NET_OFFLINE=true (Launchpad builders have no network); the frontend ships prebuilt in
+# the tarball (see scripts/build-ppa-source.sh --package desktop for why). scripts/build-ppa-
+# source.sh rewrites the cargo/rustc lines below to a versioned toolchain on series whose
+# default is too old (noble: cargo-1.91), so keep each on a line of its own.
+# The -dev packages are what the GTK/WebKit `-sys` crates link against through pkg-config;
+# libdbus-1-dev is for libdbus-sys (notifications). libappindicator-sys dlopen()s its library
+# at run time, so the tray needs it in Depends, not here.
+Build-Depends:
+ debhelper-compat (= 13),
+ cargo,
+ rustc,
+ pkgconf,
+ libwebkit2gtk-4.1-dev,
+ libjavascriptcoregtk-4.1-dev,
+ libsoup-3.0-dev,
+ libgtk-3-dev,
+ libayatana-appindicator3-dev,
+ libdbus-1-dev,
+Standards-Version: 4.6.2
+Homepage: https://bulwark.nrl.ai
+Vcs-Git: https://github.com/vietanhdev/bulwark.git
+Vcs-Browser: https://github.com/vietanhdev/bulwark
+Rules-Requires-Root: no
+
+Package: bulwark
+Architecture: any
+# Named `bulwark`, like the package inside the GitHub release's bulwark-desktop_<v>_<arch>.deb,
+# so this upgrades that install in place (<v>-0ppaN~<series>1 sorts above the release's plain
+# <v>). It owns /usr/bin/bulwark-app and /usr/bin/bulwark, never /usr/bin/bulwarkctl, so it
+# installs side by side with the bulwarkctl package.
+# libayatana-appindicator3-1 is loaded with dlopen() for the tray icon, so dh_shlibdeps cannot
+# see it (WebKit and GTK it derives from the binary's links).
+Depends: ${shlibs:Depends}, ${misc:Depends}, libayatana-appindicator3-1
+# Same list as tauri.conf.json's deb "recommends"; keep them in step.
+Recommends: clamav, openssh-client, curl, git, pkexec | policykit-1
+Description: Linux security misconfiguration & intrusion scanner (desktop app)
+ Bulwark scans a Linux host for security misconfigurations and intrusion
+ indicators using a native Rust rule engine over declarative YAML rules, and
+ explains findings in plain language with a suggested fix.
+ .
+ This package provides the desktop app (bulwark-app) and the command-line
+ engine it uses for privileged scans (bulwark). It also installs a polkit
+ policy that makes pkexec ask for the administrator password on every use.
+ See the bulwarkctl package for the command line alone.

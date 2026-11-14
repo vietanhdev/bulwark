@@ -2,7 +2,12 @@
 """Read-only Launchpad queries for publish-ppa.yml (stdlib only; anonymous API).
 
 Launchpad answers an upload by email, never by failing the dput, so without these checks
-a rejected or failed upload looks exactly like a successful one in CI. Subcommands:
+a rejected or failed upload looks exactly like a successful one in CI.
+
+  --source NAME (before the subcommand) picks the source package: `bulwark` (the CLI, the
+  default) or `bulwark-desktop` (the desktop app). Each has its own versions and .orig.
+
+Subcommands:
 
   next-rev   --upstream V                  print the next free PPA revision for V
   complete-rev --upstream V --series "a b" print the highest revision of V that Launchpad
@@ -30,7 +35,8 @@ import urllib.request
 
 API = "https://api.launchpad.net/devel"
 PPA = f"{API}/~vietanhng/+archive/ubuntu/bulwark"
-SOURCE = "bulwark"
+SOURCE = "bulwark"  # replaced by --source
+SOURCES = ("bulwark", "bulwark-desktop")
 POLL_SECONDS = 60
 
 
@@ -176,6 +182,7 @@ def cmd_wait(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--source", choices=SOURCES, default="bulwark")
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("next-rev")
     s.add_argument("--upstream", required=True)
@@ -201,6 +208,8 @@ def main():
     s.add_argument("--timeout-min", type=int, default=240)
     s.set_defaults(fn=cmd_wait)
     a = p.parse_args()
+    global SOURCE
+    SOURCE = a.source
     a.fn(a)
 
 

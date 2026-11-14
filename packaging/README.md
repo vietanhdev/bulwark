@@ -1,10 +1,11 @@
 # Publishing Bulwark as an Ubuntu package
 
-Three channels, split by what each half of Bulwark needs:
+Four channels, split by what each half of Bulwark needs:
 
 | Component | Channel | Install command | Why |
 |---|---|---|---|
 | `bulwarkctl` (CLI) | **Launchpad PPA** | `sudo add-apt-repository ppa:vietanhng/bulwark && sudo apt install bulwarkctl` | Source-built by Launchpad; deps vendored for the offline builder. |
+| `bulwark` (GUI + its CLI sidecar) | **Launchpad PPA** | `sudo add-apt-repository ppa:vietanhng/bulwark && sudo apt install bulwark` | Same PPA, its own source package (`bulwark-desktop`). Unconfined, so the full product, with `apt upgrade` updates. |
 | `bulwark-app` (GUI) | **Snap (classic)** | `sudo snap install bulwark --classic` | Privileged scans need `pkexec` + host `/etc` access, which only classic confinement allows. |
 | `bulwark-app` (GUI) | **Flatpak / Flathub** | `flatpak install flathub com.vietanhdev.bulwark` | Broadest cross-distro GUI reach — but sandboxed, so privileged scans are limited (see below). |
 
@@ -13,6 +14,7 @@ Three channels, split by what each half of Bulwark needs:
 
 Layout:
 - `ppa/debian/` — the CLI's Debian source packaging; built by `scripts/build-ppa-source.sh`.
+- `ppa-desktop/debian/` — the desktop app's; built by `scripts/build-ppa-source.sh --package desktop`.
 - `../snap/snapcraft.yaml` — the GUI's classic snap recipe.
 - `flatpak/` — the GUI's Flatpak manifest + desktop/metainfo; offline deps built
   by `scripts/flatpak-gen-sources.sh`.
@@ -26,6 +28,7 @@ The GUI's privileged path is `pkexec bulwark scan --privileged` plus reading hos
 |---|---|---|---|---|
 | `.deb`/`.rpm`/AppImage | none | ✅ works | ✅ | n/a — self-hosted |
 | PPA / AUR / COPR (CLI) | none | ✅ works | ✅ | ✅ already published |
+| PPA (desktop `bulwark`) | none | ✅ works | ✅ | ✅ our own PPA, no review |
 | Snap **classic** | none | ✅ works | ✅ | ❌ **likely refused** — see below |
 | Snap strict | yes | ❌ | `system-backup` (paths move under `/var/lib/snapd/hostfs`) | ✅ but degraded |
 | **Flatpak** | yes (no opt-out) | ⚠️ `flatpak-spawn --host` + host CLI | ✅ with `--filesystem=host:ro` | ❌ **likely refused** — see below |
@@ -60,7 +63,7 @@ what it audits is a worse outcome than no package at all.
 | Channel | x86_64 | aarch64 / arm64 | Who builds it |
 |---|---|---|---|
 | GitHub release (CLI + GUI) | yes | yes | us, natively, one runner per arch |
-| Ubuntu PPA (CLI) | yes | yes | Launchpad, from `Architecture: any` |
+| Ubuntu PPA (CLI + desktop) | yes | yes | Launchpad, from `Architecture: any` |
 | AUR (CLI) | yes | yes | the user, from the `PKGBUILD` |
 | COPR (CLI) | yes | yes | COPR, per enabled chroot |
 | Flathub (GUI) | yes | declared, unbuilt | Flathub, from the Flatpak manifest |
@@ -228,6 +231,84 @@ sudo apt install sbuild
 # ... configure an sbuild chroot for noble, then:
 sbuild -d noble target/ppa/bulwark_0.7.0-0ppa1~noble1.dsc
 ```
+
+---
+
+## Publishing the desktop app to the PPA
+
+The desktop app goes to the same PPA as a **second source package**, `bulwark-desktop`, whose
+one binary package is named **`bulwark`**:
+
+| Source package | Binary package | Contents |
+|---|---|---|
+| `bulwark` | `bulwarkctl` | `/usr/bin/bulwarkctl`, rules under `/usr/share/bulwark` |
+| `bulwark-desktop` | `bulwark` | `/usr/bin/bulwark-app`, the CLI sidecar `/usr/bin/bulwark`, resources under `/usr/lib/bulwark`, the desktop entry, icons, the polkit policy |
+
+```bash
+scripts/build-ppa-source.sh --package desktop --series resolute              # unsigned, local
+scripts/build-ppa-source.sh --package desktop --series resolute --sign-key <KEYID>
+dput ppa:vietanhng/bulwark target/ppa-desktop/bulwark-desktop_<v>-0ppa1~resolute1_source.changes
+```
+
+In CI it is the same workflow with `package: desktop` (see "CI publishing" below). Everything
+said above about the CLI — one run for every series of a version, `--ppa-rev`, the noble
+toolchain pin, uploads being irreversible — applies unchanged; the two sources simply have
+separate version histories and separate `.orig` files.
+
+Why it is shaped like this:
+
+- **`bulwark` is the name of the package inside the GitHub release's
+  `bulwark-desktop_<v>_<arch>.deb`.** A PPA package of the same name with version
+  `<v>-0ppaN~<series>1` sorts above the release's plain `<v>`, so `apt install bulwark` (or the
+  next `apt upgrade`) replaces a release-`.deb` install in place, and every later PPA upload
+  updates it. It owns `/usr/bin/bulwark`, never `/usr/bin/bulwarkctl`, so it installs beside the
+  CLI package exactly as the release `.deb` does.
+- **A separate source, not a second binary of `bulwark`.** One source would tie the CLI to
+  WebKit's Build-Depends and to the Tauri build: a GUI failure on one series or architecture
+  would stop the CLI from building there. It would also change the CLI's `.orig`, and a
+  version whose `.orig` Launchpad already has (0.16.0 did) cannot take a different one, so the
+  desktop could not ship until the next release. As two sources, the CLI is built exactly as before
+  (`build-ppa-source.sh` without `--package` gives a byte-identical `.orig` from the same
+  commit), and the desktop can be uploaded for a version whose CLI is already published.
+- **The frontend ships built, in the `.orig`.** Launchpad builders have no network. The other
+  option, vendoring `node_modules` as the Flatpak does with `node-sources.json`, means hundreds
+  of MB of npm packages, native bindings (rolldown, esbuild) for every architecture, and a Node
+  new enough for Vite on every series — noble's archive has Node 18, Vite needs 20.19+. The
+  build output is plain JS/CSS/fonts, identical on every architecture, and it is embedded into
+  the binary anyway. `build-ppa-source.sh` builds it with `npm ci && npm run build` from the
+  committed `package-lock.json`, inside the very tree that becomes the `.orig`, then removes
+  `node_modules`. Launchpad does not inspect what an `.orig` contains; it only needs the build
+  to be offline.
+- **Plain cargo, not `cargo tauri build`.** The Tauri CLI and its bundler are npm tools that
+  want the network. `debian/rules` builds `bulwarkctl` first (the app's `build.rs` stages it as
+  the sidecar, and stages a zero-byte placeholder if it is missing), then `bulwark-app` with
+  `--features custom-protocol` (without it the app is a dev build that loads
+  `http://localhost:1420`), and installs the same paths the Tauri bundler does. The desktop
+  entry is rendered from the same `bulwark.desktop` template with the same substitutions.
+  `scripts/check-packaging-consistency.sh` keeps `Recommends` equal to `tauri.conf.json`'s.
+- **Build-Depends** exist on noble, resolute and stonking alike: `libwebkit2gtk-4.1-dev`,
+  `libjavascriptcoregtk-4.1-dev`, `libsoup-3.0-dev`, `libgtk-3-dev`,
+  `libayatana-appindicator3-dev`, `libdbus-1-dev`, `pkgconf`. The GUI's dependency tree needs
+  Rust 1.90 at most, inside noble's pinned 1.91. `libayatana-appindicator3-1` is in `Depends`
+  by hand: the tray loads it with `dlopen`, which `dh_shlibdeps` cannot see.
+- **`bulwark-app --version`** prints the version and exits before GTK starts, so the install
+  tests can check the GUI binary on a machine with no display.
+
+**Rehearse before uploading**, the way Launchpad builds, and then the upgrade users take:
+
+```bash
+scripts/build-ppa-source.sh --package desktop --series resolute
+scripts/test-ppa-desktop-build.sh --series resolute \
+  --dsc target/ppa-desktop/bulwark-desktop_<v>-0ppa1~resolute1.dsc --launch
+```
+
+It installs the `.dsc`'s Build-Depends in a clean `ubuntu:<series>` container, snapshots it, runs
+`dpkg-buildpackage -b` with `--network none`, then installs the release's
+`bulwark-desktop_<v>_<arch>.deb` and `bulwarkctl_<v>_<arch>.deb` in a fresh container and the PPA
+`.deb` over them: it must unpack *over* the release version, leave `bulwarkctl` installed, and
+`bulwark-app --version` / `bulwark --version` must report `<v>`. `--launch` adds the real GUI
+launch test (`scripts/test-gui-packages-docker.sh`) on that series. A desktop `dry_run` of
+`publish-ppa.yml` runs the same script (without `--launch`) for every series.
 
 ---
 
@@ -599,12 +680,13 @@ is always a deliberate click.
 
 | Workflow | What it does | Secrets used |
 |---|---|---|
-| `publish-ppa.yml` | Builds the signed source package(s), `dput`s them to `ppa:vietanhng/bulwark`, waits until Launchpad has accepted, built and published every series on every enabled architecture, then runs `test-ppa.yml` against the live PPA. The wait is a job of its own: when Launchpad's queue outlasts it (0.15.0 waited about seven hours for an x86_64 builder) the run ends red with nothing wrong, and **Re-run failed jobs** waits again without uploading. **Re-run all jobs** is refused once a revision has reached Launchpad for every series, because it would upload the same source again as the next revision. Inputs: `series`, `ppa_rev` (`auto` picks the next free revision), `dry_run`. A re-upload of a version reuses its published `.orig`, so it can run from any commit. | `LAUNCHPAD_GPG_PRIVATE_KEY`, `LAUNCHPAD_GPG_PASSPHRASE` |
+| `publish-ppa.yml` | Builds the signed source package(s), `dput`s them to `ppa:vietanhng/bulwark`, waits until Launchpad has accepted, built and published every series on every enabled architecture, then runs `test-ppa.yml` against the live PPA. The wait is a job of its own: when Launchpad's queue outlasts it (0.15.0 waited about seven hours for an x86_64 builder) the run ends red with nothing wrong, and **Re-run failed jobs** waits again without uploading. **Re-run all jobs** is refused once a revision has reached Launchpad for every series, because it would upload the same source again as the next revision. Inputs: `package` (`cli` uploads source `bulwark` → `bulwarkctl`; `desktop` uploads source `bulwark-desktop` → `bulwark`; one run each), `series`, `ppa_rev` (`auto` picks the next free revision of that source), `dry_run` (for `desktop`, also an offline binary build in each series' container and an install over the release `.deb`). A re-upload of a version reuses its published `.orig`, so it can run from any commit. | `LAUNCHPAD_GPG_PRIVATE_KEY`, `LAUNCHPAD_GPG_PASSPHRASE` |
 | `publish-snap.yml` | Builds the snap and releases to a channel. Input: `channel` (default `edge`). | `SNAPCRAFT_STORE_CREDENTIALS` |
 | `publish-flatpak.yml` | Builds `bulwark.flatpak`, launch-tests it and uploads it as an artifact. With `release_tag` it also adds the bundle, and its line in `SHA256SUMS`, to that release. It checks first that the checkout is at that version and that the release exists, and it uses `gh release upload`, which works on a draft or a published release and changes neither. (The release action it used before publishes a draft release unless told `draft: true`, so attaching the Flatpak before publishing would have published the release.) Start the run from the tag. | none |
 
 `test-ppa.yml` (manual, weekly, and called by `publish-ppa.yml`) installs from the live PPA on
-every series and both architectures, and fails unless the installed package is the newest
+every series and both architectures — `bulwarkctl`, and `bulwark` with `bulwarkctl` beside it —
+and fails unless the installed package is the newest
 source the PPA publishes for that series. Without that comparison it passes while one
 architecture still serves the previous release.
 

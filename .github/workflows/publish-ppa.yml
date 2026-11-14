@@ -1,5 +1,11 @@
-name: Publish PPA (CLI)
+name: Publish PPA
 
+# Two source packages, chosen with the `package` input, each with its own versions and .orig:
+#   cli      source `bulwark`          -> binary `bulwarkctl`
+#   desktop  source `bulwark-desktop`  -> binary `bulwark` (the GUI; same name as the package in
+#            the GitHub release's bulwark-desktop_<v>_<arch>.deb, so it upgrades that install)
+# Upload each one in its own run.
+#
 # Manual only — a Launchpad upload is IRREVERSIBLE (a version can be superseded,
 # never deleted), so this never fires automatically. See packaging/README.md.
 #
@@ -28,6 +34,11 @@ name: Publish PPA (CLI)
 on:
   workflow_dispatch:
     inputs:
+      package:
+        description: "Which source package to upload: cli (bulwarkctl) or desktop (bulwark)"
+        type: choice
+        options: [cli, desktop]
+        default: cli
       # Upload every series of a version in ONE run. noble builds with its archive's versioned
       # cargo-1.91 (its default cargo 1.75 can't parse Cargo.lock v4) — see build-ppa-source.sh.
       series:
@@ -51,9 +62,11 @@ jobs:
   publish-ppa:
     if: github.triggering_actor == 'vietanhdev'
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    # A desktop dry run compiles the whole Tauri app offline once per series.
+    timeout-minutes: 240
     outputs:
       series: ${{ steps.upload.outputs.series }}
+      source: ${{ steps.upload.outputs.source }}
       upstream: ${{ steps.upload.outputs.upstream }}
       ppa_rev: ${{ steps.upload.outputs.ppa_rev }}
     steps:
@@ -70,6 +83,12 @@ jobs:
           # dpkg-buildpackage's implicit build-essential:native build-dep.
           sudo apt-get install -y --no-install-recommends \
             devscripts dput debhelper dpkg-dev build-essential cargo rustc python3
+
+      # The desktop source ships its frontend prebuilt, built here from package-lock.json.
+      - uses: actions/setup-node@v7
+        if: github.event.inputs.package == 'desktop'
+        with:
+          node-version: 22
 
       - name: Import GPG signing key
         env:
@@ -116,11 +135,21 @@ jobs:
         env:
           SERIES: ${{ github.event.inputs.series }}
           PPA_REV: ${{ github.event.inputs.ppa_rev }}
+          PACKAGE: ${{ github.event.inputs.package }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}
+          # The desktop dry run downloads the release .debs it tests the upgrade from.
+          GH_TOKEN: ${{ github.token }}
           DEBEMAIL: "vietanh.dev@gmail.com"
           DEBFULLNAME: "Viet Anh Nguyen"
         run: |
           set -euo pipefail
+          case "$PACKAGE" in
+            cli)     SOURCE_NAME=bulwark ;;
+            desktop) SOURCE_NAME=bulwark-desktop ;;
+            *) echo "::error::unknown package '$PACKAGE'"; exit 1 ;;
+          esac
+          LP=(scripts/ppa-launchpad.py --source "$SOURCE_NAME")
+          BUILD_DIR=target/ppa; [ "$PACKAGE" = desktop ] && BUILD_DIR=target/ppa-desktop
           UPSTREAM=$(python3 -c 'import re;print(re.search(r"\[workspace\.package\][^\[]*?version\s*=\s*\"([^\"]+)\"",open("Cargo.toml").read(),re.S).group(1))')
           if [ "$PPA_REV" = "auto" ]; then
             # A second attempt of this job means "Re-run all jobs" (or a re-run after the upload
@@ -128,16 +157,17 @@ jobs:
             # series asked for, the upload happened: uploading again would only publish the same
             # source as the next revision, which cannot be taken back.
             if [ "$GITHUB_RUN_ATTEMPT" -gt 1 ] && [ "$DRY_RUN" != "true" ]; then
-              have=$(scripts/ppa-launchpad.py complete-rev --upstream "$UPSTREAM" --series "$SERIES")
+              have=$("${LP[@]}" complete-rev --upstream "$UPSTREAM" --series "$SERIES")
               if [ -n "$have" ]; then
                 echo "::error::Launchpad already has $UPSTREAM revision $have for every series ($SERIES), so this re-run would upload the same source again as revision $((have + 1)). To keep waiting for the builds, use 'Re-run failed jobs'. To check what is live, run the 'Test PPA package' workflow. To upload a new revision on purpose, start a new run."
                 exit 1
               fi
             fi
-            PPA_REV=$(scripts/ppa-launchpad.py next-rev --upstream "$UPSTREAM")
+            PPA_REV=$("${LP[@]}" next-rev --upstream "$UPSTREAM")
           fi
-          echo "upstream $UPSTREAM, PPA revision $PPA_REV"
+          echo "$SOURCE_NAME: upstream $UPSTREAM, PPA revision $PPA_REV"
           {
+            echo "source=$SOURCE_NAME"
             echo "upstream=$UPSTREAM"
             echo "ppa_rev=$PPA_REV"
             echo "series=$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1].split()))' "$SERIES")"
@@ -146,15 +176,15 @@ jobs:
           # has it, build from those exact bytes (a tree rebuilt from this commit would differ
           # and be rejected). Otherwise the first series uploads a fresh one (-sa) and the rest
           # reference it (-sd).
-          mkdir -p target/ppa
-          ORIG=$(scripts/ppa-launchpad.py fetch-orig --upstream "$UPSTREAM" --out target/ppa)
+          mkdir -p "$BUILD_DIR"
+          ORIG=$("${LP[@]}" fetch-orig --upstream "$UPSTREAM" --out "$BUILD_DIR")
           [ -n "$ORIG" ] && echo "reusing the published $ORIG"
           first=1
           for s in $SERIES; do
             src_flags=()
             if [ -n "$ORIG" ]; then src_flags=(--orig "$ORIG"); elif [ "$first" = "0" ]; then src_flags=(--sd); fi
             echo "::group::build $s ${src_flags[*]}"
-            scripts/build-ppa-source.sh --series "$s" --ppa-rev "$PPA_REV" --sign-key "$SIGN_KEY" "${src_flags[@]}"
+            scripts/build-ppa-source.sh --package "$PACKAGE" --series "$s" --ppa-rev "$PPA_REV" --sign-key "$SIGN_KEY" "${src_flags[@]}"
             echo "::endgroup::"
             first=0
             if [ "$DRY_RUN" = "true" ]; then
@@ -163,9 +193,20 @@ jobs:
               # name (a glob can match an earlier revision's file as well, and gpg reads a
               # second argument as detached data), and by gpg's exit status: this line used to
               # end in `|| true`, so a bad or missing signature could not fail it.
-              changes="target/ppa/bulwark_${UPSTREAM}-0ppa${PPA_REV}~${s}1_source.changes"
+              changes="${BUILD_DIR}/${SOURCE_NAME}_${UPSTREAM}-0ppa${PPA_REV}~${s}1_source.changes"
               ls -1 "$changes"
               gpg --verify "$changes"
+              if [ "$PACKAGE" = desktop ]; then
+                # What Launchpad will do, as closely as a runner can: unpack the signed source in
+                # a clean container of the series, install only its Build-Depends, then build the
+                # binary package with the network cut. Then install the result over the GitHub
+                # release's .deb of the same version, which is the upgrade users take.
+                echo "::group::offline binary build + upgrade test ($s)"
+                scripts/test-ppa-desktop-build.sh --series "$s" \
+                  --dsc "${BUILD_DIR}/${SOURCE_NAME}_${UPSTREAM}-0ppa${PPA_REV}~${s}1.dsc"
+                echo "::endgroup::"
+                continue
+              fi
               # Install-test: the offline SOURCE build + signature are proven above
               # (that's the PPA-specific part Launchpad runs). Here we build the binary
               # .deb the project ships — via cargo-deb, the same tool release.yml uses,
@@ -200,7 +241,7 @@ jobs:
             # failing attempt hangs ~7 minutes before "Network is unreachable", while a good
             # one takes seconds, so each attempt is capped. dput only records a completed
             # upload, so a retry after a timeout is safe.
-            changes=$(ls target/ppa/bulwark_*"-0ppa${PPA_REV}~${s}1_source.changes")
+            changes=$(ls "${BUILD_DIR}/${SOURCE_NAME}_"*"-0ppa${PPA_REV}~${s}1_source.changes")
             for attempt in 1 2 3 4 5 6 7 8; do
               timeout 120 dput ppa:vietanhng/bulwark "$changes" && break
               [ "$attempt" = 8 ] && { echo "::error::dput failed 8 times for $s"; exit 1; }
@@ -212,7 +253,7 @@ jobs:
             # the rest immediately gets each of them rejected too ("Unable to find …orig").
             # So wait until the first is accepted before uploading the series that depend on it.
             if [ -z "$ORIG" ] && [ "$s" = "${SERIES%% *}" ] && [ "$s" != "$SERIES" ]; then
-              scripts/ppa-launchpad.py accepted --upstream "$UPSTREAM" --rev "$PPA_REV" --series "$s"
+              "${LP[@]}" accepted --upstream "$UPSTREAM" --rev "$PPA_REV" --series "$s"
             fi
             echo "::endgroup::"
           done
@@ -232,9 +273,10 @@ jobs:
       - name: Wait for Launchpad to accept, build and publish every series
         env:
           SERIES: ${{ github.event.inputs.series }}
+          SOURCE_NAME: ${{ needs.publish-ppa.outputs.source }}
           UPSTREAM: ${{ needs.publish-ppa.outputs.upstream }}
           PPA_REV: ${{ needs.publish-ppa.outputs.ppa_rev }}
-        run: scripts/ppa-launchpad.py wait --upstream "$UPSTREAM" --rev "$PPA_REV" --series "$SERIES" --timeout-min 270
+        run: scripts/ppa-launchpad.py --source "$SOURCE_NAME" wait --upstream "$UPSTREAM" --rev "$PPA_REV" --series "$SERIES" --timeout-min 270
 
   # Install what users get: the published package, from the live PPA, on both architectures.
   install-test:
@@ -246,5 +288,6 @@ jobs:
         series: ${{ fromJSON(needs.publish-ppa.outputs.series) }}
     uses: ./.github/workflows/test-ppa.yml
     with:
+      package: ${{ github.event.inputs.package }}
       series: ${{ matrix.series }}
       expect_upstream: ${{ needs.publish-ppa.outputs.upstream }}

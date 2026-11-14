@@ -1,6 +1,6 @@
 name: Test PPA package (live install)
 
-# Installs bulwarkctl from the LIVE PPA exactly as a user would — add-apt-repository,
+# Installs a package from the LIVE PPA exactly as a user would — add-apt-repository,
 # apt install — inside a clean container of the target Ubuntu series, then smoke-tests
 # the installed package. This validates the actual PUBLISHED artifact end-to-end
 # (rule-pack resolution from /usr/share/bulwark, scan, fix), which the pre-publish
@@ -16,9 +16,18 @@ name: Test PPA package (live install)
 # there for good (Launchpad reports that by email only). An install test that accepts any
 # version passes through all of that: it did, on 0.15.0, with arm64 on 0.15.0 and x86_64 on
 # 0.13.0. So the installed package must be the newest source the PPA publishes for the series.
+#
+# Two packages, from two source packages: `bulwarkctl` (source `bulwark`, the CLI) and `bulwark`
+# (source `bulwark-desktop`, the desktop app plus its `bulwark` CLI sidecar). The desktop rows
+# also install bulwarkctl beside it, because the two must coexist without a file conflict.
 on:
   workflow_dispatch:
     inputs:
+      package:
+        description: "Which package to install"
+        type: choice
+        options: [all, cli, desktop]
+        default: all
       series:
         description: "Ubuntu series to test (must be published in the PPA)"
         type: choice
@@ -27,6 +36,10 @@ on:
   # Called by publish-ppa.yml once every series it uploaded is built and published.
   workflow_call:
     inputs:
+      package:
+        description: "cli or desktop"
+        type: string
+        default: cli
       series:
         type: string
         required: true
@@ -59,15 +72,17 @@ jobs:
         # has no inputs. Keep this list in step with publish-ppa.yml's default.
         series: ${{ fromJSON((inputs.series == '' || inputs.series == 'all') && '["noble","resolute","stonking"]' || format('["{0}"]', inputs.series)) }}
         arch: [x86_64, aarch64]
+        # Both packages for `all` and for the weekly run.
+        package: ${{ fromJSON((inputs.package == '' || inputs.package == 'all') && '["cli","desktop"]' || format('["{0}"]', inputs.package)) }}
         include:
           - { arch: x86_64,  runner: ubuntu-24.04 }
           - { arch: aarch64, runner: ubuntu-24.04-arm }
-    name: install-from-ppa (${{ matrix.series }}, ${{ matrix.arch }})
+    name: install-from-ppa (${{ matrix.package }}, ${{ matrix.series }}, ${{ matrix.arch }})
     # Clean container of the target series (Ubuntu images carry codename tags, and are
     # multi-arch, so this resolves to the runner's architecture).
     container: ubuntu:${{ matrix.series }}
     steps:
-      - name: Add the PPA and install bulwarkctl
+      - name: Add the PPA
         run: |
           set -eux
           export DEBIAN_FRONTEND=noninteractive
@@ -80,11 +95,18 @@ jobs:
           # -s also enables the PPA's source index, which the version check below reads.
           add-apt-repository -y -s ppa:vietanhng/bulwark
           apt-get update
+
+      - name: Install bulwarkctl
+        if: matrix.package == 'cli'
+        run: |
+          set -eux
+          export DEBIAN_FRONTEND=noninteractive
           # --no-install-recommends skips the optional clamav to keep the test lean;
           # bulwarkctl works fully without it.
           apt-get install -y --no-install-recommends bulwarkctl
 
       - name: The installed version is the one the PPA publishes
+        if: matrix.package == 'cli'
         env:
           SERIES: ${{ matrix.series }}
           ARCH: ${{ matrix.arch }}
@@ -113,6 +135,7 @@ jobs:
             echo "::error::package $installed contains a binary that reports '$reported'"; exit 1; }
 
       - name: Smoke-test the installed package
+        if: matrix.package == 'cli'
         run: |
           set -eux
           # Installed from the archive: binary on PATH, rules under /usr/share/bulwark.
@@ -131,3 +154,62 @@ jobs:
             || { echo "::error::'bulwarkctl fix list' did not print its list of autofixes"; exit 1; }
           echo "fix preview OK"
           echo "PPA package installs and runs on ${{ matrix.series }} (${{ matrix.arch }}) ✅"
+
+      - name: Install the desktop app, and bulwarkctl beside it
+        if: matrix.package == 'desktop'
+        run: |
+          set -eux
+          export DEBIAN_FRONTEND=noninteractive
+          # Recommends left out as above. Both packages in one transaction: a file both of them
+          # claimed would fail here with "trying to overwrite".
+          apt-get install -y --no-install-recommends bulwark bulwarkctl
+
+      - name: The installed desktop version is the one the PPA publishes
+        if: matrix.package == 'desktop'
+        env:
+          SERIES: ${{ matrix.series }}
+          ARCH: ${{ matrix.arch }}
+          EXPECT_UPSTREAM: ${{ inputs.expect_upstream }}
+        run: |
+          set -eu
+          installed=$(dpkg-query -W -f='${Version}' bulwark)
+          published=""
+          for v in $(apt-cache showsrc bulwark-desktop | awk '$1 == "Version:" {print $2}'); do
+            if [ -z "$published" ] || dpkg --compare-versions "$v" gt "$published"; then published=$v; fi
+          done
+          echo "installed: $installed    published source: ${published:-none}"
+          [ -n "$published" ] || { echo "::error::the PPA's source index lists no 'bulwark-desktop' for $SERIES"; exit 1; }
+          if [ "$installed" != "$published" ]; then
+            echo "::error::$SERIES $ARCH installs bulwark $installed, but the PPA publishes $published. This architecture's build is still queued, failed, or not published yet: https://launchpad.net/~vietanhng/+archive/ubuntu/bulwark/+packages"
+            exit 1
+          fi
+          upstream=${installed%%-*}
+          if [ -n "$EXPECT_UPSTREAM" ] && [ "$upstream" != "$EXPECT_UPSTREAM" ]; then
+            echo "::error::expected $EXPECT_UPSTREAM, but $SERIES $ARCH installs bulwark $installed"; exit 1
+          fi
+          # Both binaries must report the version their package claims. `--version` returns
+          # before GTK starts, so this needs no display.
+          [ "$(bulwark-app --version)" = "bulwark-app $upstream" ] || {
+            echo "::error::bulwark $installed contains a bulwark-app that reports '$(bulwark-app --version)'"; exit 1; }
+          [ "$(bulwark --version)" = "bulwarkctl $upstream" ] || {
+            echo "::error::bulwark $installed contains a CLI sidecar that reports '$(bulwark --version)'"; exit 1; }
+
+      - name: Smoke-test the installed desktop package
+        if: matrix.package == 'desktop'
+        run: |
+          set -eux
+          # The layout the GUI resolves at run time: resources under /usr/lib/bulwark, the
+          # sidecar pkexec runs, the polkit policy that makes it ask every time, the menu entry.
+          test "$(find /usr/lib/bulwark/rules -name '*.yaml' | wc -l)" -ge 50
+          test -x /usr/bin/bulwark
+          test -s /usr/share/polkit-1/actions/com.bulwark.policy
+          grep -q '^Exec=bulwark-app$' /usr/share/applications/bulwark.desktop
+          test -s /usr/share/icons/hicolor/128x128/apps/bulwark-app.png
+          # The sidecar is the engine of the privileged scan: run it the way the GUI does.
+          test "$(bulwark rules list --rules-dir /usr/lib/bulwark/rules | grep -c '^BLWK-')" -gt 0
+          bulwark scan --json --no-persist --rules-dir /usr/lib/bulwark/rules > /tmp/scan.json || true
+          grep -q '"rules_loaded"' /tmp/scan.json
+          grep -q '"rules_loaded": *0' /tmp/scan.json && { echo "::error::scan loaded 0 rules"; exit 1; } || true
+          # bulwarkctl from the CLI package still works next to it.
+          bulwarkctl --version
+          echo "PPA desktop package installs and runs on ${{ matrix.series }} (${{ matrix.arch }}) ✅"

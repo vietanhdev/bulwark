@@ -1,6 +1,6 @@
 ---
 title: Download
-description: Download Bulwark for Linux, macOS and Windows. Desktop app (.deb, .rpm, AppImage, .dmg, Windows installer) and CLI (.deb, .rpm, PPA, COPR, AUR, tarball).
+description: Download Bulwark for Linux, macOS and Windows. Desktop app (.deb, .rpm, AppImage, Ubuntu PPA, .dmg, Windows installer) and CLI (.deb, .rpm, PPA, COPR, AUR, tarball).
 ---
 
 <script setup>
@@ -142,6 +142,21 @@ To upgrade, install the newer package the same way; your scan history and settin
 
 Direct arm64 downloads:
 <span v-if="find(is.guiDebArm)"><a :href="url(is.guiDebArm)">.deb</a> · </span><span v-if="find(is.guiRpmArm)"><a :href="url(is.guiRpmArm)">.rpm</a> · </span><a :href="url(is.guiAppImageArm)">AppImage</a>
+
+### Ubuntu PPA
+
+On Ubuntu 24.04, 26.04 and 26.10, x86_64 or arm64, install the desktop app from the PPA and
+`apt upgrade` keeps it current:
+
+```bash
+sudo add-apt-repository ppa:vietanhng/bulwark
+sudo apt update
+sudo apt install bulwark
+```
+
+The package is the same `bulwark` that the `.deb` above installs, so if you installed that
+`.deb`, `sudo apt upgrade` moves you to the PPA build. It installs beside the `bulwarkctl`
+package without conflict. On another Ubuntu release, such as 22.04, use the `.deb`.
 
 ### Snap Store and Flathub — not available
 
