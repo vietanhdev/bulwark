@@ -828,7 +828,7 @@ flowchart LR
   expiry, never a value, and follow a symlink only when its target stays inside the home folder.
 - **Whether storage is safe is a Scan rule**: `BLWK-CRED-001..010` (credential files, shell startup
   files, package-registry tokens, kubeconfig, tool token files, and keys saved in shell history),
-  `BLWK-SSH-014` (weak keys), and `BLWK-DEV-010/011` (npm install scripts; no release waiting
+  `BLWK-SSH-014` (weak keys), `BLWK-SSH-015` (a key other accounts may open), and `BLWK-DEV-010/011` (npm install scripts; no release waiting
   period for npm, bun or uv — each read from the user-level config only, so they are low-severity
   suggestions). `BLWK-AI-012` covers three kinds of hidden text in instruction files: bidi
   controls, Unicode Tag characters (decoded in the finding) and long runs of invisible characters.

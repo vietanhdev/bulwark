@@ -54,7 +54,8 @@ Each fixer is reversible and never widens access:
   `config` / `authorized_keys` to `600`, `known_hosts` and public keys to `644`). Those modes are
   the most a file may keep: access beyond them is removed, and none is ever added, so a
   `known_hosts` at `660` becomes `640`, not `644`. Never follows a symlink, and shows the mode
-  before and after.
+  before and after. It is the fix offered for `BLWK-SSH-015`, a private key other accounts may
+  open (the same test ssh applies: any group or other permission bit).
 - **`fix etc-perms`** does the same for sensitive `/etc` files (`shadow` `640`, `sudoers` `440`,
   `sshd_config` `600`, `passwd` and `group` `644`): any file that grants more than its mode is
   tightened. That includes a stock `sshd_config` at `644`, which is readable by everyone and not

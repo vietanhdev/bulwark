@@ -1649,6 +1649,23 @@
    "slug": "blwk-ssh-014"
   },
   {
+   "id": "BLWK-SSH-015",
+   "title": "SSH private key can be read by other accounts: {{ ssh_private_keys.path }}",
+   "category": "ssh-remote-access",
+   "severity": "medium",
+   "explain": "{{ ssh_private_keys.path }} is a private SSH key with permissions {{ ssh_private_keys.mode }}, so other accounts on this computer, including services that run under their own account, can open it. ssh refuses to use a key in this state, and anyone who copies it can sign in wherever the key is accepted.",
+   "fix": "Make the key readable by you alone.\n1. Run 'chmod 600 {{ ssh_private_keys.path }}', and 'chmod 700 ~/.ssh' for the folder.\n   'bulwarkctl fix ssh-perms --apply' does both for every file in ~/.ssh and only ever removes access.\n2. If other people use this computer, or the key was open for a while, replace it: create a new key\n   with 'ssh-keygen -t ed25519', add its public key where the old one is accepted, then remove the old one.",
+   "references": [
+    "ATTACK-T1552.004"
+   ],
+   "collector": "ssh_private_keys",
+   "condition": "open_to_others == true",
+   "source": "rules/ssh-remote-access/BLWK-SSH-015.yaml",
+   "group": "secrets",
+   "slug": "blwk-ssh-015",
+   "autofix": "In the app, open the issue and use “Fix automatically”, or “Fix now” for every safe fix. From a terminal: `bulwarkctl fix ssh-perms` (preview), then `bulwarkctl fix ssh-perms --apply`."
+  },
+  {
    "id": "BLWK-WIN-001",
    "title": "Microsoft Defender real-time protection is off",
    "category": "windows-hardening",

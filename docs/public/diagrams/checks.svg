@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600" width="1200" height="600" font-family="-apple-system, 'Segoe UI', Ubuntu, Roboto, 'Helvetica Neue', Arial, sans-serif" role="img" aria-labelledby="t d">
   <title id="t">What Bulwark checks</title>
-  <desc id="d">132 checks in seven groups: secrets and credentials (16), supply chain and developer tools (16), exposed services (6), AI coding agents (15), SSH (12), compromise indicators (17) and OS hardening (50), plus your own YAML checks, on Linux, macOS, Windows and WSL.</desc>
+  <desc id="d">133 checks in seven groups: secrets and credentials (17), supply chain and developer tools (16), exposed services (6), AI coding agents (15), SSH (12), compromise indicators (17) and OS hardening (50), plus your own YAML checks, on Linux, macOS, Windows and WSL.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f7fafc"/><stop offset="1" stop-color="#eef3f8"/></linearGradient>
     <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f2468f"/><stop offset="1" stop-color="#c2185b"/></linearGradient>
@@ -18,7 +18,7 @@
   <rect width="1200" height="600" rx="18" fill="url(#bg)"/>
   <rect width="1200" height="600" rx="18" fill="url(#grid)" opacity="0.6"/>
 
-  <text x="32" y="48" font-size="24" font-weight="700" fill="#16202c">132 checks, grouped by what an attacker goes after</text>
+  <text x="32" y="48" font-size="24" font-weight="700" fill="#16202c">133 checks, grouped by what an attacker goes after</text>
   <text x="32" y="72" font-size="14" fill="#5b6b7d">Each one explains why it matters and how to fix it — every check has its own page at bulwark.nrl.ai/checks</text>
 
   <!-- tile template: translate(x y); header colour band; count; title; 4 bullets -->
@@ -29,7 +29,7 @@
       <rect width="270" height="7" fill="url(#g1)" clip-path="url(#c270)"/>
       <rect x="16" y="22" width="40" height="40" rx="11" fill="url(#g1)"/>
       <circle cx="31" cy="44" r="6" fill="none" stroke="#fff" stroke-width="2.2"/><path d="M36 40l10-10M42 34l3 3" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>
-      <text x="254" y="52" font-size="30" font-weight="800" fill="#c2185b" text-anchor="end">16</text>
+      <text x="254" y="52" font-size="30" font-weight="800" fill="#c2185b" text-anchor="end">17</text>
       <text x="16" y="88" font-size="15" font-weight="700" fill="#16202c">Secrets &amp; credentials</text>
       <g fill="#33414f"><text x="16" y="114">• AWS keys left on disk</text><text x="16" y="136">• Git passwords in plain text</text><text x="16" y="158">• Keys pasted into AI chats</text><text x="16" y="180">• SSH keys with no passphrase</text></g>
       <text x="16" y="204" font-size="11" fill="#c2185b">one-click: add a passphrase, redact</text>

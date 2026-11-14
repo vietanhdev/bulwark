@@ -282,6 +282,16 @@ pub const FIX_CAPABILITIES: &[FixCapability] = &[
         needs_root: true,
         in_fix_all: true,
     },
+    // A private key other accounts may open: the `~/.ssh` tightener, which only removes bits and
+    // never follows a link. Until SSH-015 existed this fixer ran under "Fix all" but no finding
+    // ever pointed at it.
+    FixCapability {
+        rule_id: "BLWK-SSH-015",
+        kind: FixKind::SshPerms,
+        lockout_risk: false,
+        needs_root: false,
+        in_fix_all: true,
+    },
     // Kernel network knobs. Not lockout-risky: neither knob can cut an existing session.
     // `send_redirects=0` only stops this host *emitting* ICMP redirects, which a non-router has no
     // reason to do (and the rule is already gated to the server profile); `log_martians=1` only
