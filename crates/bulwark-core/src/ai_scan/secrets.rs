@@ -26,6 +26,8 @@ use crate::models::Severity;
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
 use regex::{Regex, RegexBuilder};
 use serde::Deserialize;
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::{LazyLock, OnceLock};
 
 /// One rule as authored in `secret_rules.toml`. Unknown keys — notably gitleaks' `validate` CEL
@@ -238,6 +240,8 @@ fn line_at(text: &str, offset: usize) -> &str {
 }
 
 struct Rule {
+    /// Position in [`Pack::rules`]; indexes the per-thread copies in [`matches_for`].
+    index: usize,
     id: String,
     /// Human-facing name derived from the id (`anthropic-api-key` → `Anthropic API key`).
     provider: String,
@@ -578,6 +582,7 @@ static PACK: LazyLock<Pack> = LazyLock::new(|| {
             _ => Shape::Any,
         };
         rules.push(Rule {
+            index: idx,
             shape,
             provider: humanize(&r.id),
             id: r.id,
@@ -1029,18 +1034,51 @@ fn negated_class(class: &regex_syntax::hir::ClassUnicode) -> String {
     out
 }
 
-/// Compiles one rule pattern.
+/// Compiles one rule pattern, with the meaning gitleaks gives it.
 ///
-/// The size limit is raised well above the `regex` crate's 10 MB default. Three of the vendored
-/// rules — `generic-api-key` among them, which is the one that catches a pasted secret no
-/// provider-specific pattern knows about — are broad case-insensitive alternations that compile to
-/// a program larger than that, and were being silently dropped. The limit is a guard against a
-/// hostile *user-supplied* pattern; these patterns ship with the binary and are reviewed, so the
-/// ceiling can be set by what they actually need.
+/// The patterns are written for Go's RE2, where `\w`, `\d` and `\b` are ASCII: a word character is
+/// `[0-9A-Za-z_]` and a digit is `[0-9]`. In the `regex` crate they are Unicode by default, and a
+/// Unicode `\w` is some 700 ranges of code points. Inside the pack's bounded repeats
+/// (`[\w.-]{0,50}`) that grew the compiled pack to **585 MB**, against **12 MB** with RE2's
+/// meaning, and it was most of what an AI scan kept in memory. [`re2_classes`] writes each of
+/// these escapes out as the ASCII class RE2 means. `\s` is left Unicode: its class is small, and it
+/// only ever matches more than RE2's.
+///
+/// The size limit stays above the crate's 10 MB default as a margin. The patterns ship with the
+/// binary, and `every_rule_fits_the_default_size_limit` keeps them well inside it.
 fn compile(pattern: &str) -> Result<Regex, regex::Error> {
-    RegexBuilder::new(pattern)
+    RegexBuilder::new(&re2_classes(pattern))
         .size_limit(64 * 1024 * 1024)
         .build()
+}
+
+/// Rewrites `\w`, `\W`, `\d`, `\D`, `\b` and `\B` as the ASCII classes and boundaries RE2 means by
+/// them. The class forms are bracketed, so they are valid both on their own and nested inside
+/// another class (`[\w.-]` becomes `[[0-9A-Za-z_].-]`). Every other escape, `\\` included, is
+/// copied as written.
+fn re2_classes(pattern: &str) -> String {
+    let mut out = String::with_capacity(pattern.len() + 32);
+    let mut chars = pattern.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('w') => out.push_str("[0-9A-Za-z_]"),
+            Some('W') => out.push_str("[^0-9A-Za-z_]"),
+            Some('d') => out.push_str("[0-9]"),
+            Some('D') => out.push_str("[^0-9]"),
+            Some('b') => out.push_str(r"(?-u:\b)"),
+            Some('B') => out.push_str(r"(?-u:\B)"),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
 }
 
 /// Shannon entropy of the byte distribution, in bits per character. A real 40-character token sits
@@ -1139,12 +1177,39 @@ struct RawMatch<'t> {
 /// Every hit for one rule against `text`. The caller has already established, via the keyword
 /// index, that this rule is worth running at all.
 fn matches_for<'t>(pack: &Pack, rule: &Rule, text: &'t str) -> Vec<RawMatch<'t>> {
-    let Some(re) = rule.regex() else {
+    let Some(re) = thread_copy(rule) else {
         // The pattern didn't compile. Skipped, never fatal — one bad rule must not take the pack
         // down — and `every_bundled_rule_compiles` is what stops that becoming silent lost cover.
         return Vec::new();
     };
-    matches_with(pack, rule, re, text)
+    matches_with(pack, rule, &re, text)
+}
+
+thread_local! {
+    /// This thread's copies of the rule regexes it has searched with, by [`Rule::index`].
+    static THREAD_REGEXES: RefCell<Vec<Option<Rc<Regex>>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The rule's regex as this thread searches with it.
+///
+/// A `Regex` keeps the working memory of its searches (lazy-DFA states, sparse sets) in a pool
+/// it owns, and the pack's regexes live as long as the process. Searching with them directly
+/// left every scan worker's working memory in those pools after the workers had exited: about
+/// 55 MB after an eight-worker scan, kept by the desktop app between sweeps. A clone shares the
+/// compiled program (an `Arc`) and starts with an empty pool of its own, so each thread searches
+/// with its own clone, and that memory goes away with the thread when a scan's worker pool shuts
+/// down. Compiling still happens once, in [`Rule::regex`].
+fn thread_copy(rule: &Rule) -> Option<Rc<Regex>> {
+    let shared = rule.regex()?;
+    THREAD_REGEXES.with(|copies| {
+        let mut copies = copies.borrow_mut();
+        if copies.len() <= rule.index {
+            copies.resize(rule.index + 1, None);
+        }
+        Some(Rc::clone(
+            copies[rule.index].get_or_insert_with(|| Rc::new(shared.clone())),
+        ))
+    })
 }
 
 /// [`matches_for`] with the regex named by the caller: the rule's own in a scan, and in the tests
@@ -3159,6 +3224,57 @@ mod tests {
             "expected the full vendored pack, got {}",
             pack.rules.len()
         );
+    }
+
+    /// Every pattern, as compiled, must fit the `regex` crate's own 10 MB default. With Unicode
+    /// `\w` and `\d` three rules did not fit and the whole pack took 585 MB; with RE2's meaning
+    /// the largest is under 200 KB. A rule that grows past the default again is the first sign of
+    /// that memory coming back.
+    #[test]
+    fn every_rule_fits_the_default_size_limit() {
+        let mut too_big = Vec::new();
+        for rule in &PACK.rules {
+            for pattern in [rule.pattern.as_str(), rule.final_pattern().as_str()] {
+                if RegexBuilder::new(&re2_classes(pattern)).build().is_err() {
+                    too_big.push(rule.id.clone());
+                }
+            }
+        }
+        too_big.dedup();
+        assert!(
+            too_big.is_empty(),
+            "too large for the default limit: {too_big:?}"
+        );
+    }
+
+    /// `\w`, `\d` and `\b` mean what they mean in gitleaks (Go's RE2): ASCII only. Other escapes,
+    /// an escaped backslash among them, are left alone, and `\s` stays Unicode.
+    #[test]
+    fn perl_classes_keep_their_re2_meaning() {
+        assert_eq!(re2_classes(r"[\w.-]{0,5}"), "[[0-9A-Za-z_].-]{0,5}");
+        assert_eq!(re2_classes(r"\\w\d"), r"\\w[0-9]");
+        assert_eq!(re2_classes(r"\x{41}\s\b"), r"\x{41}\s(?-u:\b)");
+
+        let word = compile(r"^\w+$").unwrap();
+        assert!(word.is_match("Ab_9"));
+        assert!(!word.is_match("é"), "RE2's \\w is ASCII");
+        let digit = compile(r"^\d+$").unwrap();
+        assert!(digit.is_match("0123"));
+        assert!(!digit.is_match("٣"), "RE2's \\d is ASCII");
+        let boundary = compile(r"\bkey\b").unwrap();
+        assert!(boundary.is_match("an api key here"));
+        assert!(
+            boundary.is_match("éKey".to_lowercase().as_str()),
+            "é is not a word character in RE2"
+        );
+        assert!(!boundary.is_match("apikeys"));
+        let space = compile(r"a\sb").unwrap();
+        assert!(
+            space.is_match("a\u{a0}b"),
+            "\\s is left Unicode, a superset of RE2's"
+        );
+        let negated = compile(r"^[^\w]$").unwrap();
+        assert!(negated.is_match("é") && !negated.is_match("a"));
     }
 
     /// Scanning an ordinary file must not pay for the whole rule pack. Compiling all 262 patterns

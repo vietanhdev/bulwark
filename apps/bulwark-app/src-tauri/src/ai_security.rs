@@ -25,6 +25,8 @@ const KEY_AUTO_SCAN: &str = "ai_auto_scan_enabled";
 /// human-edit cadence (you don't paste a new key every minute), and a full workspace sweep is
 /// heavier than a config tick — six hours keeps the tab fresh without being background noise.
 const AUTO_SCAN_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+/// Workers for the unattended sweep. A scan the user starts uses what the machine allows.
+const BACKGROUND_WORKERS: usize = 2;
 
 /// The shared database path — see `bulwark_core::paths`.
 fn db_path() -> Option<PathBuf> {
@@ -55,6 +57,7 @@ fn options(explicit_targets: Vec<PathBuf>) -> Result<AiScanOptions, String> {
         excluded_roots: read_roots(KEY_EXCLUDED_ROOTS),
         explicit_targets,
         max_workspaces: bulwark_core::ai_scan::DEFAULT_MAX_WORKSPACES,
+        max_workers: None,
     })
 }
 
@@ -146,6 +149,8 @@ pub async fn ai_scan_start(
             cancelled: report.cancelled,
             errors: report.errors.clone(),
         });
+        drop(report);
+        bulwark_core::platform::release_freed_memory();
     })
     .await
     .map_err(|e| e.to_string())
@@ -369,7 +374,12 @@ fn serious_keys(findings: &[AiFinding]) -> BTreeSet<(String, String)> {
 fn run_background_scan(app: &AppHandle) {
     let Some(p) = db_path() else { return };
     let opts = match options(Vec::new()) {
-        Ok(o) => o,
+        // Unattended and every few hours: two workers are plenty, and each one keeps its own
+        // regex caches while the sweep runs.
+        Ok(o) => AiScanOptions {
+            max_workers: Some(BACKGROUND_WORKERS),
+            ..o
+        },
         Err(_) => return,
     };
 
@@ -385,6 +395,8 @@ fn run_background_scan(app: &AppHandle) {
     if let Ok(mut store) = Store::open(&p) {
         let _ = store.persist_ai_scan(&report);
     }
+    drop(report);
+    bulwark_core::platform::release_freed_memory();
     let _ = app.emit("ai_security:tick", ());
 }
 

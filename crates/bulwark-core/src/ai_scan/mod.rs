@@ -174,6 +174,10 @@ pub struct AiScanOptions {
     pub excluded_roots: Vec<PathBuf>,
     pub explicit_targets: Vec<PathBuf>,
     pub max_workspaces: usize,
+    /// At most this many workers, below what [`scan_worker_count`] would choose. `None` leaves the
+    /// choice to the machine. The app's background sweep sets a small number: it runs unattended
+    /// every few hours, and each worker keeps its own regex caches while the scan runs.
+    pub max_workers: Option<usize>,
 }
 
 impl AiScanOptions {
@@ -186,6 +190,7 @@ impl AiScanOptions {
             excluded_roots: Vec::new(),
             explicit_targets: Vec::new(),
             max_workspaces: DEFAULT_MAX_WORKSPACES,
+            max_workers: None,
         }
     }
 }
@@ -257,12 +262,29 @@ fn available_memory_bytes() -> Option<u64> {
     None
 }
 
+/// Applies a caller's [`AiScanOptions::max_workers`] to the machine's choice. A valid
+/// `BULWARK_SCAN_THREADS` still wins, as it does everywhere else.
+fn capped(chosen: usize, env_override: Option<&str>, cap: Option<usize>) -> usize {
+    let overridden = env_override
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .is_some_and(|n| n >= 1);
+    match cap {
+        Some(cap) if !overridden => chosen.min(cap.max(1)),
+        _ => chosen,
+    }
+}
+
 /// A rayon pool bounded to [`scan_worker_count`] threads for one scan/redaction pass. `None` only
 /// if pool construction fails (effectively never), in which case the caller falls back to the
 /// global pool.
-fn bounded_scan_pool() -> Option<rayon::ThreadPool> {
+fn bounded_scan_pool(max_workers: Option<usize>) -> Option<rayon::ThreadPool> {
+    let workers = capped(
+        scan_worker_count(),
+        std::env::var("BULWARK_SCAN_THREADS").ok().as_deref(),
+        max_workers,
+    );
     rayon::ThreadPoolBuilder::new()
-        .num_threads(scan_worker_count())
+        .num_threads(workers)
         .thread_name(|i| format!("bulwark-scan-{i}"))
         .build()
         .ok()
@@ -424,7 +446,7 @@ pub fn scan_cancellable(
             .collect()
     };
     // Run on a bounded pool so a background scan leaves CPU headroom instead of pinning every core.
-    let per_artifact = match bounded_scan_pool() {
+    let per_artifact = match bounded_scan_pool(opts.max_workers) {
         Some(pool) => pool.install(run),
         None => run(),
     };
@@ -644,7 +666,7 @@ fn scan_artifact(artifact: &Artifact, ctx: &ScanContext) -> Checked {
             }
         } else if window.index == 0 {
             detections.extend(line_detections(artifact, &window.text));
-        } else {
+        } else if has_line_checks(artifact.kind) {
             // The line checks number lines from the text they are given. Padding a later window
             // with the line ends that came before it keeps their numbers, and the sentences they
             // write, true to the whole file.
@@ -794,8 +816,21 @@ fn document_detections(artifact: &Artifact, content: &str) -> Vec<detectors::Det
 }
 
 /// The checks that read a file line by line, so they can be given a large file in pieces.
+/// Whether [`line_detections`] can find anything in this kind of file. A later window of a file
+/// with no line checks (a long transcript, nearly always) is not copied into a line-numbered
+/// buffer for them: that copy was a second 4 MB per worker, for checks that return nothing.
+fn has_line_checks(kind: ArtifactKind) -> bool {
+    use ArtifactKind::*;
+    matches!(kind, Instructions | DotEnv | Memory)
+}
+
 fn line_detections(artifact: &Artifact, content: &str) -> Vec<detectors::Detection> {
     use ArtifactKind::*;
+    // The same predicate decides whether a later window is prepared for these checks, so the two
+    // cannot disagree.
+    if !has_line_checks(artifact.kind) {
+        return Vec::new();
+    }
     match artifact.kind {
         // Prompt-injection phrasing (AI-013) is checked in project instruction files only: the
         // threat is a repository you clone planting directives for your assistant. Skills and
@@ -1306,6 +1341,14 @@ mod tests {
         // Garbage / zero override falls back to the automatic policy.
         assert_eq!(worker_count(Some("0"), 16, plenty), 8);
         assert_eq!(worker_count(Some("lots"), 16, plenty), 8);
+        // A caller's cap lowers the machine's choice, never raises it, and never beats the
+        // environment override.
+        assert_eq!(capped(8, None, Some(2)), 2);
+        assert_eq!(capped(1, None, Some(2)), 1);
+        assert_eq!(capped(8, None, Some(0)), 1);
+        assert_eq!(capped(8, None, None), 8);
+        assert_eq!(capped(6, Some("6"), Some(2)), 6);
+        assert_eq!(capped(8, Some("lots"), Some(2)), 2);
     }
 
     fn write(path: &Path, content: &str) {

@@ -1425,6 +1425,7 @@ fn run_ai(action: AiAction, db_path: Option<PathBuf>) -> anyhow::Result<()> {
                 excluded_roots: excludes,
                 explicit_targets: targets,
                 max_workspaces: bulwark_core::ai_scan::DEFAULT_MAX_WORKSPACES,
+                max_workers: None,
             };
             let report = run_ai_scan(&opts, |_| {});
 
