@@ -108,6 +108,16 @@
   </branding>
 
   <releases>
+    <release version="0.16.2" date="2026-11-15">
+      <description>
+        <p>Scans use far less memory and finish sooner.</p>
+        <ul>
+          <li>The AI agent scan needs about a fifth of the memory it did (130 MB instead of 730 MB on a home folder with 800 agent files) and finishes several times faster</li>
+          <li>The app no longer holds close to 1 GB after its background check of AI agent files; it settles at about 220 MB, most of it shared system libraries</li>
+          <li>A key written right next to a non-English letter is now found, as gitleaks finds it</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.16.1" date="2026-11-14">
       <description>
         <p>A new check for SSH keys other accounts can read.</p>
