@@ -3,3 +3,5 @@ src-tauri
 node_modules
 test-results
 playwright-report
+# Vendored from the shadcn package; kept byte-for-byte as published so it can be diffed and updated.
+src/shadcn-tailwind.css

@@ -1,6 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "shadcn/tailwind.css";
+@import "./shadcn-tailwind.css";
 
 /* Ubuntu Sans (UI) + Ubuntu Sans Mono (data) — the host OS's own typefaces. Bulwark scans an
    Ubuntu machine, so dressing it in Ubuntu's design system means dressing it in Ubuntu's type:
