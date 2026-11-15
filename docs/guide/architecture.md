@@ -798,7 +798,7 @@ Uninstalling via the package manager removes the binary only. The local SQLite f
 - No animation on content the user is actively reading or scrolling — motion is reserved for state transitions, never decorative idle motion.
 - `prefers-reduced-motion` is respected everywhere — all micro-animations degrade to instant state changes when the OS signals reduced motion.
 
-**As shipped:** shadcn/ui (Radix primitives) + Tailwind v4, styled entirely off the token system above rather than shadcn's default palette. Screens: three tabs, Scan, Secrets and Tools, plus Settings (§18 lists what each holds) — a frameless window with a custom title bar, and a system tray icon for background residency (§4). A dedicated animation/motion tuning pass (beyond the principles above being followed ad hoc per component) remains open — see `AGENTS.md`'s current-status notes.
+**As shipped:** shadcn/ui (Radix primitives) + Tailwind v4, styled entirely off the token system above rather than shadcn's default palette. shadcn's base stylesheet is a vendored copy, `apps/bulwark-app/src/shadcn-tailwind.css`, not the `shadcn` npm package: that package is the whole CLI, and it pulled a dependency with an unpatched advisory into every build for one CSS file. Screens: three tabs, Scan, Secrets and Tools, plus Settings (§18 lists what each holds) — a frameless window with a custom title bar, and a system tray icon for background residency (§4). A dedicated animation/motion tuning pass (beyond the principles above being followed ad hoc per component) remains open — see `AGENTS.md`'s current-status notes.
 
 ---
 
